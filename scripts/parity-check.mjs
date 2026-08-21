@@ -20,8 +20,12 @@
  *                      example does not license every later skip in that file;
  *                      an approval matching nothing is flagged too, because a
  *                      stale licence to skip is a licence nobody reviewed.
- *  5. **shrinkage** -- fewer source cases, or fewer mapped cases, than the
- *                      ledger's own recorded totals.
+ *  5. **shrinkage** -- fewer source cases in the inventory than the recorded
+ *                      baseline.
+ *  6. **totals**    -- the recorded totals must reconcile exactly with the
+ *                      entries, per disposition. "Not fewer than" is satisfied
+ *                      by lowering the baseline in the same edit that removes
+ *                      the coverage; exact reconciliation is not.
  *
  * Run: `node scripts/parity-check.mjs`
  */
@@ -224,10 +228,42 @@ for (const ledgerPath of LEDGERS) {
     }
   }
 
+  // (5): the recorded totals must reconcile EXACTLY with the entries. A
+  // one-sided check (`mapped < recorded`) is satisfied by lowering the baseline
+  // in the same edit that removes the coverage -- both numbers shrink together
+  // and the gate stays green. Reconciling instead means the totals cannot be
+  // quietly re-based; a genuine change to them is a diff a reviewer sees.
+  const counted = {
+    source_cases: ledger.entries.length,
+    ported: ledger.entries.filter((entry) => entry.disposition === "ported").length,
+    adapted: ledger.entries.filter((entry) => entry.disposition === "adapted").length,
+    not_ported: ledger.entries.filter((entry) => entry.disposition === "not-ported").length,
+    waivers: ledger.entries.filter((entry) => entry.disposition === "waived").length,
+  };
+  for (const [key, value] of Object.entries(counted)) {
+    if (ledger.totals[key] !== value) {
+      fail(
+        "totals",
+        `${ledgerPath}: totals.${key} records ${ledger.totals[key]} but the entries count ${value}`,
+      );
+    }
+  }
+  const dispositions = new Set(["ported", "adapted", "not-ported", "waived"]);
+  for (const entry of ledger.entries) {
+    if (!dispositions.has(entry.disposition)) {
+      fail(
+        "totals",
+        `${ledgerPath}: ${entry.source_nodeid} has an unknown disposition '${entry.disposition}'; it would be counted in no total`,
+      );
+    }
+  }
+
   const mapped = ledger.entries.filter((entry) => entry.target_id !== null).length;
-  const recorded = ledger.totals.ported + ledger.totals.adapted;
-  if (mapped < recorded) {
-    fail("shrinkage", `${ledgerPath}: ${mapped} cases mapped, but the ledger records ${recorded}`);
+  if (mapped !== counted.ported + counted.adapted) {
+    fail(
+      "totals",
+      `${ledgerPath}: ${mapped} entries carry a target id but ${counted.ported + counted.adapted} are ported or adapted; a ported case with no target, or a not-ported case with one, is a bookkeeping error`,
+    );
   }
 
   // (3): everything the runner collects from a ported file is either claimed by
@@ -272,12 +308,16 @@ for (const path of testFiles()) {
   const lines = withoutComments(readFileSync(path, "utf8")).split("\n");
   for (const [index, line] of lines.entries()) {
     for (const [construct, pattern] of Object.entries(NON_RUNNING)) {
-      if (!pattern.test(line)) {
+      // Every occurrence, not merely whether the line matched: two
+      // `test.skip(...)` calls on one physical line would otherwise count as
+      // one, and an approval for one would license the other.
+      const hits = line.match(new RegExp(pattern.source, "g"));
+      if (hits === null) {
         continue;
       }
       const key = `${relativePath}\u0000${construct}`;
       const seen = observed.get(key) ?? { count: 0, lines: [] };
-      seen.count += 1;
+      seen.count += hits.length;
       seen.lines.push(index + 1);
       observed.set(key, seen);
     }

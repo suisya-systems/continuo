@@ -299,11 +299,15 @@ weaker, it is a waiver, and that is a report to the reviewer -- see rule 0.
    approved example does not license every later skip in that file, and an approval that matches
    nothing is itself flagged. Comments and string literals are excluded, so a test *named* after a
    construct is not counted as one.
-5. **shrinkage** -- fewer source cases in the inventory, or fewer mapped cases, than the recorded
-   totals.
-6. **unexplained** -- an `adapted` or `not-ported` entry with no reason.
+5. **shrinkage** -- fewer source cases in the inventory than the recorded baseline.
+6. **totals** -- the recorded totals must reconcile **exactly** with the entries, per disposition. A
+   one-sided "not fewer than" check is satisfied by lowering the baseline in the same edit that
+   removes the coverage; reconciling means the totals cannot be quietly re-based, so a real change
+   to them is a diff a reviewer sees. An unknown disposition, or a `ported` entry with no target id,
+   fails here too.
+7. **unexplained** -- an `adapted` or `not-ported` entry with no reason.
 
-Each of these six has been observed failing; a check never seen red is not a check.
+Each of these seven has been observed failing; a check never seen red is not a check.
 
 ### The source inventory
 

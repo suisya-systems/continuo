@@ -217,18 +217,20 @@ describe("parametrize reproduces pytest node ids", () => {
         ["inner2", 2],
       ],
     );
-    // The decorator closest to the function varies fastest, and its id comes
-    // first -- matching what `pytest --collect-only` prints.
+    // Measured against pytest 9.1.1, not reasoned about: the id puts the
+    // decorator closest to the function FIRST, while the axis that varies
+    // FASTEST is the outer one. The two pull in opposite directions, so this
+    // is the assertion that keeps the helper honest.
     expect(rows.map(([id]) => id)).toEqual([
       "inner1-outer1",
-      "inner2-outer1",
       "inner1-outer2",
+      "inner2-outer1",
       "inner2-outer2",
     ]);
     expect(rows.map(([, value]) => value)).toEqual([
       ["a", 1],
-      ["a", 2],
       ["b", 1],
+      ["a", 2],
       ["b", 2],
     ]);
   });
