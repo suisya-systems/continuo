@@ -1,0 +1,40 @@
+{
+  // Type-check configuration: covers everything in the repository, emits nothing.
+  // `npm run build` uses tsconfig.build.json, which narrows the input to src/.
+  //
+  // The module settings here are a bootstrap decision, not a default (D-0002):
+  // ESM + NodeNext + explicit `.js` suffixes on relative imports. Changing them
+  // after the test suite is ported would mean rewriting every import in it.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+
+    "strict": true,
+    // Not implied by `strict` -- both are enabled deliberately (D-0004).
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+
+    // `verbatimModuleSyntax` makes type-only imports explicit, which keeps the
+    // emitted ESM graph identical to the source graph -- required for NodeNext.
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "declaration": true,
+    "sourceMap": true,
+    "noEmit": true
+  },
+  "include": ["src", "test", "scripts", "vitest.config.ts"]
+}

@@ -1,0 +1,14 @@
+{
+  // Distribution build. Only src/ is emitted; test/ and scripts/ are checked by
+  // tsconfig.json but never shipped.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declarationMap": true,
+    "removeComments": false
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}
