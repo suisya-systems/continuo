@@ -1,0 +1,628 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped."
+    },
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_migrator.py",
+      "collected": 64,
+      "inventory": "parity/source-inventory/control_plane.test_migrator.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/migrator.test.ts",
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/control_plane/migrator.test.ts::seam liveness (target-only) > migrateControlPlane calls verifyReadonly through the seam record",
+        "test/control_plane/migrator.test.ts::seam liveness (target-only) > applyPending calls applyStep through the seam record",
+        "test/control_plane/migrator.test.ts::seam liveness (target-only) > the busy timeout is read from the seam record at call time"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. They assert that production code routes through the seam record, which the ported cases cannot prove on their own. The testkit contract tests in test/testkit/testkit.contract.test.ts are target-only for the same reason and are listed separately there."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/testkit/testkit.contract.test.ts",
+        "constructs": ["skipIf", "xfail(strict:true) -> test.fails", "xfail(strict:false)"],
+        "reason": "Target-only. These are the worked examples of the skip and xfail mapping rules (docs/test-translation-conventions.md). Three of the eight dangerous translation patterns -- strict/non-strict xfail, skip semantics, and a caplog-equivalent sink -- have no source case anywhere in interlock control_plane (the suite has one xfail, in messagebus, and no caplog at all), so the rules are demonstrated here rather than by inventing a source node id that does not exist. They translate no source case and are not counted as ported coverage.",
+        "approved_by": "operator, 2026-08-22"
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 64,
+    "ported": 57,
+    "adapted": 5,
+    "not_ported": 2,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_module_exposes_no_down_migration_api",
+      "target_id": "test/control_plane/migrator.test.ts::rule 1 -- forward-only > the module exposes no down migration api",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "dir(m) has no ESM analogue. Replaced by a two-part check over the module namespace and a scan of the module source for exported declarations, plus the seam record keys. The __all__ <= public half is dropped: TypeScript has no __all__ and there is nothing for it to assert.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_no_step_file_carries_a_reverse_half",
+      "target_id": "test/control_plane/migrator.test.ts::rule 1 -- forward-only > no step file carries a reverse half",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_step_whose_second_statement_fails_leaves_no_trace_of_its_first",
+      "target_id": "test/control_plane/migrator.test.ts::rule 2 -- one step, one transaction > a step whose second statement fails leaves no trace of its first",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_each_step_commits_with_its_own_ledger_row",
+      "target_id": "test/control_plane/migrator.test.ts::rule 2 -- one step, one transaction > each step commits with its own ledger row",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_an_applied_step_whose_bytes_changed_is_refused_naming_both_checksums",
+      "target_id": "test/control_plane/migrator.test.ts::rule 3 -- checksum verification > an applied step whose bytes changed is refused naming both checksums",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_renaming_an_applied_step_is_the_same_refusal",
+      "target_id": "test/control_plane/migrator.test.ts::rule 3 -- checksum verification > renaming an applied step is the same refusal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_checksum_refusal_does_not_write_to_the_database",
+      "target_id": "test/control_plane/migrator.test.ts::rule 3 -- checksum verification > a checksum refusal does not write to the database",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_database_ahead_of_the_code_is_refused_and_left_at_its_own_version",
+      "target_id": "test/control_plane/migrator.test.ts::rule 4 -- ahead of the code > a database ahead of the code is refused and left at its own version",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_opening_a_database_behind_the_code_refuses_instead_of_migrating",
+      "target_id": "test/control_plane/migrator.test.ts::rule 5 -- migration is an explicit call > opening a database behind the code refuses instead of migrating",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_explicit_call_is_what_migrates_and_then_opening_succeeds",
+      "target_id": "test/control_plane/migrator.test.ts::rule 5 -- migration is an explicit call > the explicit call is what migrates and then opening succeeds",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_migrating_an_at_head_database_twice_is_a_no_op",
+      "target_id": "test/control_plane/migrator.test.ts::rule 5 -- migration is an explicit call > migrating an at-head database twice is a no-op",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_migrating_never_creates_a_database",
+      "target_id": "test/control_plane/migrator.test.ts::rule 5 -- migration is an explicit call > migrating never creates a database",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_schema_migration_row_cannot_be_updated",
+      "target_id": "test/control_plane/migrator.test.ts::the ledger is evidence > a schema_migration row cannot be updated",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_schema_migration_row_cannot_be_deleted",
+      "target_id": "test/control_plane/migrator.test.ts::the ledger is evidence > a schema_migration row cannot be deleted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_numbering_gap_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a numbering gap is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_duplicate_version_prefix_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a duplicate version prefix is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_malformed_step_filename_is_refused_not_skipped[0002-fix.sql]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a malformed step filename is refused not skipped[0002-fix.sql]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_malformed_step_filename_is_refused_not_skipped[0002_Fix.sql]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a malformed step filename is refused not skipped[0002_Fix.sql]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_malformed_step_filename_is_refused_not_skipped[two_fix.sql]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a malformed step filename is refused not skipped[two_fix.sql]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_malformed_step_filename_is_refused_not_skipped[002_fix.sql]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a malformed step filename is refused not skipped[002_fix.sql]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_malformed_step_filename_is_refused_not_skipped[0002_.sql]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a malformed step filename is refused not skipped[0002_.sql]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_step_numbered_zero_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a step numbered zero is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_an_absent_ledger_directory_is_a_broken_build_not_an_empty_ledger",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > an absent ledger directory is a broken build not an empty ledger",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_an_empty_ledger_directory_is_a_broken_build_not_a_schema_at_version_zero",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > an empty ledger directory is a broken build not a schema at version zero",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_file_that_looks_like_a_step_but_is_not_one_is_refused_not_skipped[0002_beta.sql.bak]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a file that looks like a step but is not one is refused not skipped[0002_beta.sql.bak]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_file_that_looks_like_a_step_but_is_not_one_is_refused_not_skipped[0002_beta.sql~]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a file that looks like a step but is not one is refused not skipped[0002_beta.sql~]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_file_that_looks_like_a_step_but_is_not_one_is_refused_not_skipped[0002_beta.sql.rej]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a file that looks like a step but is not one is refused not skipped[0002_beta.sql.rej]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_file_that_looks_like_a_step_but_is_not_one_is_refused_not_skipped[notes.txt]",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a file that looks like a step but is not one is refused not skipped[notes.txt]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_packaging_companions_are_still_skipped",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > the packaging companions are still skipped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_step_whose_bytes_are_not_utf8_is_a_typed_refusal",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a step whose bytes are not utf8 is a typed refusal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Accepted message-text deviation (D-0015, D-0017 rule 5). The asserted substring \"not valid UTF-8\" is emitted identically. The parenthetical inside that message interpolates the decoder's own wording, which differs from Python's (\"'utf-8' codec can't decode byte 0xff in position 0: invalid start byte\"); the port emits Node's TextDecoder wording rather than fabricating Python's. No assertion depends on the parenthetical.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_refused_ledger_creates_no_database",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a refused ledger creates no database",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_step_ending_in_an_incomplete_statement_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::discovery > a step ending in an incomplete statement is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_user_version_disagreeing_with_the_ledger_head_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > user_version disagreeing with the ledger head is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_ledger_with_a_hole_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > a ledger with a hole is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_production_database_without_its_ledger_is_refused_not_rebuilt",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > a production database without its ledger is refused not rebuilt",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_an_absent_database_is_refused_and_not_created",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > an absent database is refused and not created",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_file_that_is_not_a_database_is_refused_and_left_alone",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > a file that is not a database is refused and left alone",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_creating_under_a_missing_parent_directory_is_a_typed_refusal",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > creating under a missing parent directory is a typed refusal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_write_lock_held_by_another_writer_is_a_typed_refusal",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > a write lock held by another writer is a typed refusal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_creating_over_an_existing_path_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > creating over an existing path is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_clock_must_be_an_integer_of_epoch_milliseconds[None]",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > the clock must be an integer of epoch milliseconds[None]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_clock_must_be_an_integer_of_epoch_milliseconds[1.5]",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > the clock must be an integer of epoch milliseconds[1.5]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_clock_must_be_an_integer_of_epoch_milliseconds[1700000000000]",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > the clock must be an integer of epoch milliseconds[1700000000000]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_clock_must_be_an_integer_of_epoch_milliseconds[True]",
+      "target_id": "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > the clock must be an integer of epoch milliseconds[True]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "In Python bool is an int, so True would store 1 -- a 1970 timestamp the typeof CHECK cannot catch. TypeScript rejects a boolean at compile time, so the value reaches the guard through a cast. The runtime guard is still exercised and still required, because untyped JavaScript callers pass exactly this value.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_production_application_id_differs_from_the_spike",
+      "target_id": "test/control_plane/migrator.test.ts::the two databases never meet > the production application id differs from the spike",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_spike_database_is_refused_by_the_production_opener",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "absent",
+      "reason": "Requires interlock control_plane/schema.py (the spike schema creator and opener), which is out of this pilot scope. Not satisfied by a hand-stamped application_id: that would exercise the production-side branch while proving nothing about the spike module, and the mirror case has no target-side function to call at all. Deferred to the belt that ports schema.py.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_production_database_is_refused_by_the_spike_opener",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "absent",
+      "reason": "Requires interlock control_plane/schema.py (the spike schema creator and opener), which is out of this pilot scope. Not satisfied by a hand-stamped application_id: that would exercise the production-side branch while proving nothing about the spike module, and the mirror case has no target-side function to call at all. Deferred to the belt that ports schema.py.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_foreign_database_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::the two databases never meet > a foreign database is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_migrating_a_foreign_database_does_not_relabel_it",
+      "target_id": "test/control_plane/migrator.test.ts::the two databases never meet > migrating a foreign database does not relabel it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_step_that_leaves_a_dangling_reference_is_refused_and_rolled_back",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > a step that leaves a dangling reference is refused and rolled back",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_migrating_connection_ends_with_foreign_keys_enforced",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > the migrating connection ends with foreign keys enforced",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_outbox_rebuild_carries_every_row_and_every_reference_forward",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > the outbox rebuild carries every row and every reference forward",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_real_ledger_is_discoverable_and_contiguous",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > the real ledger is discoverable and contiguous",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_real_ledger_migrates_an_empty_database_to_head",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > the real ledger migrates an empty database to head",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_render_current_schema_matches_a_freshly_migrated_database",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > render current schema matches a freshly migrated database",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_generated_schema_says_it_must_not_be_applied",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > the generated schema says it must not be applied",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_the_generated_schema_is_ascii_so_it_survives_a_cp932_console",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > the generated schema is ascii so it survives a cp932 console",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_rendering_leaves_no_database_behind",
+      "target_id": "test/control_plane/migrator.test.ts::the real ledger > rendering leaves no database behind",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_migrating_a_connection_with_an_open_transaction_is_refused",
+      "target_id": "test/control_plane/migrator.test.ts::a caller's open transaction > migrating a connection with an open transaction is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Python sqlite3 opens a transaction implicitly before DML and commits it when isolation_level is set to None; better-sqlite3 has neither, so the specific hazard cannot exist. The transaction is opened explicitly and the property -- refused, and the caller work still uncommitted -- is asserted unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_refused_migration_does_not_commit_the_callers_open_transaction",
+      "target_id": "test/control_plane/migrator.test.ts::a caller's open transaction > a refused migration does not commit the caller's open transaction",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same driver difference as the case above: the caller transaction is opened explicitly rather than by the driver. The property (a refusal persists nothing) is asserted unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_an_autocommit_connection_is_still_migrated",
+      "target_id": "test/control_plane/migrator.test.ts::a caller's open transaction > an autocommit connection is still migrated",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_opening_refuses_a_database_a_newer_build_migrated_in_the_verify_reopen_gap",
+      "target_id": "test/control_plane/migrator.test.ts::the verify-close-reopen window > opening refuses a database a newer build migrated in the verify-reopen gap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_migrating_refuses_a_database_a_newer_build_migrated_in_the_verify_reopen_gap",
+      "target_id": "test/control_plane/migrator.test.ts::the verify-close-reopen window > migrating refuses a database a newer build migrated in the verify-reopen gap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_migrator.py::test_a_step_is_not_applied_over_a_database_another_migrator_moved",
+      "target_id": "test/control_plane/migrator.test.ts::the verify-close-reopen window > a step is not applied over a database another migrator moved",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ]
+}

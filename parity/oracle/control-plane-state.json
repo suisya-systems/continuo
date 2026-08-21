@@ -1,0 +1,2400 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5"
+  },
+  "application_id": 1229736784,
+  "user_version": 3,
+  "foreign_keys": 1,
+  "integrity_check": ["ok"],
+  "foreign_key_check": [],
+  "schema": [
+    {
+      "type": "table",
+      "name": "action",
+      "sql": "CREATE TABLE action (\n    action_id               TEXT    PRIMARY KEY,\n    run_id                  TEXT    REFERENCES run(run_id),\n    incident_id             TEXT    REFERENCES incident(incident_id),\n    kind                    TEXT    NOT NULL,\n    idempotency_key         TEXT    NOT NULL,\n    exactly_once_mechanism  TEXT    NOT NULL,\n    status                  TEXT    NOT NULL,\n    refusal_reason          TEXT,\n    result                  TEXT,\n    writer_epoch            INTEGER,\n    created_at_ms           INTEGER NOT NULL,\n    applied_at_ms           INTEGER,\n\n    CHECK (typeof(action_id) = 'text' AND typeof(idempotency_key) = 'text'),\n    CHECK (typeof(created_at_ms) = 'integer'),\n    CHECK (applied_at_ms IS NULL OR typeof(applied_at_ms) = 'integer'),\n    CHECK (writer_epoch IS NULL OR typeof(writer_epoch) = 'integer'),\n    CHECK (length(action_id) > 0),\n    CHECK (length(kind) > 0),\n    CHECK (length(idempotency_key) > 0),\n    CHECK (exactly_once_mechanism IN (\n        'destination_idempotency_key',  -- the destination deduplicates the key\n        'transactional_with_record',    -- effect and record commit together\n        'human_gate'                    -- neither is achievable (D-0004)\n    )),\n    CHECK (status IN ('pending', 'applied', 'refused')),\n    CHECK ((status = 'applied') = (applied_at_ms IS NOT NULL)),\n    CHECK (refusal_reason IS NULL OR length(refusal_reason) > 0),\n    CHECK ((status = 'refused') = (refusal_reason IS NOT NULL)),\n    CHECK (writer_epoch IS NULL OR writer_epoch > 0),\n    CHECK (applied_at_ms IS NULL OR applied_at_ms >= created_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "ai_invocation",
+      "sql": "CREATE TABLE ai_invocation (\n    invocation_id     TEXT    PRIMARY KEY,\n    incident_id       TEXT             REFERENCES incident(incident_id),\n    run_id            TEXT             REFERENCES run(run_id),\n    provider          TEXT    NOT NULL,\n    model             TEXT    NOT NULL,\n    adapter_version   TEXT    NOT NULL,\n    usage_status      TEXT    NOT NULL,\n    output_tokens     INTEGER,\n    input_tokens      INTEGER,\n    cache_read_tokens INTEGER,\n    -- The output cap the CALLER sent with the request. Recorded at request\n    -- time, so it is present even when no usage record ever comes back -- which\n    -- is the only reason a missing invocation can be bounded at all (2.4).\n    max_output_tokens INTEGER,\n    -- Assistant turns the provider returned inside this invocation: 1 plus one\n    -- per tool round trip. AC-9's numerator sums this column, so that Interlock\n    -- is counted on the same basis as the baseline's 3,531 model responses.\n    model_response_count INTEGER NOT NULL DEFAULT 1,\n    attempt_count     INTEGER NOT NULL DEFAULT 1,\n    started_at_ms     INTEGER NOT NULL,\n    finished_at_ms    INTEGER,\n\n    CHECK (length(provider) > 0 AND length(model) > 0),\n    CHECK (length(adapter_version) > 0),\n    -- 'reported'    -- the provider returned a complete usage record\n    -- 'partial'     -- some fields present, output_tokens absent\n    -- 'unavailable' -- no usage record at all\n    CHECK (usage_status IN ('reported', 'partial', 'unavailable')),\n    CHECK ((usage_status = 'reported') = (output_tokens IS NOT NULL)),\n    CHECK (output_tokens IS NULL OR output_tokens >= 0),\n    CHECK (max_output_tokens IS NULL OR max_output_tokens > 0),\n    -- The ceiling is PER REQUEST, and an invocation makes model_response_count\n    -- of them, so the invocation's ceiling is the product. Comparing the summed\n    -- output against a single request's cap would fail on every tool-using\n    -- invocation.\n    CHECK (output_tokens IS NULL OR max_output_tokens IS NULL\n           OR output_tokens <= max_output_tokens * model_response_count),\n    CHECK (model_response_count >= 1),\n    CHECK (attempt_count >= 1),\n    CHECK (finished_at_ms IS NULL OR finished_at_ms >= started_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "ci_observation",
+      "sql": "CREATE TABLE ci_observation (\n    observation_id  TEXT    PRIMARY KEY,\n    event_seq       INTEGER NOT NULL REFERENCES event(seq),\n    provider        TEXT    NOT NULL,\n    repo_id         TEXT    NOT NULL REFERENCES repository(repo_id),\n    pr_number       INTEGER NOT NULL,\n    head_sha        TEXT    NOT NULL,\n    check_scope     TEXT    NOT NULL,\n    scope_id        TEXT    NOT NULL,\n    attempt         INTEGER NOT NULL,\n    verdict         TEXT    NOT NULL,\n    verdict_detail  TEXT,\n    source_id       TEXT,\n    observer        TEXT    NOT NULL,\n    observer_epoch  INTEGER NOT NULL,\n    occurred_at_ms  INTEGER NOT NULL,\n    ingested_at_ms  INTEGER NOT NULL,\n\n    -- provider is CHECKed to 'github' alone, exactly as it is on repository:\n    -- D-0033 says \"a second provider widens the CHECK in a migration step and\n    -- brings its substitution test then\". Mere non-emptiness would not be a\n    -- weaker version of that rule, it would defeat the projection. provider is\n    -- part of ci_observation_identity, so an unnarrowed column admits the SAME\n    -- fact a second time under a spelling variant ('GITHUB'); the\n    -- ci_current_verdict per-scope subquery does not discriminate on provider,\n    -- so the duplicate competes on (attempt, occurred_at_ms, event_seq) and a\n    -- later-timestamped bogus row wins -- a red PR projected GREEN, which is\n    -- the section 6.1 verdict-honesty failure in its most direct form.\n    CHECK (provider IN ('github')),\n    CHECK (typeof(pr_number) = 'integer' AND pr_number > 0),\n    -- a full commit SHA, lowercased at the adapter edge. An abbreviated SHA is\n    -- not an identity: two heads can share a prefix, and the observation would\n    -- then be attributed to the wrong head.\n    CHECK (length(head_sha) = 40 AND head_sha = lower(head_sha)),\n    CHECK (check_scope IN ('check_suite', 'workflow_run', 'rollup')),\n    CHECK (length(scope_id) > 0),\n    CHECK (typeof(attempt) = 'integer' AND attempt >= 1),\n    CHECK (verdict IN (\n        'passed',\n        'failed',\n        'cancelled',\n        'timed_out',\n        'no_run',          -- the provider reports no CI configured for this head\n        'indeterminate'    -- OBSERVATION_UNAVAILABLE's CI shape (D-0006)\n    )),\n    CHECK (observer_epoch > 0),\n    CHECK (typeof(occurred_at_ms) = 'integer' AND typeof(ingested_at_ms) = 'integer')\n)"
+    },
+    {
+      "type": "table",
+      "name": "consumer",
+      "sql": "CREATE TABLE consumer (\n    consumer_id        TEXT    PRIMARY KEY,\n    kind               TEXT    NOT NULL,\n    lease_resource     TEXT    NOT NULL,\n    registered_at_ms   INTEGER NOT NULL,\n    registered_from_seq INTEGER NOT NULL,\n    retired_at_ms      INTEGER,\n\n    CHECK (length(consumer_id) > 0),\n    -- 'delivery'   -- consumption IS an outbox delivery; the outbox row is\n    --                 created in the append transaction (5.4).\n    -- 'compute'    -- consumption is a state transition the consumer performs\n    --                 itself and then marks.\n    CHECK (kind IN ('delivery', 'compute')),\n    CHECK (typeof(registered_from_seq) = 'integer' AND registered_from_seq >= 0),\n    CHECK (retired_at_ms IS NULL OR retired_at_ms >= registered_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "consumer_subscription",
+      "sql": "CREATE TABLE consumer_subscription (\n    consumer_id    TEXT    NOT NULL REFERENCES consumer(consumer_id),\n    event_type     TEXT    NOT NULL,\n    recipient      TEXT,             -- required when consumer.kind = 'delivery'\n    added_at_ms    INTEGER NOT NULL,\n    removed_at_ms  INTEGER,\n\n    PRIMARY KEY (consumer_id, event_type),\n    CHECK (length(event_type) > 0),\n    CHECK (recipient IS NULL OR length(recipient) > 0),\n    CHECK (removed_at_ms IS NULL OR removed_at_ms >= added_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "event",
+      "sql": "CREATE TABLE event (\n    seq             INTEGER PRIMARY KEY AUTOINCREMENT,\n    event_id        TEXT    NOT NULL,\n    event_type      TEXT    NOT NULL,\n    subject_kind    TEXT    NOT NULL,\n    subject_id      TEXT    NOT NULL,\n    run_id          TEXT             REFERENCES run(run_id),\n    payload         TEXT    NOT NULL DEFAULT '{}',\n    producer        TEXT    NOT NULL,\n    producer_epoch  INTEGER,\n    dedup_key       TEXT    NOT NULL,\n    occurred_at_ms  INTEGER NOT NULL,\n    ingested_at_ms  INTEGER NOT NULL,\n\n    CHECK (typeof(event_id) = 'text' AND length(event_id) > 0),\n    CHECK (length(event_type) > 0),\n    CHECK (subject_kind IN ('run', 'session', 'pull_request', 'gate', 'watcher_scope', 'incident')),\n    CHECK (length(subject_id) > 0),\n    CHECK (length(producer) > 0),\n    CHECK (producer_epoch IS NULL OR (typeof(producer_epoch) = 'integer' AND producer_epoch > 0)),\n    CHECK (length(dedup_key) > 0),\n    CHECK (typeof(occurred_at_ms) = 'integer' AND typeof(ingested_at_ms) = 'integer'),\n    CHECK (json_valid(payload))\n)"
+    },
+    {
+      "type": "table",
+      "name": "event_consumption",
+      "sql": "CREATE TABLE event_consumption (\n    consumer_id     TEXT    NOT NULL REFERENCES consumer(consumer_id),\n    event_seq       INTEGER NOT NULL REFERENCES event(seq),\n    status          TEXT    NOT NULL,\n    attempt_count   INTEGER NOT NULL DEFAULT 0,\n    message_id      TEXT             REFERENCES outbox(message_id),\n    last_error      TEXT,\n    writer_epoch    INTEGER,\n    created_at_ms   INTEGER NOT NULL,\n    settled_at_ms   INTEGER,\n\n    PRIMARY KEY (consumer_id, event_seq),\n    CHECK (status IN ('pending', 'consumed', 'skipped', 'failed')),\n    CHECK (attempt_count >= 0),\n    CHECK (last_error IS NULL OR length(last_error) > 0),\n    CHECK ((status = 'failed') = (last_error IS NOT NULL)),\n    CHECK ((status IN ('consumed', 'skipped')) = (settled_at_ms IS NOT NULL)),\n    CHECK (writer_epoch IS NULL OR writer_epoch > 0),\n    CHECK (settled_at_ms IS NULL OR settled_at_ms >= created_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "gate",
+      "sql": "CREATE TABLE gate (\n    gate_id           TEXT    PRIMARY KEY,\n    gate_type         TEXT    NOT NULL,\n    run_id            TEXT             REFERENCES run(run_id),\n    subject_kind      TEXT    NOT NULL,\n    subject_id        TEXT    NOT NULL,\n    origin_event_seq  INTEGER NOT NULL REFERENCES event(seq),\n    rationale         TEXT    NOT NULL,\n    options           TEXT    NOT NULL DEFAULT '[]',\n    deadline_at_ms    INTEGER,\n    stage             TEXT    NOT NULL,\n    stage_seq         INTEGER,\n    stage_entered_at_ms INTEGER NOT NULL,\n    outcome           TEXT,\n    superseded_by     TEXT             REFERENCES gate(gate_id),\n    created_at_ms     INTEGER NOT NULL,\n    closed_at_ms      INTEGER,\n\n    CHECK (gate_type IN ('worker_escalation', 'merge_approval', 'plan_approval', 'risk_approval')),\n    CHECK (length(subject_id) > 0),\n    CHECK (length(rationale) > 0),\n    CHECK (json_valid(options) AND json_type(options) = 'array'),\n    CHECK (stage IN ('received', 'presented', 'answered', 'forwarded')),\n    CHECK (outcome IS NULL OR outcome IN (\n        'answered_and_forwarded',\n        'withdrawn',\n        'subject_gone',\n        'expired',\n        'unanswerable',\n        'superseded'\n    )),\n    CHECK ((outcome IS NOT NULL) = (closed_at_ms IS NOT NULL)),\n    CHECK ((outcome = 'superseded') = (superseded_by IS NOT NULL) OR outcome IS NULL),\n    CHECK (superseded_by IS NULL OR superseded_by <> gate_id),\n    CHECK (deadline_at_ms IS NULL OR deadline_at_ms > created_at_ms),\n    CHECK (closed_at_ms IS NULL OR closed_at_ms >= created_at_ms),\n    CHECK (stage_entered_at_ms >= created_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "gate_relay",
+      "sql": "CREATE TABLE gate_relay (\n    gate_id         TEXT    NOT NULL REFERENCES gate(gate_id),\n    to_stage        TEXT    NOT NULL,\n    message_id      TEXT    NOT NULL REFERENCES outbox(message_id),\n    enqueued_at_ms  INTEGER NOT NULL,\n\n    PRIMARY KEY (gate_id, to_stage),\n    CHECK (to_stage IN ('presented', 'forwarded'))\n)"
+    },
+    {
+      "type": "table",
+      "name": "gate_transition",
+      "sql": "CREATE TABLE gate_transition (\n    seq                 INTEGER PRIMARY KEY AUTOINCREMENT,\n    gate_id             TEXT    NOT NULL REFERENCES gate(gate_id),\n    transition_kind     TEXT    NOT NULL,\n    from_stage          TEXT,\n    to_stage            TEXT    NOT NULL,\n    actor_kind          TEXT    NOT NULL,\n    actor_id            TEXT    NOT NULL,\n    writer_epoch        INTEGER,\n    message_id          TEXT             REFERENCES outbox(message_id),\n    body                TEXT,\n    supersedes_seq      INTEGER          REFERENCES gate_transition(seq),\n    occurred_at_ms      INTEGER NOT NULL,\n    recorded_at_ms      INTEGER NOT NULL,\n\n    -- 'open'       -- the gate comes into existence (from_stage IS NULL)\n    -- 'advance'    -- the stage moves; only this kind may move gate.stage\n    -- 'resend'     -- the same relay is attempted again; the stage does not move\n    -- 'correction' -- a previously recorded body is corrected; supersedes_seq set\n    -- 'close'      -- the gate reaches a terminal outcome\n    CHECK (transition_kind IN ('open', 'advance', 'resend', 'correction', 'close')),\n    CHECK (from_stage IS NULL OR from_stage IN ('received', 'presented', 'answered', 'forwarded')),\n    CHECK (to_stage IN ('received', 'presented', 'answered', 'forwarded')),\n    CHECK ((transition_kind = 'open') = (from_stage IS NULL)),\n    -- The actor is recorded, but the WRITER is Dispatcher Core even when the\n    -- actor is a human: admissibility is a deterministic check against the\n    -- transition table and D-0008 puts deterministic evaluation in Core's row.\n    -- A human answering a question is an actor, not a writer to SQLite.\n    CHECK (actor_kind IN ('worker', 'secretary', 'human', 'dispatcher_core', 'system')),\n    CHECK (length(actor_id) > 0),\n    CHECK (writer_epoch IS NULL OR writer_epoch > 0),\n    CHECK (body IS NULL OR length(body) > 0),\n    CHECK ((transition_kind = 'correction') = (supersedes_seq IS NOT NULL)),\n    CHECK (supersedes_seq IS NULL OR supersedes_seq < seq),\n    CHECK (typeof(occurred_at_ms) = 'integer' AND typeof(recorded_at_ms) = 'integer')\n)"
+    },
+    {
+      "type": "table",
+      "name": "incident",
+      "sql": "CREATE TABLE incident (\n    incident_id          TEXT    PRIMARY KEY,\n    run_id               TEXT    REFERENCES run(run_id),\n    session_id           TEXT    REFERENCES session(session_id),\n    fact_state           TEXT    NOT NULL,\n    detector_version     TEXT    NOT NULL,\n    dedup_key            TEXT    NOT NULL,\n    retry_count          INTEGER NOT NULL DEFAULT 0,\n    known_pattern        TEXT,\n    elapsed_ms           INTEGER,\n    evidence_refs        TEXT    NOT NULL DEFAULT '[]',\n    recent_transitions   TEXT    NOT NULL DEFAULT '[]',\n    previous_assessment  TEXT,\n    previous_action_id   TEXT    REFERENCES action(action_id),\n    related_incident_id  TEXT    REFERENCES incident(incident_id),\n    created_at_ms        INTEGER NOT NULL,\n    updated_at_ms        INTEGER NOT NULL,\n    resolved_at_ms       INTEGER,\n\n    CHECK (typeof(incident_id) = 'text' AND typeof(dedup_key) = 'text'),\n    CHECK (typeof(retry_count) = 'integer'),\n    CHECK (typeof(created_at_ms) = 'integer' AND typeof(updated_at_ms) = 'integer'),\n    CHECK (elapsed_ms IS NULL OR typeof(elapsed_ms) = 'integer'),\n    CHECK (resolved_at_ms IS NULL OR typeof(resolved_at_ms) = 'integer'),\n    CHECK (length(incident_id) > 0),\n    CHECK (length(fact_state) > 0),\n    CHECK (length(detector_version) > 0),\n    CHECK (length(dedup_key) > 0),\n    CHECK (retry_count >= 0),\n    CHECK (elapsed_ms IS NULL OR elapsed_ms >= 0),\n    CHECK (related_incident_id IS NULL OR related_incident_id <> incident_id),\n    CHECK (updated_at_ms >= created_at_ms),\n    CHECK (resolved_at_ms IS NULL OR resolved_at_ms >= created_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "lease",
+      "sql": "CREATE TABLE lease (\n    resource        TEXT    PRIMARY KEY,\n    holder          TEXT    NOT NULL,\n    epoch           INTEGER NOT NULL,\n    acquired_at_ms  INTEGER NOT NULL,\n    expires_at_ms   INTEGER NOT NULL,\n\n    CHECK (typeof(resource) = 'text' AND typeof(holder) = 'text'),\n    CHECK (typeof(epoch) = 'integer'),\n    CHECK (typeof(acquired_at_ms) = 'integer' AND typeof(expires_at_ms) = 'integer'),\n    CHECK (length(resource) > 0),\n    CHECK (length(holder) > 0),\n    CHECK (epoch > 0),\n    CHECK (expires_at_ms > acquired_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "outbox",
+      "sql": "CREATE TABLE \"outbox\" (\n    message_id       TEXT    PRIMARY KEY,\n    run_id           TEXT    REFERENCES run(run_id),\n    recipient        TEXT    NOT NULL,\n    payload          TEXT    NOT NULL,\n    dedup_key        TEXT    NOT NULL,\n    status           TEXT    NOT NULL,\n    retry_count      INTEGER NOT NULL DEFAULT 0,\n    writer_epoch     INTEGER,\n    enqueued_at_ms   INTEGER NOT NULL,\n    delivered_at_ms  INTEGER,\n    acked_at_ms      INTEGER,\n\n    CHECK (typeof(message_id) = 'text' AND typeof(dedup_key) = 'text'),\n    CHECK (typeof(retry_count) = 'integer' AND typeof(enqueued_at_ms) = 'integer'),\n    CHECK (writer_epoch IS NULL OR typeof(writer_epoch) = 'integer'),\n    CHECK (delivered_at_ms IS NULL OR typeof(delivered_at_ms) = 'integer'),\n    CHECK (acked_at_ms IS NULL OR typeof(acked_at_ms) = 'integer'),\n    CHECK (length(message_id) > 0),\n    CHECK (length(recipient) > 0),\n    CHECK (length(dedup_key) > 0),\n\n    -- CHANGED (1 of 3): the widened vocabulary.\n    CHECK (status IN ('pending', 'delivered', 'acked', 'cancelled')),\n\n    CHECK (retry_count >= 0),\n    CHECK (writer_epoch IS NULL OR writer_epoch > 0),\n\n    -- CHANGED (2 of 3): 0001 had\n    --     CHECK ((status IN ('delivered', 'acked')) = (delivered_at_ms IS NOT NULL))\n    -- which is an IF AND ONLY IF, and 'cancelled' breaks the \"only if\" half in\n    -- one direction only: a relay cancelled after it was sent keeps its\n    -- delivered_at_ms, so status would be 'cancelled' with the timestamp set.\n    -- Keeping the constraint for the three statuses it can still speak about,\n    -- and saying nothing about 'cancelled', is deliberate: cancellation is\n    -- terminal but it is NOT an erasure, so a cancelled row may carry a\n    -- delivery timestamp (cancelled after delivery) or not (cancelled while\n    -- pending), and both are true statements about what happened. The one\n    -- thing still forbidden everywhere is a 'pending' row that claims a\n    -- delivery, which the CASE keeps refusing.\n    CHECK (CASE status\n             WHEN 'pending'   THEN delivered_at_ms IS NULL\n             WHEN 'delivered' THEN delivered_at_ms IS NOT NULL\n             WHEN 'acked'     THEN delivered_at_ms IS NOT NULL\n             WHEN 'cancelled' THEN 1\n           END),\n\n    -- CHANGED (3 of 3): unchanged in text, load-bearing in a new way. Because\n    -- acked_at_ms is set if and only if status = 'acked', a cancelled row can\n    -- never carry an ack -- which is the schema's own statement of the rule\n    -- close_gate implements: an ACKED relay is never cancelled. The answer\n    -- arrived; retiring the row that carries it would delete the evidence that\n    -- the stage advance in section 9.5 is justified by.\n    CHECK ((status = 'acked') = (acked_at_ms IS NOT NULL)),\n\n    CHECK (acked_at_ms IS NULL OR acked_at_ms >= delivered_at_ms),\n    CHECK (delivered_at_ms IS NULL OR delivered_at_ms >= enqueued_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "policy_detection_latency",
+      "sql": "CREATE TABLE policy_detection_latency (\n    revision_id      INTEGER NOT NULL REFERENCES policy_revision(revision_id),\n    incident_class   TEXT    NOT NULL,\n    threshold_kind      TEXT    NOT NULL,\n    threshold_value     INTEGER NOT NULL,\n    -- P for THIS class. docs/time-base-policy.md section 3.3 allows a class\n    -- whose L - T is large to be evaluated on a multiple of the base reconcile\n    -- period; carrying it per row is what lets the invariant below be checked at\n    -- all, since a CHECK cannot reach another table for the period.\n    reconcile_period_ms INTEGER NOT NULL,\n    budget_ms           INTEGER NOT NULL,   -- L: onset-to-alarm ceiling; T + P <= L\n    -- L is not always an absolute duration either, and this column is the\n    -- symmetric partner of threshold_kind. docs/time-base-policy.md section 3.2\n    -- gives lease_orphan the budget \"2 x lease TTL\", which no absolute\n    -- millisecond value can hold: the TTL is a property of the individual lease,\n    -- so precomputing it would bake one lease's TTL into a row every other lease\n    -- also reads -- the same defect threshold_kind exists to prevent on the T\n    -- side. Defaulted to 'absolute_ms' so that every class whose budget IS a\n    -- duration reads exactly as it did before this column existed.\n    --\n    --   'absolute_ms'        -- L = budget_ms, in milliseconds\n    --   'lease_ttl_multiple' -- L = budget_ms * (expires_at_ms - acquired_at_ms)\n    budget_kind      TEXT    NOT NULL DEFAULT 'absolute_ms',\n\n    PRIMARY KEY (revision_id, incident_class),\n    -- T is not always a duration, and a single tolerance_ms column cannot say\n    -- so. Three of the classes in time-base-policy.md section 3.2 are not\n    -- absolute times at all: watcher_silence is a multiple of THAT SCOPE's\n    -- expected_interval_ms, lease_orphan is a multiple of the lease's own TTL,\n    -- and watcher_error_streak is a count of consecutive failures with no\n    -- duration in it. Precomputing any of them into milliseconds would bake one\n    -- scope's interval into a global row and silently mis-age every other scope.\n    --\n    --   'absolute_ms'             -- T = threshold_value, in milliseconds\n    --   'scope_interval_multiple' -- T = threshold_value * watcher_scope.expected_interval_ms\n    --   'lease_ttl_multiple'      -- T = threshold_value * (expires_at_ms - acquired_at_ms)\n    --   'consecutive_count'       -- T is a COUNT, not a duration; the budget runs\n    --                                from the threshold_value-th consecutive failure\n    CHECK (threshold_kind IN ('absolute_ms', 'scope_interval_multiple',\n                              'lease_ttl_multiple', 'consecutive_count')),\n    CHECK (budget_kind IN ('absolute_ms', 'lease_ttl_multiple')),\n    CHECK (threshold_value >= 0),\n    CHECK (reconcile_period_ms > 0),\n    CHECK (budget_ms > 0),\n    -- The T + P <= L invariant is only checkable in DDL when BOTH sides are\n    -- absolute. For every other combination it is a PER-SUBJECT obligation\n    -- evaluated at reconcile time, because T or L depends on the subject's own\n    -- interval or TTL -- that is the policy_budget_violation pass, and it\n    -- asserts exactly this inequality for each live subject of a relative class.\n    -- Without the budget_kind conjunct this CHECK would compare an absolute T in\n    -- milliseconds against a TTL MULTIPLE in budget_ms and refuse the\n    -- lease_orphan row outright, or admit it only by mangling the multiple into\n    -- some assumed TTL.\n    -- The FULL inequality, not `T <= L`. A row with T = L passes the weaker\n    -- form and still lets the detector alarm a whole pass after its own declared\n    -- ceiling, which is the ceiling being meaningless.\n    CHECK (threshold_kind <> 'absolute_ms'\n           OR budget_kind <> 'absolute_ms'\n           OR threshold_value + reconcile_period_ms <= budget_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "policy_gate_stage_owner",
+      "sql": "CREATE TABLE policy_gate_stage_owner (\n    revision_id   INTEGER NOT NULL REFERENCES policy_revision(revision_id),\n    gate_type     TEXT    NOT NULL,\n    stage         TEXT    NOT NULL,\n    ball_holder   TEXT    NOT NULL,     -- who must act next\n    standing_owner TEXT   NOT NULL,     -- who answers for the gate type overall\n\n    PRIMARY KEY (revision_id, gate_type, stage),\n    CHECK (ball_holder IN ('worker', 'secretary', 'human', 'dispatcher_core')),\n    CHECK (standing_owner IN ('worker', 'secretary', 'human', 'dispatcher_core'))\n)"
+    },
+    {
+      "type": "table",
+      "name": "policy_gate_stage_tolerance",
+      "sql": "CREATE TABLE policy_gate_stage_tolerance (\n    revision_id   INTEGER NOT NULL REFERENCES policy_revision(revision_id),\n    gate_type     TEXT    NOT NULL,\n    stage         TEXT    NOT NULL,\n    -- NULL = this stage is never a relay gap. It is how 'presented' opts out:\n    -- the \"a slow human is not a gap\" case is data, not a special case in the\n    -- detector's query.\n    tolerance_ms  INTEGER,\n\n    PRIMARY KEY (revision_id, gate_type, stage),\n    CHECK (stage IN ('received', 'presented', 'answered', 'forwarded')),\n    CHECK (tolerance_ms IS NULL OR tolerance_ms > 0)\n)"
+    },
+    {
+      "type": "table",
+      "name": "policy_revision",
+      "sql": "CREATE TABLE policy_revision (\n    revision_id    INTEGER PRIMARY KEY AUTOINCREMENT,\n    note           TEXT    NOT NULL,\n    decided_by     TEXT    NOT NULL,   -- the D- entry that set these values\n    effective_at_ms INTEGER NOT NULL,\n\n    CHECK (length(note) > 0),\n    CHECK (length(decided_by) > 0)\n)"
+    },
+    {
+      "type": "table",
+      "name": "pull_request",
+      "sql": "CREATE TABLE pull_request (\n    pr_id                TEXT    PRIMARY KEY,\n    repo_id              TEXT    NOT NULL REFERENCES repository(repo_id),\n    pr_number            INTEGER NOT NULL,\n    provider_pr_id       TEXT,\n    head_sha             TEXT    NOT NULL,\n    head_observed_at_ms  INTEGER NOT NULL,\n    head_event_seq       INTEGER NOT NULL REFERENCES event(seq),\n    state                TEXT    NOT NULL,\n    merge_commit_sha     TEXT,\n    merged_at_ms         INTEGER,\n    closed_at_ms         INTEGER,\n    created_at_ms        INTEGER NOT NULL,\n    updated_at_ms        INTEGER NOT NULL,\n\n    CHECK (typeof(pr_number) = 'integer' AND pr_number > 0),\n    CHECK (length(head_sha) = 40 AND head_sha = lower(head_sha)),\n    CHECK (state IN ('open', 'merged', 'closed')),\n    CHECK (merge_commit_sha IS NULL OR (length(merge_commit_sha) = 40\n           AND merge_commit_sha = lower(merge_commit_sha))),\n    CHECK ((state = 'merged') = (merged_at_ms IS NOT NULL)),\n    CHECK ((state = 'merged') = (merge_commit_sha IS NOT NULL)),\n    CHECK ((state IN ('merged', 'closed')) = (closed_at_ms IS NOT NULL)),\n    CHECK (updated_at_ms >= created_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "repository",
+      "sql": "CREATE TABLE repository (\n    repo_id           TEXT    PRIMARY KEY,\n    provider          TEXT    NOT NULL,\n    provider_repo_id  TEXT,\n    owner             TEXT    NOT NULL,\n    name              TEXT    NOT NULL,\n    created_at_ms     INTEGER NOT NULL,\n    updated_at_ms     INTEGER NOT NULL,\n\n    CHECK (length(repo_id) > 0),\n    CHECK (provider IN ('github')),\n    CHECK (length(owner) > 0 AND length(name) > 0),\n    CHECK (provider_repo_id IS NULL OR length(provider_repo_id) > 0),\n    CHECK (updated_at_ms >= created_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "run",
+      "sql": "CREATE TABLE run (\n    run_id         TEXT    PRIMARY KEY,\n    status         TEXT    NOT NULL,\n    created_at_ms  INTEGER NOT NULL,\n    updated_at_ms  INTEGER NOT NULL,\n\n    CHECK (typeof(run_id) = 'text' AND typeof(status) = 'text'),\n    CHECK (typeof(created_at_ms) = 'integer' AND typeof(updated_at_ms) = 'integer'),\n    CHECK (length(run_id) > 0),\n    CHECK (status IN ('created', 'running', 'suspended',\n                      'completed', 'failed', 'cancelled')),\n    CHECK (updated_at_ms >= created_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "run_pr_link",
+      "sql": "CREATE TABLE run_pr_link (\n    run_id          TEXT    NOT NULL REFERENCES run(run_id),\n    pr_id           TEXT    NOT NULL REFERENCES pull_request(pr_id),\n    role            TEXT    NOT NULL,\n    resolution      TEXT    NOT NULL,\n    linked_at_ms    INTEGER NOT NULL,\n    unlinked_at_ms  INTEGER,\n    unlink_reason   TEXT,\n\n    PRIMARY KEY (run_id, pr_id),\n    CHECK (role IN ('primary', 'supporting')),\n    -- How the repository was resolved. The absence of a cwd-default member is\n    -- the 2026-08-06 incident encoded: there is no value this column can hold\n    -- that means \"we guessed from the working directory\". A run whose\n    -- repository cannot be resolved by one of the three FAILS TO LINK, and the\n    -- failure is an incident, not a default -- v1's tool raises\n    -- RepoResolutionError for exactly this reason, \"so the caller can exit\n    -- non-zero instead of writing a foreign repo's PR onto the run\", and this\n    -- closed set is that sentence made unfalsifiable.\n    CHECK (resolution IN ('project_registry', 'explicit_operator', 'provider_event')),\n    CHECK (unlink_reason IS NULL OR length(unlink_reason) > 0),\n    CHECK ((unlinked_at_ms IS NOT NULL) = (unlink_reason IS NOT NULL)),\n    CHECK (unlinked_at_ms IS NULL OR unlinked_at_ms >= linked_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "schema_migration",
+      "sql": "CREATE TABLE schema_migration (\n    version        INTEGER PRIMARY KEY,\n    name           TEXT    NOT NULL,\n    checksum       TEXT    NOT NULL,   -- sha256 of the step file's bytes\n    applied_at_ms  INTEGER NOT NULL,\n\n    CHECK (typeof(version) = 'integer' AND version > 0),\n    CHECK (length(name) > 0),\n    CHECK (length(checksum) = 64),\n    CHECK (typeof(applied_at_ms) = 'integer')\n)"
+    },
+    {
+      "type": "table",
+      "name": "session",
+      "sql": "CREATE TABLE session (\n    session_id          TEXT    PRIMARY KEY,\n    run_id              TEXT    NOT NULL REFERENCES run(run_id),\n    provider            TEXT    NOT NULL,\n    binding_phase       TEXT    NOT NULL,\n    observation         TEXT    NOT NULL,\n    provider_state      TEXT,\n    observation_reason  TEXT,\n    bound_at_ms         INTEGER NOT NULL,\n    released_at_ms      INTEGER,\n\n    CHECK (typeof(session_id) = 'text' AND typeof(run_id) = 'text'),\n    CHECK (typeof(bound_at_ms) = 'integer'),\n    CHECK (released_at_ms IS NULL OR typeof(released_at_ms) = 'integer'),\n    CHECK (length(session_id) > 0),\n    CHECK (binding_phase IN ('prepared', 'spawned', 'identity_confirmed')),\n    -- A pre-read-back row may not claim an observation, and a confirmed row\n    -- must carry one: the equality binds the two vocabularies both ways.\n    CHECK ((binding_phase = 'identity_confirmed') = (observation = 'observed')),\n    CHECK (observation IN ('observed', 'unobserved')),\n    -- An observed readout carries a state word; an unobserved one carries a\n    -- reason instead. Neither may be constructed empty (R4) -- and an empty\n    -- string is as empty as a NULL: a reason of '' is the v1 collapse of\n    -- \"could not observe\" into \"nothing to say\" wearing a different type.\n    CHECK (provider_state IS NULL OR length(provider_state) > 0),\n    CHECK (observation_reason IS NULL OR length(observation_reason) > 0),\n    CHECK ((observation = 'observed')   = (provider_state IS NOT NULL)),\n    CHECK ((observation = 'unobserved') = (observation_reason IS NOT NULL)),\n    CHECK (released_at_ms IS NULL OR released_at_ms >= bound_at_ms)\n)"
+    },
+    {
+      "type": "table",
+      "name": "watcher_liveness",
+      "sql": "CREATE TABLE watcher_liveness (\n    scope_id             TEXT    PRIMARY KEY REFERENCES watcher_scope(scope_id),\n    holder               TEXT    NOT NULL,\n    holder_epoch         INTEGER NOT NULL,\n    last_attempt_at_ms   INTEGER NOT NULL,\n    last_result          TEXT    NOT NULL,\n    last_success_at_ms   INTEGER,\n    last_change_at_ms    INTEGER,\n    last_error_at_ms     INTEGER,\n    last_error           TEXT,\n    consecutive_errors   INTEGER NOT NULL DEFAULT 0,\n    attempt_count        INTEGER NOT NULL DEFAULT 0,\n\n    CHECK (length(holder) > 0),\n    CHECK (typeof(holder_epoch) = 'integer' AND holder_epoch > 0),\n    -- The distinction that the single-column form loses. Written on EVERY\n    -- attempt, including the ones that observed nothing.\n    CHECK (last_result IN ('observed_change', 'observed_no_change', 'error')),\n    CHECK ((last_result = 'error') = (last_error IS NOT NULL)),\n    CHECK (last_error IS NULL OR length(last_error) > 0),\n    -- These are IMPLICATIONS, not biconditionals, and the difference is the\n    -- whole point of the row. last_success_at_ms and last_error_at_ms are\n    -- HISTORY: they survive the result that did not produce them, because a\n    -- watcher that has been failing for an hour still needs to say when it last\n    -- worked. Writing these as `(last_result = 'error') = (last_error_at_ms IS\n    -- NOT NULL)` would abort the first success-after-error and the first\n    -- error-after-success -- i.e. every recovery and every failure -- which is\n    -- exactly the alternation this table exists to record.\n    CHECK (last_result <> 'error' OR last_error_at_ms IS NOT NULL),\n    CHECK (last_result = 'error' OR last_success_at_ms IS NOT NULL),\n    CHECK (consecutive_errors >= 0),\n    CHECK (attempt_count >= 0)\n)"
+    },
+    {
+      "type": "table",
+      "name": "watcher_scope",
+      "sql": "CREATE TABLE watcher_scope (\n    scope_id              TEXT    PRIMARY KEY,\n    scope_kind            TEXT    NOT NULL,\n    repo_id               TEXT             REFERENCES repository(repo_id),\n    pr_id                 TEXT             REFERENCES pull_request(pr_id),\n    expected_interval_ms  INTEGER NOT NULL,\n    enabled               INTEGER NOT NULL DEFAULT 1,\n    registered_at_ms      INTEGER NOT NULL,\n    retired_at_ms         INTEGER,\n\n    CHECK (scope_kind IN ('ci_pull_request', 'ci_repository')),\n    CHECK (typeof(expected_interval_ms) = 'integer' AND expected_interval_ms > 0),\n    CHECK (enabled IN (0, 1)),\n    CHECK ((scope_kind = 'ci_pull_request') = (pr_id IS NOT NULL)),\n    -- Every scope names a subject. The pr_id biconditional above only binds the\n    -- ci_pull_request kind, so without this a 'ci_repository' row could carry\n    -- repo_id AND pr_id both NULL: a roster entry for nothing at all. Such a row\n    -- can never be covered, because no watcher has a subject to heartbeat for,\n    -- and the section 8.4 coverage query -- which reports live scopes with no\n    -- fresh liveness row -- would name it as uncovered forever. A roster that\n    -- permanently alarms is a roster nobody reads, which defeats the one thing\n    -- this table exists to do: make a MISSING watcher detectable.\n    CHECK (repo_id IS NOT NULL),\n    CHECK (retired_at_ms IS NULL OR retired_at_ms >= registered_at_ms)\n)"
+    },
+    {
+      "type": "view",
+      "name": "ci_current_verdict",
+      "sql": "CREATE VIEW ci_current_verdict AS\nSELECT o.repo_id, o.pr_number, o.head_sha, o.check_scope, o.scope_id,\n       o.verdict, o.attempt, o.occurred_at_ms, o.event_seq\n  FROM ci_observation o\n  JOIN pull_request p\n    ON p.repo_id = o.repo_id AND p.pr_number = o.pr_number AND p.head_sha = o.head_sha\n WHERE o.observation_id = (\n        SELECT o2.observation_id FROM ci_observation o2\n         WHERE o2.repo_id = o.repo_id AND o2.pr_number = o.pr_number\n           AND o2.head_sha = o.head_sha AND o2.check_scope = o.check_scope\n           AND o2.scope_id = o.scope_id\n         ORDER BY o2.attempt DESC, o2.occurred_at_ms DESC, o2.event_seq DESC\n         LIMIT 1)\n   -- rule 3: a rollup is the coarse fallback, never a peer of the fine-grained\n   -- scopes. It drops out of the projection the moment a real scope exists for\n   -- this head.\n   AND (o.check_scope <> 'rollup'\n        OR NOT EXISTS (SELECT 1 FROM ci_observation f\n                        WHERE f.repo_id = o.repo_id AND f.pr_number = o.pr_number\n                          AND f.head_sha = o.head_sha\n                          AND f.check_scope IN ('check_suite', 'workflow_run')))"
+    },
+    {
+      "type": "index",
+      "name": "action_one_effect_per_key",
+      "sql": "CREATE UNIQUE INDEX action_one_effect_per_key\n    ON action(idempotency_key) WHERE status <> 'refused'"
+    },
+    {
+      "type": "index",
+      "name": "action_unapplied",
+      "sql": "CREATE INDEX action_unapplied ON action(created_at_ms) WHERE status = 'pending'"
+    },
+    {
+      "type": "index",
+      "name": "ai_invocation_by_period",
+      "sql": "CREATE INDEX ai_invocation_by_period ON ai_invocation(started_at_ms)"
+    },
+    {
+      "type": "index",
+      "name": "ai_invocation_by_run",
+      "sql": "CREATE INDEX ai_invocation_by_run ON ai_invocation(run_id)"
+    },
+    {
+      "type": "index",
+      "name": "ci_observation_by_head",
+      "sql": "CREATE INDEX ci_observation_by_head\n    ON ci_observation(repo_id, pr_number, head_sha, attempt DESC, occurred_at_ms DESC)"
+    },
+    {
+      "type": "index",
+      "name": "ci_observation_event",
+      "sql": "CREATE UNIQUE INDEX ci_observation_event ON ci_observation(event_seq)"
+    },
+    {
+      "type": "index",
+      "name": "ci_observation_identity",
+      "sql": "CREATE UNIQUE INDEX ci_observation_identity\n    ON ci_observation(provider, repo_id, pr_number, head_sha, check_scope, scope_id,\n                      attempt, verdict)"
+    },
+    {
+      "type": "index",
+      "name": "event_by_event_id",
+      "sql": "CREATE UNIQUE INDEX event_by_event_id ON event(event_id)"
+    },
+    {
+      "type": "index",
+      "name": "event_by_run",
+      "sql": "CREATE INDEX event_by_run ON event(run_id, seq) WHERE run_id IS NOT NULL"
+    },
+    {
+      "type": "index",
+      "name": "event_by_subject",
+      "sql": "CREATE INDEX event_by_subject ON event(subject_kind, subject_id, seq)"
+    },
+    {
+      "type": "index",
+      "name": "event_consumption_undrained",
+      "sql": "CREATE INDEX event_consumption_undrained\n    ON event_consumption(consumer_id, event_seq) WHERE status IN ('pending', 'failed')"
+    },
+    {
+      "type": "index",
+      "name": "event_one_row_per_fact",
+      "sql": "CREATE UNIQUE INDEX event_one_row_per_fact ON event(dedup_key)"
+    },
+    {
+      "type": "index",
+      "name": "gate_by_run",
+      "sql": "CREATE INDEX gate_by_run ON gate(run_id) WHERE closed_at_ms IS NULL"
+    },
+    {
+      "type": "index",
+      "name": "gate_open",
+      "sql": "CREATE INDEX gate_open ON gate(stage, stage_entered_at_ms) WHERE closed_at_ms IS NULL"
+    },
+    {
+      "type": "index",
+      "name": "gate_relay_by_message",
+      "sql": "CREATE UNIQUE INDEX gate_relay_by_message ON gate_relay(message_id)"
+    },
+    {
+      "type": "index",
+      "name": "gate_transition_by_gate",
+      "sql": "CREATE INDEX gate_transition_by_gate ON gate_transition(gate_id, seq)"
+    },
+    {
+      "type": "index",
+      "name": "incident_by_dedup_key",
+      "sql": "CREATE INDEX incident_by_dedup_key ON incident(dedup_key)"
+    },
+    {
+      "type": "index",
+      "name": "incident_unresolved",
+      "sql": "CREATE INDEX incident_unresolved ON incident(created_at_ms) WHERE resolved_at_ms IS NULL"
+    },
+    {
+      "type": "index",
+      "name": "outbox_undelivered",
+      "sql": "CREATE INDEX outbox_undelivered ON outbox(enqueued_at_ms)\n    WHERE status IN ('pending', 'delivered')"
+    },
+    {
+      "type": "index",
+      "name": "pull_request_identity",
+      "sql": "CREATE UNIQUE INDEX pull_request_identity ON pull_request(repo_id, pr_number)"
+    },
+    {
+      "type": "index",
+      "name": "repository_by_provider_id",
+      "sql": "CREATE UNIQUE INDEX repository_by_provider_id\n    ON repository(provider, provider_repo_id) WHERE provider_repo_id IS NOT NULL"
+    },
+    {
+      "type": "index",
+      "name": "repository_by_slug",
+      "sql": "CREATE UNIQUE INDEX repository_by_slug ON repository(provider, lower(owner), lower(name))"
+    },
+    {
+      "type": "index",
+      "name": "run_pr_link_by_pr",
+      "sql": "CREATE INDEX run_pr_link_by_pr ON run_pr_link(pr_id) WHERE unlinked_at_ms IS NULL"
+    },
+    {
+      "type": "index",
+      "name": "run_pr_link_one_live_primary_per_run",
+      "sql": "CREATE UNIQUE INDEX run_pr_link_one_live_primary_per_run\n    ON run_pr_link(run_id) WHERE role = 'primary' AND unlinked_at_ms IS NULL"
+    },
+    {
+      "type": "index",
+      "name": "session_by_run",
+      "sql": "CREATE INDEX session_by_run ON session(run_id)"
+    },
+    {
+      "type": "index",
+      "name": "session_one_active_binding_per_run",
+      "sql": "CREATE UNIQUE INDEX session_one_active_binding_per_run\n    ON session(run_id) WHERE released_at_ms IS NULL"
+    },
+    {
+      "type": "index",
+      "name": "watcher_scope_live",
+      "sql": "CREATE INDEX watcher_scope_live ON watcher_scope(scope_kind) WHERE enabled = 1 AND retired_at_ms IS NULL"
+    },
+    {
+      "type": "trigger",
+      "name": "action_apply_is_set_once",
+      "sql": "CREATE TRIGGER action_apply_is_set_once\nBEFORE UPDATE ON action\nWHEN OLD.applied_at_ms IS NOT NULL\n AND (NEW.applied_at_ms IS NULL OR NEW.applied_at_ms <> OLD.applied_at_ms)\nBEGIN\n    SELECT RAISE(ABORT, 'an applied action is applied once');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "action_idempotency_key_is_frozen",
+      "sql": "CREATE TRIGGER action_idempotency_key_is_frozen\nBEFORE UPDATE OF idempotency_key ON action\nWHEN NEW.idempotency_key <> OLD.idempotency_key\nBEGIN\n    SELECT RAISE(ABORT, 'an action keeps the idempotency key it was recorded with');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "action_refusal_is_terminal",
+      "sql": "CREATE TRIGGER action_refusal_is_terminal\nBEFORE UPDATE OF status ON action\nWHEN OLD.status = 'refused' AND NEW.status <> 'refused'\nBEGIN\n    SELECT RAISE(ABORT, 'a refused action stays refused; record a new attempt instead');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "action_rows_are_never_deleted",
+      "sql": "CREATE TRIGGER action_rows_are_never_deleted\nBEFORE DELETE ON action\nBEGIN\n    SELECT RAISE(ABORT, 'action rows are exactly-once evidence and are never deleted');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "consumer_subscription_recipient_matches_kind_on_insert",
+      "sql": "CREATE TRIGGER consumer_subscription_recipient_matches_kind_on_insert\nBEFORE INSERT ON consumer_subscription\nWHEN (SELECT kind FROM consumer WHERE consumer_id = NEW.consumer_id)\n     IS NOT (CASE WHEN NEW.recipient IS NULL THEN 'compute' ELSE 'delivery' END)\nBEGIN\n    SELECT RAISE(ABORT,\n        'a delivery subscription carries a recipient and a compute subscription does not');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "consumer_subscription_recipient_matches_kind_on_update",
+      "sql": "CREATE TRIGGER consumer_subscription_recipient_matches_kind_on_update\nBEFORE UPDATE OF recipient, consumer_id ON consumer_subscription\nWHEN (SELECT kind FROM consumer WHERE consumer_id = NEW.consumer_id)\n     IS NOT (CASE WHEN NEW.recipient IS NULL THEN 'compute' ELSE 'delivery' END)\nBEGIN\n    SELECT RAISE(ABORT,\n        'a delivery subscription carries a recipient and a compute subscription does not');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "event_consumption_attempt_count_is_monotonic",
+      "sql": "CREATE TRIGGER event_consumption_attempt_count_is_monotonic\nBEFORE UPDATE OF attempt_count ON event_consumption\nWHEN NEW.attempt_count < OLD.attempt_count\nBEGIN\n    SELECT RAISE(ABORT, 'event_consumption attempt_count must not decrease');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "event_consumption_rows_are_never_deleted",
+      "sql": "CREATE TRIGGER event_consumption_rows_are_never_deleted\nBEFORE DELETE ON event_consumption\nBEGIN\n    SELECT RAISE(ABORT, 'a consumption row is the per-consumer drain evidence');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "event_consumption_settled_is_terminal",
+      "sql": "CREATE TRIGGER event_consumption_settled_is_terminal\nBEFORE UPDATE OF status ON event_consumption\nWHEN OLD.status IN ('consumed', 'skipped') AND NEW.status <> OLD.status\nBEGIN\n    SELECT RAISE(ABORT, 'a settled consumption is not reopened; append a new event instead');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "event_rows_are_immutable",
+      "sql": "CREATE TRIGGER event_rows_are_immutable\nBEFORE UPDATE ON event\nBEGIN\n    SELECT RAISE(ABORT, 'the event spine is append-only; correct a fact with a new event');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "event_rows_are_never_deleted",
+      "sql": "CREATE TRIGGER event_rows_are_never_deleted\nBEFORE DELETE ON event\nBEGIN\n    SELECT RAISE(ABORT, 'event rows are the spine every consumer is replayed from');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "gate_closure_is_terminal",
+      "sql": "CREATE TRIGGER gate_closure_is_terminal\nBEFORE UPDATE ON gate\nWHEN OLD.closed_at_ms IS NOT NULL\n AND (NEW.closed_at_ms IS NULL OR NEW.outcome <> OLD.outcome)\nBEGIN\n    SELECT RAISE(ABORT, 'a closed gate keeps its outcome; open a new gate instead');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "gate_opens_without_a_projection",
+      "sql": "CREATE TRIGGER gate_opens_without_a_projection\nBEFORE INSERT ON gate\nWHEN NEW.stage_seq IS NOT NULL OR NEW.stage <> 'received' OR NEW.outcome IS NOT NULL\nBEGIN\n    SELECT RAISE(ABORT,\n        'a gate opens at stage received with a null stage_seq; its opening transition sets the projection');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "gate_stage_matches_its_transition",
+      "sql": "CREATE TRIGGER gate_stage_matches_its_transition\nBEFORE UPDATE OF stage, stage_seq ON gate\nWHEN NOT EXISTS (\n    SELECT 1 FROM gate_transition t\n     WHERE t.seq = NEW.stage_seq\n       AND t.gate_id = NEW.gate_id\n       AND t.to_stage = NEW.stage\n       -- 'open' is admitted alongside 'advance' because the opening transition\n       -- is what establishes the projection in the first place. Admitting only\n       -- 'advance' makes gate creation impossible: the gate is inserted with a\n       -- null stage_seq, the 'open' transition is inserted, and nothing may then\n       -- point the projection at it -- and the transition table has no\n       -- received -> received advance to reach instead.\n       AND t.transition_kind IN ('open', 'advance'))\nBEGIN\n    SELECT RAISE(ABORT,\n        'gate.stage is a projection; it may only name an open or advance transition of this gate');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "gate_stage_seq_is_monotonic",
+      "sql": "CREATE TRIGGER gate_stage_seq_is_monotonic\nBEFORE UPDATE OF stage_seq ON gate\nWHEN NEW.stage_seq < OLD.stage_seq OR NEW.stage_seq IS NULL\nBEGIN\n    SELECT RAISE(ABORT, 'a gate stage projection never walks backwards');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "gate_transition_rows_are_immutable",
+      "sql": "CREATE TRIGGER gate_transition_rows_are_immutable\nBEFORE UPDATE ON gate_transition\nBEGIN\n    SELECT RAISE(ABORT, 'a gate transition is history; correct it with a correction transition');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "gate_transition_rows_are_never_deleted",
+      "sql": "CREATE TRIGGER gate_transition_rows_are_never_deleted\nBEFORE DELETE ON gate_transition\nBEGIN\n    SELECT RAISE(ABORT, 'gate transition history is the relay-gap evidence');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "incident_retry_count_is_monotonic",
+      "sql": "CREATE TRIGGER incident_retry_count_is_monotonic\nBEFORE UPDATE OF retry_count ON incident\nWHEN NEW.retry_count < OLD.retry_count\nBEGIN\n    SELECT RAISE(ABORT, 'incident retry_count must not decrease');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "lease_epoch_is_monotonic",
+      "sql": "CREATE TRIGGER lease_epoch_is_monotonic\nBEFORE UPDATE ON lease\nWHEN NEW.epoch < OLD.epoch\n  OR (NEW.holder <> OLD.holder AND NEW.epoch <= OLD.epoch)\nBEGIN\n    SELECT RAISE(ABORT, 'a lease epoch never decreases, and a new holder must raise it');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "lease_resource_is_immutable",
+      "sql": "CREATE TRIGGER lease_resource_is_immutable\nBEFORE UPDATE OF resource ON lease\nWHEN NEW.resource <> OLD.resource\nBEGIN\n    SELECT RAISE(ABORT, 'a lease resource is never renamed; its epoch history belongs to it');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "lease_rows_are_never_deleted",
+      "sql": "CREATE TRIGGER lease_rows_are_never_deleted\nBEFORE DELETE ON lease\nBEGIN\n    SELECT RAISE(ABORT, 'lease rows are never deleted; expire them instead');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "outbox_ack_is_set_once",
+      "sql": "CREATE TRIGGER outbox_ack_is_set_once\nBEFORE UPDATE ON outbox\nWHEN OLD.acked_at_ms IS NOT NULL\n AND (NEW.acked_at_ms IS NULL OR NEW.acked_at_ms <> OLD.acked_at_ms)\nBEGIN\n    SELECT RAISE(ABORT, 'an acked message is acked once');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "outbox_dedup_key_is_frozen",
+      "sql": "CREATE TRIGGER outbox_dedup_key_is_frozen\nBEFORE UPDATE OF dedup_key ON outbox\nWHEN NEW.dedup_key <> OLD.dedup_key\nBEGIN\n    SELECT RAISE(ABORT, 'an outbox row keeps the dedup key it was enqueued with');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "outbox_delivery_is_set_once",
+      "sql": "CREATE TRIGGER outbox_delivery_is_set_once\nBEFORE UPDATE ON outbox\nWHEN OLD.delivered_at_ms IS NOT NULL\n AND (NEW.delivered_at_ms IS NULL OR NEW.delivered_at_ms <> OLD.delivered_at_ms)\nBEGIN\n    SELECT RAISE(ABORT, 'a delivered message is delivered once');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "outbox_message_id_is_frozen",
+      "sql": "CREATE TRIGGER outbox_message_id_is_frozen\nBEFORE UPDATE OF message_id ON outbox\nWHEN NEW.message_id <> OLD.message_id\nBEGIN\n    SELECT RAISE(ABORT, 'an outbox row keeps the message identity it was enqueued under');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "outbox_retry_count_is_monotonic",
+      "sql": "CREATE TRIGGER outbox_retry_count_is_monotonic\nBEFORE UPDATE OF retry_count ON outbox\nWHEN NEW.retry_count < OLD.retry_count\nBEGIN\n    SELECT RAISE(ABORT, 'outbox retry_count must not decrease');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "outbox_rows_are_never_deleted",
+      "sql": "CREATE TRIGGER outbox_rows_are_never_deleted\nBEFORE DELETE ON outbox\nBEGIN\n    SELECT RAISE(ABORT, 'outbox rows are delivery evidence and are never deleted');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "outbox_status_is_forward_only",
+      "sql": "CREATE TRIGGER outbox_status_is_forward_only\nBEFORE UPDATE OF status ON outbox\nWHEN NEW.status <> OLD.status\n AND NOT (   (OLD.status = 'pending'   AND NEW.status IN ('delivered', 'cancelled'))\n          OR (OLD.status = 'delivered' AND NEW.status IN ('acked', 'cancelled')))\nBEGIN\n    SELECT RAISE(ABORT, 'outbox status walks pending -> delivered -> acked, or is cancelled from pending or delivered; acked and cancelled are terminal');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "pull_request_head_is_monotonic",
+      "sql": "CREATE TRIGGER pull_request_head_is_monotonic\nBEFORE UPDATE OF head_sha, head_observed_at_ms, head_event_seq ON pull_request\nWHEN (NEW.head_sha <> OLD.head_sha\n      AND NOT (NEW.head_observed_at_ms > OLD.head_observed_at_ms\n               AND NEW.head_event_seq > OLD.head_event_seq))\n  OR NEW.head_observed_at_ms < OLD.head_observed_at_ms\n  OR NEW.head_event_seq < OLD.head_event_seq\nBEGIN\n    SELECT RAISE(ABORT,\n        'a pull request head only moves forward in the provider''s own order; a late older observation is evidence, not a projection');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "pull_request_merge_is_terminal",
+      "sql": "CREATE TRIGGER pull_request_merge_is_terminal\nBEFORE UPDATE OF state ON pull_request\nWHEN OLD.state = 'merged' AND NEW.state <> 'merged'\nBEGIN\n    SELECT RAISE(ABORT, 'a merged pull request does not reopen; its merge is a fact');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "run_status_is_forward_only",
+      "sql": "CREATE TRIGGER run_status_is_forward_only\nBEFORE UPDATE OF status ON run\nWHEN (OLD.status IN ('completed', 'failed', 'cancelled')\n      AND NEW.status <> OLD.status)\n  OR (CASE NEW.status\n           WHEN 'created' THEN 0\n           WHEN 'running' THEN 1\n           WHEN 'suspended' THEN 1\n           ELSE 2 END)\n   < (CASE OLD.status\n           WHEN 'created' THEN 0\n           WHEN 'running' THEN 1\n           WHEN 'suspended' THEN 1\n           ELSE 2 END)\nBEGIN\n    SELECT RAISE(ABORT,\n        'run.status walks created -> running/suspended -> terminal; a terminal run is never reopened');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "schema_migration_rows_are_immutable",
+      "sql": "CREATE TRIGGER schema_migration_rows_are_immutable\nBEFORE UPDATE ON schema_migration\nBEGIN\n    SELECT RAISE(ABORT, 'a migration record is written once');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "schema_migration_rows_are_never_deleted",
+      "sql": "CREATE TRIGGER schema_migration_rows_are_never_deleted\nBEFORE DELETE ON schema_migration\nBEGIN\n    SELECT RAISE(ABORT, 'a migration record is the evidence the step ran; it is never deleted');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "session_binding_phase_is_forward_only",
+      "sql": "CREATE TRIGGER session_binding_phase_is_forward_only\nBEFORE UPDATE OF binding_phase ON session\nWHEN NOT (\n       (OLD.binding_phase = NEW.binding_phase)\n    OR (OLD.binding_phase = 'prepared' AND NEW.binding_phase = 'spawned')\n    OR (OLD.binding_phase = 'spawned'  AND NEW.binding_phase = 'identity_confirmed')\n)\nBEGIN\n    SELECT RAISE(ABORT,\n        'session.binding_phase moves prepared -> spawned -> identity_confirmed, one step at a time');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "watcher_liveness_attempt_count_is_monotonic",
+      "sql": "CREATE TRIGGER watcher_liveness_attempt_count_is_monotonic\nBEFORE UPDATE OF attempt_count ON watcher_liveness\nWHEN NEW.attempt_count < OLD.attempt_count\nBEGIN\n    SELECT RAISE(ABORT, 'watcher attempt_count must not decrease');\nEND"
+    },
+    {
+      "type": "trigger",
+      "name": "watcher_liveness_epoch_is_monotonic",
+      "sql": "CREATE TRIGGER watcher_liveness_epoch_is_monotonic\nBEFORE UPDATE ON watcher_liveness\nWHEN NEW.holder_epoch < OLD.holder_epoch\n  OR (NEW.holder <> OLD.holder AND NEW.holder_epoch <= OLD.holder_epoch)\nBEGIN\n    SELECT RAISE(ABORT, 'a watcher liveness epoch never decreases, and a new holder must raise it');\nEND"
+    }
+  ],
+  "tables": {
+    "action": {
+      "columns": [
+        {
+          "name": "action_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "incident_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "idempotency_key",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "exactly_once_mechanism",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "refusal_reason",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "result",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "writer_epoch",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "created_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "applied_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "ai_invocation": {
+      "columns": [
+        {
+          "name": "invocation_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "incident_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "provider",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "model",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "adapter_version",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "usage_status",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "output_tokens",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "input_tokens",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "cache_read_tokens",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "max_output_tokens",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "model_response_count",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "1",
+          "pk": 0
+        },
+        {
+          "name": "attempt_count",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "1",
+          "pk": 0
+        },
+        {
+          "name": "started_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "finished_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "ci_observation": {
+      "columns": [
+        {
+          "name": "observation_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "event_seq",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "provider",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "repo_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "pr_number",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "head_sha",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "check_scope",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "scope_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "attempt",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "verdict",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "verdict_detail",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "source_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "observer",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "observer_epoch",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "occurred_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "ingested_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "consumer": {
+      "columns": [
+        {
+          "name": "consumer_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "lease_resource",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "registered_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "registered_from_seq",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "retired_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "consumer_subscription": {
+      "columns": [
+        {
+          "name": "consumer_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "event_type",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2
+        },
+        {
+          "name": "recipient",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "added_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "removed_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "event": {
+      "columns": [
+        {
+          "name": "seq",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "event_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "event_type",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "subject_kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "subject_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "payload",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": "'{}'",
+          "pk": 0
+        },
+        {
+          "name": "producer",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "producer_epoch",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "dedup_key",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "occurred_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "ingested_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "event_consumption": {
+      "columns": [
+        {
+          "name": "consumer_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "event_seq",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "attempt_count",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "last_error",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "writer_epoch",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "created_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "settled_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "gate": {
+      "columns": [
+        {
+          "name": "gate_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "gate_type",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "subject_kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "subject_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "origin_event_seq",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "rationale",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "options",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": "'[]'",
+          "pk": 0
+        },
+        {
+          "name": "deadline_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "stage",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "stage_seq",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "stage_entered_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "outcome",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "superseded_by",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "created_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "closed_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "gate_relay": {
+      "columns": [
+        {
+          "name": "gate_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "to_stage",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "enqueued_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "gate_transition": {
+      "columns": [
+        {
+          "name": "seq",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "gate_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "transition_kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "from_stage",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "to_stage",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "actor_kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "actor_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "writer_epoch",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "body",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "supersedes_seq",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "occurred_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "recorded_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "incident": {
+      "columns": [
+        {
+          "name": "incident_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "session_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "fact_state",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "detector_version",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "dedup_key",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "retry_count",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0
+        },
+        {
+          "name": "known_pattern",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "elapsed_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "evidence_refs",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": "'[]'",
+          "pk": 0
+        },
+        {
+          "name": "recent_transitions",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": "'[]'",
+          "pk": 0
+        },
+        {
+          "name": "previous_assessment",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "previous_action_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "related_incident_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "created_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "resolved_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "lease": {
+      "columns": [
+        {
+          "name": "resource",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "holder",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "epoch",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "acquired_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "expires_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "outbox": {
+      "columns": [
+        {
+          "name": "message_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "recipient",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "payload",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "dedup_key",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "retry_count",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0
+        },
+        {
+          "name": "writer_epoch",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "enqueued_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "delivered_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "acked_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "policy_detection_latency": {
+      "columns": [
+        {
+          "name": "revision_id",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "incident_class",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2
+        },
+        {
+          "name": "threshold_kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "threshold_value",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "reconcile_period_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "budget_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "budget_kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": "'absolute_ms'",
+          "pk": 0
+        }
+      ],
+      "row_count": 10,
+      "rows": [
+        {
+          "revision_id": 1,
+          "incident_class": "ci_outcome_undrained",
+          "threshold_kind": "absolute_ms",
+          "threshold_value": 180000,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 300000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "consumer_backlog",
+          "threshold_kind": "absolute_ms",
+          "threshold_value": 300000,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 600000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "lease_orphan",
+          "threshold_kind": "lease_ttl_multiple",
+          "threshold_value": 1,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 2,
+          "budget_kind": "lease_ttl_multiple"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "observation_unavailable",
+          "threshold_kind": "absolute_ms",
+          "threshold_value": 300000,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 600000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "relay_delivery_stall",
+          "threshold_kind": "absolute_ms",
+          "threshold_value": 120000,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 300000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "relay_gap",
+          "threshold_kind": "absolute_ms",
+          "threshold_value": 180000,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 300000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "session_no_evidence",
+          "threshold_kind": "absolute_ms",
+          "threshold_value": 600000,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 900000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "watcher_error_streak",
+          "threshold_kind": "consecutive_count",
+          "threshold_value": 5,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 600000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "watcher_scope_uncovered",
+          "threshold_kind": "absolute_ms",
+          "threshold_value": 0,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 600000,
+          "budget_kind": "absolute_ms"
+        },
+        {
+          "revision_id": 1,
+          "incident_class": "watcher_silence",
+          "threshold_kind": "scope_interval_multiple",
+          "threshold_value": 3,
+          "reconcile_period_ms": 120000,
+          "budget_ms": 600000,
+          "budget_kind": "absolute_ms"
+        }
+      ]
+    },
+    "policy_gate_stage_owner": {
+      "columns": [
+        {
+          "name": "revision_id",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "gate_type",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2
+        },
+        {
+          "name": "stage",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 3
+        },
+        {
+          "name": "ball_holder",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "standing_owner",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 6,
+      "rows": [
+        {
+          "revision_id": 1,
+          "gate_type": "merge_approval",
+          "stage": "answered",
+          "ball_holder": "secretary",
+          "standing_owner": "human"
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "merge_approval",
+          "stage": "presented",
+          "ball_holder": "human",
+          "standing_owner": "human"
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "merge_approval",
+          "stage": "received",
+          "ball_holder": "secretary",
+          "standing_owner": "human"
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "worker_escalation",
+          "stage": "answered",
+          "ball_holder": "secretary",
+          "standing_owner": "secretary"
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "worker_escalation",
+          "stage": "presented",
+          "ball_holder": "human",
+          "standing_owner": "secretary"
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "worker_escalation",
+          "stage": "received",
+          "ball_holder": "secretary",
+          "standing_owner": "secretary"
+        }
+      ]
+    },
+    "policy_gate_stage_tolerance": {
+      "columns": [
+        {
+          "name": "revision_id",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "gate_type",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2
+        },
+        {
+          "name": "stage",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 3
+        },
+        {
+          "name": "tolerance_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 6,
+      "rows": [
+        {
+          "revision_id": 1,
+          "gate_type": "merge_approval",
+          "stage": "answered",
+          "tolerance_ms": 120000
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "merge_approval",
+          "stage": "presented",
+          "tolerance_ms": null
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "merge_approval",
+          "stage": "received",
+          "tolerance_ms": 180000
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "worker_escalation",
+          "stage": "answered",
+          "tolerance_ms": 120000
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "worker_escalation",
+          "stage": "presented",
+          "tolerance_ms": null
+        },
+        {
+          "revision_id": 1,
+          "gate_type": "worker_escalation",
+          "stage": "received",
+          "tolerance_ms": 180000
+        }
+      ]
+    },
+    "policy_revision": {
+      "columns": [
+        {
+          "name": "revision_id",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "note",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "decided_by",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "effective_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 1,
+      "rows": [
+        {
+          "revision_id": 1,
+          "note": "initial time base: detection latency budgets, gate stage tolerances and gate stage owners as first decided",
+          "decided_by": "D-0031, D-0032",
+          "effective_at_ms": 0
+        }
+      ]
+    },
+    "pull_request": {
+      "columns": [
+        {
+          "name": "pr_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "repo_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "pr_number",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "provider_pr_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "head_sha",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "head_observed_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "head_event_seq",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "merge_commit_sha",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "merged_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "closed_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "created_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "repository": {
+      "columns": [
+        {
+          "name": "repo_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "provider",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "provider_repo_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "owner",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "created_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "run": {
+      "columns": [
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "created_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "updated_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "run_pr_link": {
+      "columns": [
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "pr_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "resolution",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "linked_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "unlinked_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "unlink_reason",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "schema_migration": {
+      "columns": [
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "checksum",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "applied_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 3,
+      "rows": [
+        {
+          "version": 1,
+          "name": "initial",
+          "checksum": "d674c2031347dab83306b13fd34cbb819b25653dae6da37db4d4eb09aae2c851",
+          "applied_at_ms": 1700000000000
+        },
+        {
+          "version": 2,
+          "name": "policy_seed",
+          "checksum": "08ff45bb526440108741c7e0d2093a02f053374989b966b528d65f1711811c79",
+          "applied_at_ms": 1700000000000
+        },
+        {
+          "version": 3,
+          "name": "outbox_cancelled_status",
+          "checksum": "6e3ba7325ab73d23b2c8138b084c0f67d49794a12e75cb0111c1fb4298915f09",
+          "applied_at_ms": 1700000000000
+        }
+      ]
+    },
+    "session": {
+      "columns": [
+        {
+          "name": "session_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "run_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "provider",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "binding_phase",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "observation",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "provider_state",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "observation_reason",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "bound_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "released_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "sqlite_sequence": {
+      "columns": [
+        {
+          "name": "name",
+          "type": "",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "seq",
+          "type": "",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 1,
+      "rows": [
+        {
+          "name": "policy_revision",
+          "seq": 1
+        }
+      ]
+    },
+    "watcher_liveness": {
+      "columns": [
+        {
+          "name": "scope_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "holder",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "holder_epoch",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "last_attempt_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "last_result",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "last_success_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "last_change_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "last_error_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "last_error",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "consecutive_errors",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0
+        },
+        {
+          "name": "attempt_count",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    },
+    "watcher_scope": {
+      "columns": [
+        {
+          "name": "scope_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 1
+        },
+        {
+          "name": "scope_kind",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "repo_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "pr_id",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "expected_interval_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "enabled",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "1",
+          "pk": 0
+        },
+        {
+          "name": "registered_at_ms",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0
+        },
+        {
+          "name": "retired_at_ms",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0
+        }
+      ],
+      "row_count": 0,
+      "rows": []
+    }
+  }
+}

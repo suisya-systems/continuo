@@ -35,6 +35,13 @@ spaces distinct.
 | D-0009 | Install with `--ignore-scripts`; the prebuilt binary is the artifact | accepted |
 | D-0010 | Biome is the linter and formatter | accepted |
 | D-0011 | Package-quality tooling: publint, attw, knip, Dependabot, editor pins | accepted |
+| D-0012 | The control plane uses the rollback journal, not WAL | accepted |
+| D-0013 | `sqlite3_complete` is transcribed, and pinned by a differential corpus | accepted |
+| D-0014 | Seam records reproduce monkeypatch on module internals | accepted |
+| D-0015 | Strict UTF-8 decoding for migration step files | accepted |
+| D-0016 | Mapping Python sqlite3 exception classes to better-sqlite3 result codes | accepted |
+| D-0017 | What refusal message text may change in translation, and what may not | accepted |
+| D-0018 | The differential oracle, and the one face this pilot implements | accepted |
 
 ---
 
@@ -607,3 +614,582 @@ build step.
 6.32.2 on this repository. attw baseline measured before configuration: the only failing rule was
 `cjs-resolves-to-esm` (node10, node16-from-ESM, and bundler all green). knip baseline: two
 devDependencies unflagged once npm scripts referenced them, one export used only in its own file.
+
+---
+
+## D-0012 — The control plane uses the rollback journal, not WAL
+
+**Context.** `src/sqlite/open.ts` -- the generic opener written at bootstrap -- issues
+`db.pragma("journal_mode = WAL")` on every writable connection. That is a reasonable default for a
+database that is written to concurrently, and it is the wrong default for the control plane, whose
+refusal contract several ported cases state in terms of what a *refused* operation does **not** do
+to a file.
+
+interlock's `control_plane/migrator.py` does not set a journal mode at all. `_configure` issues
+exactly two pragmas -- `PRAGMA foreign_keys = ON` and `PRAGMA synchronous = FULL` -- and a grep for
+`journal_mode` across the whole `control_plane` package returns no hits, so SQLite's default
+rollback journal is what the source behaves under. Three groups of ported assertions depend on that,
+and each fails under WAL for a different reason:
+
+- Three cases assert `sidecars(dbPath) == []`. The source's helper is documented as "Journal and WAL
+  files -- evidence that a 'refused' open in fact wrote." WAL creates `-wal` and `-shm` on the first
+  write and removes them only on a clean last-connection close, so a correct implementation would
+  leave them behind and the assertion would read as an implementation bug -- and the tempting fix is
+  to delete the assertion, which discards the property.
+- Four cases compare the database file's **bytes** before and after the refused operation (`a
+  checksum refusal does not write to the database`, `opening a database behind the code refuses
+  instead of migrating`, `creating over an existing path is refused`, and `a file that is not a
+  database is refused and left alone`). Under WAL recent commits live in the sidecar, so "the main
+  file is unchanged" stops meaning what those tests mean by it.
+- Setting `journal_mode = WAL` is itself a write to the database header, so on a writable connection
+  it mutates a file the module may not have decided to trust yet -- and on the read-only connection
+  verification actually uses, it throws `SQLITE_READONLY` outright. Either way the WAL opener cannot
+  serve the path that inspects an untrusted database, which is the path the refusal cases are about.
+
+**Decision.** The control plane gets its own opener, `src/control_plane/connection.ts`, and
+`src/sqlite/open.ts` is left unchanged. It exports two functions and the split between them is the
+decision:
+
+- `openControlPlaneConnection(path, options)` opens the file and applies **no pragmas**.
+- `configureConnection(connection)` applies exactly the two pragmas interlock's `_configure`
+  applies, in that order, and nothing else.
+
+Splitting open from configure is not tidiness. Verification runs on a **read-only** connection over
+a file that is being inspected precisely because it is not yet trusted, and the fewest pragmas such
+a file can be touched with is none.
+
+The tempting justification for that split is that pragmas cannot be issued read-only, and it is
+false. Measured on better-sqlite3 13.0.3: `foreign_keys = ON` and `synchronous = FULL` both succeed
+on a read-only connection and neither changes a byte. It is `journal_mode = WAL` that differs -- it
+throws `SQLITE_READONLY`, "attempt to write a readonly database". So routing verification through
+the WAL opener would not quietly corrupt an untrusted file; it would fail outright, and every
+refusal that depends on reading one would reach the caller as a driver error rather than as a typed
+refusal.
+
+**Alternatives.**
+
+- **Change `src/sqlite/open.ts` to drop WAL (rejected).** It settles the journal mode of every
+  future consumer by way of the control plane's refusal semantics. The rollback journal is right
+  *here* because of what these tests assert; it is not established as right for the spike database
+  or for anything else, and D-0007's posture is that a shared default is chosen deliberately, not
+  inherited from whichever module was ported first.
+- **Add a `journalMode` option to the generic opener (rejected).** It makes the dangerous setting
+  the default and the safe one opt-in, so a new control-plane call site is wrong unless someone
+  remembers a flag. A separate module cannot be reached by forgetting.
+- **Keep WAL and relax the byte-identity and sidecar assertions (rejected).** interlock#74 asks for
+  a faithful translation; these are the assertions that give the refusal cases their teeth.
+  Weakening a ported assertion to accommodate a target-side choice that has no source-side
+  counterpart is the failure mode the parity ledger exists to make visible, and this one has an easy
+  correct fix.
+- **`journal_mode = MEMORY` or `OFF` to avoid sidecars (not considered seriously).** Both are
+  divergences from the source in the opposite direction, and `OFF` gives up rollback -- which
+  contradicts `synchronous = FULL`, whose whole point is that a committed step is durable.
+
+**Consequences.**
+
+- Control-plane connections are single-writer with reader/writer exclusion, which is what interlock
+  has today; nothing in the ported suite depends on WAL's concurrent-reader behaviour.
+- Two openers now exist, and nothing mechanical stops a future module under `src/control_plane/`
+  from importing `openDatabase` instead. The sidecar and byte-identity assertions would catch it
+  only in the cases that make them. That gap is stated rather than papered over: the module comment
+  in `connection.ts` names this decision, and a lint rule confining the import is the obvious
+  follow-up if a second control-plane module ever lands.
+- `configureConnection` is applied by callers rather than folded into open, so a writable connection
+  that skips it silently runs with `foreign_keys` off. That risk is real and accepted: the read-only
+  verification path cannot be served otherwise, and `the migrating connection ends with foreign keys
+  enforced` pins the property for the path that matters.
+- The two pragmas are per-connection, not stored in the file, so they are reapplied on every open
+  rather than assumed from a previous session.
+
+**Status.** accepted
+
+**Source.** `control_plane/migrator.py::_configure` read directly in the interlock checkout at
+`/home/happy_ryo/work/org/workers/interlock` (main @ 65f36c5) on 2026-08-22, together with a
+`journal_mode` grep over the whole `control_plane` package that returns no hits, and the docstring
+of the source's sidecar helper. The read-only pragma behaviour above was measured directly against
+better-sqlite3 13.0.3 (SQLite 3.53.4) on the same date. Falsified if interlock's control plane
+adopts a journal mode -- at which point this repository follows it rather than keeping the rollback
+journal on its own authority -- or if the ported cases that assert `sidecars(dbPath) == []` and
+byte-identity are themselves retired.
+
+---
+
+## D-0013 — `sqlite3_complete` is transcribed, and pinned by a differential corpus
+
+**Context.** interlock's migrator does not split a migration step on `;`. `migrator._statements`
+accumulates lines and asks `sqlite3.complete_statement(buffer)` where each statement ends, and that
+choice is load-bearing rather than stylistic: the production DDL is largely triggers, and a naive
+split on `;` cuts every `CREATE TRIGGER ... BEGIN ... END` in half at the first statement inside its
+body. better-sqlite3 exposes no equivalent API, so porting the migrator
+(`src/control_plane/migrator.ts`) means either reproducing that oracle or changing what a migration
+step means.
+
+**Decision.** `src/sqlite/complete-statement.ts` **transcribes** SQLite's `sqlite3_complete()` from
+`src/complete.c`: the 8x8 state table, the token classes, and the early-return points, kept in the
+original's shape and ordering so the two files can be diffed against each other. It is a
+transcription, not a reimplementation -- the shape is the review mechanism.
+
+The transcription was validated differentially against Python's `sqlite3.complete_statement` over a
+corpus of **2,203 inputs**: every cumulative line-prefix of the three shipped migration files
+(`src/control_plane/migrations/0001_initial.sql`, `0002_policy_seed.sql`,
+`0003_outbox_cancelled_status.sql`) plus 30 hand-built adversarial cases -- unterminated string,
+unterminated trigger, `;` inside a string literal, `--` comment tail, unclosed `/* */`, bracket and
+backtick identifiers, `EXPLAIN`, and the near-keywords `creates` / `ends`.
+
+**The comparison is a standing check, not a one-off run.** `test/sqlite/complete-statement.test.ts`
+rebuilds the corpus from the committed migration files and the committed adversarial list, and
+asserts the transcription against the vector at every position;
+`scripts/oracle/dump_complete_statement.py` regenerates the vector. The corpus is rebuilt rather
+than committed because the cumulative prefixes of an 85 KB file come to tens of megabytes, and
+rebuilding them from files that are already in the repository is exact.
+
+**That corpus earned its place on the first run.** One cell of the state table was wrong -- state 6,
+`TRIGGER`, on a `SEMI` token -- and it made the machine treat the first semicolon *inside* a trigger
+body as a statement terminator. 42 of the 2,203 inputs mismatched. After the fix, 2,203/2,203 agree.
+A transcription that is 99% right is a transcription that silently truncates trigger DDL.
+
+**Alternatives.**
+
+- **`sql.trimEnd().endsWith(";")` (rejected).** Misclassifies every trigger (the `;` before `END` is
+  not a boundary) and every statement whose tail is a `--` comment. It is the shortcut this decision
+  exists to refuse.
+- **Call `prepare()` and classify the resulting error as "incomplete" (rejected).** It conflates
+  *incomplete* with *invalid*. A statement referencing a table that an earlier statement in the same
+  step creates fails to prepare while being perfectly complete, so the incomplete-statement refusal
+  would fire on a valid migration step.
+- **Depending on a third-party SQL splitter (not considered seriously).** The requirement is not "a
+  splitter" but "the same answers as the oracle interlock used"; anything not diffable against
+  `complete.c` cannot be argued to meet it.
+
+**Consequences.**
+
+- **`splitLinesKeepEnds` lives in the same file and is part of the same fidelity claim.** It
+  reproduces Python's `str.splitlines(keepends=True)` boundary set, which is wider than `"\n"`.
+  Splitting at fewer points than the source does could merge two statements into one execution,
+  which changes what a mid-step failure rolls back -- a data-integrity difference, not a formatting
+  one.
+- **The statement splitter stays a generator, as the source is.** An eager array is the tempting
+  simplification and it is wrong: it would raise the incomplete-statement refusal before any
+  statement ran, so the partial-execution-then-rollback path would never be exercised, and the
+  ported tests that assert on it would pass for the wrong reason.
+- Both functions are internal (`src/sqlite/`), not part of the published surface (D-0002); they
+  exist to serve the migrator, not as a general SQL utility.
+- SQL text itself is migrated verbatim per the port's SQL policy, so a dialect deviation surfaces as
+  a recorded decision rather than as a quiet edit to the splitter.
+
+**Status.** accepted
+
+**Source.** Transcribed from SQLite's `src/complete.c`. Differential run against Python's
+`sqlite3.complete_statement` (SQLite 3.45.1) over 2,203 inputs, 2026-08-22: 42 mismatches before the
+state-table fix, 0 after. What falsifies this: any input on which the two disagree. The corpus is
+derived from the migration files as they stand, so adding or editing a migration changes it -- the
+length check in the test turns that into an explicit instruction to regenerate rather than a silent
+drift. An upstream change to `sqlite3_complete()`'s state table, or to Python's `str.splitlines`
+boundary set, would invalidate the transcription rather than merely age it.
+
+---
+
+## D-0014 — Seam records reproduce monkeypatch on module internals
+
+**Context.** Three ported cases patch a function that the module under test calls *itself*:
+`_verify_readonly` (the two verify-reopen-gap cases) and `_apply_step` (one case). In Python this is
+ordinary `monkeypatch.setattr`, and it works because a module-level name is resolved at call time
+through the module dictionary -- rebinding the dict entry changes what the caller inside the module
+sees on its next call. ESM has no equivalent: bindings are resolved at link time and cannot be
+rebound from outside the module. `vi.mock` does not reach this case either -- it replaces a module
+for its *importers*, and an intra-module call has no importer to intercept. The same problem applies
+to `MIGRATION_BUSY_TIMEOUT_MS`: Python reads the module-level constant at call time and the
+lock-contention case patches it to 250 ms, while a TypeScript `export const` is immutable.
+
+**Decision.** `src/control_plane/migrator.ts` exports a **seam record**:
+
+```ts
+export const migratorSeams = { migrationBusyTimeoutMs, verifyReadonly, applyStep };
+```
+
+Every internal call site goes *through* the record (`migratorSeams.verifyReadonly(...)`,
+`migratorSeams.applyStep(...)`, `busy_timeout = ${migratorSeams.migrationBusyTimeoutMs}`), so
+replacing an entry changes what production code actually calls. That is a reproduction of Python's
+late binding, not a workaround for its absence. The record is not re-exported from `src/index.ts`:
+it is a testing seam, not public surface.
+
+Tests patch it through `patchSeam` in `test/testkit/seams.ts`, which reproduces the two load-bearing
+properties of pytest's `monkeypatch`: it snapshots the value present **at each patch**, not once,
+and undoes in **LIFO** order. Both matter here -- one ported case re-patches the same key from
+inside its own wrapper to disarm it after a single call, so a restore in registration order would
+leave the wrapper installed for the rest of the file.
+
+The seam is kept honest by three **target-only "seam liveness" tests** in
+`test/control_plane/migrator.test.ts`, which assert that production code routes through the record:
+they count calls through a wrapper, and one asserts that a patched busy timeout reaches `PRAGMA
+busy_timeout`.
+
+**Alternatives.**
+
+- **Parameter injection -- pass `verifyReadonly`/`applyStep` in as arguments (rejected).** It
+  changes the production call graph. The ported case would then exercise a path that only tests use,
+  so a green result would prove something about the injection point rather than about the behaviour
+  the source case was written to pin.
+- **`vi.mock` on the module (rejected).** It substitutes the module for its importers; the calls in
+  question are intra-module and never cross that boundary, so the replacement is simply not reached.
+- **`vi.spyOn` on the module namespace object (rejected).** ESM namespace objects are not writable,
+  and it cannot touch a plain data key such as a timeout constant at all.
+- **Dropping the three cases as untranslatable (rejected).** They cover the verify-reopen gap and a
+  mid-apply failure -- exactly the windows a forward-only migrator has to get right. Marking them as
+  waivers would spend the pilot's credibility on its hardest cases.
+
+**Consequences.**
+
+- Refactoring an internal call site to call `verifyReadonlyImpl`/`applyStepImpl` directly would
+  leave all three ported cases **green for the wrong reason** -- the replacement would never be
+  reached. The seam-liveness tests exist precisely to turn that refactor red, and they must be
+  maintained alongside the seam; a seam without them is a decoration.
+- The record's keys are part of the module's name surface, so the ported "no down migration api"
+  case scans `Object.keys(migratorSeams)` as well as the module's exports. Adding a seam named after
+  a down-migration operation fails that case.
+- Seams are a cost, not a convenience: each one is production indirection that exists for tests.
+  Follow-on batches add a seam only where the source case patches a module internal, and the
+  translation convention says so.
+- `patchSeam` is registered through `onTestFinished`, so a patch is undone whether the test passes
+  or fails and is scoped to the test rather than the file -- under the shuffled order of D-0005, a
+  patch that outlived its test would fail a different test on each run.
+
+**Status.** accepted
+
+**Source.** The three affected cases and their Python originals were read against the local
+interlock checkout on 2026-08-22; the ESM binding and `vi.mock` limitations were confirmed by the
+ported cases failing under those approaches before the seam record was introduced. What would
+falsify this: a Vitest/Node mechanism that rebinds a live ESM export as seen by its own module -- if
+intra-module rebinding becomes available, the seam record is redundant indirection and the three
+cases should move to it, with the seam-liveness tests deleted alongside.
+
+---
+
+## D-0015 — Strict UTF-8 decoding for migration step files
+
+**Context.** One ported case writes a migration step file whose bytes are not valid UTF-8 and
+requires a typed refusal -- `MigrationStepsRefused` whose message matches `not valid UTF-8` --
+rather than a decoder exception escaping raw, and rather than a read that quietly succeeds. Python's
+`Path.read_text()` raises `UnicodeDecodeError` there, so the source test gets its refusal for free.
+Node's `Buffer.toString("utf8")` does not: it substitutes U+FFFD for every undecodable byte and
+**never throws**. The naive port therefore does not refuse at all -- the corrupted step decodes to
+something plausible, is stored with the rest, and is then applied to the database. The test does not
+merely fail; it fails by describing the exact production accident the refusal exists to prevent,
+which is half a schema change landing on a real database.
+
+**Decision.** `discoverMigrationSteps` (`src/control_plane/migrator.ts`) decodes step bodies with
+`new TextDecoder("utf-8", { fatal: true }).decode(bytes)`. The `TypeError` that decoder throws is
+caught and re-thrown as `MigrationStepsRefused`, carrying the original as `cause`.
+
+Two properties of the surrounding code are part of this decision, not incidental:
+
+- **The checksum is taken over the raw bytes**, `createHash("sha256").update(readFileSync(path))`,
+  never over the decoded or normalized text. The property the checksum protects is that the file has
+  not been touched at all since it ran, so a whitespace-only edit must change it. No line-ending
+  normalization either: a CRLF/LF change *is* a checksum change, by design.
+- **The failing test writes its bad bytes as an explicit byte array**, `Buffer.concat` with
+  `Buffer.from([0xff])`. `Buffer.from(someString)` cannot express this case -- a literal U+00FF
+  encodes to two *valid* UTF-8 bytes, which decode cleanly and turn the test green for the wrong
+  reason -- and a raw undecodable byte cannot be written into the source file anyway (D-0006).
+
+**Alternatives.**
+
+- **`Buffer.toString("utf8")` plus a post-hoc scan for U+FFFD (rejected).** It cannot distinguish a
+  corrupted file from one that legitimately contains U+FFFD, and it re-derives, badly, a check the
+  decoder already performs exactly.
+- **Letting the decoder's `TypeError` propagate unwrapped (rejected).** Callers discriminate
+  migration failures by type; a bare `TypeError` reaching them is indistinguishable from a
+  programming error, and the ported case asserts on `MigrationStepsRefused` specifically.
+- **Decoding lazily, at apply time rather than at discovery (rejected).** Discovery is the point
+  where the whole ledger is validated as a set; deferring this one check means a corrupted step is
+  reported only after earlier steps have already been applied.
+- **Reproducing Python's `UnicodeDecodeError` message text (not considered seriously).** See
+  Consequences -- the assertion does not depend on it, and fabricating another runtime's diagnostic
+  string is worse than differing from it.
+
+**Consequences.**
+
+- **The refusal message differs from Python's in its parenthetical.** It interpolates whatever the
+  platform decoder says, where Python says `'utf-8' codec can't decode byte 0xff in position 0:
+  invalid start byte`. The ported assertion matches the substring `not valid UTF-8`, which the port
+  emits identically, so this is an accepted deviation recorded here rather than a parity gap.
+- **`TextDecoder` is the decoding path for this file class; `Buffer.toString` is not.** The two
+  differ only on invalid input, which makes the wrong one silently fine in every test that uses
+  valid bytes -- the reason this is written down rather than left to reviewers.
+- Any future normalization of step text (trimming, line-ending fixes) would have to run *after* the
+  checksum, or it silently forgives edits the checksum exists to catch.
+
+**Status.** accepted
+
+**Source.** Ported control-plane migrator case, translated 2026-08-22 against the interlock source
+suite. `Buffer.toString("utf8")` substituting U+FFFD without throwing, and `Buffer.from` encoding
+U+00FF as two valid UTF-8 bytes, were both observed in this repository while the case was red, not
+taken from documentation. Falsified if a Node release makes `Buffer.toString("utf8")` fatal, or if
+`TextDecoder` with `fatal: true` stops throwing on an invalid sequence -- in either case the strict
+decoder here becomes redundant rather than wrong.
+
+---
+
+## D-0016 — Mapping Python sqlite3 exception classes to better-sqlite3 result codes
+
+**Context.** Interlock's migrator branches on Python exception *classes*: `sqlite3.OperationalError`
+for lock contention, `sqlite3.IntegrityError` for a trigger's `RAISE(ABORT, ...)`,
+`sqlite3.DatabaseError` for "file is not a database", and a catch-all `sqlite3.Error` around step
+application. better-sqlite3 raises **one** error type carrying a `code` string, so those four
+branches do not survive translation as written -- they have to be rebuilt from result codes. Done ad
+hoc, each `catch` site invents its own test, and the tempting test is `message.includes("locked")`:
+SQLite's message text is not a compatibility surface, so that translation is green today and wrong
+after any upgrade that reworded a message.
+
+**Decision.** The mapping is written down once, in [`src/sqlite/errors.ts`](./src/sqlite/errors.ts),
+as a table in the module comment, and every branch the port actually takes goes through a predicate
+there rather than through an inline `catch` test. `isSqliteError` and `sqliteCodeOf` extract the
+code; two predicates carry the two classes the migrator branches on: `isBusyError` (`SQLITE_BUSY*`
+**and** `SQLITE_LOCKED*`) and `isNotADatabaseError` (`SQLITE_NOTADB`, `SQLITE_CORRUPT*`).
+
+The constraint and cant-open rows of the table are **documented and not written**. Nothing in the
+port branches on them -- the ledger-trigger cases assert `SQLITE_CONSTRAINT*` from the test side,
+and the absent-database case is settled by a `statSync` before the file is ever opened. An unused
+predicate is a guess about a future branch, and a guess nothing exercises is the shape of a mapping
+that turns out to be wrong on the day it is finally reached; knip would flag it as dead surface in
+any case (D-0011).
+
+`isSqliteError` recognises an error by the presence of a `SQLITE_`-prefixed `code`, **not** by
+`instanceof`. better-sqlite3's `SqliteError` constructor is reachable only through the default
+export's `.SqliteError` property, and pinning the check to that identity breaks the moment a second
+copy of the package is resolved anywhere in the graph -- an `instanceof` that quietly answers false
+turns every one of these branches into its fallback path.
+
+On the test side the same split is kept by `expectSqliteError` in
+[`test/testkit/errors.ts`](./test/testkit/errors.ts), which asserts the **code** and optionally the
+message. A source `pytest.raises(sqlite3.IntegrityError, match="written once")` asserts a class and
+a message search; the naive Vitest translation asserts the message alone, dropping the type half
+without leaving a trace. Asserting the code keeps both halves, and keeps the durable half
+load-bearing.
+
+The refusal family this feeds is separately load-bearing and lives in
+[`src/control_plane/refusals.ts`](./src/control_plane/refusals.ts) as **one** declaration that every
+module imports, never as parallel declarations -- class identity has to hold across the module
+boundary for `instanceof` assertions to mean anything. `MigrationChecksumRefused` and
+`DatabaseAheadOfCodeRefused` descend from `CorruptStateRefused`; `MigrationStepsRefused` descends
+from `ControlPlaneRefusal` **directly and deliberately not** from `CorruptStateRefused`, because no
+database is at fault when this build's own step files are unusable, and an operator who reads it as
+corruption reaches for a restore when the fix is a rebuild. Every subclass constructor calls
+`Object.setPrototypeOf`: extending a built-in under a downlevel emit target loses the prototype
+chain, and `instanceof` then silently reports false.
+
+**Alternatives.**
+
+- **Recreating the Python class hierarchy as TS error classes and wrapping every better-sqlite3 call
+  to rethrow into it (rejected).** It buys the `instanceof` spelling of the source at the cost of a
+  wrapper on every call site, and the classification still has to be done from codes -- the same
+  table, plus a translation layer that can drop `cause` and stack.
+- **Matching on message text (rejected).** It is the translation that looks most like the source's
+  `match=` and it depends on strings SQLite does not promise; the codes are the documented surface.
+- **`instanceof db.SqliteError` (rejected).** See Decision: correct until two copies of the package
+  are resolved, then silently false everywhere.
+- **Distinguishing `SQLITE_LOCKED` from `SQLITE_BUSY` in the migrator (not considered seriously).**
+  Both mean some other holder has the database, which is what the refusal text says; the
+  table-level/file-level distinction has no different operator move.
+- **Folding `MigrationStepsRefused` under `CorruptStateRefused` to flatten the family (rejected).**
+  It is the one split in the hierarchy that changes what the operator does next.
+
+**Consequences.**
+
+- New SQLite branches must be expressed as a predicate in `src/sqlite/errors.ts`, not as an inline
+  `catch` test. That friction is the point: the mapping stays reviewable in one place.
+- The predicates are prefix matches (`SQLITE_CONSTRAINT*`, `SQLITE_BUSY*`, ...), so extended result
+  codes SQLite adds within an existing family classify correctly without an edit here.
+- `isSqliteError` will accept a non-better-sqlite3 error that happens to carry a `SQLITE_`-prefixed
+  `code`. Nothing in this tree produces one, and the alternative failure -- refusing a genuine
+  SQLite error because module identity differs -- is the worse direction to be wrong in.
+- The migrator issues its own `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK` rather than using
+  better-sqlite3's `transaction()` wrapper, and relies on two behaviours measured directly (see
+  Source): `db.inTransaction` tracks a manually issued `BEGIN IMMEDIATE`, and `db.exec()` issues no
+  implicit `COMMIT`. If either changed, the rollback path would silently leak a half-applied step.
+
+**Status.** accepted
+
+**Source.** Mapping derived from interlock `control_plane` (`main` @ 65f36c5) by reading the
+migrator's `except` clauses. Transaction behaviour was **measured, not assumed**, on 2026-08-22
+against better-sqlite3 13.0.3 (bundling SQLite 3.53.4, D-0003): `db.inTransaction` is true after a
+manual `BEGIN IMMEDIATE` and false after `ROLLBACK`, and a `CREATE TABLE` run through `db.exec()`
+inside a manual transaction is rolled back -- so `exec()` does not commit implicitly. Falsified by:
+either of those two probes reporting otherwise on a future better-sqlite3, or a result code moving
+out of the family its predicate matches; `test/contract/` re-runs the probes, so an upgrade that
+changes them is red rather than silent.
+
+---
+
+## D-0017 — What refusal message text may change in translation, and what may not
+
+**Context.** pytest's `raises(match=)` is a regex **search** over the exception's string form, so
+interlock's refusal messages are the oracle for 32 of this file's 64 collected cases -- the
+assertion is on the text, not on the exception class. That makes the message wording part of the
+contract being ported, and it makes improvisation dangerous in a way that is easy to miss: a
+translator who rewrites a message to read better in TypeScript does not get a red test with a diff,
+they get a regex that no longer matches a string nobody is looking at, and the fix is to relax the
+pattern. Every relaxation is a case that stops testing anything. Left to case-by-case judgement, the
+rule also drifts -- the same class of substitution gets made in one file and not the next.
+
+**Decision.** Five rules, applied globally, each with at least one instance in this pilot:
+
+1. **Function and module names in refusal text are the target's names.** The source asserts
+`match="migrate_control_plane"`; the port emits and asserts `migrateControlPlane`. The same for the
+generated schema header, which names `control_plane/migrator.ts` and
+`src/control_plane/migrations/`. The property under test -- that the refusal tells the operator what
+to call and where to look -- is preserved exactly; a message telling a TypeScript operator to call
+`migrate_control_plane` would be a faithful string and a broken instruction. 2. **Literal data in
+messages is carried verbatim.** `LEDGER_COMPANIONS` keeps interlock's five names, `__init__.py` and
+`__pycache__` included: the allowlist is by provenance, and what the ledger directory may contain is
+a step-file decision, not a translation detail. 3. **Mechanical formats are reproduced, not
+approximated.** Python's `{:#x}` becomes `` `0x${n.toString(16)}` `` -- lower-case, because that is
+what the source's assertions match. Python's `repr` of a name becomes single quotes written by hand,
+never `JSON.stringify`. 4. **Rows interpolated into messages get one renderer.** `renderRow` /
+`renderRows` in `migrator.ts` turn better-sqlite3 row objects into Python-tuple-shaped text, rather
+than an inline join at each call site. 5. **A message difference forced by the runtime is an
+accepted deviation recorded in the parity ledger** -- for example the decoder's own wording inside
+the not-valid-UTF-8 refusal (D-0015). It is never papered over by hand-copying Python's wording into
+a message the runtime did not produce.
+
+Ordering that messages depend on is preserved too: discovery iterates entries in sorted order, and
+the file named as the incumbent in a duplicate-version refusal is whichever sorts first. Python's
+`sorted()` over `str` is code-*point* order while JavaScript's default `Array#sort` is UTF-16
+code-*unit* order; they agree for every code point below U+FFFF, which covers every filename the
+naming convention admits. The sort runs on raw basenames *before* the `STEP_FILENAME` filter, so a
+non-BMP filename could in principle make them disagree -- and would then be refused by that filter
+in both languages regardless of which one sorted first.
+
+**Alternatives.**
+
+- **Keep the source's identifier spellings verbatim, including `migrate_control_plane` (rejected).**
+  It maximizes textual fidelity and destroys the property the text exists for: the message would
+  name a function this package does not export. Rule 1 changes the token and keeps the meaning;
+  verbatim would keep the token and lose the meaning.
+- **Substitute Node equivalents into `LEDGER_COMPANIONS` -- drop the Python names, add
+  `node_modules` (rejected).** Two ported cases are a matched pair pinning the exact list: one
+  requires the companions to be skipped, the other requires `notes.txt` to be **refused**.
+  Substituting flips one of the pair red, and the tempting repair -- "skip anything not ending in
+  `.sql`" -- turns four cases vacuously green while silently skipping `0007_fix.sql.bak` and
+  `0007_fix.sql~`. A skipped step is a schema change that happened on some databases and not others.
+- **`JSON.stringify` for quoting names, and `toUpperCase()` on hex (rejected).** Both are the
+  idiomatic JavaScript reflex and both change bytes the source's regexes match: double quotes where
+  Python's `repr` emits single ones, `0xILKP`-style upper-case where `{:#x}` emits lower.
+- **Rewrite the assertions to be structural -- match on an error code, not on text (deferred).** A
+  better long-term shape, but it is a change to what the tests assert, which is exactly what a
+  parity port must not do on the way in. Revisit after the full port is green, as a change made once
+  against a passing baseline.
+- **Normalize message text through a translation table at assert time (not considered seriously).**
+  It would let both spellings pass, which is another way of saying it tests neither.
+
+**Consequences.**
+
+- The five rules are the only sanctioned reasons a ported message may differ from its source. Any
+  other difference is a bug in the translation, and the reviewer's question is "which rule?" rather
+  than "does this read well?".
+- Rule 1 is applied as a global sweep, so a reviewer can check it by grepping for source-style
+  snake_case identifiers in message strings rather than by reading each message against its source.
+- Rule 4 makes `renderRow` load-bearing: two refusal messages interpolate rows through it, and both
+  are matched by ported cases, so a change to its output is a change to the contract rather than to
+  formatting. It does **not** feed the differential oracle (D-0018), which compares a JSON dump
+  built from pragma output and row objects.
+- Rule 5 means the parity ledger, not the code, is where message deviations are counted -- an
+  accepted deviation is visible in the ledger's reason column and is a PR review argument, per the
+  waiver posture.
+- The companion allowlist carries Python-flavoured names into a TypeScript package indefinitely.
+  That is intended: removing them is a step-file decision that needs its own entry here.
+
+**Status.** accepted
+
+**Source.** `raises(match=)` search semantics and the affected assertions read from the interlock
+`control_plane` tests at the pinned source revision, 2026-08-22; the rules above are instantiated in
+`src/control_plane/migrator.ts` (`LEDGER_COMPANIONS`, `renderCompanions`, `renderRow`, `renderRows`,
+the `0x${...toString(16)}` sites) and in the ported cases the parity ledger maps to them. Falsified
+if a ported case's assertion is found to match message text that no rule above sanctions, or if the
+sort-order claim fails -- Python `sorted()` over basenames and JavaScript `Array#sort` agreeing on
+code-unit order is what makes the incumbent named in a duplicate-version refusal identical in both
+languages, and a discovery path that sorts on anything other than the raw basename breaks it.
+
+---
+
+## D-0018 — The differential oracle, and the one face this pilot implements
+
+**Context.** This pilot copies interlock's SQL verbatim -- the three migration files are
+byte-identical, verified with `cmp`. That fixes the *text* and nothing else. It says nothing about
+the order the statements execute in, where the transaction boundaries fall, which pragmas are in
+force while they run, or how two different drivers represent the values that come back. Each of
+those can differ while both suites stay green, and each of them changes the database. A ported test
+asserts what its author thought to assert; it cannot notice a difference nobody wrote an assertion
+about.
+
+**Decision.** For any face that can be normalised, feed the same fixture vector to the Python
+implementation and to the TypeScript one and compare the normalised output. The design review named
+four candidate faces: DB state, CLI results, state transitions, exception classification. **This
+pilot implements exactly one -- control-plane DB state** -- and defers the rest to later belt work.
+
+The implemented face:
+
+- [`scripts/oracle/dump_control_plane.py`](./scripts/oracle/dump_control_plane.py) migrates an empty
+  database to head through **interlock's** migrator at a fixed clock (`1700000000000`) and prints a
+  normalised JSON dump.
+- [`test/oracle/control-plane-dump.ts`](./test/oracle/control-plane-dump.ts) does the same through
+  continuo's.
+- The vector the Python side produced is committed at `parity/oracle/control-plane-state.json`, and
+  `test/control_plane/differential-oracle.test.ts` compares against it. CI therefore gets a
+  cross-runtime comparison without needing a Python interpreter or an interlock checkout.
+- The dump covers `application_id`, `user_version`, `foreign_keys`, `integrity_check`,
+  `foreign_key_check`, every schema object's stored SQL text, and for every table its full column
+  metadata (name / type / notnull / default / pk) plus every row.
+
+Normalisation is deliberate in two places. `applied_at_ms` is **fixed**, not stripped -- stripping
+it would hide a migrator that ignored the caller's clock. Rows are ordered by **every** column,
+because neither driver promises an order without `ORDER BY` and an accidental agreement is worse
+than a mismatch. Nothing path-dependent is emitted.
+
+Regeneration is one-directional on purpose: the test refuses to write the vector from the TypeScript
+side. Setting `CONTINUO_ORACLE_WRITE=1` overwrites it **and fails the test**, so a self-updating
+golden vector cannot be left armed in CI. The vector is regenerated by running the Python script
+against an interlock checkout.
+
+**Alternatives.**
+
+- **Trust the verbatim SQL and skip the oracle (rejected).** It is the tempting one, and it is wrong
+  for the reason above: identical text is not identical execution. The oracle found a real
+  divergence on its first run -- see Consequences.
+- **Run the Python side in CI on every build (rejected).** It would make every continuo build depend
+  on a Python toolchain and an interlock checkout being present and at a known revision, which is a
+  much larger operational surface than a committed vector regenerated on demand.
+- **Strip the timestamp instead of fixing the clock (rejected).** A migrator that writes
+  `time.time()` regardless of the injected clock would compare equal.
+- **Compare only row contents, not the stored schema text (rejected).** That is exactly the
+  divergence that was found; SQLite keeps `CREATE TABLE` text verbatim in `sqlite_master`, so schema
+  text is observable state, not formatting.
+- **All four faces in this pilot (deferred).** PR-size discipline; the value of the pilot is the
+  mechanism and the recorded design, not coverage breadth.
+
+**Consequences.**
+
+- **It found a real divergence on its first run that no ported test had caught.** continuo's
+  `SCHEMA_MIGRATION_DDL` had been *retyped* rather than copied, differing from interlock's by
+  whitespace and one trailing comment. Because SQLite stores `CREATE TABLE` text verbatim, the two
+  databases' schemas differed textually. Fixed by carrying the DDL across byte-for-byte; the dumps
+  are now equal. This is a second class of defect from the state-table bug the `complete_statement`
+  corpus found (D-0013) -- that one a ported assertion caught, this one only the oracle could.
+- **The comparison is itself guarded.** A "vector is not vacuous" test asserts the committed vector
+  has more than 50 schema objects, more than 10 tables, exactly 3 `schema_migration` rows, and a
+  non-empty `policy_revision` table, so a vector regenerated from an empty or failed run cannot make
+  the comparison pass while comparing nothing.
+- Updating the vector is a reviewable diff. A migration change shows up as a schema-text diff in the
+  PR rather than as a silently re-recorded golden file.
+- The CLI, state-transition and exception-classification faces remain unimplemented. Until they
+  exist, parity on those faces rests on the ported assertions alone.
+
+**Status.** accepted
+
+**Source.** Codex design review 2026-08-22 (differential oracle item); implemented 2026-08-22
+against the interlock checkout at `/home/happy_ryo/work/org/workers/interlock` (main @ `65f36c5`).
+The three migration files were compared with `cmp` on that date. Falsified by: the two dumps ceasing
+to be equal after a change on either side, or the vector being regenerated from a source revision
+other than the one recorded alongside it -- the vector is only evidence of parity against the
+interlock revision it was produced from, so a stale `source_revision` makes the comparison
+meaningless rather than merely out of date.
