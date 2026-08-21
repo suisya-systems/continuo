@@ -23,7 +23,14 @@ path rather than in a nightly job.
 | Covered | Not covered |
 |---|---|
 | `src/`, `scripts/`, `test/` | `docs/`, `README.md`, `DECISIONS.md`, `CHANGELOG` |
+| Root-level `.ts` / `.js` / `.mjs`, `vitest.config.ts` included | Root-level JSON (`package.json`, `tsconfig.json`) and dot-files |
 | Anything continuo prints | Text that continuo only reads, stores, or passes through |
+
+Root-level files are covered because `vitest.config.ts` writes the seed line to stderr on **every**
+run, which makes it more likely to reach a cp932 console than anything under `src/`. A
+directory-only scan misses it. Root JSON and dot-files are excluded so the scan stays deterministic:
+a working copy may hold untracked local files that are not continuo's source, and they must not
+decide whether the suite is green.
 
 The mechanical check is **wider than the rule it protects**: it rejects any non-ASCII codepoint
 anywhere in a covered file, including comments and test names, not only in strings that are
