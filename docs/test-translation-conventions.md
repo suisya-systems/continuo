@@ -120,9 +120,10 @@ reported title.
 `process.platform === "win32"`: the source condition is often about a *capability* (POSIX process
 groups, `/proc`, symlink creation), and the port must ask about the capability.
 
-**Enforcement.** `scripts/parity-check.mjs` fails on any `skip`, `todo`, `fails` or `xfail` construct
-anywhere under `test/` that a ledger does not name with a reason. A skip added quietly is the cheapest
-way to make a port look finished.
+**Enforcement.** `scripts/parity-check.mjs` counts every `skip`, `todo`, `fails` and `xfail`
+construct under `test/` and requires a ledger approval with a matching **exact count**. One approved
+example does not license the next one. A skip added quietly is the cheapest way to make a port look
+finished.
 
 ---
 
@@ -293,8 +294,11 @@ weaker, it is a waiver, and that is a report to the reviewer -- see rule 0.
 2. **duplicate** -- one source case claimed twice, or two source cases pointing at one target test.
 3. **unmapped** -- a target test in a ported file that no entry claims and that is not declared
    target-only.
-4. **unapproved non-running tests** -- any `skip`, `todo`, `fails` or `xfail` under `test/` that no
-   ledger names, with a reason.
+4. **unapproved non-running tests** -- any `skip`, `todo`, `fails` or `xfail` under `test/` beyond
+   what a ledger approves. Approvals carry an **exact count per construct per file**, so one
+   approved example does not license every later skip in that file, and an approval that matches
+   nothing is itself flagged. Comments and string literals are excluded, so a test *named* after a
+   construct is not counted as one.
 5. **shrinkage** -- fewer source cases in the inventory, or fewer mapped cases, than the recorded
    totals.
 6. **unexplained** -- an `adapted` or `not-ported` entry with no reason.

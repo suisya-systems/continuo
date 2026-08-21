@@ -34,9 +34,12 @@
     "approved_non_running": [
       {
         "file": "test/testkit/testkit.contract.test.ts",
-        "constructs": ["skipIf", "xfail(strict:true) -> test.fails", "xfail(strict:false)"],
         "reason": "Target-only. These are the worked examples of the skip and xfail mapping rules (docs/test-translation-conventions.md). Three of the eight dangerous translation patterns -- strict/non-strict xfail, skip semantics, and a caplog-equivalent sink -- have no source case anywhere in interlock control_plane (the suite has one xfail, in messagebus, and no caplog at all), so the rules are demonstrated here rather than by inventing a source node id that does not exist. They translate no source case and are not counted as ported coverage.",
-        "approved_by": "operator, 2026-08-22"
+        "approved_by": "operator, 2026-08-22",
+        "constructs": {
+          "skipIf": 2,
+          "xfail": 3
+        }
       }
     ]
   },

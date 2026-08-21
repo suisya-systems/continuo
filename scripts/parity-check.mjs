@@ -14,9 +14,12 @@
  *                      this, a case could be deleted from the ledger and left
  *                      running, or added to the file and never accounted for.
  *  4. **unapproved non-running tests** -- any `skip`, `todo`, `fails`, or
- *                      `xfail` construct anywhere under `test/` that the ledger
- *                      does not name, with a reason. A skip added quietly is
- *                      the cheapest way to make a port look finished.
+ *                      `xfail` construct anywhere under `test/` beyond what a
+ *                      ledger approves, with a reason. Approvals declare an
+ *                      exact count per construct per file, so one approved
+ *                      example does not license every later skip in that file;
+ *                      an approval matching nothing is flagged too, because a
+ *                      stale licence to skip is a licence nobody reviewed.
  *  5. **shrinkage** -- fewer source cases, or fewer mapped cases, than the
  *                      ledger's own recorded totals.
  *
@@ -32,14 +35,21 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LEDGERS = ["parity/control-plane.ledger.json"];
 
-/** Constructs that stop a test from running, or expect it to fail. */
-const NON_RUNNING = [
-  /\b(?:test|it|describe)\.skip\b/,
-  /\b(?:test|it|describe)\.todo\b/,
-  /\b(?:test|it)\.fails\b/,
-  /\bskipIf\(/,
-  /\bxfail\(/,
-];
+/**
+ * Constructs that stop a test from running, or expect it to fail.
+ *
+ * Keyed by name so an approval can be counted per construct rather than per
+ * file. Approving a file wholesale would mean that one approved example makes
+ * every later `test.skip` in that file invisible to this check -- which is the
+ * hole the check exists to close.
+ */
+const NON_RUNNING = {
+  "test.skip": /\b(?:test|it|describe)\.skip\b/,
+  "test.todo": /\b(?:test|it|describe)\.todo\b/,
+  "test.fails": /\b(?:test|it)\.fails\b/,
+  skipIf: /\bskipIf\(/,
+  xfail: /\bxfail\(/,
+};
 
 const problems = [];
 
@@ -83,6 +93,75 @@ function testFiles(directory = join(ROOT, "test")) {
     }
   }
   return found;
+}
+
+/**
+ * Blank out comments, keeping line numbering intact.
+ *
+ * The sweep below matches source text, and these files *document* the mapping
+ * rules they implement -- a doc comment reading "maps to `test.fails`" is prose,
+ * not a non-running test. Counting it would force an approval for something
+ * that does not exist, which teaches the reader that the counts are noise.
+ *
+ * Deliberately crude: it does not understand strings containing comment
+ * markers. Erring toward blanking means a construct hidden inside such a string
+ * would be missed -- but a `test.skip` written inside a string literal is not a
+ * skip either, so the error direction is harmless here.
+ */
+function withoutComments(source) {
+  return blankStrings(stripComments(source));
+}
+
+/**
+ * Blank out single-line string literals, keeping length and line numbering.
+ *
+ * Test *titles* mention these constructs constantly -- "a strict xfail maps to
+ * `test.fails`" is a name, not a use. Counting titles would make the approval
+ * counts track prose, and an approval that tracks prose is one nobody believes.
+ *
+ * Single-line only, and escapes are honoured. A template literal spanning lines
+ * is left alone: the constructs this sweep looks for are always called at the
+ * start of a statement, never from inside a multi-line template.
+ */
+function blankStrings(source) {
+  return source.replace(
+    /(['"`])(?:\\.|(?!\1)[^\\\n])*\1/g,
+    (match) => match[0] + " ".repeat(Math.max(0, match.length - 2)) + match[0],
+  );
+}
+
+function stripComments(source) {
+  const out = [];
+  let inBlock = false;
+  for (const line of source.split("\n")) {
+    let kept = line;
+    if (inBlock) {
+      const end = kept.indexOf("*/");
+      if (end < 0) {
+        out.push("");
+        continue;
+      }
+      kept = " ".repeat(end + 2) + kept.slice(end + 2);
+      inBlock = false;
+    }
+    for (;;) {
+      const start = kept.indexOf("/*");
+      if (start < 0) break;
+      const end = kept.indexOf("*/", start + 2);
+      if (end < 0) {
+        kept = kept.slice(0, start);
+        inBlock = true;
+        break;
+      }
+      kept = kept.slice(0, start) + " ".repeat(end + 2 - start) + kept.slice(end + 2);
+    }
+    const line_comment = kept.indexOf("//");
+    if (line_comment >= 0) {
+      kept = kept.slice(0, line_comment);
+    }
+    out.push(kept);
+  }
+  return out.join("\n");
 }
 
 const collected = collectTargetTests();
@@ -178,26 +257,59 @@ for (const ledgerPath of LEDGERS) {
   }
 }
 
-// (4): a skip, todo, fails or xfail anywhere under test/ has to be approved by
-// name in a ledger, with a reason.
+// (4): every skip, todo, fails or xfail under test/ has to be approved, and the
+// approval has to account for it *individually*. Approvals declare an exact
+// count per construct, so adding one more skip to an already-approved file is a
+// count mismatch rather than a free ride.
+const observed = new Map();
 for (const path of testFiles()) {
   const relativePath = relative(ROOT, path).split("\\").join("/");
-  const source = readFileSync(path, "utf8");
-  const lines = source.split("\n");
+  // The definitions inside the testkit's own helpers are the implementation of
+  // the mapping, not a use of it.
+  if (relativePath === "test/testkit/marks.ts") {
+    continue;
+  }
+  const lines = withoutComments(readFileSync(path, "utf8")).split("\n");
   for (const [index, line] of lines.entries()) {
-    // The definitions inside the testkit's own helpers are the implementation
-    // of the mapping, not a use of it.
-    if (relativePath === "test/testkit/marks.ts") {
-      continue;
+    for (const [construct, pattern] of Object.entries(NON_RUNNING)) {
+      if (!pattern.test(line)) {
+        continue;
+      }
+      const key = `${relativePath}\u0000${construct}`;
+      const seen = observed.get(key) ?? { count: 0, lines: [] };
+      seen.count += 1;
+      seen.lines.push(index + 1);
+      observed.set(key, seen);
     }
-    if (!NON_RUNNING.some((pattern) => pattern.test(line))) {
-      continue;
-    }
-    const approval = approvedNonRunning.get(relativePath);
-    if (approval === undefined) {
+  }
+}
+
+for (const [key, seen] of observed) {
+  const [relativePath, construct] = key.split("\u0000");
+  const approval = approvedNonRunning.get(relativePath);
+  const allowed = approval?.constructs?.[construct];
+  if (allowed === undefined) {
+    fail(
+      "unapproved-skip",
+      `${relativePath} uses '${construct}' at line(s) ${seen.lines.join(", ")} and no ledger approves that construct in that file`,
+    );
+    continue;
+  }
+  if (allowed !== seen.count) {
+    fail(
+      "unapproved-skip",
+      `${relativePath} uses '${construct}' ${seen.count} time(s) (line(s) ${seen.lines.join(", ")}) but the ledger approves exactly ${allowed}; a new one needs its own approval and reason`,
+    );
+  }
+}
+
+// An approval that no longer matches anything is a stale licence to skip.
+for (const [relativePath, approval] of approvedNonRunning) {
+  for (const [construct, allowed] of Object.entries(approval.constructs ?? {})) {
+    if (!observed.has(`${relativePath}\u0000${construct}`) && allowed > 0) {
       fail(
-        "unapproved-skip",
-        `${relativePath}:${index + 1} uses a non-running test construct that no ledger approves: ${line.trim()}`,
+        "stale-approval",
+        `${relativePath} has an approval for ${allowed} '${construct}' use(s) but none are present; remove the approval`,
       );
     }
   }

@@ -12,9 +12,19 @@
  * same warning written next to it: "without this the wheel ships a migrator
  * whose steps are missing, which every opener then refuses."
  *
- * The copy is verified rather than assumed. A silent no-op here -- a renamed
- * source directory, a glob that stops matching -- produces a package that fails
- * only at run time, on the machine of whoever installed it.
+ * **The packaged ledger must be the same ledger, not a filtered one.** A naive
+ * `*.sql` copy is the trap: an editor's `0004_fix.sql.bak` left in the source
+ * directory is *refused* by `discoverMigrationSteps` in a source-tree run and
+ * would be silently dropped on the way into `dist`, so the packaged build would
+ * migrate happily where the source build refuses. That is the strict-discovery
+ * rule defeated by the build system, and it would show up as "works when
+ * installed, fails in development", which is the worst direction for this
+ * particular disagreement to run.
+ *
+ * So this script applies the module's *own* rules -- imported from the build
+ * output, never restated here, because a second copy of `STEP_FILENAME` is a
+ * second thing to keep in sync -- and refuses anything the migrator would
+ * refuse.
  */
 
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -26,12 +36,37 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FROM = join(ROOT, "src", "control_plane", "migrations");
 const INTO = join(ROOT, "dist", "control_plane", "migrations");
 
-const steps = readdirSync(FROM).filter((entry) => entry.endsWith(".sql"));
-if (steps.length === 0) {
-  process.stderr.write(
-    `no .sql steps found in ${FROM}; the ledger is missing from the source tree\n`,
-  );
+// Imported from dist rather than re-declared: this script runs after `tsc`, so
+// the compiled module is present, and using it means the packaging rule cannot
+// drift away from the discovery rule.
+const { LEDGER_COMPANIONS, STEP_FILENAME } = await import(
+  join(ROOT, "dist", "control_plane", "migrator.js")
+);
+
+function fail(message) {
+  process.stderr.write(`${message}\n`);
   process.exit(1);
+}
+
+const entries = readdirSync(FROM);
+const steps = [];
+for (const entry of entries) {
+  if (LEDGER_COMPANIONS.has(entry)) {
+    continue;
+  }
+  if (!STEP_FILENAME.test(entry)) {
+    fail(
+      `${join(FROM, entry)} is neither a migration step name nor a packaging companion. ` +
+        `discoverMigrationSteps refuses this ledger, so packaging it -- with or without ` +
+        `this entry -- would ship a build that disagrees with the source tree. ` +
+        `Remove it, or add it to LEDGER_COMPANIONS if it genuinely belongs beside the steps.`,
+    );
+  }
+  steps.push(entry);
+}
+
+if (steps.length === 0) {
+  fail(`no migration steps found in ${FROM}; the ledger is missing from the source tree`);
 }
 
 mkdirSync(INTO, { recursive: true });
@@ -43,18 +78,20 @@ for (const step of steps) {
 // over these bytes, so a copy that altered so much as a line ending would make
 // the packaged build refuse databases the source build wrote.
 for (const step of steps) {
-  const source = readFileSync(join(FROM, step));
-  const copied = readFileSync(join(INTO, step));
-  if (!source.equals(copied)) {
-    process.stderr.write(`${step} differs after copying into ${INTO}\n`);
-    process.exit(1);
+  if (!readFileSync(join(FROM, step)).equals(readFileSync(join(INTO, step)))) {
+    fail(`${step} differs after copying into ${INTO}`);
   }
 }
 
-const copied = readdirSync(INTO).filter((entry) => entry.endsWith(".sql"));
-if (copied.length !== steps.length) {
-  process.stderr.write(`copied ${copied.length} steps but the source holds ${steps.length}\n`);
-  process.exit(1);
+// And that nothing extra is in the destination -- a step deleted from source
+// but left behind in a stale `dist/` would be discovered there and applied.
+const copied = readdirSync(INTO).sort();
+const expected = [...steps].sort();
+if (copied.length !== expected.length || copied.some((name, index) => name !== expected[index])) {
+  fail(
+    `${INTO} holds [${copied.join(", ")}] but the source ledger is [${expected.join(", ")}]; ` +
+      `run \`npm run clean\` and build again`,
+  );
 }
 
 const bytes = steps.reduce((total, step) => total + statSync(join(INTO, step)).size, 0);
