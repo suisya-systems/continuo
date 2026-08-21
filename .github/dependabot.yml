@@ -1,0 +1,35 @@
+# Dependabot keeps the exact pins current without widening them.
+#
+# Every dependency is pinned exactly (save-exact in .npmrc, D-0003), so
+# `versioning-strategy: increase` is the only strategy that fits: it rewrites
+# the exact pin to the new exact version instead of introducing a range.
+#
+# Dependabot regenerates package-lock.json on its own runners. The
+# platform-coverage contract test (test/contract/lockfile-platforms.test.ts)
+# runs on every PR, so a lockfile that lost a required platform's native
+# binding turns the merge gate red rather than landing silently.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    versioning-strategy: increase
+    ignore:
+      # better-sqlite3 is pinned together with the supported Node range
+      # (D-0003): a major bump can change the prebuilt binary set, the
+      # Node-API floor, and the bundled SQLite version, all of which are
+      # decisions rather than version bumps. Minor/patch updates within v13
+      # stay automated; a new major arrives as a deliberate DECISIONS entry,
+      # not a Dependabot PR.
+      - dependency-name: "better-sqlite3"
+        update-types: ["version-update:semver-major"]
+      # The type package tracks the runtime pin's major line for the same
+      # reason.
+      - dependency-name: "@types/better-sqlite3"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

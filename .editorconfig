@@ -1,0 +1,17 @@
+# Editor defaults for tools that act before Biome does (biome.json is the
+# authority: space indent, width 2, lineWidth 100, LF -- D-0010). This file
+# only keeps editors from producing text Biome would immediately rewrite.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+max_line_length = 100
+trim_trailing_whitespace = true
+
+[*.md]
+# Markdown uses trailing double-space line breaks; do not strip them.
+trim_trailing_whitespace = false

@@ -37,7 +37,8 @@ suggests, deliberately.
 
 ```bash
 npm ci --ignore-scripts
-npm run verify   # typecheck + native-addon smoke + the suite
+npm run verify          # lint + knip + typecheck + native-addon smoke + the suite
+npm run check:package   # build, then publint + attw against the packed tarball
 ```
 
 `--ignore-scripts` is deliberate: continuo runs better-sqlite3's prebuilt binary and never builds it

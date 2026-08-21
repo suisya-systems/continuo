@@ -34,6 +34,7 @@ spaces distinct.
 | D-0008 | The package is `private` until publication is decided | accepted |
 | D-0009 | Install with `--ignore-scripts`; the prebuilt binary is the artifact | accepted |
 | D-0010 | Biome is the linter and formatter | accepted |
+| D-0011 | Package-quality tooling: publint, attw, knip, Dependabot, editor pins | accepted |
 
 ---
 
@@ -518,3 +519,91 @@ config surfaces and a plugin chain for a codebase this size.
 
 **Source.** Tooling comparison at introduction time, 2026-08-22, against Biome 2.5.10 on this
 repository (16 files, lint + format in under 10ms).
+
+---
+
+## D-0011 — Package-quality tooling: publint, attw, knip, Dependabot, editor pins
+
+**Context.** The package's publishable surface (`exports`, `types`, `files`) is maintained from the
+start so the eventual first publish is a decision rather than a packaging project (D-0008), but
+nothing checked that surface: a broken `exports` map or a type declaration unresolvable under
+NodeNext would land silently, because no consumer exists yet to notice. Likewise nothing swept for
+unused exports or dependencies, dependency pins had no update automation, and the editor-level
+conventions Biome enforces after the fact (D-0010) were not communicated to editors before the
+fact.
+
+**Decision.** Five additions, one decision, because they answer the same question -- "does the
+package stay healthy without a human remembering to check?":
+
+- **publint** (`npm run publint`, `publint --strict`) lints the packed tarball's metadata:
+  `exports` map consistency, file inclusion, ESM/CJS field agreement. Runs after `npm run build`
+  since it inspects `dist/`.
+- **@arethetypeswrong/cli** (`npm run attw`, `attw --pack .`) resolves the packed tarball's types
+  under every module-resolution mode. Configured in `.attw.json` with one ignored rule,
+  **`cjs-resolves-to-esm`**: the package is deliberately ESM-only (D-0002) and ships no CJS
+  artifact, so a `require()` from a CJS consumer resolving to an ESM file is the *declared* shape
+  of this package, not a packaging accident. (On the supported Node range -- 22.14+ and 24, D-0003
+  -- `require()` of a synchronous ESM graph additionally works natively.) All other rules,
+  including the node10/node16 resolution checks that pass today, stay live.
+- **knip** (`npm run knip`, configured in `knip.json`) reports unused files, exports, and
+  dependencies. Entry points are declared explicitly: `src/index.ts` (the public surface),
+  `scripts/*.mjs` (run via npm scripts), `test/**/*.test.ts`, and `vitest.config.ts`. The vitest
+  plugin is disabled (`"vitest": false`) because it *executes* `vitest.config.ts` to discover
+  entries, and that config fails closed when `CI` is set without a `CONTINUO_TEST_SEED` (D-0005)
+  -- knip is not a test run and gets no seed, so the config is declared as a static entry instead.
+  `ignoreExportsUsedInFile: true` keeps an export that its own module consumes (e.g.
+  `createTempDir` in `test/helpers/tmp.ts`) from reading as dead.
+- **Dependabot** (`.github/dependabot.yml`): npm and github-actions ecosystems, weekly.
+  `versioning-strategy: increase` rewrites exact pins to exact pins (save-exact posture, D-0003).
+  Major updates of `better-sqlite3` / `@types/better-sqlite3` are ignored: a major can move the
+  prebuilt binary set, the Node-API floor, and the bundled SQLite, which travel with a DECISIONS
+  entry (D-0003), not a bot PR. The lockfiles Dependabot regenerates are policed by the existing
+  platform-coverage contract test.
+- **`.editorconfig` / `.nvmrc`**: the editorconfig restates only what `biome.json` already
+  enforces (space/2, LF, line width 100) so editors produce compliant text instead of text Biome
+  rewrites; `.nvmrc` says `22`, the lower supported LTS line (engines floor `22.14.0`, D-0003), so
+  version managers land contributors on the line most likely to expose a floor violation.
+
+**CI**: one `package` job on `ubuntu-latest` / Node 24 runs knip, then build, then publint and
+attw. All three checks are platform-independent, so one cell is enough (D-0010 reasoning); the job
+is wired into `ci-gate`'s `needs` and its allow-list, and the ruleset references no new check name
+(D-0005 posture). Locally, `npm run verify` now runs knip after lint (cheap, text-only); publint
+and attw live behind `npm run check:package`, which builds first, so verify keeps working without a
+build step.
+
+**Alternatives.**
+
+- **Wiring publint/attw into `verify` (rejected).** Both need `dist/` to exist and to be current;
+  verify is deliberately runnable on a clean worktree without a build. A stale-dist false green is
+  worse than a second command.
+- **Ignoring attw's node10 rules preemptively (rejected).** The common ESM-only advice is to
+  ignore `node10` resolution failures, but this package resolves cleanly under node10 today
+  (`main` + `types` fallbacks are maintained). An ignore that nothing triggers is a blind spot on
+  layaway; the one rule actually triggered is the one ignored.
+- **Renovate instead of Dependabot (deferred).** More expressive grouping and scheduling, but a
+  third-party app installation for a repository with two runtime dependencies. Dependabot is
+  GitHub-native and its config is one file. Revisit if update-PR volume ever needs grouping.
+- **A shared `tool.config` monolith (not considered seriously).** Each tool reads its own file;
+  inventing indirection would trade five small explicit configs for one bespoke one.
+
+**Consequences.**
+
+- A change that breaks the `exports` map, ships a type declaration NodeNext cannot resolve, or
+  strands an export or dependency turns the merge gate red before any consumer exists to be
+  broken.
+- `attw --pack` and `publint` both run `npm pack` internally; nothing is published (the package
+  remains `private: true`, D-0008).
+- knip findings are a merge-gate concern, so "temporarily unused" code needs either an entry
+  declaration or removal -- that friction is the feature.
+- Dependabot PRs arrive weekly and each must pass the full gate, including the double-green
+  matrix and the lockfile platform test; a bot PR has no shortcut.
+- None of the new tools ship install scripts that matter here; `npm ci --ignore-scripts` (D-0009)
+  is unaffected. The three new devDependencies are pure-JS (no native bindings), so the
+  platform-coverage test's required-binding list is unchanged.
+
+**Status.** accepted
+
+**Source.** Introduced 2026-08-22 against publint 0.3.24, @arethetypeswrong/cli 0.18.5, and knip
+6.32.2 on this repository. attw baseline measured before configuration: the only failing rule was
+`cjs-resolves-to-esm` (node10, node16-from-ESM, and bundler all green). knip baseline: two
+devDependencies unflagged once npm scripts referenced them, one export used only in its own file.
