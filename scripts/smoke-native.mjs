@@ -11,6 +11,9 @@
 // ASCII-only output: see docs/cli-output-policy.md. This runs on the Windows
 // matrix cell, where a cp932 console cannot encode non-ASCII characters.
 
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import process from "node:process";
 
 const steps = [];
@@ -43,13 +46,51 @@ try {
     db.prepare("SELECT sqlite_version() AS v").get().v,
   );
 
+  // Prove *which* binary answered. better-sqlite3 prefers the bundled prebuild
+  // over a node-gyp build directory, and continuo installs with
+  // --ignore-scripts so no source build ever happens (D-0009). If the prebuild
+  // is missing for this platform the loader silently falls back to
+  // build/Release, which on CI would mean a toolchain-dependent binary had
+  // quietly replaced the pinned one.
+  const prebuild = await step("resolve prebuilt binary", () => {
+    // Checked on disk rather than through better-sqlite3's own resolver:
+    // lib/binding.js is not an exported subpath, and reaching past a package's
+    // `exports` map is exactly the kind of coupling that breaks on a patch
+    // release.
+    const require = createRequire(import.meta.url);
+    const root = dirname(require.resolve("better-sqlite3/package.json"));
+
+    const target = `${process.platform}-${process.arch}`;
+    const file = join(root, "prebuilds", `${target}.node`);
+    if (!existsSync(file)) {
+      throw new Error(
+        `no prebuilt binary at ${file}; better-sqlite3 would fall back to a` +
+          ` node-gyp source build for ${target}`,
+      );
+    }
+
+    // A build directory means node-gyp ran, which means an install script was
+    // executed somewhere it should not have been.
+    const buildDir = join(root, "build");
+    if (existsSync(buildDir)) {
+      throw new Error(
+        `${buildDir} exists: node-gyp ran during install. Continuo installs` +
+          ` with --ignore-scripts so the pinned prebuilt binary is used and no` +
+          ` toolchain is required (see DECISIONS.md D-0009).`,
+      );
+    }
+
+    return file;
+  });
+
   await step("close", () => db.close());
   db = undefined;
 
   process.stdout.write(
     `better-sqlite3 native load OK` +
       ` (node ${process.version}, ${process.platform}-${process.arch},` +
-      ` sqlite ${version})\n`,
+      ` sqlite ${version})\n` +
+      `  prebuilt binary: ${prebuild}\n`,
   );
 } catch (error) {
   // Fail closed and loudly: name the last step that succeeded, so the log

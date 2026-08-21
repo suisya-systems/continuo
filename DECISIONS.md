@@ -32,6 +32,7 @@ spaces distinct.
 | D-0006 | ASCII-only for anything continuo prints | accepted |
 | D-0007 | The SQLite value-representation contract | accepted |
 | D-0008 | The package is `private` until publication is decided | accepted |
+| D-0009 | Install with `--ignore-scripts`; the prebuilt binary is the artifact | accepted |
 
 ---
 
@@ -375,3 +376,72 @@ start, so the eventual first publish is a decision rather than a packaging proje
 **Status.** accepted
 
 **Source.** interlock#74 refinement comment; Codex design review 2026-08-22, Nit.
+
+---
+
+## D-0009 — Install with `--ignore-scripts`; the prebuilt binary is the artifact
+
+**Context.** `D-0003` chose better-sqlite3 partly because v13 ships prebuilt binaries **inside the
+npm tarball** -- eight platform/arch files, no post-install download, no toolchain needed. The first
+CI run on this repository showed that npm does not do that by default.
+
+better-sqlite3 v13 declares **no `install` script**. npm's fallback for a package that contains a
+`binding.gyp` and no install script is to run **`node-gyp rebuild`** anyway. On the
+`windows-latest` / Node 22 cell that failed outright:
+
+```
+gyp ERR! find VS unknown version "undefined" found at "C:\Program Files\Microsoft Visual Studio\18\Enterprise"
+gyp ERR! find VS Failure details: RangeError [ERR_CHILD_PROCESS_STDIO_MAXBUFFER]
+gyp ERR! configure error: Could not find any Visual Studio installation to use
+```
+
+The node-gyp bundled with that Node line could not parse the runner's Visual Studio 18 install, and
+the failure is at **configure** time -- before any compilation decision is reached. The same cell on
+Node 24, whose npm bundles a newer node-gyp, found the toolchain and passed. So the required matrix
+was one node-gyp version away from being green or red for reasons that have nothing to do with
+continuo.
+
+The build was **never producing anything**. `binding.gyp` runs `node lib/binding.js` to detect a
+prebuild for the host and, when one exists, emits an empty target: measured locally, the resulting
+`build/Release/` contains no `.node` file at all, and better-sqlite3's loader prefers
+`prebuilds/<platform>-<arch>.node` over `build/` regardless. The entire node-gyp invocation was
+overhead that could still fail the build.
+
+**Decision.** CI installs with **`npm ci --ignore-scripts`**. The prebuilt binary shipped in the
+tarball is the artifact continuo runs; no source build happens on any cell, and no C++ toolchain is
+a requirement for working on this repository. `scripts/smoke-native.mjs` proves it each run: it
+asserts the prebuild for the host platform exists on disk **and** that no `build/` directory was
+created, then loads the addon and queries it.
+
+**Alternatives.**
+
+- **Install the MSVC toolchain on the Windows cells (rejected).** It makes a green build depend on a
+  toolchain that produces nothing, and it makes every contributor need one too.
+- **Pin an `npm_config_msvs_version`, or upgrade node-gyp on the Node 22 cell (rejected).** It fixes
+  this instance of a class. The class is "a native build we do not want runs anyway and can fail for
+  environmental reasons"; not running it removes the class.
+- **`npm ci --omit=optional` or vendoring the binary (rejected).** The optional platform packages are
+  Vite's, not better-sqlite3's, and are needed (`test/contract/lockfile-platforms.test.ts`).
+- **Keep scripts enabled and tolerate the failure on one cell (rejected).** Windows is a required
+  cell (`D-0005`); a cell that cannot install never reaches the suite, so the double-green rule
+  cannot fail closed on it.
+
+**Consequences.**
+
+- **`--ignore-scripts` applies to every dependency, not just better-sqlite3.** That is acceptable
+  here because nothing in the tree needs an install script: Vite's and Rolldown's platform-specific
+  binaries arrive as ordinary optional *packages*, not as build steps. Any future dependency that
+  genuinely needs a lifecycle script will fail visibly, and adding it is a decision -- which is the
+  intended posture, since an install script is arbitrary code execution at `npm ci` time.
+- **Installs are faster and hermetic.** Measured locally: 9s with scripts, under 1s without.
+- **The smoke test is now load-bearing, not decorative.** It is the thing that would notice a silent
+  regression to a source-built binary. Verified by creating a `build/` directory by hand: the smoke
+  fails with a message naming this decision.
+- Contributors need no C++ toolchain, on any platform.
+
+**Status.** accepted
+
+**Source.** First CI run of PR #1 on `suisya-systems/continuo` (run 32515324352, head `f25a390`):
+`double-green (windows-latest, node 22)` red at `npm ci`, the other three cells green, and `ci-gate`
+correctly red as a result. Root cause measured locally against better-sqlite3 13.0.3
+(`binding.gyp`, `lib/binding.js`, and an empty `build/Release/`), 2026-08-22.

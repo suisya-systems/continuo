@@ -66,6 +66,18 @@ The ruleset references the literal string **`ci-gate`** and nothing else. A matr
 name embeds its matrix values (`double-green (ubuntu-latest, node 22)`), so requiring leg names
 means every matrix edit silently changes the set of required contexts.
 
+## Installing: `npm ci --ignore-scripts`
+
+CI installs with `--ignore-scripts`, and that flag is load-bearing (`D-0009`). better-sqlite3 v13
+ships no install script, so npm falls back to running `node-gyp rebuild` for any package containing
+a `binding.gyp`. That build produces nothing -- `binding.gyp` detects the bundled prebuilt binary
+and emits an empty target -- but node-gyp must still *configure* first, which needs a working MSVC
+toolchain. The `windows-latest` / Node 22 cell has a node-gyp that cannot parse the runner's Visual
+Studio install, so the install failed there while the same cell on Node 24 passed.
+
+The prebuilt binary in the tarball is the artifact continuo runs. `npm run smoke:native` asserts
+that: the prebuild for the host exists on disk, and no `build/` directory was created.
+
 ## Regenerating the lockfile
 
 `package-lock.json` must describe **every** required platform, not only the one it was generated on.

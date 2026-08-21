@@ -5,7 +5,7 @@ Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0001` (runner), `D-0005` (the CI
 ## Commands
 
 ```bash
-npm ci             # install exactly what the lockfile pins
+npm ci --ignore-scripts   # install exactly what the lockfile pins, no source builds
 npm run typecheck  # tsc --noEmit over src/, test/, scripts/
 npm run smoke:native   # prove the better-sqlite3 addon actually loads
 npm test           # the suite, once, in a random order
