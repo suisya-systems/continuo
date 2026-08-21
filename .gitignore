@@ -1,0 +1,13 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Test / tool scratch
+coverage/
+*.tsbuildinfo
+.vitest-tmp/
+
+# Editor / OS
+.DS_Store

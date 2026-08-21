@@ -1,0 +1,52 @@
+{
+  "name": "@suisya-systems/continuo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript port of interlock: durable control plane, measurement harness, and per-role fencing for a coding-agent organization.",
+  "license": "MIT",
+  "author": "suisya-systems <iwama.ryo.0731@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suisya-systems/continuo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/suisya-systems/continuo/issues"
+  },
+  "homepage": "https://github.com/suisya-systems/continuo#readme",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0 <23 || >=24.0.0 <25"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "node scripts/clean.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke:native": "node scripts/smoke-native.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "npm run typecheck && npm run smoke:native && npm run test"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "@types/better-sqlite3": "7.6.13"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "typescript": "5.8.3",
+    "vitest": "4.1.11"
+  }
+}
