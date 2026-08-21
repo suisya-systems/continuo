@@ -19,9 +19,9 @@ describe("openDatabase", () => {
         );
       `);
 
-      expect(() =>
-        db.prepare("INSERT INTO child (id, parent_id) VALUES (1, 999)").run(),
-      ).toThrow(/FOREIGN KEY constraint failed/);
+      expect(() => db.prepare("INSERT INTO child (id, parent_id) VALUES (1, 999)").run()).toThrow(
+        /FOREIGN KEY constraint failed/,
+      );
     } finally {
       db.close();
     }
@@ -48,9 +48,7 @@ describe("openDatabase", () => {
 
     const db = openDatabase(path);
     try {
-      const tables = db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .all();
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
       expect(tables).toEqual([]);
     } finally {
       db.close();

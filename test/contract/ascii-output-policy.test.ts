@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -92,9 +92,7 @@ describe("ASCII-only output policy", () => {
     ...SCANNED_DIRS.flatMap((dir) => walk(join(REPO_ROOT, dir))),
     ...rootSourceFiles(),
   ];
-  const relativePaths = files.map((f) =>
-    relative(REPO_ROOT, f).split(sep).join("/"),
-  );
+  const relativePaths = files.map((f) => relative(REPO_ROOT, f).split(sep).join("/"));
 
   it("scans a non-empty set of files", () => {
     // Guards its own vacuity: a moved directory or a changed extension list
@@ -109,20 +107,17 @@ describe("ASCII-only output policy", () => {
     expect(relativePaths).toContain("vitest.config.ts");
   });
 
-  it.each(relativePaths)(
-    "%s contains only ASCII",
-    (relativePath) => {
-      const text = readFileSync(join(REPO_ROOT, relativePath), "utf8");
-      const offenders = offendersIn(text);
-      expect(
-        offenders.map(
-          (o) =>
-            `${relativePath}:${o.line}:${o.column} U+${(o.char.codePointAt(0) ?? 0)
-              .toString(16)
-              .toUpperCase()
-              .padStart(4, "0")}`,
-        ),
-      ).toEqual([]);
-    },
-  );
+  it.each(relativePaths)("%s contains only ASCII", (relativePath) => {
+    const text = readFileSync(join(REPO_ROOT, relativePath), "utf8");
+    const offenders = offendersIn(text);
+    expect(
+      offenders.map(
+        (o) =>
+          `${relativePath}:${o.line}:${o.column} U+${(o.char.codePointAt(0) ?? 0)
+            .toString(16)
+            .toUpperCase()
+            .padStart(4, "0")}`,
+      ),
+    ).toEqual([]);
+  });
 });

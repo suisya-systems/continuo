@@ -64,9 +64,7 @@ describe("better-sqlite3 native addon", () => {
     // A Node 22.0-22.13 runtime therefore satisfies the dependency's declared
     // range and still cannot load the addon, so continuo declares the real
     // floor itself (D-0003).
-    const [major = 0, minor = 0] = process.versions.node
-      .split(".")
-      .map((part) => Number(part));
+    const [major = 0, minor = 0] = process.versions.node.split(".").map((part) => Number(part));
 
     // Node 23 is excluded outright rather than given a >=23.6.0 floor: it was
     // never an LTS line and reached EOL on 2026-06-01, so admitting it would

@@ -27,6 +27,8 @@ const LOCKFILE = fileURLToPath(new URL("../../package-lock.json", import.meta.ur
  * instead of a quietly shrinking set.
  */
 const REQUIRED_BINDINGS = [
+  "node_modules/@biomejs/cli-linux-x64",
+  "node_modules/@biomejs/cli-win32-x64",
   "node_modules/@rolldown/binding-linux-x64-gnu",
   "node_modules/@rolldown/binding-win32-x64-msvc",
   "node_modules/lightningcss-linux-x64-gnu",
@@ -51,10 +53,7 @@ describe("package-lock.json platform coverage", () => {
     // `npm ci` does NOT reject a mismatch in this root metadata, so a stale
     // range here would go unnoticed while lockfile-consuming tooling reads it.
     const pkg = JSON.parse(
-      readFileSync(
-        fileURLToPath(new URL("../../package.json", import.meta.url)),
-        "utf8",
-      ),
+      readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
     ) as { engines?: Record<string, string> };
 
     expect(lock.packages[""]?.engines?.["node"]).toBe(pkg.engines?.["node"]);

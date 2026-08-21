@@ -9,5 +9,5 @@
  * (DECISIONS.md D-0001..D-0042, docs/parity-audit.md).
  */
 
-export { openDatabase, MEMORY, type OpenDatabaseOptions } from "./sqlite/open.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
+export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";

@@ -29,21 +29,18 @@ async function step(name, fn) {
 
 let db;
 try {
-  const { default: Database } = await step("import better-sqlite3", () =>
-    import("better-sqlite3"),
-  );
+  const { default: Database } = await step("import better-sqlite3", () => import("better-sqlite3"));
 
   db = await step("open in-memory database", () => new Database(":memory:"));
 
   const row = await step("SELECT 1", () => db.prepare("SELECT 1 AS one").get());
-  if (!row || row.one !== 1) {
-    throw new Error(
-      `SELECT 1 returned ${JSON.stringify(row)}, expected { one: 1 }`,
-    );
+  if (row?.one !== 1) {
+    throw new Error(`SELECT 1 returned ${JSON.stringify(row)}, expected { one: 1 }`);
   }
 
-  const version = await step("read sqlite_version()", () =>
-    db.prepare("SELECT sqlite_version() AS v").get().v,
+  const version = await step(
+    "read sqlite_version()",
+    () => db.prepare("SELECT sqlite_version() AS v").get().v,
   );
 
   // Prove *which* binary answered. better-sqlite3 prefers the bundled prebuild
