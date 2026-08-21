@@ -40,15 +40,11 @@ function resolveSeed(): number {
   }
 
   if (!/^\d+$/.test(raw)) {
-    throw new Error(
-      `${SEED_ENV} must be a non-negative integer, got ${JSON.stringify(raw)}.`,
-    );
+    throw new Error(`${SEED_ENV} must be a non-negative integer, got ${JSON.stringify(raw)}.`);
   }
   const seed = Number(raw);
   if (!Number.isSafeInteger(seed) || seed > SEED_MAX) {
-    throw new Error(
-      `${SEED_ENV} must be a non-negative integer <= ${SEED_MAX}, got ${raw}.`,
-    );
+    throw new Error(`${SEED_ENV} must be a non-negative integer <= ${SEED_MAX}, got ${raw}.`);
   }
   return seed;
 }

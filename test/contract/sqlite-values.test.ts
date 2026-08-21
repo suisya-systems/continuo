@@ -32,10 +32,7 @@ describe("SQLite to JavaScript value contract", () => {
         null,
       );
 
-      const row = db.prepare("SELECT * FROM t").get() as Record<
-        string,
-        unknown
-      >;
+      const row = db.prepare("SELECT * FROM t").get() as Record<string, unknown>;
 
       expect(typeof row["i"]).toBe("number");
       expect(row["i"]).toBe(42);
@@ -54,10 +51,7 @@ describe("SQLite to JavaScript value contract", () => {
       db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v INTEGER)");
       db.prepare("INSERT INTO t (id, v) VALUES (1, NULL)").run();
 
-      const present = db.prepare("SELECT * FROM t WHERE id = 1").get() as Record<
-        string,
-        unknown
-      >;
+      const present = db.prepare("SELECT * FROM t WHERE id = 1").get() as Record<string, unknown>;
       // A column that exists and holds SQL NULL.
       expect(present["v"]).toBeNull();
       // A column that does not exist in the result at all.
@@ -81,9 +75,7 @@ describe("SQLite to JavaScript value contract", () => {
       db.exec("INSERT INTO t VALUES (9007199254740993)");
 
       // Stored exactly, on the SQLite side.
-      expect(
-        db.prepare("SELECT i = 9007199254740993 AS eq FROM t").get(),
-      ).toEqual({ eq: 1 });
+      expect(db.prepare("SELECT i = 9007199254740993 AS eq FROM t").get()).toEqual({ eq: 1 });
 
       // Read back as a Number: rounded, with no error raised.
       const value = (db.prepare("SELECT i FROM t").get() as { i: number }).i;
@@ -134,9 +126,7 @@ describe("SQLite to JavaScript value contract", () => {
     withDb((db) => {
       db.exec("CREATE TABLE t (v INTEGER)");
       // Booleans, objects and symbols have no SQLite storage class and throw.
-      expect(() =>
-        db.prepare("INSERT INTO t (v) VALUES (?)").run(true),
-      ).toThrow(/can only bind/);
+      expect(() => db.prepare("INSERT INTO t (v) VALUES (?)").run(true)).toThrow(/can only bind/);
       // Arity is checked: a missing parameter is an error, unlike `undefined`.
       expect(() => db.prepare("INSERT INTO t (v) VALUES (?)").run()).toThrow(
         /Too few parameter values/,

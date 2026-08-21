@@ -33,6 +33,7 @@ spaces distinct.
 | D-0007 | The SQLite value-representation contract | accepted |
 | D-0008 | The package is `private` until publication is decided | accepted |
 | D-0009 | Install with `--ignore-scripts`; the prebuilt binary is the artifact | accepted |
+| D-0010 | Biome is the linter and formatter | accepted |
 
 ---
 
@@ -445,3 +446,75 @@ created, then loads the addon and queries it.
 `double-green (windows-latest, node 22)` red at `npm ci`, the other three cells green, and `ci-gate`
 correctly red as a result. Root cause measured locally against better-sqlite3 13.0.3
 (`binding.gyp`, `lib/binding.js`, and an empty `build/Release/`), 2026-08-22.
+
+---
+
+## D-0010 — Biome is the linter and formatter
+
+**Context.** The repository had no lint or format tooling: style and import order were whatever
+each edit produced, and nothing gated them. The candidates for a TypeScript project in 2026 are
+Biome (one tool: linter + formatter + import sorting, a single Rust binary) and the
+ESLint + typescript-eslint + Prettier stack (three tools, plugin ecosystem, and -- uniquely --
+type-aware lint rules that consult the TypeScript checker).
+
+What type-aware linting would buy here is small. The tsconfig already carries `strict`,
+`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noUnusedLocals`, `noUnusedParameters`,
+`noImplicitReturns` and friends (D-0004), and `npm run typecheck` runs the full checker over
+`src`, `test`, and `scripts` on every verify and every CI cell. The marginal catches of
+typescript-eslint's type-aware rules (floating promises, unsafe `any` flow) sit on top of a
+checker this repository already runs at maximum strictness -- worth having, not worth three
+config surfaces and a plugin chain for a codebase this size.
+
+**Decision.** Biome (`@biomejs/biome`, pinned exact like every dependency), configured in
+`biome.json`:
+
+- **Formatter and linter both enabled**, `recommended` preset, plus import organizing via the
+  `assist.source.organizeImports` action. `npm run lint` runs `biome check .`, which evaluates
+  all three; format-only entry points exist as `npm run format` / `npm run format:check`.
+- **`lineWidth: 100`**, measured against the existing code rather than chosen on taste: the
+  longest pre-existing line was 86 characters, so 100 reformats the least and the default 80
+  would have rewrapped compliant code.
+- **`complexity/useLiteralKeys` is off.** The contract tests read index-signature fields with
+  bracket access (`row["i"]`, `engines?.["node"]`) deliberately, to say "this key is data, not a
+  property the type system vouches for". The rule would rewrite them to dot access, which is a
+  meaning change, not a style fix.
+- **`vcs.useIgnoreFile: true`**: `.gitignore` is the single ignore list; `dist/`,
+  `node_modules/`, and coverage output are excluded without a second copy of the list.
+  `package-lock.json` is additionally excluded -- it is generated, and reformatting it would
+  create diffs npm then rewrites.
+- **CI**: one `lint` job on `ubuntu-latest` / Node 24, wired into `ci-gate`'s `needs` and its
+  allow-list check. Lint output is platform-independent text analysis, so running it per matrix
+  cell would quadruple an identical answer; the merge gate remains `ci-gate` alone (D-0005
+  posture: the ruleset references no new check name).
+- `npm run verify` now runs lint first -- it is the cheapest gate and fails in milliseconds.
+
+**Alternatives.**
+
+- **ESLint + typescript-eslint + Prettier (rejected for now).** Chosen against for the reasons
+  above: three tools and their interop config versus one, slower runs, and a type-aware margin
+  that the existing checker configuration has already thinned. If the codebase grows async-heavy
+  logic where floating-promise detection earns its keep, adding typescript-eslint *alongside*
+  Biome's formatter is a compatible follow-up decision, not a reversal.
+- **Prettier alone, no linter (rejected).** Format churn was the smaller half of the problem;
+  import order and the mechanical bug-shape rules (unused expressions, accidental `==`) need a
+  linter.
+- **Biome with type-aware rules pending (noted).** Biome's own type inference (shipped from 2.x)
+  covers a growing subset of type-aware rules without the checker dependency; the `recommended`
+  preset picks these up as they stabilize, which is the passive path to the same coverage.
+
+**Consequences.**
+
+- One binary, no plugin resolution, no `.eslintrc`/`.prettierrc` interplay: `biome.json` is the
+  whole configuration surface. Biome ships platform binaries as optional npm packages (same
+  mechanism as Vite's), which the lockfile-platform contract test already polices.
+- Biome has no install script, so `npm ci --ignore-scripts` (D-0009) is unaffected.
+- The one-time reformat touched most files under `test/` and `src/` mechanically (line
+  rewrapping, import reordering, one `!x || x.y` to `x?.y` rewrite in
+  `scripts/smoke-native.mjs`). No logic changed; `npm run verify` is the witness.
+- A contributor whose editor formats with Prettier will see `format:check` fail on details where
+  the two disagree; the repository answer is Biome's.
+
+**Status.** accepted
+
+**Source.** Tooling comparison at introduction time, 2026-08-22, against Biome 2.5.10 on this
+repository (16 files, lint + format in under 10ms).

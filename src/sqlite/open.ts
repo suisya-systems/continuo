@@ -1,6 +1,5 @@
-import Database from "better-sqlite3";
-
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import Database from "better-sqlite3";
 
 /**
  * The single place where a SQLite connection is created.
@@ -27,15 +26,11 @@ export interface OpenDatabaseOptions {
 /** Path accepted for an in-memory database. */
 export const MEMORY = ":memory:" as const;
 
-export function openDatabase(
-  path: string,
-  options: OpenDatabaseOptions = {},
-): SqliteDatabase {
+export function openDatabase(path: string, options: OpenDatabaseOptions = {}): SqliteDatabase {
   const readonly = options.readonly ?? false;
   // An in-memory database never exists beforehand, so the guard would make it
   // impossible to open one.
-  const fileMustExist =
-    path === MEMORY ? false : (options.fileMustExist ?? true);
+  const fileMustExist = path === MEMORY ? false : (options.fileMustExist ?? true);
 
   const db = new Database(path, { readonly, fileMustExist });
 

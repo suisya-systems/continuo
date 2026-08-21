@@ -51,10 +51,7 @@ describe("package-lock.json platform coverage", () => {
     // `npm ci` does NOT reject a mismatch in this root metadata, so a stale
     // range here would go unnoticed while lockfile-consuming tooling reads it.
     const pkg = JSON.parse(
-      readFileSync(
-        fileURLToPath(new URL("../../package.json", import.meta.url)),
-        "utf8",
-      ),
+      readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
     ) as { engines?: Record<string, string> };
 
     expect(lock.packages[""]?.engines?.["node"]).toBe(pkg.engines?.["node"]);

@@ -35,16 +35,21 @@
     "build": "tsc -p tsconfig.build.json",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
     "smoke:native": "node scripts/smoke-native.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run typecheck && npm run smoke:native && npm run test"
+    "verify": "npm run lint && npm run typecheck && npm run smoke:native && npm run test"
   },
   "dependencies": {
-    "better-sqlite3": "13.0.3",
-    "@types/better-sqlite3": "7.6.13"
+    "@types/better-sqlite3": "7.6.13",
+    "better-sqlite3": "13.0.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.10",
     "@types/node": "22.15.3",
     "typescript": "5.8.3",
     "vitest": "4.1.11"
