@@ -68,8 +68,10 @@ describe("better-sqlite3 native addon", () => {
       .split(".")
       .map((part) => Number(part));
 
-    expect(major).toBeGreaterThanOrEqual(22);
-    expect(major).toBeLessThan(25);
+    // Node 23 is excluded outright rather than given a >=23.6.0 floor: it was
+    // never an LTS line and reached EOL on 2026-06-01, so admitting it would
+    // declare support for a runtime nothing tests.
+    expect([22, 24]).toContain(major);
     if (major === 22) {
       expect(minor).toBeGreaterThanOrEqual(14);
     }

@@ -149,7 +149,7 @@ better-sqlite3 is the synchronous driver, and it is a **native addon**, which ma
 range part of the same decision rather than a separate one.
 
 **Decision.** `better-sqlite3` is pinned to **`13.0.3`** exactly, and `engines.node` is
-**`>=22.14.0 <25`**. The required CI matrix is Node **22** and **24** on **ubuntu-latest** and
+**`>=22.14.0 <23 || >=24.0.0 <25`** -- the two LTS lines and nothing between them. The required CI matrix is Node **22** and **24** on **ubuntu-latest** and
 **windows-latest**. `package-lock.json` is committed; CI installs with `npm ci`. A native-load smoke
 (`scripts/smoke-native.mjs`: import, open `:memory:`, `SELECT 1`, read `sqlite_version()`, close)
 runs in every cell **before** the suite.
@@ -173,6 +173,10 @@ locking, so the lease and single-writer disciplines interlock depends on cannot 
   major. There is no post-install download, so a CI cell cannot half-install the addon because a
   binary host was unreachable. The smoke test exists for the residual case: an unlisted platform,
   where npm reports success and the addon still will not load.
+- **Node 23 is excluded outright, not merely floored.** Node-API 10 arrives in v23.6.0, so a naive
+  `>=22.14.0 <25` range would still admit 23.0-23.5, where npm reports the package compatible and
+  the addon cannot load. Node 23 was never an LTS line and reached EOL on 2026-06-01, so the range
+  names the two LTS lines instead of carrying a third floor for a runtime nothing tests.
 - **Node 26 Current is deliberately outside the range.** It is not in the required matrix and the
   `engines` ceiling excludes it. Adding it is a decision, not a version bump.
 - The bundled SQLite at this pin is **3.53.4**. A SQLite version change is a semantic change to the

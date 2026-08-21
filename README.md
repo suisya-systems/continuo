@@ -40,7 +40,7 @@ npm ci
 npm run verify   # typecheck + native-addon smoke + the suite
 ```
 
-Requires Node `>=22.14.0 <25`. The floor is not cosmetic: better-sqlite3 v13's prebuilt binary is
+Requires Node 22 or 24 LTS (`>=22.14.0 <23 || >=24.0.0 <25`). The floor is not cosmetic: better-sqlite3 v13's prebuilt binary is
 built at Node-API 10, which Node provides only from v22.14.0 onward
 ([`DECISIONS.md`](./DECISIONS.md) D-0003).
 
