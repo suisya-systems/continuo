@@ -1,3 +1,5 @@
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { MEMORY, openDatabase } from "../../src/sqlite/open.js";
@@ -53,6 +55,25 @@ describe("openDatabase", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("closes the handle when connection setup fails", () => {
+    // Opening is lazy: `new Database` succeeds on a file that is not a database,
+    // and `journal_mode = WAL` is what throws. If openDatabase let that escape
+    // without closing, the native handle would live until garbage collection --
+    // and on Windows it would hold a lock, so the caller could not delete the
+    // file. Deleting it here is the assertion that the handle is gone.
+    const path = tempDatabasePath("not-a-db");
+    writeFileSync(path, "this is not a SQLite database, but it is a real file");
+
+    expect(() => openDatabase(path)).toThrow(/not a database/);
+
+    // Honest about where this bites: on POSIX, unlinking a file with an open
+    // descriptor always succeeds, so this assertion is trivially true on the
+    // Linux cells. It has teeth on the required Windows cells, where a retained
+    // handle raises EBUSY / EPERM. That is the cell it is written for.
+    expect(() => rmSync(path)).not.toThrow();
+    expect(existsSync(path)).toBe(false);
   });
 
   it("opens read-only without upgrading the journal mode", () => {

@@ -41,10 +41,10 @@
     "verify": "npm run typecheck && npm run smoke:native && npm run test"
   },
   "dependencies": {
-    "better-sqlite3": "13.0.3"
+    "better-sqlite3": "13.0.3",
+    "@types/better-sqlite3": "7.6.13"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "7.6.13",
     "@types/node": "22.15.3",
     "typescript": "5.8.3",
     "vitest": "4.1.11"

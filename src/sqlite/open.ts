@@ -39,14 +39,33 @@ export function openDatabase(
 
   const db = new Database(path, { readonly, fileMustExist });
 
-  // Enforced on every connection rather than stored in the file, because
-  // `foreign_keys` is a per-connection setting in SQLite: a connection that
-  // forgets it silently accepts rows the schema forbids.
-  db.pragma("foreign_keys = ON");
+  // Opening is lazy: `new Database` succeeds on a file that is not a database
+  // at all, and the first statement to touch it is what fails. So setup runs
+  // inside a try, and a failure closes the handle before rethrowing.
+  //
+  // Without this the native handle survives the throw and is released only by
+  // garbage collection, at a time nothing controls. On Windows that retains a
+  // lock on the file, and the caller -- a test tearing down its temporary
+  // directory, say -- then cannot delete it. The symptom appears far from the
+  // cause and only on one platform.
+  try {
+    // Enforced on every connection rather than stored in the file, because
+    // `foreign_keys` is a per-connection setting in SQLite: a connection that
+    // forgets it silently accepts rows the schema forbids.
+    db.pragma("foreign_keys = ON");
 
-  if (!readonly) {
-    // WAL is a file-level property and only settable on a writable connection.
-    db.pragma("journal_mode = WAL");
+    if (!readonly) {
+      // WAL is a file-level property and only settable on a writable connection.
+      db.pragma("journal_mode = WAL");
+    }
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      // The close is best-effort cleanup. Surfacing its error would replace the
+      // diagnosis the caller needs with one about tidying up.
+    }
+    throw error;
   }
 
   return db;
