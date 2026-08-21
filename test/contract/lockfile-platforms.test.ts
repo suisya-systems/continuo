@@ -27,6 +27,8 @@ const LOCKFILE = fileURLToPath(new URL("../../package-lock.json", import.meta.ur
  * instead of a quietly shrinking set.
  */
 const REQUIRED_BINDINGS = [
+  "node_modules/@biomejs/cli-linux-x64",
+  "node_modules/@biomejs/cli-win32-x64",
   "node_modules/@rolldown/binding-linux-x64-gnu",
   "node_modules/@rolldown/binding-win32-x64-msvc",
   "node_modules/lightningcss-linux-x64-gnu",

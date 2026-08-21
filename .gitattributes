@@ -1,0 +1,4 @@
+# The formatter enforces LF (biome.json, D-0010), so the checkout must deliver
+# LF on every platform. Without this, a Windows clone under core.autocrlf=true
+# materializes CRLF and `npm run verify` fails on a clean worktree.
+* text=auto eol=lf
