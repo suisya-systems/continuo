@@ -66,6 +66,25 @@ The ruleset references the literal string **`ci-gate`** and nothing else. A matr
 name embeds its matrix values (`double-green (ubuntu-latest, node 22)`), so requiring leg names
 means every matrix edit silently changes the set of required contexts.
 
+## Regenerating the lockfile
+
+`package-lock.json` must describe **every** required platform, not only the one it was generated on.
+Regenerating with `npm install --package-lock-only` while a platform-pruned `node_modules` is
+present rewrites the lockfile from that tree and silently drops the optional native bindings for
+every other platform. The result is green locally and dies on the Windows cell during runner
+startup, before a single test runs, with an error about a missing module rather than about the
+lockfile.
+
+Regenerate from a clean tree:
+
+```bash
+mv node_modules /tmp/nm-old && rm -f package-lock.json
+npm install --package-lock-only
+npm ci
+```
+
+`test/contract/lockfile-platforms.test.ts` fails when the lockfile has been pruned this way.
+
 ## The branch ruleset
 
 A ruleset is a repository setting: it lives outside this repository's diff and cannot be reviewed in

@@ -77,6 +77,8 @@ only, and nothing depends on its numbering (Vitest 4 starts `VITEST_WORKER_ID` a
 - `sqlite-values.test.ts` -- the SQLite value mapping (`D-0007`). Fails when a dependency upgrade
   changes how a stored value reads back.
 - `ascii-output-policy.test.ts` -- the ASCII-only output policy (`D-0006`).
+- `lockfile-platforms.test.ts` -- that `package-lock.json` describes every required CI platform, not
+  only the one it was last generated on.
 
 They are ordinary tests and run with everything else. Their purpose is that a decision recorded in
 prose is also enforced by something that can turn red.
