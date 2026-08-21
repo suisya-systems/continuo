@@ -767,6 +767,37 @@ describe("rule 6 -- corrupt state is refused", () => {
     );
   });
 
+  test("a ledger table missing the columns the reader names is a refusal (target-only)", () => {
+    // Target-only: no source case constructs this state. It is here because the
+    // straightforward TypeScript translation of the source's
+    // `except sqlite3.DatabaseError` gets the *breadth* wrong and nothing else
+    // notices. Python's DatabaseError covers OperationalError -- "no such
+    // column: name" -- so interlock refuses this database; a port that matched
+    // only "not a database" and "corrupt" would hand the caller a raw driver
+    // error instead, and every caller of this module is written against the
+    // refusal family.
+    const { ledger, dbPath } = scratch();
+    createProductionControlPlane(dbPath, { nowMs: T0, migrationsDir: ledger }).close();
+    const connection = rawConnection(dbPath);
+    try {
+      connection.pragma("writable_schema = ON");
+      connection
+        .prepare(
+          "UPDATE sqlite_master SET sql = 'CREATE TABLE schema_migration (version INTEGER PRIMARY KEY)' WHERE name = 'schema_migration'",
+        )
+        .run();
+      connection.pragma("writable_schema = OFF");
+    } finally {
+      connection.close();
+    }
+
+    expectRefusal(
+      () => openProductionControlPlane(dbPath, { migrationsDir: ledger }),
+      CorruptStateRefused,
+      /not a readable database/,
+    );
+  });
+
   test("a production database without its ledger is refused not rebuilt", () => {
     const { ledger, dbPath } = scratch();
     createProductionControlPlane(dbPath, { nowMs: T0, migrationsDir: ledger }).close();

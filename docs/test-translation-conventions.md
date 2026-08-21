@@ -280,8 +280,14 @@ One entry per **collected source node id**, with `disposition`, `source_status`,
 | `not-ported` | not translated; `reason` says why and what unblocks it |
 | `waived`     | translated **weaker** than the source. Requires an approved waiver and is an explicit review topic |
 
-There are **no waivers in this pilot**. Four cases are `adapted` and two are `not-ported`; the reasons
-are in the ledger.
+There are **no waivers in this pilot**. Five cases are `adapted` and two are `not-ported`; the
+reasons are in the ledger.
+
+The ledger also carries an `inherited_limitations` list, for rough edges the port **reproduces**
+rather than fixes. A parity port that quietly improves on its source is no longer a parity port, and
+interlock#74's acceptance criteria require known limitations to stay disclosed. Each entry says what
+the behaviour is, that it matches the source, and where a fix would belong -- which is upstream, or
+in a change that moves both sides together.
 
 An `adapted` case must still be *at least as strong* as its source in the property it pins. If it is
 weaker, it is a waiver, and that is a report to the reviewer -- see rule 0.

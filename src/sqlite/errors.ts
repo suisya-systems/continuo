@@ -19,7 +19,7 @@
  * |-----------------------------|--------------------------------------------|
  * | `sqlite3.IntegrityError`    | `SQLITE_CONSTRAINT*`                        |
  * | `sqlite3.OperationalError`  | `SQLITE_BUSY*`, `SQLITE_LOCKED*` (lock role)|
- * | `sqlite3.DatabaseError`     | `SQLITE_NOTADB`, `SQLITE_CORRUPT*`          |
+ * | `sqlite3.DatabaseError`     | every `SQLITE_` code (see below)            |
  * | `sqlite3.OperationalError`  | `SQLITE_CANTOPEN*` (absent/unopenable file) |
  * | `sqlite3.Error`             | anything carrying a `SQLITE_` code           |
  *
@@ -27,6 +27,13 @@
  * the table is documented rather than written: an unused predicate is a guess
  * about a future branch, and a guess that nothing exercises is the shape of a
  * mapping that is wrong when it is finally reached.
+ *
+ * The `DatabaseError` row is the one that surprises. Every `sqlite3` error class
+ * except `InterfaceError` descends from it -- `OperationalError` ("no such
+ * column") included -- so a Python `except sqlite3.DatabaseError` is very nearly
+ * "any error from the database". {@link isSqliteError} draws the same line:
+ * better-sqlite3 signals misuse of its own API with plain `TypeError`s rather
+ * than `SQLITE_` codes, so what carries a code is what came from SQLite.
  */
 
 /** The shape better-sqlite3 gives its errors. Not exported by the package. */
@@ -66,10 +73,4 @@ export function sqliteCodeOf(error: unknown): string | undefined {
 export function isBusyError(error: unknown): boolean {
   const code = sqliteCodeOf(error);
   return code !== undefined && (code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED"));
-}
-
-/** The file exists and is not a SQLite database, or is a corrupt one. */
-export function isNotADatabaseError(error: unknown): boolean {
-  const code = sqliteCodeOf(error);
-  return code !== undefined && (code === "SQLITE_NOTADB" || code.startsWith("SQLITE_CORRUPT"));
 }

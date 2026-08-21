@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { isCompleteStatement, splitLinesKeepEnds } from "../sqlite/complete-statement.js";
-import { isBusyError, isNotADatabaseError, isSqliteError } from "../sqlite/errors.js";
+import { isBusyError, isSqliteError } from "../sqlite/errors.js";
 import { configureConnection, openControlPlaneConnection } from "./connection.js";
 import {
   ControlPlaneRefusal,
@@ -534,8 +534,19 @@ function verifyReadonlyImpl(
     return verifyProductionDatabase(target, connection, steps, { requireLedger });
   } catch (error) {
     // "file is not a database", a truncated header, a corrupt page read while
-    // answering a pragma. All refusals, never an empty start (rule 6).
-    if (isNotADatabaseError(error)) {
+    // answering a pragma, a `schema_migration` table missing the columns the
+    // ledger query names. All refusals, never an empty start (rule 6).
+    //
+    // The breadth here is the source's, and it is wider than it first looks:
+    // Python catches `sqlite3.DatabaseError`, and *every* sqlite3 error class
+    // except `InterfaceError` descends from it -- `OperationalError` ("no such
+    // column: name") included. Matching only "not a database" and "corrupt"
+    // would let a malformed ledger reach the caller as a raw driver error, and
+    // the callers of this module are written against its refusal family.
+    // better-sqlite3 signals misuse of its own API with plain `TypeError`s
+    // rather than `SQLITE_` codes, so `isSqliteError` draws the same line
+    // `DatabaseError` does.
+    if (isSqliteError(error)) {
       throw new CorruptStateRefused(`${target} is not a readable database: ${describe(error)}`, {
         cause: error,
       });

@@ -23,11 +23,12 @@
   "target": {
     "test_file": "test/control_plane/migrator.test.ts",
     "target_only_tests": {
-      "count": 3,
+      "count": 4,
       "ids": [
         "test/control_plane/migrator.test.ts::seam liveness (target-only) > migrateControlPlane calls verifyReadonly through the seam record",
         "test/control_plane/migrator.test.ts::seam liveness (target-only) > applyPending calls applyStep through the seam record",
-        "test/control_plane/migrator.test.ts::seam liveness (target-only) > the busy timeout is read from the seam record at call time"
+        "test/control_plane/migrator.test.ts::seam liveness (target-only) > the busy timeout is read from the seam record at call time",
+        "test/control_plane/migrator.test.ts::rule 6 -- corrupt state is refused > a ledger table missing the columns the reader names is a refusal (target-only)"
       ],
       "note": "Target-only tests translate no source case and are NOT counted as ported coverage. They assert that production code routes through the seam record, which the ported cases cannot prove on their own. The testkit contract tests in test/testkit/testkit.contract.test.ts are target-only for the same reason and are listed separately there."
     },
@@ -626,6 +627,13 @@
       "target_status": "passed",
       "reason": null,
       "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "An unreadable step file (a directory, a broken symlink, a permissions failure) escapes as a raw filesystem error rather than as MigrationStepsRefused.",
+      "status": "inherited, not fixed",
+      "detail": "interlock reads the step bytes with path.read_bytes() outside its try block -- only the UTF-8 decode is wrapped -- so a directory named 0004_foo.sql raises IsADirectoryError there and an EISDIR error here. The behaviour is therefore at parity, and the module comment's claim that every fault arrives as the refusal family is the source's aspiration rather than its behaviour. Deliberately not fixed: interlock#74 is a parity port, and its acceptance criteria require known limitations to stay disclosed rather than be silently repaired. Raised by the pre-merge review (2026-08-22) and recorded here so it is a review topic rather than an oversight. A fix belongs upstream in interlock, or in a change that moves both sides together."
     }
   ]
 }
