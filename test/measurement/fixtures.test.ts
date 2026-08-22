@@ -1135,6 +1135,67 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     // Named explicitly so a failure says which formatter it got.
     expect((0.125).toFixed(2), "the tie toFixed gets wrong").toBe("0.13");
   });
+  test("a fixture file that is not valid UTF-8 is refused, not silently repaired", () => {
+    // Target-only, and a PORT DIVERGENCE the review caught. Python's
+    // `read_text(encoding="utf-8")` raises UnicodeDecodeError, so the source
+    // refuses the file. Node's `readFileSync(path, "utf8")` is lenient: an
+    // invalid byte becomes U+FFFD and the read succeeds.
+    //
+    // Silent repair is the worst outcome available here, because the content
+    // digest is taken over the RAW BYTES: the corpus would load, grade, and
+    // report under a digest that identifies bytes it did not evaluate. Fixed
+    // with the same fatal TextDecoder D-0015 uses for migration step files.
+    const root = caseRoot("fixtures");
+    const casePath = writeCase(root, "relay_gap", "stalled_relay", { label: positiveLabel() });
+    // 0xFF is not valid UTF-8 in any position.
+    writeFileSync(join(casePath, "trace.jsonl"), Buffer.from([0x7b, 0xff, 0x7d, 0x0a]));
+
+    const refusal = expectRefusal(() => loadCase(casePath), FixtureRefusal);
+    expect(refusal.message).toContain("not valid UTF-8");
+    expect(refusal.message).toContain("content digest");
+  });
+
+  test("an integer beyond MAX_SAFE_INTEGER is refused rather than silently rounded", () => {
+    // Target-only, and the second PORT DIVERGENCE from the same review.
+    // Python's ints are arbitrary precision, so the source accepts
+    // 9007199254740993 exactly. JSON.parse has already rounded it to ...992 by
+    // the time any check runs, and `Number.isInteger` still says yes -- so the
+    // fixture would be graded against a number that is not in its bytes, with
+    // the onset, deadline and latency all wrong under a digest still claiming
+    // to identify this corpus.
+    //
+    // Refusing rejects an input the source accepts. That is the better error,
+    // and it is the posture D-0007 already records for this runtime beyond
+    // 2^53. A millisecond offset past 2^53 is some 285,000 years.
+    const root = caseRoot("fixtures");
+    const casePath = writeCase(root, "relay_gap", "stalled_relay", {
+      // Written as raw JSON text: passing the number through a JS literal would
+      // round it before it ever reached the file.
+      label:
+        '{"incident_class":"relay_gap","onset_offset_ms":9007199254740993,' +
+        '"tolerance_ms":180000,"budget_ms":300000,"fact_state":"EXPLICIT_BLOCK",' +
+        '"must_not_recommend":[],"provenance":"accident: x"}',
+    });
+    const refusal = expectRefusal(() => loadCase(casePath), LabelMalformed);
+    expect(refusal.message).toContain("MAX_SAFE_INTEGER");
+    expect(refusal.message).toContain("D-0007");
+
+    // The same rule on the trace's offsets and on the clock.
+    const traceCase = writeCase(root, "relay_gap", "big_offset", {
+      label: positiveLabel({ onset_offset_ms: 0 }),
+      trace: '{"offset_ms": 9007199254740993, "kind": "x"}\n',
+    });
+    expectRefusal(() => loadCase(traceCase), TraceMalformed);
+    // Built by arithmetic rather than written as a literal: a literal past 2^53
+    // is itself precision-losing, which the linter rightly refuses. 2^53 is the
+    // first integer Number.isSafeInteger rejects.
+    const beyondSafe = Number.MAX_SAFE_INTEGER + 1;
+    expect(Number.isInteger(beyondSafe), "still an integer, which is the trap").toBe(true);
+    expect(Number.isSafeInteger(beyondSafe)).toBe(false);
+    expectRefusal(() => new SyntheticClock(beyondSafe), EvaluationRefusal);
+    expectRefusal(() => new SyntheticClock(T0).at(beyondSafe), EvaluationRefusal);
+  });
+
   test("the corpus walk orders case ids by code point, as Python does", () => {
     // Target-only, and it protects the claim this belt makes hardest: the
     // corpus content digest is taken over cases in SORTED order and is

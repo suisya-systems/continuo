@@ -580,9 +580,13 @@ export class SyntheticClock {
   readonly #minted: Set<number>;
 
   constructor(t0Ms: number) {
-    if (!Number.isInteger(t0Ms)) {
+    if (!Number.isSafeInteger(t0Ms)) {
+      // Safe, not merely integral: past 2^53 the arithmetic this clock does --
+      // t0 + offset -- stops being exact, so an instant it minted would not
+      // compare equal to the one a detector was handed (D-0007).
       throw new EvaluationRefusal(
-        `t0_ms must be an integer epoch-ms instant, got ${describe(t0Ms)}`,
+        `t0_ms must be an integer epoch-ms instant within ` +
+          `Number.MAX_SAFE_INTEGER (D-0007), got ${describe(t0Ms)}`,
       );
     }
     this.#t0Ms = t0Ms;
@@ -595,8 +599,10 @@ export class SyntheticClock {
 
   /** The instant `offsetMs` after `t0`, minted and remembered. */
   at(offsetMs: number): number {
-    if (!Number.isInteger(offsetMs)) {
-      throw new EvaluationRefusal(`offset_ms must be an integer, got ${describe(offsetMs)}`);
+    if (!Number.isSafeInteger(offsetMs)) {
+      throw new EvaluationRefusal(
+        `offset_ms must be an integer within Number.MAX_SAFE_INTEGER (D-0007), got ${describe(offsetMs)}`,
+      );
     }
     if (offsetMs < 0) {
       throw new EvaluationRefusal(
@@ -833,6 +839,27 @@ function requireInt(
       `${options.field} must be an integer, got ${describe(value)}`,
     );
   }
+  if (!Number.isSafeInteger(value)) {
+    // Python's ints are arbitrary precision, so the source accepts this value
+    // exactly. `JSON.parse` has already rounded it -- 9007199254740993 arrives
+    // as ...992 and `Number.isInteger` still says yes -- so accepting it would
+    // grade the fixture against a number that is not in its bytes, and the
+    // onset, deadline and latency computed from it would all be wrong while the
+    // content digest still claimed to identify this corpus.
+    //
+    // Refusing diverges from the source by rejecting an input it accepts, and
+    // that is the better error: D-0007 already records that beyond 2^53 this
+    // runtime is lossy and that a module handling such values must opt in
+    // explicitly. A millisecond offset past 2^53 is some 285,000 years, so
+    // nothing legitimate is being turned away.
+    throw refuseLabel(
+      options.casePath,
+      `${options.field}=${value} is beyond Number.MAX_SAFE_INTEGER, so it ` +
+        `cannot be represented exactly and JSON.parse has already rounded it ` +
+        `(D-0007); a fixture graded against a number that is not in its bytes ` +
+        `is worse than one that is refused`,
+    );
+  }
   if (value < minimum) {
     throw refuseLabel(options.casePath, `${options.field}=${value} must be >= ${minimum}`);
   }
@@ -1001,7 +1028,7 @@ function parseTrace(text: string, casePath: string): readonly Observation[] {
       );
     }
     const offset = observation["offset_ms"];
-    if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) {
+    if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
       throw new TraceMalformed(
         `${casePath}/${TRACE_FILENAME} line ${number}: offset_ms must be a ` +
           `non-negative integer, got ${describe(offset)}`,
@@ -1083,12 +1110,15 @@ export function loadCase(
 
   let labelPayload: unknown;
   try {
-    labelPayload = JSON.parse(readFileSync(join(casePath, EXPECTED_FILENAME), "utf8"));
+    labelPayload = JSON.parse(readCaseFile(join(casePath, EXPECTED_FILENAME)));
   } catch (error) {
+    if (error instanceof FixtureRefusal) {
+      throw error;
+    }
     throw refuseLabel(casePath, `not JSON (${String(error)})`);
   }
   const expected = parseLabel(labelPayload, casePath);
-  const observations = parseTrace(readFileSync(join(casePath, TRACE_FILENAME), "utf8"), casePath);
+  const observations = parseTrace(readCaseFile(join(casePath, TRACE_FILENAME)), casePath);
 
   if (!expected.isNegative && expected.incidentClass !== classDir) {
     throw new ClassDirectoryMismatch(
@@ -1602,4 +1632,31 @@ function smallest(values: readonly number[]): number {
     }
   }
   return least;
+}
+
+/**
+ * A case file's bytes, decoded as UTF-8 **strictly**.
+ *
+ * Node's `readFileSync(path, "utf8")` is lenient: an invalid byte becomes
+ * U+FFFD and the read succeeds. Python's `read_text(encoding="utf-8")` raises
+ * `UnicodeDecodeError`, so the source refuses the file and this must too --
+ * otherwise a corpus loads whose evaluated data differs from the bytes its
+ * digest identifies, which is the one correspondence the digest exists to
+ * guarantee.
+ *
+ * The same reasoning, and the same `TextDecoder({ fatal: true })`, as `D-0015`
+ * gives for migration step files.
+ */
+function readCaseFile(path: string): string {
+  const bytes = readFileSync(path);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new FixtureRefusal(
+      `${path} is not valid UTF-8 (${String(error)}); a fixture whose bytes ` +
+        `cannot be decoded would be graded as something other than what its ` +
+        `content digest identifies`,
+      { cause: error },
+    );
+  }
 }

@@ -56,7 +56,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 10,
+      "count": 12,
       "ids": [
         "test/measurement/fixtures.test.ts::the shipped corpus > the carried corpus digests to interlock's own value (target-only)",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the missing-field check is what refuses a missing field, not a downstream type check",
@@ -67,7 +67,9 @@
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the rendered rate goes through formatFixed, not toFixed",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the corpus walk orders case ids by code point, as Python does",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the composition map is copied, not borrowed",
-        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a case with very many matching incidents is graded, not crashed"
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a case with very many matching incidents is graded, not crashed",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a fixture file that is not valid UTF-8 is refused, not silently repaired",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > an integer beyond MAX_SAFE_INTEGER is refused rather than silently rounded"
       ],
       "note": "Target-only tests translate no source case and are NOT counted as ported coverage. This one is the parity evidence for the carried DATA rather than for code: it pins the corpus content digest to the value interlock's own loader produces over interlock's own tree, which proves both that the files arrived unaltered and that this port's digest construction (id, NUL, filename, NUL, bytes, NUL, over cases sorted by id) agrees with the source's. Interlock has no such test because it has only one copy of the corpus and nothing to compare against. Six more close properties a 36-mutation sweep found unguarded; each is recorded with its verdict under mutation_sweep below. Five are inherited (interlock's suite cannot tell the mutated module from the real one either, verified against 65f36c5 in each case) and one is a port artifact. Production behaviour is unchanged throughout. Three more were added after the codex review gate found three PORT DIVERGENCES (not inherited gaps) in the same pass: the corpus walk sorted by UTF-16 code unit where Python sorts by code point, the composition map was borrowed rather than copied, and the earliest-alarm minimum spread an unbounded array into Math.min. All three are fixed in the module and pinned here."
     },
@@ -98,6 +100,12 @@
       "matches_source": true,
       "note": "Found by a 36-mutation sweep on the port and verified against interlock 65f36c5 case by case. The port reproduces the production behaviour exactly and does not change it; it adds five target-only tests so the properties stop being unguarded on this side. The clock one is the notable entry: interlock HAS a case for it whose docstring states the hazard precisely, and the case cannot detect it because the corpus's sort order grades the stamped case first.",
       "where_a_fix_belongs": "upstream, as the same five cases added to interlock's tests/measurement/test_fixtures.py."
+    },
+    {
+      "behaviour": "renderFixtureReport interpolates the corpus root path, case ids, incident classes and recommendation names verbatim, so a corpus under a non-ASCII path -- or with a non-ASCII name anywhere -- produces a report that breaks the rendering's own ASCII guarantee.",
+      "matches_source": true,
+      "note": "Raised by the codex review gate as a P2. Identical upstream: interlock's render_fixture_report interpolates the same f-strings and validates none of them, and its own cp932 assertion only ever sees the shipped ASCII corpus. NOT fixed: escaping would make continuo's report differ from interlock's for the same corpus. Handled under the precedent the operator set for the action_id escaping question on 2026-08-22 -- reproduce and disclose, do not repair one side alone -- and it is the same defect in the same shape, now in a second module.",
+      "where_a_fix_belongs": "upstream, as an ASCII-safe rendering of externally supplied fields applied to both sides together."
     }
   ],
   "entries": [
@@ -671,6 +679,11 @@
         "mutation": "(codex review, not the sweep) sort order, composition copy, spread minimum",
         "verdict": "three PORT DIVERGENCES, all fixed and pinned",
         "note": "Found by the review gate rather than by the sweep, and worth recording beside it because they are the class the sweep is worst at: a mutation list asks 'is this property tested', and these are places where the port silently did something Python does not. (1) JavaScript's `<` and default sort compare UTF-16 code units, Python compares code points; they disagree for every supplementary character, and the corpus digest is taken over cases in SORTED order -- so the cross-runtime digest identity this belt claims was true only for BMP names. `comparePythonStrings` in src/measurement/format.ts now backs every string sort in fixtures.ts and latency.ts. (2) `composition` was assigned from the caller's Map rather than copied, so a caller could set a new denominator into a published evaluation. (3) `Math.min(...array)` throws past roughly a hundred thousand elements where Python's min() has no ceiling, so a noisy detector would crash this harness and not interlock's."
+      },
+      {
+        "mutation": "(codex review round 2) lenient UTF-8 decoding, and integers beyond 2^53",
+        "verdict": "two more PORT DIVERGENCES, both fixed and pinned",
+        "note": "(1) Python's read_text(encoding='utf-8') raises UnicodeDecodeError; Node's readFileSync(.., 'utf8') substitutes U+FFFD and succeeds. Silent repair is the worst outcome available here because the digest is over the RAW BYTES -- the corpus would load, grade and report under a digest identifying bytes it did not evaluate. Fixed with the fatal TextDecoder D-0015 already uses for migration step files. (2) Python's ints are arbitrary precision, so the source accepts 9007199254740993 exactly; JSON.parse has already rounded it to ...992 and Number.isInteger still says yes. Now refused via Number.isSafeInteger on every millisecond input (label fields, trace offsets, and the synthetic clock). Refusing rejects an input the source accepts, which is a deliberate divergence in the safe direction and the posture D-0007 already records for this runtime beyond 2^53 -- a millisecond offset past 2^53 is some 285,000 years."
       }
     ]
   }
