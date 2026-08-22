@@ -28,6 +28,21 @@ the runner is not a translator's call. Record it, escalate it, and let the revie
 This pilot needed that escape hatch zero times; two cases are deferred and four are adapted, and none
 of the six assert less than their source (see [Dispositions](#dispositions)).
 
+**"What the source asserted" is a ceiling as well as a floor.** A translated case that asserts
+*more* than its source is wrong in the same way one that asserts less is wrong: both make the suite
+say something interlock's suite does not say, and the ledger then describes coverage that is not
+the coverage under review. Two real instances, both caught late because a stricter test looks like a
+better test:
+
+- a `match=` pattern whose `.` was escaped, narrowing a regex the source leaves wide;
+- a signature check matched against the whole declaration text, where the source asserts only that
+  no *parameter* carries the forbidden name -- it would fail on a parameter merely named
+  `resourceScope`.
+
+If the stronger assertion is worth having, it is worth having as a **target-only** test that says so,
+next to the faithful translation. What it may not do is occupy the ported case's slot and be counted
+as that case.
+
 ---
 
 ## 1. Fixture teardown ordering
@@ -283,6 +298,67 @@ that breaks it is one the source's suite had no way to construct. The check has 
 
 Anything on either list is suspect until it has been checked.
 
+## 10. Make it fail on purpose, and confirm it fails for the reason you expect
+
+**The heading is the check, and the load-bearing words are "for the reason you expect".** Applying a
+mutation and watching something go red is not enough: in every instance below, something *did* fail
+or pass -- the condition being observed was simply a different one from the condition the case
+names. A case that fails with the wrong message is protecting the wrong property, and it will keep
+protecting the wrong property indefinitely, because it is green.
+
+**The shape it catches.** *A case can go green because the thing it asserts became unreachable, not
+because it holds.* Nothing is red, nothing is skipped, the ledger counts the case as coverage -- and
+the property it names is unprotected. It is the translation hazard this port has hit most often, because
+translating a case moves it onto a different runtime, a different launcher and a different file
+layout, and each of those can quietly remove the path the assertion was watching.
+
+Three instances, with what was measured. They are listed together on purpose: this section is the
+one place to look for "where green has lied here".
+
+1. **A missing build makes the deny hook deny for the wrong reason** (`DECISIONS.md` D-0209).
+   `hook.mjs` resolves its dependencies from `dist/` when it runs as a real subprocess. Without a
+   build it cannot load them and denies with `fence-unavailable` -- which is fail-closed, so every
+   `decision == "block"` assertion still passes. Measured: with `dist/fencing/state.js` moved aside,
+   **9 of the deny hook's 21 cases were green against a hook that never read a fence**. Answered by
+   a `pretest` build plus an explicit `existsSync` guard in the suite.
+2. **An exit-code assertion that no longer distinguishes anything**
+   (`test/fencing/deny-hook.test.ts`). Interlock's hook exits **1** when it cannot load itself, so
+   the source's `returncode != 1` is what separates "the fence denied this probe" from "the hook
+   broke and denied by default". Continuo's hook denies with **2**, so `returncode != 1` plus
+   `decision == "block"` is satisfied by a hook that never read a fence. Two cases needed a
+   `rule_id` assertion added -- the deny has to be *the fence's* deny -- to keep meaning what their
+   source meant.
+3. **A glob that stopped covering the file that mattered**
+   (`test/fencing/renderer.test.ts`, "the fencing package does not import the discarded transport
+   module"). The source globs the package's `*.py`, which is every file in it. The translation
+   globbed `*.ts` -- and then D-0204 shipped `hook.mjs`, so the most security-critical file in the
+   package silently left the discarded-axis guard, which stayed green over the remaining files.
+   Measured: with `transport.descriptor` appended to `hook.mjs`, the case **passed**. Fixed by
+   globbing `.ts` and `.mjs`. Note the shape: *adding a file narrowed a check that names no file.*
+
+**Applying it.** Break the thing the assertion is watching -- move the build aside, revert the repaired
+behaviour, append the forbidden string to the file the glob should cover -- and read the failure. A
+case that stays green is not protecting the property; a case that fails with a different message is
+protecting a different one. Two rules follow:
+
+- Do this for every case whose subject is *out of process* (a subprocess, a built artefact, a file
+  discovered by pattern), because those are the paths a translation is most able to sever.
+- Prefer an assertion that names the *specific* outcome (a rule id, an exact code set) over one that
+  names a *class* of outcome (non-zero exit, "it refused"). Fail-closed defaults live in the class,
+  so a class assertion is exactly what a broken component satisfies for free.
+
+**The sibling hazard.** Read this alongside **rule 9, "The port's types are wider than the
+source's"**. It is the same principle on the implementation side: the source relied on something
+narrow that the target does not enforce, and nothing in the diff shows it. Instance 3 above is
+literally that rule applied to a *test*: the glob defined its subject set by file extension rather
+than by "every file in the package", so shipping one file under a new extension narrowed a check
+that names no file at all. The two sections describe one failure mode reached from two directions --
+a translated **check** whose reach silently shrank, and translated **code** whose accepted inputs
+silently grew. Neither shows up as a red test, which is why both need a deliberate probe rather than
+a reading.
+
+---
+
 ## Patterns with no source case
 
 Three of the eight -- **strict/non-strict xfail**, **skip semantics**, and a **`caplog`-equivalent
@@ -397,4 +473,7 @@ Belt-specific helpers live under the belt's own directory until they have earned
 - [ ] No seam without a liveness test.
 - [ ] Every caller-supplied map key and every `int`-typed number in the ported module has been
       checked against rule 9, and the answer is in the porting report.
+- [ ] Every case whose subject is out of process -- a subprocess, a built artefact, a file found by
+      pattern -- has been made to fail on purpose once, and failed for the expected reason. See
+      [Make it fail on purpose](#10-make-it-fail-on-purpose-and-confirm-it-fails-for-the-reason-you-expect).
 - [ ] `npm run parity` passes, and the suite is green **twice** at two distinct seeds.

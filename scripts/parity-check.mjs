@@ -74,6 +74,9 @@ const LEDGERS = [
   // lane C -- fencing + settings
   "parity/fencing.renderer.ledger.json",
   "parity/fencing.battery-coverage.ledger.json",
+  "parity/fencing.deny-hook.ledger.json",
+  "parity/fencing.restart.ledger.json",
+  "parity/fencing.spawn-precondition.ledger.json",
 ];
 
 /**

@@ -23,17 +23,23 @@
   "target": {
     "test_file": "test/fencing/renderer.test.ts",
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "note": "This file carries no target-only test. The lane's target-only tests are the CPython differential oracle, which is listed in parity/fencing.battery-coverage.ledger.json because it belongs to no single ported source file. Target-only tests are never counted as ported coverage."
+      "count": 5,
+      "ids": [
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > a hook merely mentioned on the command line refuses (target-only)",
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > a hook at argv[1] under a launcher that is not the interpreter refuses (target-only)",
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > the shipped {python} {hook_script} shape still renders (target-only)",
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > an executable hook at argv[0] refuses: the recorded interpreter is required (target-only)",
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > an unparseable hook command refuses hook-absent as well as rule-syntax (target-only)"
+      ],
+      "note": "The five cases listed are target-only because interlock has no case for the property: interlock HAS the defect they pin (the substring hook test, see intentional_divergences and D-0208). They are never counted as ported coverage. The lane's other target-only tests are the CPython differential oracle, which is listed in parity/fencing.battery-coverage.ledger.json because it belongs to no single ported source file."
     },
     "approved_non_running": []
   },
   "totals": {
     "source_cases": 40,
     "ported": 36,
-    "adapted": 3,
-    "not_ported": 1,
+    "adapted": 4,
+    "not_ported": 0,
     "waivers": 0
   },
   "entries": [
@@ -88,16 +94,16 @@
       "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": "The source builds its FenceContext around default_hook_script(), the shipped hook file. continuo has not ported fencing/hook.py yet (it lands in the next PR of this lane), so the fixture creates a real hook file inside the space-bearing directory instead. The property the case pins -- that shlex quoting of context paths survives the render, so --fence arrives as one token -- is unchanged, and the case is strictly STRONGER than its source here: the hook path now carries the space too, so it must survive the quoting as well.",
+      "reason": "The source builds its FenceContext around default_hook_script(), the shipped hook file. This case instead creates a real hook file inside the space-bearing directory. That was originally forced -- continuo had no shipped hook -- and it is now KEPT deliberately: this PR ships src/fencing/hook.mjs, but a renderer case needs only \"the context names a script file that exists\", and reaching for the shipped hook here would couple the case to the hook's own file layout while making the space-bearing path impossible. The property the case pins -- that shlex quoting of context paths survives the render, so --fence arrives as one token -- is unchanged, and the case is strictly STRONGER than its source here: the hook path now carries the space too, so it must survive the quoting as well.",
       "source_revision": "65f36c5"
     },
     {
       "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_the_default_hook_launcher_resolves_on_this_platform",
-      "target_id": null,
-      "disposition": "not-ported",
+      "target_id": "test/fencing/renderer.test.ts::renders > the default hook launcher resolves on this platform",
+      "disposition": "adapted",
       "source_status": "passed",
-      "target_status": "absent",
-      "reason": "Genuinely about the SHIPPED default: it asserts default_hook_script() exists and that ctx.python == sys.executable or 'python3'. continuo has no shipped hook script until src/fencing/hook.ts lands in the next PR of this lane, and the second assertion has no faithful analogue in any case -- FenceContext.python defaults to process.execPath, a recorded deviation documented at the field itself, because continuo's hook is a Node script and not a Python one. Unblocked by the hook PR, where it needs rewriting against the Node launcher rather than straight translation. Deliberately NOT made to pass by inventing a shipped hook: a hook file that exists is a hook a spawn will wire in, and an untested fail-closed hook fails open, which is the accident i04 section 5 measured.",
+      "target_status": "passed",
+      "reason": "Was not-ported in the PR that translated this file, on the premise that continuo had no shipped hook script to resolve. THIS PR SHIPS src/fencing/hook.mjs, so the premise is gone and the case is translated. Three of the source's four assertions carry across unchanged: default_hook_script() -- defaultHookScript() here, pointing at the shipped hook.mjs -- names a file that exists; the launcher resolves on THIS platform (`Path(ctx.python).is_file() or shutil.which(ctx.python)`, both halves); and the render SUCCEEDS rather than refusing hook-unresolvable, which the source calls the actual regression. ADAPTED for the fourth: the source asserts `ctx.python == (sys.executable or \"python3\")`, the running PYTHON interpreter. continuo's hook is a Node script (D-0204), so FenceContext.python defaults to process.execPath -- a recorded deviation documented at the field itself -- and there is no \"python3\" fallback because process.execPath is always an absolute path. The assertion is NOT dropped: it is replaced by the one that means the same thing here, `expect(ctx.python).toBe(process.execPath)` -- the default IS the running interpreter. That substitution of a Python-interpreter identity for its Node equivalent is the whole of the adaptation.",
       "source_revision": "65f36c5"
     },
     {
@@ -115,7 +121,7 @@
       "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": "Same substitution as test_paths_with_spaces_survive_into_the_hook_command: the shipped hook script is not ported yet, so the fixture supplies a real file. The source's load-bearing detail is preserved -- the context tree is never created on disk, because rendering must not touch the filesystem for those paths -- by creating the hook file OUTSIDE that tree. Both assertions are kept: the --fence token equals ctx.fencePath, and tokens[0] equals ctx.python.",
+      "reason": "Same substitution as test_paths_with_spaces_survive_into_the_hook_command, and kept for the same reason now that src/fencing/hook.mjs ships: the fixture supplies a throwaway file so the case depends on nothing but the path's existence. The source's load-bearing detail is preserved -- the context tree is never created on disk, because rendering must not touch the filesystem for those paths -- by creating the hook file OUTSIDE that tree. Both assertions are kept: the --fence token equals ctx.fencePath, and tokens[0] equals ctx.python.",
       "source_revision": "65f36c5"
     },
     {
@@ -169,7 +175,7 @@
       "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": "The source globs the Python package's *.py; the target globs src/fencing/*.ts. The two source exemptions are translated rather than dropped: the RST double-backtick spelling of the discarded axis becomes the TSDoc single-backtick form, and the '\\\"\\\"\\\"' docstring marker becomes '/**'. A non-empty-glob assertion is added so an empty match cannot read as a pass. See inherited_limitations for the half of this case that is near-vacuous in the source and is reproduced rather than quietly strengthened.",
+      "reason": "The source globs the Python package's *.py; the target globs src/fencing/*.ts. The two source exemptions are translated rather than dropped: the RST double-backtick spelling of the discarded axis becomes the TSDoc single-backtick form, and the '\\\"\\\"\\\"' docstring marker becomes '/**'. A non-empty-glob assertion is added so an empty match cannot read as a pass. See inherited_limitations for the half of this case that is near-vacuous in the source and is reproduced rather than quietly strengthened. Cross-reference: this is one of three cases in this port where the suite was green while proving nothing; the three are written up together in docs/test-translation-conventions.md, section 10 (\"Make it fail on purpose, and confirm it fails for the reason you expect\").",
       "source_revision": "65f36c5"
     },
     {
@@ -398,22 +404,51 @@
       "source_revision": "65f36c5"
     }
   ],
+  "intentional_divergences": [
+    {
+      "topic": "The renderer decided that a hook command invokes interlock's deny hook by a SUBSTRING test, so a command that merely mentions the hook path -- without executing it -- was admitted. continuo requires the hook to be the program that actually runs.",
+      "status": "intentional divergence; continuo is authoritative (D-0208; D-0022 is superseded by D-0023: interlock is frozen, so an inherited defect is repaired at the first belt that touches it)",
+      "direction": "interlock renders a document continuo refuses",
+      "decision": "D-0208",
+      "reproduction": "renderer.py:412 is `if str(ctx.hook_script) in hook[\"command\"]:`. A command such as `/bin/echo <hook_script> --role worker --fence <fence_path>` therefore satisfies every check the renderer makes: `_check_command_resolves` finds `/bin/echo` on PATH and finds the script token on disk, `_check_invocation` finds `--fence` and `--role` carrying the right values, and the matcher is universal. The CLI then runs `echo` and the deny hook never executes, so the render succeeds and the session is unfenced.",
+      "measurement": "Measured against interlock at 65f36c5 rather than reasoned about: driving `render_fence` with exactly that command returns a fence of 17 rules. The same 17-rule render was measured in continuo before this change, and again by reverting the new check to the substring test; after the change both the `/bin/echo` shape and the `true` shape refuse with `hook-absent`. Re-measured when the argv[0] branch was dropped, on the same four shapes: the `/bin/echo` decoy refuses `hook-absent` before and after; the `true` decoy refuses `hook-absent` before and after; the shipped `{python} {hook_script}` shape renders 17 rules before and after; the bare `{hook_script}` shape at argv[0] goes from rendering 17 rules to refusing `hook-absent` at mode 0755 (and from `hook-unresolvable` to `hook-absent, hook-unresolvable` at the shipped mode 0644). All 45 renderer cases were then run under one fixed order seed with every refusal's codes logged: the log differs in exactly one line, the added refusal from the rewritten target-only case, so no ported case changed its refusal codes.",
+      "detail": "continuo now tokenises the command with the CPython `shlex.split` transcription (D-0200) and treats it as invoking the deny hook only if the hook script is argv[1] AND argv[0] is `ctx.python` -- the interpreter the renderer itself recorded, which is what `{python} {hook_script} ...` renders to. That is the ONLY accepted shape. An earlier form of this divergence also accepted the hook script at argv[0] (a directly executable hook); that branch was dropped before the change shipped, because it was open on Windows. The shipped src/fencing/hook.mjs has no shebang and is mode 0644: on POSIX `checkCommandResolves` refuses it `hook-unresolvable` via access(X_OK), but on Windows X_OK is only an existence check, so the render SUCCEEDED there, `cmd` cannot execute a .mjs directly, the deny hook never launched, and the child ran UNFENCED with the spawn recorded as admitted (Windows is a required CI cell, D-0003). The argv[0] shape is one nothing produces -- all four shipped roles render `{python} {hook_script} ...`, and interlock's own hook.py is likewise not executable -- so requiring the recorded interpreter is strictly tighter at no cost, and closes the hole on every platform instead of special-casing one. POSITION ALONE IS NOT SUFFICIENT: `true /path/hook.mjs --fence X --role worker` puts the hook at argv[1] and would satisfy a naive position check, because `true` resolves on PATH exactly as `echo` does; it is the `argv[0] === ctx.python` half that rejects it. The shipped src/fencing/roles.json is unaffected -- all four roles already use the `{python} {hook_script} ...` form and all four still render -- and none of the 40 ported source cases changes its refusal codes (verified by execution, before and after). The divergence is fail-closed and stays traceable here because parity is still judged against interlock. Originally recorded as an inherited limitation, disclosed and not repaired under D-0022, and surfaced by an independent review of this port (Codex); D-0023 superseded that rule when interlock was frozen, and the defect is repaired here because this is the first belt that touches the code.",
+      "tracking": "suisya-systems/continuo#18",
+      "target_only_tests": [
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > a hook merely mentioned on the command line refuses (target-only)",
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > a hook at argv[1] under a launcher that is not the interpreter refuses (target-only)",
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > the shipped {python} {hook_script} shape still renders (target-only)",
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > an executable hook at argv[0] refuses: the recorded interpreter is required (target-only)"
+      ]
+    },
+    {
+      "topic": "An unparseable hook command refuses with one code in interlock (rule-syntax) and two in continuo (rule-syntax, hook-absent). The second half of D-0208: tokenising the command first means a command that does not tokenise is not counted as invoking the deny hook.",
+      "status": "intentional divergence; continuo is authoritative (D-0208). Fail-closed: continuo refuses strictly more loudly about a document interlock also refuses.",
+      "direction": "both refuse; continuo reports an additional code",
+      "decision": "D-0208",
+      "reproduction": "Render the worker role with `hooks.PreToolUse[0].hooks[0].command` set to `{python} {hook_script} --role worker --fence \"{fence_path}` -- the shipped command shape with one unbalanced double quote. interlock's `_check_command_resolves` raises rule-syntax on the shlex failure, and because its invocation test is a SUBSTRING match the command still counts as invoking the hook, so hook-absent is never reached. continuo's `commandRunsHook` tokenises with the CPython shlex transcription (D-0200) and returns false on the ShlexError, so `interlockMatchers` stays empty and `hook-absent` -- \"no PreToolUse hook invokes Interlock's deny hook\" -- is appended after the same rule-syntax.",
+      "codes": {
+        "interlock": ["rule-syntax"],
+        "continuo": ["rule-syntax", "hook-absent"]
+      },
+      "measurement": "Measured by execution, with set EQUALITY rather than containment so the extra code is the thing asserted: the target-only case below observes exactly {rule-syntax, hook-absent} against continuo. interlock's single code is read off renderer.py at 65f36c5, where the substring test at line 412 is what keeps hook-absent unreachable on this input.",
+      "detail": "No ported case pinned this on either side before now, which is why it is added: D-0208's prose already mentioned the behaviour, but a divergence that no case measures is a claim, not a fact. The divergence follows from D-0208's decision rather than being a separate choice, and neither direction changes any of the 40 ported cases' refusal codes.",
+      "tracking": "suisya-systems/continuo#18",
+      "target_only_tests": [
+        "test/fencing/renderer.test.ts::the deny hook must be the program that runs (target-only, D-0208) > an unparseable hook command refuses hook-absent as well as rule-syntax (target-only)"
+      ]
+    }
+  ],
   "inherited_limitations": [
     {
       "topic": "The second assertion of test_the_fencing_package_does_not_import_the_discarded_transport_module is nearly vacuous.",
       "status": "inherited, not fixed",
-      "detail": "The source reads `assert \"sandbox_by_pattern\" not in text or \"DISCARDED\" in text or '\\\"\\\"\\\"' in text`. The third disjunct is true of any file containing a docstring, which in that package is every file, so the assertion cannot fail on the sandbox_by_pattern axis. The first assertion (about transport.descriptor) is real and does the work. The translation reproduces the disjunction rather than strengthening it, because a port that quietly improves on its source is no longer a parity port and the difference would be invisible to anyone comparing the two suites. A fix belongs upstream, or in a change that moves both sides together."
+      "detail": "The source reads `assert \"sandbox_by_pattern\" not in text or \"DISCARDED\" in text or '\\\"\\\"\\\"' in text`. The third disjunct is true of any file containing a docstring, which in that package is every file, so the assertion cannot fail on the sandbox_by_pattern axis. The first assertion (about transport.descriptor) is real and does the work. The translation reproduces the disjunction rather than strengthening it, because a port that quietly improves on its source is no longer a parity port and the difference would be invisible to anyone comparing the two suites. A fix belongs upstream, or in a change that moves both sides together. Separately from the inherited vacuity, the TRANSLATED half of this case lost its coverage of src/fencing/hook.mjs when the glob was written as `.ts`-only and the hook shipped as `.mjs`: measured, with `transport.descriptor` appended to hook.mjs a `.ts`-only glob reported this case GREEN. Repaired by globbing `.ts` and `.mjs`. Cross-reference: this is one of three cases in this port where the suite was green while proving nothing; the three are written up together in docs/test-translation-conventions.md, section 10 (\"Make it fail on purpose, and confirm it fails for the reason you expect\")."
     },
     {
       "topic": "JavaScript has one number type, so a role document's numeric values can lose both their int/float distinction AND, beyond 2^53, their exact value.",
-      "status": "inherited from the runtime, disclosed and not repaired (D-0022)",
+      "status": "inherited from the runtime; repair scheduled under D-0023 (suisya-systems/continuo#18, PR 2.5)",
       "detail": "Two distinct losses, both at `JSON.parse`, both inherited from the runtime rather than introduced by the translation. (1) TYPE: Python's json preserves int vs float (`1` and `1.0` parse to different types), so a refusal naming a value's type reads `got int` here where interlock says `got float`. (2) VALUE: an integer beyond `Number.MAX_SAFE_INTEGER` is rounded -- `9007199254740993` parses as `9007199254740992` -- and `pyJsonDumps` then emits a number that is neither what was authored nor what Python would print. Because the settings payload is compared byte-for-byte across a restart, a document carrying such a value would render a fence that disagrees with interlock's bytes. No ported case exercises either: the shipped roles.json carries no number in any position that reaches a message or the payload, and the refusal CODE -- which is what the ledger and an operator act on -- is unaffected in every case. Recorded rather than papered over, and raised with the operator: closing (2) means either a lossless number parser or REFUSING an out-of-range number, and refusing is a deliberate divergence from interlock (which accepts it) rather than a bug fix, so it is not a translator's call. Surfaced by an independent review of this port (Codex). Tracked for post-parity repair in suisya-systems/continuo#18, which also carries the upstream decision to take before interlock is archived.",
-      "tracking": "suisya-systems/continuo#18"
-    },
-    {
-      "topic": "The renderer decides that a hook command invokes interlock's deny hook by a SUBSTRING test, so a command that merely mentions the hook path -- without executing it -- is admitted.",
-      "status": "inherited, disclosed and not repaired during the port (D-0022)",
-      "detail": "renderer.py:412 is `if str(ctx.hook_script) in hook[\"command\"]:`. A command such as `/bin/echo <hook_script> --role worker --fence <fence_path>` therefore satisfies every check the renderer makes: `_check_command_resolves` finds `/bin/echo` on PATH and finds the script token on disk, `_check_invocation` finds `--fence` and `--role` carrying the right values, and the matcher is universal. The CLI then runs `echo` and the deny hook never executes, so the render succeeds and the session is unfenced. Measured against interlock at 65f36c5 rather than reasoned about: driving `render_fence` with exactly that command returns a fence of 17 rules. continuo reproduces the behaviour exactly. Fixing it here would mean the port refuses a document interlock renders -- a silent improvement, which interlock#74 acceptance criteria 5 and 6 forbid and which would make the two suites disagree about what a valid role document is. `D-0022` settles what to do with a defect that is reproduced faithfully from interlock, pinned by no case on either side, and raised by review rather than by a failing test: disclose it here, do not repair it during the port, and repair it in a dedicated change after parity. This is that shape exactly, including the detail that the porting lane's own recommendation was to repair it now -- which the operator rejected for the event-spine belt. The repair, when it comes, has to check the argv POSITION of the script rather than its presence in the string, and belongs upstream or in a change that moves both sides together. Surfaced by an independent review of this port (Codex), which raised it in two consecutive rounds because it reviews the target as greenfield and cannot see interlock. Tracked for post-parity repair in suisya-systems/continuo#18, which also carries the upstream decision to take before interlock is archived.",
       "tracking": "suisya-systems/continuo#18"
     }
   ]

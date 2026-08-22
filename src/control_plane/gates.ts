@@ -947,6 +947,7 @@ export function closeGate(
         supersededBy,
         writerEpoch,
         body,
+        payloadStage: gate.stage,
       });
     },
   });
@@ -1526,6 +1527,19 @@ function _closeInTransaction(
     readonly supersededBy: string | null;
     readonly writerEpoch: number | null;
     readonly body: string | null;
+    /**
+     * The stage the caller's event payload already records.
+     *
+     * The payload is built from a gate read BEFORE this transaction opened,
+     * and this function re-reads the gate inside it. If another writer advanced
+     * the gate in between, and the outcome is admissible from both stages
+     * ('withdrawn' and 'subject_gone' are), the commit would pair an audit
+     * event claiming one stage with a gate row closed at another -- a
+     * permanently inconsistent record of a single act.
+     *
+     * So the reload confirms it. Either the two agree, or nothing commits.
+     */
+    readonly payloadStage: string;
   },
 ): void {
   const {
@@ -1538,12 +1552,25 @@ function _closeInTransaction(
     supersededBy,
     writerEpoch,
     body,
+    payloadStage,
   } = options;
 
   const gate = _loadGate(connection, gateId);
   if (gate.closedAtMs !== null) {
     throw new GateClosedRefused(
       `gate ${gateId} was closed as '${gate.outcome}' while this close ran`,
+    );
+  }
+  if (gate.stage !== payloadStage) {
+    // The event payload built before this transaction opened records
+    // `payloadStage`; the gate is now at `gate.stage`. Committing both would
+    // put an audit event and the gate row it describes permanently at odds,
+    // and for an outcome admissible from both stages nothing else would ever
+    // notice. Refusing here rolls the append back, so the caller sees a
+    // refusal instead of the database gaining a contradiction.
+    throw new GateClosedRefused(
+      `gate ${gateId} advanced from '${payloadStage}' to '${gate.stage}' while this close ran; ` +
+        "the closure event already records the earlier stage, so the two would disagree",
     );
   }
   const stage = gate.stage;

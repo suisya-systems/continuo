@@ -733,8 +733,8 @@
     },
     {
       "topic": "A fenced write's no-op/stale classification is two statements, not one transaction.",
-      "status": "inherited, scheduled for repair",
-      "detail": "When _MARK_DELIVERED changes no row, the fence is re-read in a following statement to decide whether that was a benign duplicate or a superseded writer. A lease taken over between the two turns a legitimate deduplicated resend into a recorded StaleWriterRefused. interlock's _protected_write has the same two-step shape, so the port is at parity. Under the policy that replaced D-0022 this is to be repaired in continuo rather than disclosed indefinitely, but it is a concurrency redesign rather than a local fix, so it is scheduled into the control_plane repair belt with the other inherited defects rather than squeezed into this change. Raised by the Codex review gate (2026-08-22, P2)."
+      "status": "REPAIRED -- deliberate divergence from interlock (continuo D-0024)",
+      "detail": "The protected write and the fence re-read that classifies a no-op now run in ONE transaction (joining the caller's if one is open, since withImmediate refuses a nested BEGIN). interlock runs them as two autocommitted statements, so a lease taken over in between turns a legitimate deduplicated resend into a recorded StaleWriterRefused -- a refusal history recording something that did not happen."
     }
   ]
 }
