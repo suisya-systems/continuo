@@ -301,7 +301,8 @@ export {
   transaction,
 } from "./control_plane/txn.js";
 /**
- * Per-role fencing: the rule model, the renderer, and the breach battery.
+ * Per-role fencing: the rule model, the renderer, the breach battery, the
+ * persisted fence and the fail-closed spawn precondition.
  *
  * Listed by name for the reason the entries above are: the package exports only
  * `.` (D-0002), so a name absent from here is one an installed consumer cannot
@@ -310,10 +311,19 @@ export {
  *
  * The surface mirrors interlock's `fencing/__init__.py` `__all__`, restricted to
  * what is ported. Absent because they are not ported yet, not because they were
- * judged internal: `EVENT_ADMITTED`, `EVENT_REFUSED`, `FenceLedger`,
- * `FencedSpawner`, `SpawnOutcome`, `SpawnPlan`, `default_hook_script`,
- * `FenceDiff`, `FenceStateError`, `diff_fences`, `read_fence`, `write_fence`.
- * Each arrives with its own module and its own translated cases.
+ * judged internal: nothing from `__all__` -- `state.ts` and `spawn.ts` complete
+ * it. Present here but NOT in that `__all__`: `EVENT_BATTERY`,
+ * `REASON_BATTERY_INCOMPLETE`, `REASON_PROBE_UNSYNTHESIZABLE`,
+ * `FENCE_FORMAT_VERSION`, `fenceToJson` and `fenceFromJson`, which are
+ * module-level publics interlock's own cases import from
+ * `claude_org_runtime.fencing.spawn` and `...fencing.state` directly. Python
+ * offers a submodule path for that and a single-entry package does not, so the
+ * names an interlock case can reach are the names this barrel carries -- a
+ * ported case cannot be made to reach less than its original did.
+ *
+ * `hook.mjs` has no export here at all, and that is not an omission: the deny
+ * hook is launched as a subprocess BY PATH (D-0204), so `defaultHookScript()`
+ * is its entire public surface.
  *
  * The CPython transcriptions (`fnmatch`, `shlex`, `pypath`, `pyrepr`, `pyjson`,
  * `pysemantics`, `pyregex`, `uescape`) are deliberately absent. In interlock
@@ -362,6 +372,29 @@ export {
   WITNESS_TOKEN,
   witnessSubject,
 } from "./fencing/rules.js";
+export {
+  defaultHookScript,
+  EVENT_ADMITTED,
+  EVENT_BATTERY,
+  EVENT_REFUSED,
+  FencedSpawner,
+  FenceLedger,
+  REASON_BATTERY_INCOMPLETE,
+  REASON_PROBE_UNSYNTHESIZABLE,
+  SpawnOutcome,
+  SpawnPlan,
+  type SpawnReason,
+} from "./fencing/spawn.js";
+export {
+  diffFences,
+  FENCE_FORMAT_VERSION,
+  FenceDiff,
+  FenceStateError,
+  fenceFromJson,
+  fenceToJson,
+  readFence,
+  writeFence,
+} from "./fencing/state.js";
 /**
  * Section 5's AC-7 canary divergence report.
  *

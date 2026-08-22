@@ -1,5 +1,13 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
@@ -32,15 +40,17 @@ import {
   hookScriptForTest,
   mutate,
   replaceFenceContext,
+  shippedHookScript,
 } from "./helpers/fence-cases.js";
 
 /**
  * The per-role fencing renderer: what it renders, and what it refuses.
  *
  * Ported from interlock `tests/fencing/test_renderer.py` at `65f36c5`. Every
- * case here maps to one source node id; the mapping, the two cases that are
- * adapted and the one that is not ported are recorded in the fencing parity
- * ledger.
+ * one of the 40 source cases maps to one case here; the mapping and the four
+ * that are adapted are recorded in `parity/fencing.renderer.ledger.json`,
+ * along with the target-only cases that pin this port's two intentional
+ * divergences from the source renderer (D-0208).
  *
  * The refusals carry most of the weight of this file. D-0023 part 2 makes
  * fail-closed Interlock's own obligation, and F2/V15/V16 record how readily
@@ -57,6 +67,33 @@ const PLACEHOLDER = /\{[a-z_]+\}/g;
 
 function placeholdersIn(text: string): string[] {
   return [...text.matchAll(PLACEHOLDER)].map((match) => match[0]);
+}
+
+/**
+ * `Path(launcher).is_file() or shutil.which(launcher)`.
+ *
+ * Both halves, because both halves are the property: a launcher named by an
+ * absolute path has to BE a file, and a bare name has to be findable on `PATH`.
+ * Returning `true` for a name that merely appears in a `PATH` directory listing
+ * would make the case pass on a directory of that name, so each candidate is
+ * stat'ed.
+ */
+function launcherResolvesHere(launcher: string): boolean {
+  const isFile = (path: string): boolean => existsSync(path) && statSync(path).isFile();
+  if (isFile(launcher)) {
+    return true;
+  }
+  // `PATHEXT` is Windows' answer to "which name on disk is this"; an empty
+  // extension is always tried first, as `shutil.which` does.
+  const extensions = ["", ...(process.env["PATHEXT"] ?? "").split(delimiter).filter(Boolean)];
+  for (const directory of (process.env["PATH"] ?? "").split(delimiter).filter(Boolean)) {
+    for (const extension of extensions) {
+      if (isFile(join(directory, launcher + extension))) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -199,6 +236,37 @@ describe("renders", () => {
     expect(tokens[tokens.indexOf("--fence") + 1]).toBe(ctx.fencePath);
   });
 
+  test("the default hook launcher resolves on this platform", () => {
+    // The default must be launchable *here*, not on the author's machine.
+    //
+    // A literal `"python3"` is frequently absent on Windows -- only
+    // `python.exe` / `py.exe` exist -- so every render there would refuse with
+    // `hook-unresolvable`, and the fence would be unspawnable rather than
+    // merely mis-launched. The hook also has to import the runtime, so the one
+    // interpreter guaranteed to manage it is the running one.
+    //
+    // ADAPTED, in exactly one of its four assertions. The source asserts
+    // `ctx.python == (sys.executable or "python3")`: the default is the running
+    // PYTHON. Continuo's hook is a Node script (D-0204), so `FenceContext`
+    // defaults `python` to `process.execPath` -- a recorded deviation,
+    // documented at the field itself. The assertion is not dropped; it is
+    // replaced by the one that means the same thing here: the default IS the
+    // running interpreter. The other three carry across unchanged -- the
+    // shipped hook script exists, the launcher resolves on THIS platform, and
+    // the render succeeds rather than refusing `hook-unresolvable`, which the
+    // source calls the actual regression.
+    const document = fenceDocument();
+    const hookScript = shippedHookScript();
+    expect(existsSync(hookScript), `${hookScript} is not a file`).toBe(true);
+    const ctx = fenceContext(fenceCaseRoot(), { hookScript });
+    // `Path(ctx.python).is_file() or shutil.which(ctx.python)`.
+    expect(launcherResolvesHere(ctx.python), `${ctx.python} does not resolve here`).toBe(true);
+    // The Python-interpreter identity half, in its Node spelling.
+    expect(ctx.python).toBe(process.execPath);
+    // Renders rather than refusing -- the actual regression.
+    expect(renderFence("worker", ctx, { document }).rules.length).toBeGreaterThan(0);
+  });
+
   test("shlex mangles an unquoted backslash path and quoting prevents it", () => {
     // The hazard the quoting exists for, at the string level.
     //
@@ -314,7 +382,24 @@ describe("discarded axes", () => {
     // spares a file that says DISCARDED or carries a docstring, whose marker is
     // `/**` here rather than a triple quote.
     const packageDir = join(import.meta.dirname, "..", "..", "src", "fencing");
-    const sources = readdirSync(packageDir).filter((entry) => entry.endsWith(".ts"));
+    // `.mjs` as well as `.ts`, and that is not a detail. The source globs the
+    // package's `*.py`, which covers EVERY file in it including `hook.py`. This
+    // port's package is not all one extension: `D-0204` ships the deny hook as
+    // hand-written JavaScript, so a `.ts`-only glob silently stops scanning the
+    // most security-critical file in the package -- and it stops silently,
+    // because the assertion still passes over the remaining files.
+    //
+    // Measured rather than reasoned about: with `transport.descriptor` appended
+    // to `hook.mjs`, a `.ts`-only glob reported this case GREEN. The guard was
+    // weakened by the same pull request that shipped the file it stopped
+    // covering, which is the shape worth remembering -- adding a file can
+    // narrow a check that names no file at all.
+    //
+    // Written up with the other two instances of the shape in
+    // docs/test-translation-conventions.md section 9, "Make it fail on purpose, and confirm it fails for the reason you expect".
+    const sources = readdirSync(packageDir).filter(
+      (entry) => entry.endsWith(".ts") || entry.endsWith(".mjs"),
+    );
     expect(sources.length).toBeGreaterThan(0);
     for (const entry of sources) {
       const text = readFileSync(join(packageDir, entry), "utf8");
@@ -679,6 +764,146 @@ describe("permission mode is U15's answer", () => {
       const permissionMode = isRecord(body) ? body["permission_mode"] : undefined;
       expect(permissionMode, role).not.toBe("bypassPermissions");
     }
+  });
+});
+
+/**
+ * The deny hook has to be the program that RUNS -- **target-only**, D-0208.
+ *
+ * These four cases are target-only: interlock has no case for this property
+ * because interlock has the defect. `renderer.py:412` decides that a command
+ * invokes the deny hook with a substring test, so a command that merely
+ * MENTIONS the hook path is admitted, the CLI runs something else, and the
+ * session believes it is fenced when it is not. Measured against interlock at
+ * `65f36c5`, not reasoned about: `/bin/echo {hook_script} --role worker --fence
+ * {fence_path}` renders a fence of 17 rules there. Interlock is frozen, so
+ * continuo repairs it and the parity ledger carries the difference as an
+ * intentional divergence rather than an inherited limitation.
+ *
+ * The first two cases are the pair that matters. `/bin/echo` shows the defect;
+ * `true` shows why POSITION ALONE IS NOT THE FIX -- it puts the hook at argv[1]
+ * exactly where the real command puts it, resolves on PATH exactly as `echo`
+ * does, and exits 0 without running anything. Only `argv[0] === ctx.python`
+ * rejects it.
+ *
+ * The codes are asserted with `toContain` rather than by equality because the
+ * two decoy launchers do not resolve on every platform (`/bin/echo` is absent
+ * on Windows, `true` is not on its PATH), so those runs carry an extra
+ * `hook-unresolvable`. `hook-absent` -- "no PreToolUse hook invokes Interlock's
+ * deny hook" -- is the code this property owns, and it is present on every
+ * platform.
+ *
+ * The accepted shape is exactly one: `ctx.python` at argv[0], the hook script
+ * at argv[1]. A hook at argv[0] was admitted when D-0208 first landed and is
+ * refused now, because that branch was open on Windows -- the last case here
+ * pins the tightened rule and records the failure mode.
+ */
+describe("the deny hook must be the program that runs (target-only, D-0208)", () => {
+  test("a hook merely mentioned on the command line refuses (target-only)", () => {
+    const document = fenceDocument();
+    const hooks = deepCopyDocument(roleHooks(document, "worker"));
+    firstHook(hooks)["command"] = "/bin/echo {hook_script} --role worker --fence {fence_path}";
+    const broken = mutate(document, "worker", { hooks });
+    const refusal = expectRefusal(
+      () => renderFence("worker", fenceContext(), { document: broken }),
+      FenceRefusal,
+    );
+    // Not merely "it refused": every OTHER check passes on this command, so a
+    // refusal for any other reason would mean the property is unprotected.
+    expect(refusal.codes).toContain(RefusalReason.HOOK_ABSENT);
+  });
+
+  test("a hook at argv[1] under a launcher that is not the interpreter refuses (target-only)", () => {
+    // The counter-example that makes a position-only check insufficient.
+    const document = fenceDocument();
+    const hooks = deepCopyDocument(roleHooks(document, "worker"));
+    firstHook(hooks)["command"] = "true {hook_script} --role worker --fence {fence_path}";
+    const broken = mutate(document, "worker", { hooks });
+    const refusal = expectRefusal(
+      () => renderFence("worker", fenceContext(), { document: broken }),
+      FenceRefusal,
+    );
+    expect(refusal.codes).toContain(RefusalReason.HOOK_ABSENT);
+  });
+
+  test("the shipped {python} {hook_script} shape still renders (target-only)", () => {
+    // The other half of the divergence: the check must not be so strict that
+    // the document this repository actually ships stops rendering.
+    const document = fenceDocument();
+    const ctx = fenceContext();
+    const fence = renderFence("worker", ctx, { document });
+    const invoking = hookCommands(fence).filter((command) => {
+      const tokens = shlexSplit(command);
+      return tokens[0] === ctx.python && tokens[1] === ctx.hookScript;
+    });
+    expect(invoking.length).toBeGreaterThan(0);
+  });
+
+  test("an unparseable hook command refuses hook-absent as well as rule-syntax (target-only)", () => {
+    // The second intentional divergence of this check, pinned so it stops
+    // being a sentence in a decision entry that no case measures.
+    //
+    // interlock refuses this command with `rule-syntax` alone: its substring
+    // test never tokenises, so the command still counts as invoking the hook
+    // and `hook-absent` is never reached. continuo tokenises first (D-0208),
+    // `commandRunsHook` returns false on the `ShlexError`, no invoking hook
+    // remains, and `hook-absent` is appended. Both codes, not one.
+    //
+    // The direction is fail-closed -- continuo refuses strictly more loudly
+    // about a document interlock also refuses -- and it is recorded in
+    // `parity/fencing.renderer.ledger.json` under `intentional_divergences`.
+    const document = fenceDocument();
+    const hooks = deepCopyDocument(roleHooks(document, "worker"));
+    // The unbalanced quote is the whole input: everything else about this
+    // command is the shipped, correct shape.
+    firstHook(hooks)["command"] = '{python} {hook_script} --role worker --fence "{fence_path}';
+    const broken = mutate(document, "worker", { hooks });
+    const refusal = expectRefusal(
+      () => renderFence("worker", fenceContext(), { document: broken }),
+      FenceRefusal,
+    );
+    // Set equality, not `toContain`: the divergence IS the extra code, so a
+    // containment check would pass against interlock's own code set and pin
+    // nothing. Sorted, because the order is not the property.
+    expect([...new Set(refusal.codes)].sort()).toEqual(
+      [RefusalReason.RULE_SYNTAX, RefusalReason.HOOK_ABSENT].sort(),
+    );
+  });
+
+  test("an executable hook at argv[0] refuses: the recorded interpreter is required (target-only)", () => {
+    // D-0208 also admitted this shape once -- a hook at argv[0], on the theory
+    // that an executable file with a shebang is run by the kernel. It is
+    // refused now, and this case is the evidence that the tighter rule holds.
+    //
+    // The branch was unsound on Windows, which is a required CI cell (D-0003).
+    // The shipped `src/fencing/hook.mjs` has NO shebang and is mode 0644, so
+    // on POSIX `checkCommandResolves` refuses it with `hook-unresolvable` --
+    // but `accessSync(path, X_OK)` on Windows is only an existence check, so
+    // there the render SUCCEEDED, `cmd` cannot execute a `.mjs` directly, the
+    // deny hook never launched, and the child ran UNFENCED with the spawn
+    // recorded as admitted. Nothing this project ships ever produced the
+    // shape: all four roles render `{python} {hook_script} ...`, exactly as
+    // interlock's own non-executable `hook.py` does.
+    const root = fenceCaseRoot();
+    const ctx = fenceContext(root);
+    // The chmod is what makes this case prove the RULE rather than the
+    // accident. With the executable bit set, `checkCommandResolves` is
+    // satisfied on POSIX -- and it is satisfied on Windows either way -- so
+    // the refusal below cannot be the old `hook-unresolvable` defence firing
+    // on one platform. It is `commandRunsHook` refusing the shape on both.
+    chmodSync(ctx.hookScript, 0o755);
+    const document = fenceDocument();
+    const hooks = deepCopyDocument(roleHooks(document, "worker"));
+    firstHook(hooks)["command"] = "{hook_script} --role worker --fence {fence_path}";
+    const patched = mutate(document, "worker", { hooks });
+    const refusal = expectRefusal(
+      () => renderFence("worker", ctx, { document: patched }),
+      FenceRefusal,
+    );
+    // Set equality, not `toContain`: `hook-absent` alone is the whole claim.
+    // An extra `hook-unresolvable` would mean the launcher check refused the
+    // command first and this case had stopped measuring the invocation rule.
+    expect([...new Set(refusal.codes)].sort()).toEqual([RefusalReason.HOOK_ABSENT]);
   });
 });
 
