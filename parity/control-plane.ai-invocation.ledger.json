@@ -1,0 +1,330 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_ai_invocation.py",
+      "collected": 31,
+      "inventory": "parity/source-inventory/control_plane.test_ai_invocation.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/ai-invocation.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "note": "No target-only tests. ai_invocation.py is not monkeypatched by its suite, so the module needed no seam and carries no seam-liveness obligation."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 31,
+    "ported": 26,
+    "adapted": 5,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_started_invocation_is_readable_before_any_usage_arrives",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.4 -- the request-time record, and what only it can bound > a started invocation is readable before any usage arrives",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_in_flight_invocation_is_told_from_one_that_finished_without_usage",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.4 -- the request-time record, and what only it can bound > an in flight invocation is told from one that finished without usage",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_unfinished_invocation_carries_a_placeholder_response_count",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.4 -- the request-time record, and what only it can bound > an unfinished invocation carries a placeholder response count",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_invocation_without_a_ceiling_is_recorded_and_stays_unbounded",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.4 -- the request-time record, and what only it can bound > an invocation without a ceiling is recorded and stays unbounded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_zero_ceiling_is_refused_because_it_imputes_a_missing_invocation_at_nothing",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.4 -- the request-time record, and what only it can bound > a zero ceiling is refused because it imputes a missing invocation at nothing",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's `assert read_invocation(cp, 'inv-zero-cap') is None` becomes `toBeUndefined()`: per D-0007 a row that does not exist reads back as `undefined`, not `null`, and this port keeps the two distinct (a stored SQL NULL inside a row is still asserted with `toBeNull()` elsewhere in the same file). The refusal type assertions (MalformedCeilingRefused, twice) are unchanged; neither half is weakened.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_the_output_ceiling_is_per_request_times_the_response_count",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- what one prompt is, in both directions > the output ceiling is per request times the response count",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_the_ceiling_is_exact_at_the_product_and_refused_one_token_above",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- what one prompt is, in both directions > the ceiling is exact at the product and refused one token above",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_uncapped_invocation_admits_any_reported_output",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- what one prompt is, in both directions > an uncapped invocation admits any reported output",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_retry_is_an_attempt_and_never_a_response",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- what one prompt is, in both directions > a retry is an attempt and never a response",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_response_count_below_one_is_refused",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- what one prompt is, in both directions > a response count below one is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_attempt_count_below_one_is_refused",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- what one prompt is, in both directions > an attempt count below one is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_reported_usage_round_trips_every_column_of_the_seam",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > a reported usage round trips every column of the seam",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_partial_usage_keeps_the_fields_that_did_arrive",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > a partial usage keeps the fields that did arrive",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_unavailable_usage_round_trips_as_a_completed_invocation_with_no_figures",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > an unavailable usage round trips as a completed invocation with no figures",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_unavailable_alongside_a_usage_figure_is_refused",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > unavailable alongside a usage figure is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_the_status_and_the_output_figure_must_agree[usage0]",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > the status and the output figure must agree[usage0]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_the_status_and_the_output_figure_must_agree[usage1]",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > the status and the output figure must agree[usage1]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_status_outside_the_closed_set_is_refused",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > a status outside the closed set is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's `assert USAGE_STATUSES == ('reported', 'partial', 'unavailable')` compares a Python tuple; the port's USAGE_STATUSES is a frozen array, so the assertion is `expect(USAGE_STATUSES).toEqual(['reported','partial','unavailable'])`. The three members and their order are written out literally, not derived from the port's own constant, so the case still fails if the vocabulary or its order changes. The refusal half (UnknownUsageStatusRefused for 'probably_fine') is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_negative_token_count_is_refused_on_every_figure[usage0]",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > a negative token count is refused on every figure[usage0]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_negative_token_count_is_refused_on_every_figure[usage1]",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > a negative token count is refused on every figure[usage1]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_negative_token_count_is_refused_on_every_figure[usage2]",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > a negative token count is refused on every figure[usage2]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_the_seam_refuses_a_mapping_that_is_not_a_provider_usage",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.3 -- the provider seam, and only the provider seam > the seam refuses a mapping that is not a provider usage",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts a bare `ValueError`; the module raises its own `AiInvocationUsageError(ValueError)`, so the port asserts `AiInvocationUsageError` (the module's own subclass, as events.test.ts does with EventSpineUsageError) rather than the `TypeError` the house convention gives an UNTYPED ValueError (gates.test.ts / repo-link.test.ts). Strictly at least as strong as the source. The mapping passed in keeps the source's provider-shaped snake_case keys verbatim ({output_tokens: 5, usage_status: 'reported'}) and reaches the function through `as unknown as ProviderUsage`, so the runtime `instanceof` guard is genuinely exercised rather than being short-circuited by the type system.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_invocation_without_an_incident_is_recorded_and_identifiable",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- AC-1 is measured from these rows > an invocation without an incident is recorded and identifiable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_invocation_may_name_a_run_without_an_incident_and_the_reverse",
+      "target_id": "test/control_plane/ai-invocation.test.ts::section 2.2 -- AC-1 is measured from these rows > an invocation may name a run without an incident and the reverse",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_second_completion_is_refused_rather_than_overwriting_the_first",
+      "target_id": "test/control_plane/ai-invocation.test.ts::append, then ONE usage fill-in (production-schema.md section 4) > a second completion is refused rather than overwriting the first",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_completing_an_invocation_that_was_never_started_is_refused",
+      "target_id": "test/control_plane/ai-invocation.test.ts::append, then ONE usage fill-in (production-schema.md section 4) > completing an invocation that was never started is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same single change as the zero-ceiling case: `assert read_invocation(cp, 'inv-never') is None` becomes `toBeUndefined()` per D-0007 (a row that does not exist reads back as undefined, not null). The InvocationNotStartedRefused assertion is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_starting_the_same_invocation_id_twice_is_refused",
+      "target_id": "test/control_plane/ai-invocation.test.ts::append, then ONE usage fill-in (production-schema.md section 4) > starting the same invocation id twice is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_completion_before_its_own_start_is_refused",
+      "target_id": "test/control_plane/ai-invocation.test.ts::append, then ONE usage fill-in (production-schema.md section 4) > a completion before its own start is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_completion_at_the_start_instant_is_legal",
+      "target_id": "test/control_plane/ai-invocation.test.ts::append, then ONE usage fill-in (production-schema.md section 4) > a completion at the start instant is legal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_a_refused_completion_leaves_no_open_transaction",
+      "target_id": "test/control_plane/ai-invocation.test.ts::the transaction boundary > a refused completion leaves no open transaction",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ai_invocation.py::test_an_unknown_run_reference_is_refused_by_the_foreign_key",
+      "target_id": "test/control_plane/ai-invocation.test.ts::the transaction boundary > an unknown run reference is refused by the foreign key",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Two runtime differences, neither weakening. (1) `sqlite3.IntegrityError` has no better-sqlite3 class analogue, so it becomes expectSqliteError on the RESULT CODE family /^SQLITE_CONSTRAINT/ per D-0016 -- the durable half; SQLite's message text is not a compatibility surface. (2) `assert read_invocation(cp, 'inv-ghost-run') is None` becomes toBeUndefined() per D-0007.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "MalformedCeilingRefused says 'Pass null' where the source says 'Pass None'.",
+      "status": "adapted message text, disclosed",
+      "detail": "The one message-text judgment call in this file, and it falls outside D-0017's five named rules: it is neither an identifier, literal data, a mechanical format, a rendered row, nor a runtime-forced difference. It is an INSTRUCTION to the caller about which literal to pass, and the literal a TypeScript caller passes is `null`. Resolved in the spirit of rule 1 -- a message that told a TypeScript operator to pass `None` would be a faithful string and a broken instruction. Raised by the porting agent itself rather than left implicit. Nothing asserts this text on either side."
+    },
+    {
+      "topic": "ProviderUsage cannot reproduce Python's missing-keyword-argument failure.",
+      "status": "divergence, disclosed",
+      "detail": "A JavaScript caller reaching the constructor through `any` can omit a field TypeScript requires, and gets `null` where Python raises TypeError at the call. The runtime validation that matters still happens in completeInvocation, which is where the source's own suite drives it."
+    },
+    {
+      "topic": "Numeric reads follow D-0007's number mapping with no int()-style re-narrowing.",
+      "status": "divergence, accepted under continuo D-0021",
+      "detail": "Unreachable through the public API under test."
+    }
+  ]
+}

@@ -1,0 +1,449 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_production_schema.py",
+      "collected": 44,
+      "inventory": "parity/source-inventory/control_plane.test_production_schema.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/production-schema.test.ts",
+    "target_only_tests": {
+      "count": 1,
+      "ids": [
+        "test/control_plane/production-schema.test.ts::target only > the second connection is configured the way the source configures it"
+      ],
+      "note": "Target-only. The second connection this file opens to drive interleaved transactions is a test mechanism, and the source configures it deliberately (isolation_level=None, foreign_keys = ON, busy_timeout = 0). This test pins that configuration, so a helper that quietly stopped applying it would fail here rather than making the commit-order case pass for the wrong reason. It translates no source case and is not counted as ported coverage."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 44,
+    "ported": 41,
+    "adapted": 3,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_pending_or_delivered_message_may_be_cancelled_and_a_cancelled_one_is_terminal",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the outbox status lattice (0003_outbox_cancelled_status.sql) > a pending or delivered message may be cancelled and a cancelled one is terminal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_cancelling_a_delivered_message_does_not_erase_that_it_was_delivered",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the outbox status lattice (0003_outbox_cancelled_status.sql) > cancelling a delivered message does not erase that it was delivered",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_an_acked_message_is_never_cancelled",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the outbox status lattice (0003_outbox_cancelled_status.sql) > an acked message is never cancelled",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_message_never_marked_delivered_cannot_jump_straight_to_acked",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the outbox status lattice (0003_outbox_cancelled_status.sql) > a message never marked delivered cannot jump straight to acked",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_the_undelivered_index_stops_matching_a_cancelled_row",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the outbox status lattice (0003_outbox_cancelled_status.sql) > the undelivered index stops matching a cancelled row",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The plan() helper renders each EXPLAIN QUERY PLAN row with String(array) where the source uses str(tuple); rows are still read positionally (.raw()) and joined with a space, and the three substring assertions ('SEARCH', 'outbox_undelivered', 'SCAN') are unchanged. Only the delimiter bytes of the joined text differ, and nothing asserts on them.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_repolled_fact_does_not_append_twice",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the event spine > a repolled fact does not append twice",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_the_spine_is_append_only",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the event spine > the spine is append only",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_delivery_subscription_needs_a_recipient_and_a_compute_one_must_not_have_it",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the event spine > a delivery subscription needs a recipient and a compute one must not have it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_no_committed_event_seq_is_ever_observed_out_of_commit_order",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the event spine > no committed event seq is ever observed out of commit order",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's second_connection passes isolation_level=None to switch off Python's implicit transaction management; better-sqlite3 has none to switch off, so that argument has no counterpart and the two remaining pragmas (foreign_keys = ON, busy_timeout = 0) are applied explicitly -- busy_timeout via both the constructor's timeout option and the pragma, because better-sqlite3's default is 5,000 ms. sqlite3.OperationalError(match='locked|busy') becomes expectSqliteError on the SQLITE_BUSY/SQLITE_LOCKED family AND the same message pattern (D-0016), keeping both halves. Every assertion, both writers, the reader and the interleaving are kept verbatim; the target-only case 'the second connection is configured the way the source configures it' pins the two pragmas so the helper cannot silently stop applying them.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_an_append_whose_fanout_fails_leaves_no_event_behind",
+      "target_id": "test/control_plane/production-schema.test.ts::section 5 -- the event spine > an append whose fanout fails leaves no event behind",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_repeated_ci_observation_identity_is_refused",
+      "target_id": "test/control_plane/production-schema.test.ts::section 6 -- CI observation identity, ordering and the verdict projection > a repeated ci observation identity is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_provider_outside_the_closed_set_is_refused_on_an_observation",
+      "target_id": "test/control_plane/production-schema.test.ts::section 6 -- CI observation identity, ordering and the verdict projection > a provider outside the closed set is refused on an observation",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_provider_spelling_variant_cannot_reproject_a_red_pull_request_green",
+      "target_id": "test/control_plane/production-schema.test.ts::section 6 -- CI observation identity, ordering and the verdict projection > a provider spelling variant cannot reproject a red pull request green",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_verdict_outside_the_closed_set_is_refused",
+      "target_id": "test/control_plane/production-schema.test.ts::section 6 -- CI observation identity, ordering and the verdict projection > a verdict outside the closed set is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_an_indeterminate_observation_is_superseded_by_the_recovered_verdict",
+      "target_id": "test/control_plane/production-schema.test.ts::section 6 -- CI observation identity, ordering and the verdict projection > an indeterminate observation is superseded by the recovered verdict",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_rollup_drops_out_of_the_projection_once_a_finegrained_scope_exists",
+      "target_id": "test/control_plane/production-schema.test.ts::section 6 -- CI observation identity, ordering and the verdict projection > a rollup drops out of the projection once a finegrained scope exists",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_merged_pull_request_does_not_reopen",
+      "target_id": "test/control_plane/production-schema.test.ts::section 7 -- run to PR linkage > a merged pull request does not reopen",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_closed_unmerged_pull_request_reopens_and_a_merged_one_does_not",
+      "target_id": "test/control_plane/production-schema.test.ts::section 7 -- run to PR linkage > a closed unmerged pull request reopens and a merged one does not",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_late_older_head_observation_cannot_revive_superseded_ci_evidence",
+      "target_id": "test/control_plane/production-schema.test.ts::section 7 -- run to PR linkage > a late older head observation cannot revive superseded ci evidence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_second_live_primary_pr_per_run_is_refused_and_a_repoint_keeps_both_links",
+      "target_id": "test/control_plane/production-schema.test.ts::section 7 -- run to PR linkage > a second live primary pr per run is refused and a repoint keeps both links",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_link_resolution_cannot_say_we_guessed_from_the_working_directory",
+      "target_id": "test/control_plane/production-schema.test.ts::section 7 -- run to PR linkage > a link resolution cannot say we guessed from the working directory",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_stale_watchers_heartbeat_is_refused_by_the_fence",
+      "target_id": "test/control_plane/production-schema.test.ts::section 8 -- watcher liveness > a stale watchers heartbeat is refused by the fence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_watcher_bootstraps_and_then_keeps_both_success_and_error_history",
+      "target_id": "test/control_plane/production-schema.test.ts::section 8 -- watcher liveness > a watcher bootstraps and then keeps both success and error history",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_roster_entry_must_name_a_subject",
+      "target_id": "test/control_plane/production-schema.test.ts::section 8 -- watcher liveness > a roster entry must name a subject",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_watcher_holding_another_scopes_lease_cannot_heartbeat_this_one",
+      "target_id": "test/control_plane/production-schema.test.ts::section 8 -- watcher liveness > a watcher holding another scopes lease cannot heartbeat this one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_the_silence_query_scales_the_policy_multiple_by_the_scopes_own_interval",
+      "target_id": "test/control_plane/production-schema.test.ts::section 8 -- watcher liveness > the silence query scales the policy multiple by the scopes own interval",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_gate_cannot_be_created_already_claiming_a_projection",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > a gate cannot be created already claiming a projection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_gate_can_be_opened_end_to_end",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > a gate can be opened end to end",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_gate_stage_may_only_name_an_open_or_advance_transition_of_its_own_gate",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > gate stage may only name an open or advance transition of its own gate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_gate_stage_projection_never_walks_backwards",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > a gate stage projection never walks backwards",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_gate_transitions_are_immutable_and_undeletable",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > gate transitions are immutable and undeletable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_an_outcome_outside_the_terminal_taxonomy_is_refused",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > an outcome outside the terminal taxonomy is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_closed_gate_keeps_its_outcome",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > a closed gate keeps its outcome",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_second_relay_for_the_same_gate_stage_is_refused",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > a second relay for the same gate stage is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_the_relay_gap_detector_emits_one_row_per_gate_with_two_revisions_on_record",
+      "target_id": "test/control_plane/production-schema.test.ts::section 9 -- the Gate entity > the relay gap detector emits one row per gate with two revisions on record",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_the_detection_budget_check_includes_the_reconcile_period",
+      "target_id": "test/control_plane/production-schema.test.ts::section 10 -- policy data > the detection budget check includes the reconcile period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_relative_threshold_stores_losslessly_and_an_over_budget_absolute_one_does_not",
+      "target_id": "test/control_plane/production-schema.test.ts::section 10 -- policy data > a relative threshold stores losslessly and an over budget absolute one does not",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_budget_kind_exempts_a_relative_budget_from_the_absolute_arithmetic",
+      "target_id": "test/control_plane/production-schema.test.ts::section 10 -- policy data > budget kind exempts a relative budget from the absolute arithmetic",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_the_seeded_policy_is_the_time_base_documents_own_numbers",
+      "target_id": "test/control_plane/production-schema.test.ts::section 10 -- policy data > the seeded policy is the time base documents own numbers",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_an_invocations_output_token_ceiling_scales_with_its_response_count",
+      "target_id": "test/control_plane/production-schema.test.ts::measurement-harness.md section 2.3 -- the AI invocation record > an invocations output token ceiling scales with its response count",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_an_invocation_that_reports_usage_must_carry_the_tokens_it_reported",
+      "target_id": "test/control_plane/production-schema.test.ts::measurement-harness.md section 2.3 -- the AI invocation record > an invocation that reports usage must carry the tokens it reported",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_a_migration_record_is_written_once_and_never_deleted",
+      "target_id": "test/control_plane/production-schema.test.ts::section 3.1 -- the migration ledger > a migration record is written once and never deleted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_run_status_is_a_closed_set_that_only_walks_forward",
+      "target_id": "test/control_plane/production-schema.test.ts::section 2 -- the two conventions, and the adjudicated run status > run status is a closed set that only walks forward",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_production_schema.py::test_no_timestamp_column_in_the_production_schema_carries_a_default",
+      "target_id": "test/control_plane/production-schema.test.ts::section 2 -- the two conventions, and the adjudicated run status > no timestamp column in the production schema carries a default",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source reads PRAGMA table_info positionally as row[1] (name) and row[4] (dflt_value). better-sqlite3 exposes pragma results only as objects, so the same two columns are read by their pragma-documented names. Verified that dflt_value is null exactly when the column has no DEFAULT and a string otherwise, so the assertion is still live rather than vacuous. The table enumeration, the _at_ms/_at suffix rule and the failure message are unchanged.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "sqlite3.IntegrityError and OperationalError are matched as result-code families.",
+      "status": "inherited from the driver, recorded under D-0016",
+      "detail": "better-sqlite3 raises one error type for everything, so IntegrityError becomes /^SQLITE_CONSTRAINT/ and OperationalError becomes /^SQLITE_(BUSY|LOCKED)/. Python's IntegrityError also covers a few codes outside SQLITE_CONSTRAINT* (SQLITE_MISMATCH among them) and its OperationalError covers far more than lock contention, so the port's predicate is NARROWER than the source's class on those codes. Every refusal this file's cases actually raise falls inside the narrower set, so no case is weakened; the difference would show only for a code neither suite provokes."
+    },
+    {
+      "topic": "This file asserts against the DDL and required no implementation port.",
+      "status": "structural, recorded",
+      "detail": "docs/production-schema.md section 11's verification table made executable. Its only module dependency is createProductionControlPlane; every property it pins is enforced by the SQL in src/control_plane/migrations/, which is carried byte-identically. One section 11 row is stale and is deliberately not reproduced as written -- the source says so, and the port carries that explanation across rather than silently translating the stale claim."
+    },
+    {
+      "topic": "Values read from SQLite are not re-narrowed to reproduce Python's int().",
+      "status": "divergence, accepted under continuo D-0021",
+      "detail": "Every numeric assertion compares a better-sqlite3 number against a literal. A hand-damaged row would compare unequal rather than raising as Python's int() does; no case here can reach that state, since every row is written through the DDL's own CHECKs."
+    }
+  ]
+}

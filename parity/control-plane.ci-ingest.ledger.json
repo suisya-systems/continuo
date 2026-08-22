@@ -271,6 +271,11 @@
       "topic": "A no-change observation does not advance the head_observed_at_ms watermark.",
       "status": "inherited, not fixed",
       "detail": "So two late observations that both post-date the last projected one are ordered only by their own timestamps. interlock's own comment documents this and says closing it needs a provider cursor the design does not define. Reproduced unchanged."
+    },
+    {
+      "topic": "CI_PROVIDERS / CI_VERDICTS / CHECK_SCOPES are mutable Sets behind a ReadonlySet type.",
+      "status": "divergence, disclosed (consistent with policy.ts and gates.ts)",
+      "detail": "The source uses frozenset, which is immutable at runtime. `ReadonlySet` is erased at emit, so a JavaScript consumer -- or a cast -- can delete 'failed' and make valid observations refuse, or add a verdict that passes the edge check and then fails deeper as a raw SQLite constraint error. Object.freeze does NOT close this: it blocks property writes but not .add()/.delete(), so freezing would advertise a guarantee it does not deliver. The same position is already recorded for policy.ts's THRESHOLD_KINDS (in the module comment) and for gates.ts's ADMISSIBLE actorKinds, so this is the port's standing treatment of frozenset rather than a choice made here. Closing it properly needs a wrapper type applied everywhere at once, which is a convention change rather than a translation. Raised by the Codex review gate (2026-08-22, P2)."
     }
   ]
 }

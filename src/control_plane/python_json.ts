@@ -131,7 +131,19 @@ export function pythonJsonDocumentSorted(value: unknown): string {
     return pythonJsonString(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map(pythonJsonDocumentSorted).join(", ")}]`;
+    // Indexed rather than `.map`, because `.map` SKIPS the holes in a sparse
+    // array: `[1, , 2].map(render).join(", ")` yields `1, , 2`, and `[1, , 2]`
+    // is not JSON at all -- the `json_valid` CHECK on these columns would
+    // reject it, so a payload with a hole in it would be refused rather than
+    // recorded. `JSON.stringify` renders a hole as `null`, which is also what
+    // this renderer already does with an explicit `undefined`, so that is the
+    // rendering the hole gets. Python has no sparse array, so this is a hazard
+    // the translation introduces rather than one the source has.
+    const items: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      items.push(pythonJsonDocumentSorted(value[index]));
+    }
+    return `[${items.join(", ")}]`;
   }
   if (typeof value === "object") {
     const entries = Object.keys(value as Record<string, unknown>)

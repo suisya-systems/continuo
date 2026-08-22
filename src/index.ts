@@ -10,6 +10,27 @@
  */
 
 export {
+  AiInvocationRefused,
+  AiInvocationUsageError,
+  CompletionPrecedesStartRefused,
+  completeInvocation,
+  DuplicateInvocationRefused,
+  InvocationAlreadyCompleteRefused,
+  InvocationNotStartedRefused,
+  MalformedAttemptCountRefused,
+  MalformedCeilingRefused,
+  MalformedResponseCountRefused,
+  NegativeTokenCountRefused,
+  OutputExceedsRequestCeilingRefused,
+  ProviderUsage,
+  readInvocation,
+  startInvocation,
+  UnknownUsageStatusRefused,
+  USAGE_STATUSES,
+  UsageStatusContradictsTokensRefused,
+  UsageWithoutRecordRefused,
+} from "./control_plane/ai_invocation.js";
+export {
   CHECK_SCOPES,
   CI_OBSERVED_EVENT_TYPE,
   CI_PROVIDERS,
