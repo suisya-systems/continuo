@@ -82,7 +82,11 @@
  *    `(?(1)a|b)` conditionals, `(?#comment)`, `\N{NAME}`, multi-digit
  *    backreferences, octal escapes past `\0oo`, `[\W]`, a literal `-`
  *    following a completed range (`[a-z-\w]`), and a QUANTIFIED LOOKAROUND
- *    (`(?=a)*`, which Python repeats and `u` mode rejects outright).
+ *    (`(?=a)*`, which Python repeats and `u` mode rejects outright), plus a
+ *    LOOKBEHIND whose body this walk cannot prove fixed-width -- which
+ *    over-refuses the equal-width alternations `re` allows (`(?<=ab|cd)`), the
+ *    width-neutral `(?<=a{2}?)` and `(?<=a{1,1})`, and a backreference to a
+ *    fixed-width group (`(a)(?<=\1)b`); see {@link Walk.refuseVariableWidth}.
  *    JavaScript has no equivalent for the first four, and the rest are
  *    ambiguous enough that a guess would be a silent mistranslation. Interlock
  *    renders these documents and this refuses them: over-refusal, which stops a
@@ -115,12 +119,14 @@
  *    WHICH `[` in a long pattern was never closed -- but the engine's messages
  *    do not.
  *
- * Two whole classes of Python compile error are reproduced here rather than
- * left to `new RegExp`, because the emulations above would otherwise make the
- * pattern legal: `nothing to repeat` (see {@link Walk.lastAtom}) and
+ * Three whole classes of Python compile error are reproduced here rather than
+ * left to `new RegExp`, because JavaScript's own grammar would otherwise make
+ * the pattern legal: `nothing to repeat` (see {@link Walk.lastAtom}),
  * `invalid group reference` / `unknown group name` (see
- * {@link Walk.groupCount}). Both were measured as "Python rejects, we compile"
- * divergences before they were closed.
+ * {@link Walk.groupCount}), and `look-behind requires fixed-width pattern`
+ * (see {@link Walk.refuseVariableWidth}). All three were measured as "Python
+ * rejects, we compile" divergences before they were closed -- the last of them
+ * by the differential oracle, which is what that corpus is for.
  *
  * Only `u` and `i` ever reach `new RegExp`. `m` and `s` are deliberately NOT
  * forwarded: they are tracked as walk state and compiled away into explicit
@@ -313,6 +319,21 @@ class Walk {
    * the two messages are not an exotic corner.
    */
   private readonly openGroups: number[] = [];
+  /**
+   * For each entry of {@link openGroups}, whether that group opened a
+   * LOOKBEHIND.
+   *
+   * Kept parallel to `openGroups` and popped with it, so {@link lookbehindDepth}
+   * describes the cursor's position rather than the whole pattern: the `+` in
+   * `(?<=ab)c+` is outside the lookbehind body and must still be allowed.
+   */
+  private readonly openGroupIsLookbehind: boolean[] = [];
+  /**
+   * How many enclosing groups are lookbehinds.
+   *
+   * @see refuseVariableWidth for what is refused while this is non-zero.
+   */
+  private lookbehindDepth = 0;
 
   constructor(source: string) {
     this.src = source;
@@ -357,6 +378,42 @@ class Walk {
    */
   private fail(message: string, index: number): PythonRegexError {
     return new PythonRegexError(`${message} at position ${this.codePointOffset(index)}`);
+  }
+
+  /**
+   * CPython's `look-behind requires fixed-width pattern`.
+   *
+   * `sre_parse` computes a min and a max width for a lookbehind body and
+   * rejects the pattern unless the two agree. JavaScript's lookbehind is
+   * variable-width and accepts every body, so `(?<=a+)b` compiled here and
+   * raised in `re` -- the "interlock refuses, continuo renders" direction the
+   * module header names as the dangerous one: a `forbidden_allow_regex` entry
+   * using one turns into a `global-config-invalid` refusal that stops the spawn
+   * over there, and rendered the role over here.
+   *
+   * The width ANALYSIS is deliberately not reproduced. Instead every construct
+   * that can make a body's width vary is refused outright while the cursor is
+   * inside a lookbehind: alternation, `*`, `+`, `?` (greedy or non-greedy), a
+   * `{n,m}` / `{n,}` / `{,m}` repeat, and a backreference (whose width is the
+   * referenced group's, which CPython computes from the parse tree and this
+   * walk does not track). An exact `{n}` repeat stays legal, and so does every
+   * fixed-width atom, so `(?<=ab)c`, `(?<=a{2})b` and `(?<!ab)c` still compile.
+   *
+   * That rule OVER-refuses the fixed-width alternations CPython allows --
+   * `(?<=ab|cd)e`, `(?<=a|b)c` -- and the width-neutral non-greedy marker in
+   * `(?<=a{2}?)b`, and a backreference to a fixed-width group in
+   * `(a)(?<=\1)b`. Over-refusal is the direction this module exists to fail in:
+   * the render stops loudly with the pattern named instead of proceeding on a
+   * body whose width the walk cannot prove. Every such case is pinned under
+   * `pyregex.refused` in `parity/oracle/fnmatch-shlex-corpus.json`, which
+   * asserts BOTH halves -- CPython compiles it, continuo refuses it -- so the
+   * list cannot go stale unnoticed.
+   *
+   * No `at position N` suffix: CPython raises this one with `pos` unset, so
+   * `str(exc)` is the bare sentence, and the oracle compares it byte for byte.
+   */
+  private refuseVariableWidth(): PythonRegexError {
+    return new PythonRegexError("look-behind requires fixed-width pattern");
   }
 
   /**
@@ -494,8 +551,19 @@ class Walk {
         // in both). A closed group is repeatable -- including a lookaround,
         // which Python does allow a quantifier on -- while a fresh branch has
         // nothing in front of it, which is why `a|*` is "nothing to repeat".
-        if (ch === ")" && this.openGroups.pop() === undefined) {
-          throw this.fail("unbalanced parenthesis", this.index);
+        if (ch === ")") {
+          if (this.openGroups.pop() === undefined) {
+            throw this.fail("unbalanced parenthesis", this.index);
+          }
+          if (this.openGroupIsLookbehind.pop() === true) {
+            this.lookbehindDepth -= 1;
+          }
+        } else if (this.lookbehindDepth > 0) {
+          // Alternation is the other way a lookbehind body's width can vary.
+          // CPython allows the branches that happen to be equal width
+          // (`(?<=ab|cd)`); proving that needs the width analysis this walk
+          // does not have, so it refuses. @see refuseVariableWidth
+          throw this.refuseVariableWidth();
         }
         this.emit(ch);
         this.index += 1;
@@ -505,6 +573,13 @@ class Walk {
       case "+":
       case "?":
         this.requireRepeatableAtom();
+        if (this.lookbehindDepth > 0) {
+          // `(?<=a+)`, `(?<=a*)`, `(?<=a?)` all vary in width, and the
+          // non-greedy marker in `(?<=a{2}?)` does not -- but telling the two
+          // apart is the analysis this walk does not do.
+          // @see refuseVariableWidth
+          throw this.refuseVariableWidth();
+        }
         if (quantified && ch === "+") {
           // `a*+`, `a{2}+`, `a?+`: Python 3.11+ possessive quantifiers, which
           // forbid the backtracking that would otherwise find a match.
@@ -592,6 +667,12 @@ class Walk {
       return;
     }
     this.requireRepeatableAtom();
+    if (this.lookbehindDepth > 0 && upper !== undefined) {
+      // A RANGE repeat -- `{n,m}`, `{n,}`, `{,m}` -- is variable width. An
+      // exact `{n}` is not, and is the one repeat a lookbehind body may carry.
+      // @see refuseVariableWidth
+      throw this.refuseVariableWidth();
+    }
     // `{,3}` is `{0,3}` in Python and four literal characters in JavaScript:
     // the pattern stops being a quantifier and starts being a string.
     const min = lower === "" ? "0" : lower;
@@ -605,6 +686,7 @@ class Walk {
     const rest = this.src.slice(this.index);
     if (!rest.startsWith("(?")) {
       this.openGroups.push(this.index);
+      this.openGroupIsLookbehind.push(false);
       this.emit("(");
       this.index += 1;
       this.groupCount += 1;
@@ -626,6 +708,7 @@ class Walk {
         );
       }
       this.openGroups.push(this.index);
+      this.openGroupIsLookbehind.push(false);
       this.emit(`(?<${name}>`);
       this.index += (named[0] as string).length;
       this.groupCount += 1;
@@ -640,6 +723,12 @@ class Walk {
         // CPython's wording and offset: the name starts after `(?P=`.
         throw this.fail(`unknown group name '${target}'`, this.index + 4);
       }
+      if (this.lookbehindDepth > 0) {
+        // A backreference is as wide as whatever the referenced group matched,
+        // which CPython bounds from the parse tree and this walk does not
+        // track. @see refuseVariableWidth
+        throw this.refuseVariableWidth();
+      }
       this.emit(`\\k<${target}>`);
       this.index += (backref[0] as string).length;
       this.lastAtom = "atom";
@@ -647,7 +736,15 @@ class Walk {
     }
     for (const prefix of ["(?:", "(?=", "(?!", "(?<=", "(?<!"]) {
       if (rest.startsWith(prefix)) {
+        const lookbehind = prefix === "(?<=" || prefix === "(?<!";
         this.openGroups.push(this.index);
+        this.openGroupIsLookbehind.push(lookbehind);
+        if (lookbehind) {
+          // CPython requires a lookbehind body to be fixed width and this
+          // engine does not, so the body is walked under a restriction the
+          // surrounding pattern is not. @see refuseVariableWidth
+          this.lookbehindDepth += 1;
+        }
         this.emit(prefix);
         this.index += prefix.length;
         this.lastAtom = "none";
@@ -931,6 +1028,12 @@ class Walk {
       if (Number.parseInt(ch, 10) > this.groupCount) {
         // CPython's offset is the DIGIT, not the backslash.
         throw this.fail(`invalid group reference ${ch}`, start + 1);
+      }
+      if (this.lookbehindDepth > 0) {
+        // Same as `(?P=name)`: the width is the referenced group's, so
+        // `(a+)(?<=\1)b` is a CPython fixed-width error and `(a)(?<=\1)b` is
+        // not. @see refuseVariableWidth
+        throw this.refuseVariableWidth();
       }
       this.index += 1;
       this.emit(`\\${ch}`);
