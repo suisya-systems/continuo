@@ -1,0 +1,296 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file; the reader's is parity/measurement.ledger.json (named before the lane had a second file, kept rather than renamed to avoid churn on a merged path). false_termination is the second file and the second module in the lane that imports nothing continuo has not ported -- everything else still waits on control_plane policy / gates / ai_invocation / ci_ingest."
+    },
+    "file": {
+      "path": "tests/measurement/test_false_termination.py",
+      "collected": 20,
+      "inventory": "parity/source-inventory/measurement.test_false_termination.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/false-termination.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "typing.Mapping / MappingProxyType keyed by action_id",
+        "to": "ReadonlyMap<string, string>",
+        "why": "Applied uniformly wherever the source passes or returns a map keyed by a database-supplied id. A plain object is the closer-looking translation and is the wrong one here: a lookup for an action_id that happens to spell __proto__ or constructor finds something on Object.prototype and reads it as a verdict. A Map has no such keys. This changes how a case SPELLS the call, never what it asserts.",
+        "affects": "every entry that passes fixture_labels / subsequent_evidence / human_adjudications, and the QUERY_DEFINITIONS lookup"
+      },
+      {
+        "from": "frozen dataclass with @property members",
+        "to": "class with readonly fields and getters, whose collections are copied through frozenList / readOnlyMap (src/measurement/immutable.ts) and whose instance is then Object.freeze'd",
+        "why": "TerminateAction and FalseTerminationReport both derive values (subjectKind, subjectId, rateLower, rateUpper, rateIsSettled) that the ported cases read as properties. Getters keep that spelling and keep the derivation in one place. Immutability needed building rather than annotating: the source's fields are `tuple`s and a `MappingProxyType` and raise on mutation, while TypeScript's `readonly` is erased at runtime and Object.freeze(this) is shallow -- so `report.appliedTerminate.push(id)` would otherwise succeed and break the partition the rate is computed over. Copied as well as frozen, so the array a caller still holds cannot reach inside a built report.",
+        "affects": "every entry that reads a derived field"
+      },
+      {
+        "from": "str.isascii()",
+        "to": "isAscii() from src/measurement/format.ts",
+        "why": "No JavaScript equivalent exists. Iterates code points rather than matching code units, so a lone surrogate is correctly non-ASCII.",
+        "affects": "the two entries that assert the rendering is ASCII (D-0006)"
+      },
+      {
+        "from": "f\"{value:.2f}\"",
+        "to": "formatFixed(value, 2) from src/measurement/format.ts",
+        "why": "Number.prototype.toFixed disagrees with Python on exact ties (0.125 -> 0.13 vs 0.12), and a rate is count/count*100, which reaches them. This is an implementation change, not a test change: no ported case asserts a tie, and the port is held to Python's answers by the fixed-format oracle rather than by these cases. See D-0104.",
+        "affects": "the rendered percentage lines; no entry's assertion changed"
+      }
+    ],
+    "target_only_tests": {
+      "count": 11,
+      "ids": [
+        "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the rebuilt corpus is the one the vector was produced from",
+        "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the vector is not vacuous",
+        "test/measurement/format.test.ts::the fixed-format oracle (target-only) > formatFixed agrees with CPython on every corpus value, at every width",
+        "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the tie cases toFixed gets wrong are the ones this exists for",
+        "test/measurement/format.test.ts::the fixed-format oracle (target-only) > a carry propagates out of the fraction and into a new digit",
+        "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the sign survives a magnitude that rounds to zero",
+        "test/measurement/format.test.ts::the fixed-format oracle (target-only) > a non-finite figure is a caller bug, not a value to render",
+        "test/measurement/format.test.ts::isAscii (target-only) > it is Python's str.isascii",
+        "test/measurement/format.test.ts::isAscii (target-only) > it counts code points, so a lone surrogate is not ASCII",
+        "test/measurement/false-termination.test.ts::the report itself > the rendered rate goes through formatFixed, not toFixed (target-only)",
+        "test/measurement/false-termination.test.ts::the report itself > the report is immutable at runtime, as the source's is (target-only)"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All nine are in test/measurement/format.test.ts and pin src/measurement/format.ts, which has no interlock counterpart to translate: in Python the behaviour is the standard library's, so there is nothing there to assert. They exist because the port had to REIMPLEMENT that behaviour (D-0104), and a reimplementation can only be checked against the thing it reimplements -- the same argument, and the same shape, as the sqlite3_complete corpus (D-0013). The comparison is a differential oracle face: scripts/oracle/dump_fixed_format.py writes CPython's answers to parity/oracle/fixed-format-vector.json and the test may only compare. NOTE for the reviewer: these ids are in a different target file from this ledger's test_file, so scripts/parity-check.mjs verifies that each declared one EXISTS but does not sweep that file for unmapped tests. Everything in it is target-only by construction. A tenth target-only test lives in this ledger's own test file: 'the rendered rate goes through formatFixed, not toFixed'. It is a LIVENESS test in the sense of rule 5 of docs/test-translation-conventions.md -- the oracle proves formatFixed is correct, but not that this module calls it, and a mutation sweep confirmed that swapping in toFixed left all twenty ported cases green. It drives the report to a rate of 1/32 = 3.125 percent, an exact tie where the two formatters disagree (3.12 against 3.13). An eleventh pins runtime immutability: the source's fields are tuples and a MappingProxyType, which raise on mutation, whereas TypeScript's `readonly` is erased at runtime and Object.freeze is shallow -- so the property had to be BUILT in the port (frozenList / readOnlyMap in src/measurement/immutable.ts) and therefore had to be pinned. Raised by the codex review gate as a P2 against a claim this ledger itself made."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 20,
+    "ported": 20,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The subsequent-evidence source can never return 'stuck', only 'not_stuck' or silence, so a termination of a genuinely stuck subject can only be justified by a fixture label or a human -- and is otherwise undetermined.",
+      "matches_source": true,
+      "note": "Deliberate in interlock and reproduced exactly: silence after a termination is what a termination PRODUCES, and reading it as confirmation would make every termination self-justifying and drive the rate to zero by construction. The cost is a wider undetermined bucket, which the two rate bounds are designed to make visible rather than hide.",
+      "where_a_fix_belongs": "nowhere -- this is the design, recorded here so it is not mistaken for a gap."
+    },
+    {
+      "behaviour": "This is a detector. It raises no incident and applies no remedy, and there is no reconcile driver to act on its findings.",
+      "matches_source": true,
+      "note": "interlock#74 acceptance criterion 5 requires the limitations disclosed in interlock PR #72 (detector-only among them) to stay disclosed rather than be silently fixed.",
+      "where_a_fix_belongs": "upstream, and out of scope for the parity port by interlock#74 acceptance criterion 6 (no reconcile driver, no new features)."
+    },
+    {
+      "behaviour": "renderFalseTerminationReport interpolates action_id into the report verbatim. The action table's DDL permits any non-empty SQLite TEXT value, so an id containing non-ASCII text breaks the rendering's ASCII guarantee (D-0006), and one containing a newline can inject structurally misleading report lines.",
+      "matches_source": true,
+      "note": "Verified identical upstream: interlock's render_false_termination_report interpolates the same f-string (measurement/false_termination.py, the `settled by:` line) and the module contains no escaping or validation of action_id anywhere. Its own test asserts rendered.isascii() only over ASCII fixture ids, so its suite is equally silent. Raised by the codex review gate on this PR as a P2. NOT fixed here: escaping would make continuo's rendered report differ from interlock's for the same database, which is the one thing a parity port must not do quietly, and interlock#74 acceptance criterion 5 requires known limitations to stay disclosed rather than be silently repaired. ESCALATED to the operator rather than decided in the lane, because it is a genuine tension between fidelity and continuo's own D-0006 output contract.",
+      "where_a_fix_belongs": "upstream, or in a change that moves both sides together -- an ASCII-safe escape applied in interlock's renderer and in continuo's in the same breath, so the two keep producing the same bytes."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_a_recommendation_that_was_not_applied_is_not_a_false_termination",
+      "target_id": "test/measurement/false-termination.test.ts::the numerator: applied effects only > a recommendation that was not applied is not a false termination",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_a_pending_recommendation_is_reported_separately_from_a_declined_one",
+      "target_id": "test/measurement/false-termination.test.ts::the numerator: applied effects only > a pending recommendation is reported separately from a declined one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_only_the_declared_kind_is_counted",
+      "target_id": "test/measurement/false-termination.test.ts::the numerator: applied effects only > only the declared kind is counted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_the_two_cohorts_are_counted_on_their_own_instants",
+      "target_id": "test/measurement/false-termination.test.ts::the numerator: applied effects only > the two cohorts are counted on their own instants",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_an_action_naming_no_incident_still_counts",
+      "target_id": "test/measurement/false-termination.test.ts::the numerator: applied effects only > an action naming no incident still counts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_the_fixture_label_wins_when_it_disagrees_with_subsequent_evidence",
+      "target_id": "test/measurement/false-termination.test.ts::the preference order > the fixture label wins when it disagrees with subsequent evidence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_the_second_source_decides_when_the_first_is_silent",
+      "target_id": "test/measurement/false-termination.test.ts::the preference order > the second source decides when the first is silent",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_human_adjudication_is_the_last_resort_and_still_decides",
+      "target_id": "test/measurement/false-termination.test.ts::the preference order > human adjudication is the last resort and still decides",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_an_agreeing_lower_source_is_not_recorded_as_overruled",
+      "target_id": "test/measurement/false-termination.test.ts::the preference order > an agreeing lower source is not recorded as overruled",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_a_verdict_outside_the_closed_set_is_refused",
+      "target_id": "test/measurement/false-termination.test.ts::the preference order > a verdict outside the closed set is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_undetermined_is_reachable_counted_and_opens_the_rate_gap",
+      "target_id": "test/measurement/false-termination.test.ts::undetermined > undetermined is reachable, counted, and opens the rate gap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_the_bounds_coincide_when_every_applied_row_is_settled",
+      "target_id": "test/measurement/false-termination.test.ts::undetermined > the bounds coincide when every applied row is settled",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_activity_after_the_termination_says_the_subject_was_not_stuck",
+      "target_id": "test/measurement/false-termination.test.ts::the subsequent-evidence source > activity after the termination says the subject was not stuck",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_silence_after_a_termination_never_says_the_subject_was_stuck",
+      "target_id": "test/measurement/false-termination.test.ts::the subsequent-evidence source > silence after a termination never says the subject was stuck",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_an_undeclared_event_type_is_not_productive_activity",
+      "target_id": "test/measurement/false-termination.test.ts::the subsequent-evidence source > an undeclared event type is not productive activity",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_declaring_no_productive_event_type_is_refused",
+      "target_id": "test/measurement/false-termination.test.ts::the subsequent-evidence source > declaring no productive event type is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_evidence_arriving_after_the_period_belongs_to_the_next_report",
+      "target_id": "test/measurement/false-termination.test.ts::the subsequent-evidence source > evidence arriving after the period belongs to the next report",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_a_pending_recommendation_has_no_subsequent_evidence_to_read",
+      "target_id": "test/measurement/false-termination.test.ts::the subsequent-evidence source > a pending recommendation has no subsequent evidence to read",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_an_empty_or_inverted_period_is_refused",
+      "target_id": "test/measurement/false-termination.test.ts::the report itself > an empty or inverted period is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_false_termination.py::test_the_report_states_what_it_does_not_count",
+      "target_id": "test/measurement/false-termination.test.ts::the report itself > the report states what it does not count",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "20 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 18,
+    "survivors": [
+      {
+        "mutation": "percent() uses toFixed instead of formatFixed",
+        "verdict": "real gap, closed",
+        "note": "Closed by the target-only liveness test named above. The ported cases never exercise a tie, so nothing distinguished the two formatters."
+      },
+      {
+        "mutation": "subsequentActivityVerdicts drops the `status !== STATUS_APPLIED` guard",
+        "verdict": "equivalent mutant, deliberately not closed",
+        "note": "NOT a coverage gap. The guard reads `status !== 'applied' || appliedAtMs === null`, and 0001_initial.sql carries CHECK ((status = 'applied') = (applied_at_ms IS NOT NULL)) -- so the row that would distinguish the two halves (a pending or refused action with applied_at_ms set) cannot exist. Verified by attempting the INSERT: SQLITE_CONSTRAINT_CHECK. A test for it would have to insert a row the schema forbids. Interlock's guard is the same shape and its suite is equally unable to distinguish it, so this is inherited redundancy rather than a translation defect; the guard is kept because it is what the source says and it states the intent locally."
+      }
+    ]
+  }
+}
