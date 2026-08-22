@@ -28,7 +28,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import Database from "better-sqlite3";
 import { describe, expect, test } from "vitest";
@@ -51,7 +50,7 @@ import {
   V1_OWNED,
 } from "../../src/measurement/cohort.js";
 import { openForMeasurement } from "../../src/measurement/reader.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -74,11 +73,27 @@ const NOW = PERIOD_END + 1;
 // helpers
 // --------------------------------------------------------------------------
 
-/** The source's `db` fixture, as a per-test call (rule 8). */
-function productionDb(): string {
-  const path = join(caseRoot("cohort"), "production.sqlite3");
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Every case here wants the same thing -- a production control plane at head,
+ * created at `T0` -- and creating one costs about 87.5ms against about 0.97ms
+ * to copy an existing one. Building it once per file and handing each case its
+ * own copy keeps the per-case fixture identical while removing the 25 migrations
+ * this file used to run.
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
   createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+});
+
+/**
+ * The source's `db` fixture, as a per-test call (rule 8).
+ *
+ * Still a fresh, writable database in a fresh per-case directory -- the copy is
+ * the case's own file, and nothing here is shared with another case at runtime.
+ */
+function productionDb(): string {
+  return productionTemplate.copyInto(caseRoot("cohort"));
 }
 
 type RunRow = readonly [runId: string, status: string, createdAtMs: number, updatedAtMs: number];
