@@ -606,8 +606,8 @@
     },
     {
       "topic": "WRITE_HISTORY_QUERY's resource filter is a suffix match, so an '@' inside a resource name makes it ambiguous.",
-      "status": "inherited, not fixed (continuo D-0022)",
-      "detail": "The filter is `substr(kind, -(length(:resource) + 1)) = '@' || :resource`, so asking for resource 'r' also returns rows whose kind is 'effect@x@r' -- which belong to resource 'x@r'. Two independently allocated epoch sequences can therefore be mixed in one history read. The SQL is carried byte-identically from interlock, where the query has exactly the same shape, so the port is at parity; the ambiguity is the design's, arising from encoding the resource into the composed `kind` string because the spike `action` table has no resource column (Q-0001). Reproduced rather than repaired, per D-0022. Raised by the Codex review gate (2026-08-22, P2)."
+      "status": "inherited, not fixed (continuo D-0023 (which superseded D-0022))",
+      "detail": "The filter is `substr(kind, -(length(:resource) + 1)) = '@' || :resource`, so asking for resource 'r' also returns rows whose kind is 'effect@x@r' -- which belong to resource 'x@r'. Two independently allocated epoch sequences can therefore be mixed in one history read. The SQL is carried byte-identically from interlock, where the query has exactly the same shape, so the port is at parity; the ambiguity is the design's, arising from encoding the resource into the composed `kind` string because the spike `action` table has no resource column (Q-0001). Reproduced rather than repaired, per D-0023, which superseded D-0022. Raised by the Codex review gate (2026-08-22, P2)."
     }
   ]
 }

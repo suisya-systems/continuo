@@ -263,8 +263,8 @@
     },
     {
       "topic": "observePullRequest does not validate the optional mergedAtMs / closedAtMs as integer epoch milliseconds.",
-      "status": "inherited, not fixed (continuo D-0022)",
-      "detail": "Only observedAtMs and ingestedAtMs go through the epoch-ms guard, so a merged or closed observation can supply a fractional value. The pull_request table declares those columns INTEGER but carries no typeof CHECK, and SQLite's INTEGER affinity stores a non-losslessly-convertible REAL as given -- so 1.5 persists as 1.5 and the module's integer-epoch contract is violated in the projection. interlock's observe_pull_request applies exactly the same two validators (`_require_epoch_ms(observed_at_ms=..., ingested_at_ms=...)`) and validates neither optional timestamp, so the port is at parity. Reproduced rather than repaired, per D-0022; the repair is reserved for the post-parity change. Raised by the Codex review gate (2026-08-22, P2)."
+      "status": "inherited, not fixed (continuo D-0023 (which superseded D-0022))",
+      "detail": "Only observedAtMs and ingestedAtMs go through the epoch-ms guard, so a merged or closed observation can supply a fractional value. The pull_request table declares those columns INTEGER but carries no typeof CHECK, and SQLite's INTEGER affinity stores a non-losslessly-convertible REAL as given -- so 1.5 persists as 1.5 and the module's integer-epoch contract is violated in the projection. interlock's observe_pull_request applies exactly the same two validators (`_require_epoch_ms(observed_at_ms=..., ingested_at_ms=...)`) and validates neither optional timestamp, so the port is at parity. Reproduced rather than repaired, per D-0023, which superseded D-0022; the repair is reserved for the post-parity change. Raised by the Codex review gate (2026-08-22, P2)."
     }
   ]
 }

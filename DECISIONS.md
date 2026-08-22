@@ -49,7 +49,8 @@ spaces distinct.
 | D-0019 | One parity ledger per source test file | accepted |
 | D-0020 | A temp-directory label may not contain refusal vocabulary | accepted |
 | D-0021 | Values read from SQLite are not re-narrowed to reproduce Python's `int()` | accepted |
-| D-0022 | Inherited defects are disclosed and repaired after parity, not during | accepted |
+| D-0022 | Inherited defects are disclosed and repaired after parity, not during | superseded by D-0023 |
+| D-0023 | Inherited defects are repaired in continuo, at the first belt that touches them | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -1375,6 +1376,14 @@ on better-sqlite3 13.0.3 (`CREATE TABLE t(v INTEGER)` binding `3.5` reads back `
 
 ## D-0022 — Inherited defects are disclosed and repaired after parity, not during
 
+> **SUPERSEDED by `D-0023`.** The rule below is no longer in force. It rests on a premise that
+> stopped being true: that a defect faithfully reproduced from interlock would eventually be fixed
+> *upstream*, so disclosing it here was deferral rather than abandonment. **interlock is now frozen**
+> -- no upstream change is coming -- so an item disclosed and left alone is an item nobody will ever
+> fix. Read `D-0023` for the rule that replaced it. The text is kept intact, per this file's own
+> convention that an ID is never rewritten, and because the reasoning it records is still the
+> reasoning a reader needs in order to understand why the port hesitated.
+
 **Context.** The review gate on the event-spine belt raised three defects in `txn.ts` / `events.ts`,
 two of them P1:
 
@@ -1440,7 +1449,7 @@ tell the two implementations apart -- it stops being an inherited limitation and
 failure to fix immediately. Likewise if interlock repairs one upstream, continuo follows rather than
 waiting.
 
-**Status.** accepted
+**Status.** superseded by `D-0023`
 
 **Source.** Codex review gate, 2026-08-22, rounds 1 and 2 (two P1, one P2); escalated by lane A per
 `docs/test-translation-conventions.md` rule 0 and decided by the operator.
@@ -2312,3 +2321,55 @@ from `.` exactly as the others are.
 **Falsified by.** interlock widening `measurement/__init__.py` to re-export its whole harness, which
 would mean it had either dropped the assertion or reconciled it with canary's vocabulary upstream --
 and this port would then follow whichever it chose.
+---
+
+## D-0023 — Inherited defects are repaired in continuo, at the first belt that touches them
+
+**Context.** `D-0022` said that a defect faithfully reproduced from interlock, pinned by no case on
+either side and raised by review rather than by a failing test, should be **disclosed** in the
+parity ledger and repaired after parity. That rule had a premise: interlock would still be there to
+fix it, so continuo diverging early would cost the parity claim more than the defect cost anyone.
+
+**The premise is gone. interlock is frozen** -- it will not be changed again. So every inherited
+defect has exactly one place left where it can be fixed, and "inherited" stops being a reason to
+wait. An item disclosed under `D-0022` and left alone is not deferred; it is abandoned.
+
+**Decision.** Inherited defects are **repaired in continuo**. The right moment is normally *now* --
+the belt that is already editing that code is the cheapest place to fix it, and the one where the
+person doing it has the source open. Concretely:
+
+- Repair it in the belt that touches the code, unless the repair is large enough to be its own
+  change (a concurrency redesign, say) -- in which case name the belt it is scheduled into, in the
+  ledger, rather than leaving it open-ended.
+- When a defect is repaired, its ledger entry moves from `inherited, disclosed` to a **deliberate
+  divergence**: continuo's behaviour is now the intended one, and the entry says so. Any test that
+  pinned the inherited behaviour is inverted in the same change.
+- **The trail is the point.** Parity is still established by comparison against interlock, so every
+  place the two now differ on purpose has to be reachable from the ledger. A divergence nobody can
+  find is indistinguishable from a translation error.
+
+**Alternatives.**
+
+- **Keep `D-0022` and schedule one repair belt after parity (rejected).** It concentrates the work
+  at the moment the code is coldest, and it asks a later reader to reconstruct context that is free
+  today. It also leaves a growing list whose only purpose is to be worked through later.
+- **Repair silently, without moving the ledger entry (rejected).** That is the failure
+  interlock#74's acceptance criterion 5 is written against, and it would break the trail the third
+  bullet above exists to keep.
+
+**Consequences.**
+
+- The review gate stops being answered with "inherited, see `D-0022`". That answer was correct under
+  the old rule and is now a deferral that needs a reason of its own.
+- Ledger entries become the record of where continuo deliberately differs from interlock, not only
+  of where it deliberately agrees. That is a larger claim to keep true, and the reason the trail
+  requirement is stated as a rule rather than left to habit.
+
+**Falsifier.** If interlock is un-frozen and upstream repair becomes possible again, the premise
+returns and this decision should be revisited.
+
+**Status.** accepted
+
+**Source.** Operator decision, 2026-08-22, applied across all three lanes; the measurement lane's
+`D-0107` and `D-0108` are the first and second applications.
+
