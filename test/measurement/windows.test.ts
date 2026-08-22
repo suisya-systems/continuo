@@ -895,3 +895,50 @@ describe("the buckets", () => {
     );
   });
 });
+
+describe("a deliberate divergence from interlock (target-only)", () => {
+  test("a declared grace is validated even when no episode is classified", () => {
+    // Target-only, and `D-0108`, decided by the operator on 2026-08-22 with the
+    // withdrawal of `D-0022`.
+    //
+    // `requireGraceMs` runs inside `episodeWindow`, so over an EMPTY episode
+    // list nothing ever reaches it: interlock returns a report carrying
+    // `grace_ms = -1` and raises nothing, and its own docstring names the
+    // consequence -- "on a report that classified no episodes, nothing would
+    // ever raise, so it would render clean". Verified against interlock at
+    // 65f36c5. A report that states a grace nobody could have applied is a
+    // report whose stated basis is false, and section 3.5 asks for a single
+    // declared value per report precisely so the value can be checked.
+    //
+    // The check is CALLED once more here rather than duplicated: the same
+    // function, after the grace is resolved, so there is still one definition
+    // of what a legal grace is.
+    const db = productionDb();
+    const revisionId = seedRevisionId(db);
+
+    withMeasurement(db, (connection) => {
+      expectRefusal(
+        () =>
+          classifyEpisodes(connection, {
+            revisionId,
+            periodStartMs: PERIOD_START,
+            periodEndMs: PERIOD_END,
+            graceMs: -1,
+            episodes: [],
+          }),
+        WindowRefusal,
+      );
+
+      // A legal grace over an empty list is still a report, not a refusal.
+      const empty = classifyEpisodes(connection, {
+        revisionId,
+        periodStartMs: PERIOD_START,
+        periodEndMs: PERIOD_END,
+        graceMs: 0,
+        episodes: [],
+      });
+      expect(empty.windows).toEqual([]);
+      expect(empty.graceMs).toBe(0);
+    });
+  });
+});

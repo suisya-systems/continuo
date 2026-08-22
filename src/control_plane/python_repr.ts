@@ -34,6 +34,73 @@ export function pythonRepr(value: unknown): string {
 }
 
 /**
+ * `repr` of a string, with Python's quoting and escaping.
+ *
+ * Not simply "wrap it in apostrophes" -- that is what this renderer used to do,
+ * and it produced `'a'b'` for a value containing a quote: ambiguous text, not
+ * parity text, on the paths that report exactly which rejected value the caller
+ * passed. Measured against CPython:
+ *
+ * ```
+ * repr("a'b")   -> "a'b"      # switches to double quotes
+ * repr('a"b')   -> 'a"b'      # stays single
+ * repr('a\'"b') -> 'a\'"b'    # both present: single, with the quote escaped
+ * repr('a\\b')   -> 'a\\b'
+ * repr('a\nb')   -> 'a\nb'
+ * ```
+ *
+ * So: prefer single quotes; switch to double only when the value contains a
+ * single quote AND no double quote; otherwise escape the single quote.
+ * Backslash and the C0 controls are escaped either way (D-0017 rule 3, the
+ * mechanical-format contract).
+ */
+function reprString(value: string): string {
+  const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
+  let out = "";
+  for (const character of value) {
+    if (character === "\\") {
+      out += "\\\\";
+    } else if (character === quote) {
+      out += `\\${quote}`;
+    } else if (character === "\n") {
+      out += "\\n";
+    } else if (character === "\r") {
+      out += "\\r";
+    } else if (character === "\t") {
+      out += "\\t";
+    } else {
+      const code = character.codePointAt(0) ?? 0;
+      // Python escapes anything `str.isprintable()` calls unprintable, not just
+      // the C0 controls: `repr("\u0085")` is `'\\x85'` and `repr("\u2028")` is
+      // `'\\u2028'`. `ensure_ascii` is a `json.dumps` default rather than a repr
+      // one, so printable non-ASCII stays literal -- but a C1 control or a line
+      // separator emitted raw is both non-parity text and a way to put a line
+      // break into a log through a refusal message.
+      //
+      // Approximated rather than reproduced exactly: full `isprintable()` needs
+      // the Unicode category table. This covers the classes reachable here --
+      // C0, DEL, C1, the line and paragraph separators, and lone surrogates --
+      // and the approximation is recorded in the ledger.
+      const unprintable =
+        code < 0x20 ||
+        code === 0x7f ||
+        (code >= 0x80 && code <= 0x9f) ||
+        code === 0x2028 ||
+        code === 0x2029 ||
+        (code >= 0xd800 && code <= 0xdfff);
+      if (!unprintable) {
+        out += character;
+      } else if (code <= 0xff) {
+        out += `\\x${code.toString(16).padStart(2, "0")}`;
+      } else {
+        out += `\\u${code.toString(16).padStart(4, "0")}`;
+      }
+    }
+  }
+  return `${quote}${out}${quote}`;
+}
+
+/**
  * The recursive half, carrying the set of containers already being rendered.
  *
  * Python's `repr` detects a cycle and prints an ellipsis marker rather than
@@ -46,10 +113,7 @@ export function pythonRepr(value: unknown): string {
  */
 function renderRepr(value: unknown, seen: Set<object>): string {
   if (typeof value === "string") {
-    // Single quotes written by hand, never `JSON.stringify` (D-0017 rule 3):
-    // Python's `repr` prefers single quotes and the source's assertions match
-    // that text.
-    return `'${value}'`;
+    return reprString(value);
   }
   // `String(null)` is "null" and `String(undefined)` is "undefined"; Python's
   // repr of the absence these stand for is `None`. These messages are how an

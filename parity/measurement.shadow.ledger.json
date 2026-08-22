@@ -62,14 +62,15 @@
       }
     ],
     "target_only_tests": {
-      "count": 4,
+      "count": 5,
       "ids": [
         "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > a fixture label outside the vocabulary is refused even when no episode wears it",
         "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > two subject classes spelling the same parts do not pair",
         "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > a negative onset buckets downward, not toward zero",
+        "test/measurement/shadow.test.ts::a deliberate divergence from interlock (target-only) > the positional caveat prints for an unpaired escalation in any bucket",
         "test/measurement/shadow.test.ts::hostile values in the rendering (target-only) > an episode id cannot forge a line and cannot reach a cp932 console"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close gaps a 33-mutation sweep found, and all three are INHERITED: the same mutation was applied to interlock's own shadow.py at 65f36c5 and its 37 cases still passed in each case (measured, not inferred). Each is recorded with its verdict under mutation_sweep below, and each was confirmed to kill its mutation and only its mutation. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close gaps a 33-mutation sweep found, and all three are INHERITED: the same mutation was applied to interlock's own shadow.py at 65f36c5 and its 37 cases still passed in each case (measured, not inferred). Each is recorded with its verdict under mutation_sweep below, and each was confirmed to kill its mutation and only its mutation. One more was added after this belt shipped: the evidence for D-0108, which repairs a defect this ledger previously disclosed under the withdrawn D-0022. See divergences. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
     }
   },
   "totals": {
@@ -467,6 +468,16 @@
     "note": "The three survivors were re-run against the new target-only cases and each is now killed by its own case and no other. A first attempt at this sweep reported 33/33 caught and was DISCARDED as invalid: the scratch harness had no CONTINUO_TEST_SEED, so every run failed at config load and every mutation looked caught. The sweep above asserts a green baseline in the same harness before mutating. The codex review gate raised two P2 observations against this port; both are recorded rather than silently actioned -- one as the inherited limitation above, the other (ReadonlySet is a compile-time constraint where Python's frozenset is a runtime one) as a repo-wide convention question rather than a shadow-specific defect, since every closed vocabulary in continuo -- CI_PROVIDERS, CI_VERDICTS, EVENT_TYPES, THRESHOLD_KINDS and six more -- is spelled the same way."
   },
   "divergences": [
+    {
+      "decision": "D-0108",
+      "behaviour": "The positional caveat prints for an unpaired positional episode in ANY bucket -- unmatched_key, interlock_only or v1_only. interlock guards it on unmatched_key alone.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Raised by the codex review gate on the shadow belt and disclosed there under D-0022, now superseded by D-0023, which the operator WITHDREW on 2026-08-22. The guard was on the bucket where a positional episode is LEAST likely to be the story: an escalation whose key composed and found no counterpart is filed interlock_only or v1_only, and a run of exactly those is what an ordering divergence looks like -- so the warning went missing precisely when the key was the first thing to doubt. Unlike the other two D-0108 repairs this one is reachable from ordinary output rather than from a hand-built object.",
+      "parity_cost": "continuo's rendered reconciliation carries a NOTE line interlock omits, for any period with an unpaired positional episode outside unmatched_key. No ported case changes; the new target-only case builds the situation deliberately.",
+      "evidence": "test/measurement/shadow.test.ts::a deliberate divergence from interlock (target-only) > the positional caveat prints for an unpaired escalation in any bucket",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this renderer."
+    },
     {
       "decision": "D-0109",
       "behaviour": "renderShadowReconciliation escapes the episode ids, shapes, evidence keys and values, the shadow source and the absence reason before printing them. interlock interpolates all of them raw.",

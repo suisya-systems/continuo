@@ -50,12 +50,13 @@
       }
     ],
     "target_only_tests": {
-      "count": 2,
+      "count": 3,
       "ids": [
         "test/measurement/windows.test.ts::the buckets > idsFor refuses a classification this module does not have (target-only)",
-        "test/measurement/windows.test.ts::the buckets > counts refuses a window carrying an unknown classification (target-only)"
+        "test/measurement/windows.test.ts::the buckets > counts refuses a window carrying an unknown classification (target-only)",
+        "test/measurement/windows.test.ts::a deliberate divergence from interlock (target-only) > a declared grace is validated even when no episode is classified"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The one here pins WindowReport.idsFor's refusal of an unrecognised bucket name, which a mutation sweep found unguarded on BOTH sides: interlock calls ids_for only with the three real classifications, so deleting its own guard leaves its suite green too. It matters because idsFor FILTERS -- without the guard a misspelled bucket returns an empty list rather than an error, and a caller would print a zero, which is the exact reading counts() emits all three keys to prevent. Production behaviour is unchanged and still matches interlock's. This module has no seam (nothing in it is monkeypatched by the source), so rule 5's liveness requirement does not apply, and its number handling is integer millisecond arithmetic with no rendering, so D-0104's formatter is not involved. The second pins a PORT divergence a review caught rather than an inherited gap: the source indexes a pre-seeded dict in counts(), so a window carrying an unknown classification raises KeyError there, while the port's first cut used a `?? 0` fallback and grew a fourth bucket. Fixed to throw, and deliberately a RangeError rather than a WindowRefusal -- KeyError is outside the source's refusal family, so a caller catching refusals must not swallow it."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The one here pins WindowReport.idsFor's refusal of an unrecognised bucket name, which a mutation sweep found unguarded on BOTH sides: interlock calls ids_for only with the three real classifications, so deleting its own guard leaves its suite green too. It matters because idsFor FILTERS -- without the guard a misspelled bucket returns an empty list rather than an error, and a caller would print a zero, which is the exact reading counts() emits all three keys to prevent. Production behaviour is unchanged and still matches interlock's. This module has no seam (nothing in it is monkeypatched by the source), so rule 5's liveness requirement does not apply, and its number handling is integer millisecond arithmetic with no rendering, so D-0104's formatter is not involved. The second pins a PORT divergence a review caught rather than an inherited gap: the source indexes a pre-seeded dict in counts(), so a window carrying an unknown classification raises KeyError there, while the port's first cut used a `?? 0` fallback and grew a fourth bucket. Fixed to throw, and deliberately a RangeError rather than a WindowRefusal -- KeyError is outside the source's refusal family, so a caller catching refusals must not swallow it. One more was added after this belt shipped: the evidence for D-0108, which repairs a defect this ledger previously disclosed under the withdrawn D-0022. See divergences."
     },
     "approved_non_running": []
   },
@@ -84,12 +85,6 @@
       "matches_source": true,
       "note": "Found by a mutation sweep on the port, then confirmed against interlock 65f36c5 (four ids_for call sites in tests/measurement/test_windows.py, all with valid classifications). The port reproduces the guard exactly as upstream has it and does NOT change behaviour; it adds a target-only test so the property stops being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
       "where_a_fix_belongs": "upstream, as the same case added to interlock's tests/measurement/test_windows.py."
-    },
-    {
-      "behaviour": "classifyEpisodes does not validate a caller-declared graceMs when the episode list is EMPTY. requireGraceMs runs inside episodeWindow, so a report over zero episodes with graceMs = -1 is returned with grace_ms = -1 and no refusal.",
-      "matches_source": true,
-      "note": "Raised by the codex review gate on this PR as a P2. Verified empirically against interlock 65f36c5: classify_episodes(..., episodes=[], grace_ms=-1) returns a report with grace_ms = -1 and raises nothing, identically. The source is aware of the shape -- require_grace_ms's own docstring ends '...and on a report that classified no episodes, nothing would ever raise, so it would render clean.' NOT fixed here, for two reasons that point the same way: (1) validating in classifyEpisodes as well would be the SECOND COPY of the check that same docstring argues against, and (2) it would make continuo refuse an input interlock accepts, which is a silent behavioural divergence in a parity port. Handled under the precedent the operator set for the action_id escaping question on 2026-08-22: reproduce and disclose, do not repair one side alone.",
-      "where_a_fix_belongs": "upstream, and as a move of the check rather than a duplication of it -- require_grace_ms called once in classify_episodes after grace is resolved, with episode_window's call kept only for its own direct callers. That is a change to both sides together."
     }
   ],
   "entries": [
@@ -290,6 +285,18 @@
       "target_status": "passed",
       "reason": "",
       "source_revision": "65f36c5"
+    }
+  ],
+  "divergences": [
+    {
+      "decision": "D-0108",
+      "behaviour": "classifyEpisodes validates a caller-declared graceMs even when the episode list is empty. interlock returns a report carrying grace_ms = -1 and raises nothing.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Raised by the codex review gate on the windows belt and disclosed there under D-0022, now superseded by D-0023, which the operator WITHDREW on 2026-08-22 because interlock is frozen. Verified against interlock at 65f36c5: classify_episodes(..., episodes=[], grace_ms=-1) returns grace_ms = -1 and raises nothing, and require_grace_ms's own docstring names the consequence ('on a report that classified no episodes, nothing would ever raise, so it would render clean'). A report that states a grace nobody could have applied has a false stated basis, and section 3.5 asks for a single declared value per report so that the value can be checked. requireGraceMs is CALLED once more after the grace is resolved rather than copied -- the docstring's argument is against a second DEFINITION of a legal grace, not a second call site.",
+      "parity_cost": "continuo refuses an input interlock accepts, on the empty-episode path only. No ported case changes: every one of them classifies at least one episode, where both implementations already refuse.",
+      "evidence": "test/measurement/windows.test.ts::a deliberate divergence from interlock (target-only) > a declared grace is validated even when no episode is classified",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this check."
     }
   ]
 }

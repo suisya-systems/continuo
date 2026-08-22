@@ -50,14 +50,15 @@
       }
     ],
     "target_only_tests": {
-      "count": 4,
+      "count": 5,
       "ids": [
         "test/measurement/latency.test.ts::the report itself > percentiles are ceil-rank, on a sample where floor would differ (target-only)",
         "test/measurement/latency.test.ts::the report itself > a class present in the shadow source with an EMPTY sample is absent for it (target-only)",
         "test/measurement/latency.test.ts::the report itself > classes are reported in first-seen order, not sorted (target-only)",
+        "test/measurement/latency.test.ts::a deliberate divergence from interlock (target-only) > a present shadow reference must state the population it is over",
         "test/measurement/latency.test.ts::hostile values in the rendering (target-only) > an incident class cannot forge a line and cannot reach a cp932 console"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 22-mutation sweep and then confirmed against interlock 65f36c5 -- in each case the source's own suite cannot tell the mutated module from the real one either. Production behaviour is unchanged; these add coverage, not behaviour. This module has no seam (nothing in it is monkeypatched by the source) and renders no figure through D-0104's formatter, so neither of those liveness obligations applies. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 22-mutation sweep and then confirmed against interlock 65f36c5 -- in each case the source's own suite cannot tell the mutated module from the real one either. Production behaviour is unchanged; these add coverage, not behaviour. This module has no seam (nothing in it is monkeypatched by the source) and renders no figure through D-0104's formatter, so neither of those liveness obligations applies. One more was added after this belt shipped: the evidence for D-0108, which repairs a defect this ledger previously disclosed under the withdrawn D-0022. See divergences. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
     },
     "approved_non_running": []
   },
@@ -271,6 +272,16 @@
     ]
   },
   "divergences": [
+    {
+      "decision": "D-0108",
+      "behaviour": "ShadowReference refuses a present reference that carries no bothBucketCount. interlock accepts it and renders 'over None both-bucket episode(s)'.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Raised by the codex review gate on the latency belt and disclosed there under D-0022, now superseded by D-0023 (inherited defects are disclosed, not repaired), now superseded by D-0023. D-0022 was WITHDRAWN by the operator on 2026-08-22 and replaced by D-0023 -- interlock is frozen, so there is no upstream repair to follow -- and this is repaired accordingly. Verified against interlock at 65f36c5 before and after: its __post_init__ checks only `distribution is None` for the present state. Same shape as D-0107: the type is exported, so the construction path is public, and an invariant only the tidy path upholds is not an invariant. A caller with nothing to count writes 0, which is accepted.",
+      "parity_cost": "continuo refuses an input interlock accepts. Unreachable through the module's own API -- ShadowReference.present always supplies the count -- so no ported case changes and no rendered report differs except in the hand-built state itself.",
+      "evidence": "test/measurement/latency.test.ts::a deliberate divergence from interlock (target-only) > a present shadow reference must state the population it is over",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this constructor."
+    },
     {
       "decision": "D-0109",
       "behaviour": "renderLatencyReport escapes the incident class, the itemised episode ids and the shadow reference's absence reason before printing them. interlock interpolates them raw.",

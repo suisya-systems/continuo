@@ -49,7 +49,8 @@ spaces distinct.
 | D-0019 | One parity ledger per source test file | accepted |
 | D-0020 | A temp-directory label may not contain refusal vocabulary | accepted |
 | D-0021 | Values read from SQLite are not re-narrowed to reproduce Python's `int()` | accepted |
-| D-0022 | Inherited defects are disclosed and repaired after parity, not during | accepted |
+| D-0022 | Inherited defects are disclosed and repaired after parity, not during | superseded by D-0023 |
+| D-0023 | Inherited defects are repaired in continuo, at the first belt that touches them | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -58,6 +59,9 @@ spaces distinct.
 | D-0105 | Maps keyed by database-supplied ids are `Map`, never plain objects | accepted |
 | D-0106 | The measurement barrel stays as narrow as the invariant that guards it | accepted |
 | D-0107 | The header's acceptance predicate counts both disqualifying populations | accepted |
+| D-0108 | An invariant a public constructor can walk around is repaired, not disclosed | accepted |
+| D-0109 | A renderer's ASCII claim covers the values it prints, not only the words it authors | accepted |
+| D-0110 | The content fingerprint orders by storage class as well as by value | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -1376,6 +1380,14 @@ on better-sqlite3 13.0.3 (`CREATE TABLE t(v INTEGER)` binding `3.5` reads back `
 
 ## D-0022 — Inherited defects are disclosed and repaired after parity, not during
 
+> **SUPERSEDED by `D-0023`.** The rule below is no longer in force. It rests on a premise that
+> stopped being true: that a defect faithfully reproduced from interlock would eventually be fixed
+> *upstream*, so disclosing it here was deferral rather than abandonment. **interlock is now frozen**
+> -- no upstream change is coming -- so an item disclosed and left alone is an item nobody will ever
+> fix. Read `D-0023` for the rule that replaced it. The text is kept intact, per this file's own
+> convention that an ID is never rewritten, and because the reasoning it records is still the
+> reasoning a reader needs in order to understand why the port hesitated.
+
 **Context.** The review gate on the event-spine belt raised three defects in `txn.ts` / `events.ts`,
 two of them P1:
 
@@ -1441,7 +1453,7 @@ tell the two implementations apart -- it stops being an inherited limitation and
 failure to fix immediately. Likewise if interlock repairs one upstream, continuo follows rather than
 waiting.
 
-**Status.** accepted
+**Status.** superseded by `D-0023`
 
 **Source.** Codex review gate, 2026-08-22, rounds 1 and 2 (two P1, one P2); escalated by lane A per
 `docs/test-translation-conventions.md` rule 0 and decided by the operator.
@@ -2313,6 +2325,58 @@ from `.` exactly as the others are.
 **Falsified by.** interlock widening `measurement/__init__.py` to re-export its whole harness, which
 would mean it had either dropped the assertion or reconciled it with canary's vocabulary upstream --
 and this port would then follow whichever it chose.
+---
+
+## D-0023 — Inherited defects are repaired in continuo, at the first belt that touches them
+
+**Context.** `D-0022` said that a defect faithfully reproduced from interlock, pinned by no case on
+either side and raised by review rather than by a failing test, should be **disclosed** in the
+parity ledger and repaired after parity. That rule had a premise: interlock would still be there to
+fix it, so continuo diverging early would cost the parity claim more than the defect cost anyone.
+
+**The premise is gone. interlock is frozen** -- it will not be changed again. So every inherited
+defect has exactly one place left where it can be fixed, and "inherited" stops being a reason to
+wait. An item disclosed under `D-0022` and left alone is not deferred; it is abandoned.
+
+**Decision.** Inherited defects are **repaired in continuo**. The right moment is normally *now* --
+the belt that is already editing that code is the cheapest place to fix it, and the one where the
+person doing it has the source open. Concretely:
+
+- Repair it in the belt that touches the code, unless the repair is large enough to be its own
+  change (a concurrency redesign, say) -- in which case name the belt it is scheduled into, in the
+  ledger, rather than leaving it open-ended.
+- When a defect is repaired, its ledger entry moves from `inherited, disclosed` to a **deliberate
+  divergence**: continuo's behaviour is now the intended one, and the entry says so. Any test that
+  pinned the inherited behaviour is inverted in the same change.
+- **The trail is the point.** Parity is still established by comparison against interlock, so every
+  place the two now differ on purpose has to be reachable from the ledger. A divergence nobody can
+  find is indistinguishable from a translation error.
+
+**Alternatives.**
+
+- **Keep `D-0022` and schedule one repair belt after parity (rejected).** It concentrates the work
+  at the moment the code is coldest, and it asks a later reader to reconstruct context that is free
+  today. It also leaves a growing list whose only purpose is to be worked through later.
+- **Repair silently, without moving the ledger entry (rejected).** That is the failure
+  interlock#74's acceptance criterion 5 is written against, and it would break the trail the third
+  bullet above exists to keep.
+
+**Consequences.**
+
+- The review gate stops being answered with "inherited, see `D-0022`". That answer was correct under
+  the old rule and is now a deferral that needs a reason of its own.
+- Ledger entries become the record of where continuo deliberately differs from interlock, not only
+  of where it deliberately agrees. That is a larger claim to keep true, and the reason the trail
+  requirement is stated as a rule rather than left to habit.
+
+**Falsifier.** If interlock is un-frozen and upstream repair becomes possible again, the premise
+returns and this decision should be revisited.
+
+**Status.** accepted
+
+**Source.** Operator decision, 2026-08-22, applied across all three lanes; the measurement lane's
+`D-0107` and `D-0108` are the first and second applications.
+
 
 ## D-0107 -- The header's acceptance predicate counts both disqualifying populations
 
@@ -2374,6 +2438,71 @@ can reach it from the ledger rather than discovering it as an unexplained differ
 
 **Falsified by.** interlock resuming and reconciling the two predicates upstream, at which point this
 stops being a divergence and becomes a plain translation.
+
+## D-0108 -- An invariant a public constructor can walk around is repaired, not disclosed
+
+**Context.** `D-0022` ruled that a defect reproduced faithfully from interlock, pinned by no case on
+either side, and raised by review rather than by a failing test, is **disclosed** in the parity
+ledger and repaired in a dedicated change after parity. The operator **withdrew that rule on 2026-08-22**, and lane A has since recorded the replacement as
+`D-0023` (inherited defects are repaired in continuo, at the first belt that touches them): interlock is frozen, so "after parity, follow upstream" has no upstream to follow, and
+every inherited defect will eventually have to be repaired here. The cheapest moment to repair one
+is the belt already editing that file.
+
+This entry is the measurement lane's first application of the withdrawal, covering three defects the
+review gate raised across three belts and this lane disclosed under `D-0022`. All three were
+verified against interlock at `65f36c5` before being recorded, and all three are now repaired.
+
+**The first two share their shape with `D-0107`**, which is why they are settled together:
+
+- `ShadowReference`'s constructor validates only the distribution for a present reference, so one
+  built with a distribution and no `bothBucketCount` is accepted and the renderer emits `over null
+  both-bucket episode(s)` -- a heading that announces a comparison and names no population.
+- `classifyEpisodes` resolves a caller-declared `graceMs` and never validates it when the episode
+  list is empty, because `requireGraceMs` runs inside `episodeWindow`. A report over zero episodes
+  therefore carries `grace_ms = -1` and states it. The source's own docstring names the consequence:
+  "on a report that classified no episodes, nothing would ever raise, so it would render clean."
+
+In both, the invariant exists, the module's own API upholds it, and the **exported constructor walks
+around it**. That is exactly `D-0107`'s finding -- an optional count defaulting to zero reintroduced
+the contradiction that decision removed -- and the same answer applies: a type this package exports
+is a public door, and an invariant that only the tidy path enforces is not an invariant.
+
+The third is different in kind and is repaired for its own reason:
+
+- `renderShadowReconciliation` prints `POSITIONAL_KEY_CAVEAT` only when an episode in the
+  `unmatched_key` bucket is positional -- and that is the bucket where a positional episode is
+  *least* likely to be the story. An escalation whose key composed and found no counterpart is filed
+  `interlock_only` or `v1_only`, and a run of exactly those is what an ordering divergence looks
+  like. The warning went missing precisely when the key was the first thing to doubt.
+
+**Decision.** All three are repaired, and each is recorded in its ledger under `divergences` rather
+than `inherited_limitations`, with the interlock behaviour it departs from, the evidence that
+interlock behaves that way, and the target-only case that pins the new behaviour.
+
+`requireGraceMs` is **called** a second time rather than copied: the same function, in
+`classifyEpisodes`, after the grace is resolved. `require_grace_ms`'s own docstring argues against a
+second copy of the check, and that argument is about a second *definition* of what a legal grace is,
+not about a second call site.
+
+**Alternatives.**
+
+- **Keep disclosing (rejected -- this is the withdrawn `D-0022`, now `D-0023`).** It was the right rule while an
+  upstream repair was possible to follow. With interlock frozen it means shipping a defect nobody
+  will ever fix, in a package that is now the authority for this behaviour.
+- **Repair the two constructors and leave the caveat (rejected).** The caveat's failure is the one a
+  reader actually meets: the other two need a hand-built object, while an unpaired escalation is
+  ordinary output. Fixing only what a reviewer typed first is how a rule becomes case-by-case.
+- **Validate `graceMs` by duplicating the check in `classifyEpisodes` (rejected).** Two definitions
+  of a legal grace drift; one function called twice does not.
+
+**Consequences.** continuo refuses two inputs interlock accepts, and prints a caveat interlock omits.
+Each is reachable from its ledger's `divergences` block, so the `interlock#74` AC3 reconciliation
+finds a recorded decision rather than an unexplained difference. `D-0022` remains in this file as the
+record of what was decided and when; its withdrawal is noted here rather than by editing it, because
+it belongs to another lane.
+
+**Falsified by.** interlock resuming. Every one of these would then be a bug report upstream, and
+continuo would follow whatever interlock decided rather than keeping its own answer.
 
 ## D-0109 -- A renderer's ASCII claim covers the values it prints, not only the words it authors
 
@@ -2477,3 +2606,4 @@ exists for. Recorded in `parity/measurement.provenance.ledger.json` under `diver
 
 **Falsified by.** interlock adopting the same tie-breaker, or the schema gaining a constraint that
 makes a mixed-storage-class column impossible.
+

@@ -70,6 +70,18 @@ export {
   openControlPlaneConnection,
 } from "./control_plane/connection.js";
 export {
+  ATTEMPT_LOG_NAME,
+  DeliveryReceipt,
+  type Destination,
+  DestinationRefusal,
+  EFFECT_SUFFIX,
+  FENCE_NAME,
+  isDestination,
+  KeyedDropbox,
+  LOCK_NAME,
+  StaleTokenRefused,
+} from "./control_plane/destination.js";
+export {
   type AppendedEvent,
   appendEvent,
   BACKLOG_INCIDENT_CLASS,
@@ -128,6 +140,13 @@ export {
   UnknownGateRefused,
   WRITER,
 } from "./control_plane/gates.js";
+export {
+  HUMAN_GATED_RECIPIENT,
+  HumanGatedHandler,
+  NOTIFY_RECIPIENT,
+  NotifyDestinationHandler,
+  spikeRegistry,
+} from "./control_plane/handlers.js";
 export {
   Authority,
   acquire,
@@ -199,6 +218,25 @@ export {
   verifyProductionDatabase,
 } from "./control_plane/migrator.js";
 export {
+  AckOutcome,
+  ActionHandler,
+  AttemptOutcome,
+  CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD,
+  CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT,
+  CHECKPOINT_BEFORE_DURABLE_WRITE,
+  CHECKPOINT_DELIVERED_BEFORE_ACK,
+  CHECKPOINTS,
+  HandlerRegistry,
+  HandlerRejected,
+  HumanGateRequired,
+  Outbox,
+  OutboxMessage,
+  OutboxUsageError,
+  RecoveryReport,
+  UNOWNED_OUTBOX_QUERY,
+  UNSUPPORTED_MECHANISMS,
+} from "./control_plane/outbox.js";
+export {
   BUDGET_KINDS,
   type BudgetViolation,
   budgetViolations,
@@ -262,6 +300,23 @@ export {
   TransactionUsageError,
   transaction,
 } from "./control_plane/txn.js";
+export {
+  EFFECTIVE_REVISION_SQL,
+  errorStreakScopes,
+  HEARTBEAT_RESULTS,
+  HeartbeatRefused,
+  heartbeat,
+  registerScope,
+  retireScope,
+  SCOPE_KINDS,
+  SCOPE_LEASE_PREFIX,
+  ScopeNotRegistered,
+  scopeLeaseResource,
+  silentScopes,
+  uncoveredScopes,
+  WatcherRefusal,
+  WatcherUsageError,
+} from "./control_plane/watcher.js";
 /**
  * Per-role fencing: the rule model, the renderer, and the breach battery.
  *

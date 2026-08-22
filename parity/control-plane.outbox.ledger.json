@@ -1,0 +1,740 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_outbox.py",
+      "collected": 74,
+      "inventory": "parity/source-inventory/control_plane.test_outbox.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/outbox.test.ts",
+    "target_only_tests": {
+      "count": 2,
+      "ids": [
+        "test/control_plane/outbox.test.ts::seam liveness (target-only) > destination uuid4Hex routes both staging mint sites",
+        "test/control_plane/outbox.test.ts::seam liveness (target-only) > outbox uuid4Hex names the bare refusal row"
+      ],
+      "note": "Target-only seam-liveness tests, required by docs/test-translation-conventions.md rule 5. destination.ts and outbox.ts each route their uuid mint sites through a D-0014 seam record so a case needing a pinned id has a way to get one; interlock's own suite never needs it, so these have no source counterpart and are not counted as ported coverage. They exist because a seam nothing routes through is worse than no seam -- it looks like a control point while production goes around it."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 74,
+    "ported": 63,
+    "adapted": 11,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_every_registered_handler_names_its_exactly_once_mechanism",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > every registered handler names its exactly once mechanism",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_every_handler_class_in_the_package_names_one_too",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > every handler class in the package names one too",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ActionHandler.__subclasses__() has no JavaScript analogue. Two halves replace it, both asserted with anti-vacuity checks: a walk over the outbox/handlers/destination module namespaces (which, unlike __subclasses__, structurally excludes the handlers the cases below define, so the source's 'restricted to classes that actually ship' filter is free), and a source-text scan of those three files requiring every class that extends ActionHandler to be exported and therefore reachable by the walk. The declaration is an instance field in TypeScript where Python's is a class attribute, so each class is constructed to be asked.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_mechanism_names_are_exactly_the_ddls",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > the mechanism names are exactly the ddls",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_handler_that_names_no_mechanism_is_refused_registration",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > a handler that names no mechanism is refused registration",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_handler_that_invents_a_mechanism_is_refused_registration",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > a handler that invents a mechanism is refused registration",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_declared_mechanism_reaches_the_durable_record",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > the declared mechanism reaches the durable record",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_chosen_handler_is_not_a_human_gate_case",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > the chosen handler is not a human gate case",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_declaring_a_destination_mechanism_requires_a_destination",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 1 -- the handler names its mechanism, and a test asserts the name > declaring a destination mechanism requires a destination",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_lost_ack_causes_a_resend_and_the_effect_count_stays_one",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 2 -- ack is idempotent; a lost ack resends, never loses > a lost ack causes a resend and the effect count stays one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_duplicate_ack_changes_nothing",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 2 -- ack is idempotent; a lost ack resends, never loses > a duplicate ack changes nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_late_ack_after_a_restart_changes_nothing",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 2 -- ack is idempotent; a lost ack resends, never loses > a late ack after a restart changes nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_message_shows_exactly_one_acked_state_however_many_acks_arrive",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 2 -- ack is idempotent; a lost ack resends, never loses > the message shows exactly one acked state however many acks arrive",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_ack_for_an_undelivered_message_is_refused",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 2 -- ack is idempotent; a lost ack resends, never loses > an ack for an undelivered message is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's bare ValueError becomes OutboxUsageError, this module's per-module usage-error class (same convention as lease.ts's LeaseUsageError). The match= half is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_ack_under_backward_clock_skew_is_kept_and_the_clamp_is_reported",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 2 -- ack is idempotent; a lost ack resends, never loses > an ack under backward clock skew is kept and the clamp is reported",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_ack_is_recorded_even_after_the_writers_lease_moved_on",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 2 -- ack is idempotent; a lost ack resends, never loses > an ack is recorded even after the writers lease moved on",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_retry_count_counts_attempts_not_successes",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 3 -- retry count is monotonic across a process restart > the retry count counts attempts not successes",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_retry_count_is_monotonic_across_a_process_restart",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 3 -- retry count is monotonic across a process restart > the retry count is monotonic across a process restart",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Still a real child process (spawnSync of process.execPath), as the source requires; the program is the Node/TypeScript equivalent of the Python one and registers a resolve hook mapping the NodeNext '.js' specifiers to the '.ts' sources, the way spike-schema.test.ts's 'state survives the process that wrote it' does. Same assertions on the child's reported before/after counts.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_retry_count_cannot_be_walked_backwards",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 3 -- retry count is monotonic across a process restart > the retry count cannot be walked backwards",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError becomes expectSqliteError on the result CODE (/^SQLITE_CONSTRAINT/) as well as the source's match='retry_count' message (D-0016); better-sqlite3 raises one error type for everything, so the code is what carries the class distinction.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_row_is_owned_from_the_instant_it_is_enqueued",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 4 -- no outbox row remains in a state with no owner after recovery > a row is owned from the instant it is enqueued",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_rows_orphaned_by_a_dead_epoch_are_adopted_by_recovery",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 4 -- no outbox row remains in a state with no owner after recovery > rows orphaned by a dead epoch are adopted by recovery",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_recovery_adopts_nothing_when_the_recovering_holders_lease_is_not_live",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 4 -- no outbox row remains in a state with no owner after recovery > recovery adopts nothing when the recovering holders lease is not live",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_acked_row_is_never_unowned",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 4 -- no outbox row remains in a state with no owner after recovery > an acked row is never unowned",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_ownership_criterion_is_a_query_anyone_can_run",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 4 -- no outbox row remains in a state with no owner after recovery > the ownership criterion is a query anyone can run",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_reconstructed_process_sees_every_unfinished_row",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 4 -- no outbox row remains in a state with no owner after recovery > a reconstructed process sees every unfinished row",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_duplicate_delivery_causes_exactly_one_effect",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > duplicate delivery causes exactly one effect",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_one_effect_record_per_dedup_key",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > one effect record per dedup key",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_re_enqueue_of_the_same_dedup_key_still_causes_one_effect",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > a re enqueue of the same dedup key still causes one effect",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_kill_after_the_effect_and_before_its_record_replays_to_one_effect",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > a kill after the effect and before its record replays to one effect",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_kill_after_the_record_and_before_the_effect_loses_nothing",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > a kill after the record and before the effect loses nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_kill_before_the_durable_write_loses_nothing",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > a kill before the durable write loses nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_kill_after_delivery_and_before_the_ack_resends_to_one_effect",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > a kill after delivery and before the ack resends to one effect",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_every_named_checkpoint_is_actually_reached",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > every named checkpoint is actually reached",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_exactly_once_evidence_outlives_our_database",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > the exactly once evidence outlives our database",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_destination_refuses_a_key_that_is_already_bound_to_another_payload",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > the destination refuses a key that is already bound to another payload",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_apply_that_dies_before_publishing_leaves_nothing_behind",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > an apply that dies before publishing leaves nothing behind",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Python's bare RuntimeError has no JavaScript analogue and `Error` is the base of every refusal in this file, so asserting on `Error` would also admit a DestinationRefusal; a test-local KilledAfterStaging class keeps the source's discrimination. Path.glob('*.staging') becomes a readdir+endsWith filter (rule 6: never assert on a path built with '/').",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_damaged_published_record_is_refused_rather_than_applied_twice",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > a damaged published record is refused rather than applied twice",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_destination_refuses_an_empty_idempotency_key",
+      "target_id": "test/control_plane/outbox.test.ts::criterion 5 -- duplicate delivery causes exactly one effect > a destination refuses an empty idempotency key",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_stale_writer_is_refused_and_the_refusal_is_recorded",
+      "target_id": "test/control_plane/outbox.test.ts::the fence -- a stale writer is rejected, not merged, and the rejection is itself durable (ACCEPTANCE.md section 2) > a stale writer is refused and the refusal is recorded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_refusal_class_is_the_lease_owned_one",
+      "target_id": "test/control_plane/outbox.test.ts::the fence -- a stale writer is rejected, not merged, and the rejection is itself durable (ACCEPTANCE.md section 2) > the refusal class is the lease owned one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_writer_that_keeps_returning_is_refused_every_time",
+      "target_id": "test/control_plane/outbox.test.ts::the fence -- a stale writer is rejected, not merged, and the rejection is itself durable (ACCEPTANCE.md section 2) > a writer that keeps returning is refused every time",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_expired_lease_refuses_the_write_even_though_the_epoch_matches",
+      "target_id": "test/control_plane/outbox.test.ts::the fence -- a stale writer is rejected, not merged, and the rejection is itself durable (ACCEPTANCE.md section 2) > an expired lease refuses the write even though the epoch matches",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_fence_is_one_statement_and_not_a_check_then_write",
+      "target_id": "test/control_plane/outbox.test.ts::the fence -- a stale writer is rejected, not merged, and the rejection is itself durable (ACCEPTANCE.md section 2) > the fence is one statement and not a check then write",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source reads module-private names off the module object; ESM has no such reach, so _COUNT_ATTEMPT and _MARK_DELIVERED are exported from outbox.ts (leading underscore kept, not re-exported from src/index.ts). All three assertions are unchanged, with the boxed FencedStatement read via String.prototype.valueOf.call rather than String().",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_outbox_writer_must_name_its_lease_resource_and_holder",
+      "target_id": "test/control_plane/outbox.test.ts::the fence -- a stale writer is rejected, not merged, and the rejection is itself durable (ACCEPTANCE.md section 2) > an outbox writer must name its lease resource and holder",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's bare ValueError becomes OutboxUsageError (same per-module convention). Both loop iterations and the match= half are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_stale_writer_cannot_even_enqueue",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a stale writer cannot even enqueue",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_refusal_with_no_lease_row_at_all_observes_none",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a refusal with no lease row at all observes none",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_expired_lease_refuses_the_enqueue_too",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > an expired lease refuses the enqueue too",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_lease_is_re_read_between_the_durable_write_and_the_effect",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the lease is re read between the durable write and the effect",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_destination_refuses_a_superseded_fencing_token",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the destination refuses a superseded fencing token",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_superseded_writer_is_refused_even_when_its_effect_is_already_present",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a superseded writer is refused even when its effect is already present",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_apply_carrying_no_token_is_not_fenced",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > an apply carrying no token is not fenced",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_fencing_token_reaches_the_destination_from_the_outbox",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the fencing token reaches the destination from the outbox",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_every_refusal_is_recorded_even_within_one_millisecond",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > every refusal is recorded even within one millisecond",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_handler_claiming_a_transactional_commit_is_refused",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a handler claiming a transactional commit is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_unsupported_mechanism_is_still_part_of_the_vocabulary",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the unsupported mechanism is still part of the vocabulary",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_stale_writer_cannot_record_an_effect_intent",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a stale writer cannot record an effect intent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Outbox._ensurePendingAction is `private`, which is a TypeScript compile-time rule and not a runtime one, so the call goes through a typed cast; the source reaches the same method by its own leading-underscore convention. Every assertion is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_effect_intent_insert_is_one_statement_and_not_a_check_then_write",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the effect intent insert is one statement and not a check then write",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same as above for _PENDING_ACTION: exported from outbox.ts so the statement object is reachable. Assertions unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_stale_writer_cannot_park_a_human_gated_action",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a stale writer cannot park a human gated action",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_writer_superseded_during_the_effect_may_not_record_the_result",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a writer superseded during the effect may not record the result",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_applied_instant_survives_a_backward_clock_skew",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the applied instant survives a backward clock skew",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_fence_check_and_the_publish_happen_under_one_lock",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the fence check and the publish happen under one lock",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_apply_that_cannot_serialise_refuses_rather_than_racing",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > an apply that cannot serialise refuses rather than racing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_tokens_from_different_leases_are_different_sequences",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > tokens from different leases are different sequences",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_superseded_writer_is_still_refused_within_its_own_scope",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > a superseded writer is still refused within its own scope",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_unscoped_token_is_its_own_scope_and_not_a_wildcard",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > an unscoped token is its own scope and not a wildcard",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_effect_key_is_namespaced_by_recipient_not_only_by_action_kind",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > the effect key is namespaced by recipient not only by action kind",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_two_handlers_sharing_an_action_kind_each_get_their_own_effect",
+      "target_id": "test/control_plane/outbox.test.ts::the fence, continued -- the windows a single fenced UPDATE does not cover > two handlers sharing an action kind each get their own effect",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_human_gated_action_is_recorded_and_never_applied",
+      "target_id": "test/control_plane/outbox.test.ts::the third branch -- neither mechanism is achievable, so a human gate (D-0004) > a human gated action is recorded and never applied",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_a_human_gated_action_stays_pending_however_often_it_is_offered",
+      "target_id": "test/control_plane/outbox.test.ts::the third branch -- neither mechanism is achievable, so a human gate (D-0004) > a human gated action stays pending however often it is offered",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_the_human_gated_handler_refuses_to_be_applied_directly",
+      "target_id": "test/control_plane/outbox.test.ts::the third branch -- neither mechanism is achievable, so a human gate (D-0004) > the human gated handler refuses to be applied directly",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_unknown_recipient_has_no_handler_and_says_so",
+      "target_id": "test/control_plane/outbox.test.ts::registry hygiene > an unknown recipient has no handler and says so",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_two_handlers_cannot_claim_the_same_recipient",
+      "target_id": "test/control_plane/outbox.test.ts::registry hygiene > two handlers cannot claim the same recipient",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_two_handlers_do_not_collide_on_a_shared_dedup_key",
+      "target_id": "test/control_plane/outbox.test.ts::registry hygiene > two handlers do not collide on a shared dedup key",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_an_acked_message_is_not_resent",
+      "target_id": "test/control_plane/outbox.test.ts::registry hygiene > an acked message is not resent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's bare ValueError becomes OutboxUsageError (same per-module convention). The match= half is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_outbox.py::test_no_retry_interval_or_window_appears_in_this_layer",
+      "target_id": "test/control_plane/outbox.test.ts::registry hygiene > no retry interval or window appears in this layer",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`tokenize` has no runtime analogue, so comments and string literals are stripped by a scanner written out in the file, guarded by explicit anti-vacuity assertions (the stripped text must still contain 'class Outbox' and 'attempt' and be over 1,000 characters) so a stripper that ate the file cannot make the case pass. The forbidden list keeps the source's four snake_case tokens and adds the camelCase spellings the target would actually use (D-0017 rule 1: names in the port are the target's names), so 'visibility_timeout' and 'retry_after' stay discriminating.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "destination.py and handlers.py have no test file of their own anywhere in interlock.",
+      "status": "structural, recorded",
+      "detail": "Both are specified entirely through tests/control_plane/test_outbox.py, which is why all three modules land in one change: separating them would put roughly 800 lines of production code in the tree with no specification at all. This is the source's structure, not a packaging choice made here, and it is the whole reason this PR exceeds the hand-written line cap."
+    },
+    {
+      "topic": "outbox.py declares its own EXACTLY_ONCE_MECHANISMS rather than importing lease's.",
+      "status": "inherited, reproduced deliberately",
+      "detail": "The source duplicates the tuple in both modules and a ported case asserts the two copies are equal -- the value is ACCEPTANCE.md section 2's clause and the DDL's enumeration, not either module's policy. The port reproduces the duplication rather than collapsing it, so the case that guards against drift still has two things to compare."
+    },
+    {
+      "topic": "UNSUPPORTED_MECHANISMS is frozen where the source's is a plain dict.",
+      "status": "divergence, disclosed",
+      "detail": "Lesson 13 says freeze what Python freezes; this freezes more. Harmless and unreachable from any ported case, but recorded rather than left as an undisclosed asymmetry."
+    },
+    {
+      "topic": "Outbox.load throws a bare Error where the source raises KeyError.",
+      "status": "divergence, disclosed",
+      "detail": "Every bare ValueError in this module was given a dedicated OutboxUsageError, following the per-module convention; the KeyError path was not, so the class is less specific than the source's. No ported case asserts on it."
+    },
+    {
+      "topic": "Numeric reads follow D-0007's number mapping with no int()-style re-narrowing (D-0021).",
+      "status": "divergence, accepted",
+      "detail": "Unreachable through the public API under test."
+    },
+    {
+      "topic": "pythonRepr approximates Python's str.isprintable() rather than reproducing it.",
+      "status": "approximation, disclosed",
+      "detail": "Python escapes any character isprintable() rejects. Reproducing that exactly needs the Unicode category table; the renderer escapes the classes reachable here -- C0, DEL, C1, the line and paragraph separators, and lone surrogates -- and emits other printable non-ASCII literally, as Python does. A character outside those classes that Python would nonetheless call unprintable would render literally here. Pinned by test/contract/python-repr.test.ts against values measured on CPython."
+    },
+    {
+      "topic": "A fenced write's no-op/stale classification is two statements, not one transaction.",
+      "status": "inherited, scheduled for repair",
+      "detail": "When _MARK_DELIVERED changes no row, the fence is re-read in a following statement to decide whether that was a benign duplicate or a superseded writer. A lease taken over between the two turns a legitimate deduplicated resend into a recorded StaleWriterRefused. interlock's _protected_write has the same two-step shape, so the port is at parity. Under the policy that replaced D-0022 this is to be repaired in continuo rather than disclosed indefinitely, but it is a concurrency redesign rather than a local fix, so it is scheduled into the control_plane repair belt with the other inherited defects rather than squeezed into this change. Raised by the Codex review gate (2026-08-22, P2)."
+    }
+  ]
+}

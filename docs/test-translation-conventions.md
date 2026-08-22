@@ -248,6 +248,41 @@ to a per-test call, which is stricter than the source and therefore safe.
 
 ---
 
+## 9. The port's types are wider than the source's
+
+The eight rules above are about translating **tests**. This one is about porting **implementations**,
+and it is here because it has produced more defects than any of them: **six, across three belts, all
+the same shape.** Each was found by review rather than by a failing test, because in every case the
+translated suite was green -- the source's own cases could not reach the state, since Python's types
+excluded it.
+
+> Wherever the source relies on a Python **type** to exclude a value, check whether the TypeScript
+> type still excludes it.
+
+Three families, with the instances found so far:
+
+| Python excludes | TypeScript admits | Found in |
+|---|---|---|
+| `int` is never `NaN`, `Infinity` or fractional | `number` is all three | a transaction scope watermark; an external destination's watermark; a `KeyedDropbox` fencing token |
+| `str(x)` on a `str` subclass reads the buffer; `__str__` cannot intercept an `==` | `String(x)` on a boxed string dispatches through a caller-replaceable `toString` / `Symbol.toPrimitive` | a protected table name; **executing unfenced SQL** through a builder-issued statement |
+| `dict` has no inherited keys | an object literal carries `Object.prototype` | a fence map keyed by the caller's lease resource, where a resource named `constructor` or `__proto__` reads an inherited value |
+
+The remedies are mechanical once the hazard is named: guard with `Number.isInteger(x) && x >= 1`;
+take the primitive with `String.prototype.valueOf.call(x)`; build the map with `Object.create(null)`
+and read it with `Object.hasOwn`.
+
+**What makes this class dangerous is that the wider type is usually the *right* TypeScript type.**
+`number` is what a millisecond timestamp should be, and an object literal is what a small map should
+be. So there is nothing odd-looking to notice in review, and the ported tests cannot fail: the value
+that breaks it is one the source's suite had no way to construct. The check has to be deliberate.
+
+**Two questions worth asking of every ported module**, and worth answering in the porting report:
+
+1. Which caller-supplied strings does it use as a map or object **key**?
+2. Which `number` parameters does the source type as `int`?
+
+Anything on either list is suspect until it has been checked.
+
 ## Patterns with no source case
 
 Three of the eight -- **strict/non-strict xfail**, **skip semantics**, and a **`caplog`-equivalent
@@ -360,4 +395,6 @@ Belt-specific helpers live under the belt's own directory until they have earned
 - [ ] Every fixture's cleanup is registered at acquisition.
 - [ ] No `skip`, `todo` or `xfail` that the ledger does not name.
 - [ ] No seam without a liveness test.
+- [ ] Every caller-supplied map key and every `int`-typed number in the ported module has been
+      checked against rule 9, and the answer is in the porting report.
 - [ ] `npm run parity` passes, and the suite is green **twice** at two distinct seeds.

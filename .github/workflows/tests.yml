@@ -23,7 +23,23 @@ jobs:
     # ruleset references -- see `ci-gate`.
     name: double-green (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # 40, not 20, and the number is measured rather than guessed. This job runs
+    # the whole suite TWICE (that is what double-green means), and the Windows
+    # cells are an order of magnitude slower than the Linux ones on the same
+    # commit: on `d44bd14` the ubuntu cells finished in ~1 minute each and
+    # windows node 24 took 15m31s. At a 20-minute cap that cell was already at
+    # 78% with the port less than half ported, and the first belt to add a few
+    # cases to it was cancelled mid-second-run -- which surfaces as `ci-gate`
+    # failing on a `cancelled` result rather than as anything a log explains.
+    #
+    # The cost is per-test SQLite: nearly every case builds a migrated
+    # production control plane, ~50ms locally and far worse on Windows file I/O.
+    # Copying a per-file template instead of re-migrating is ~100x cheaper and
+    # is the real fix, but it needs a suite-scoped temporary directory that
+    # `test/testkit` does not have yet, and testkit is frozen behind its own
+    # change. Until that lands, the cap has to leave room for a suite that is
+    # still growing by design.
+    timeout-minutes: 40
     strategy:
       # A red cell must not hide the state of the others: which cells failed is
       # the diagnosis, and cancelling them destroys it.
