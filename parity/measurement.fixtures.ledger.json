@@ -56,7 +56,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 7,
+      "count": 10,
       "ids": [
         "test/measurement/fixtures.test.ts::the shipped corpus > the carried corpus digests to interlock's own value (target-only)",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the missing-field check is what refuses a missing field, not a downstream type check",
@@ -64,9 +64,12 @@
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > every clock instant is checked before ANY case is graded",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a rate over an empty denominator is null, not zero",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the latency percentiles are nearest-rank, on a sample where interpolation would differ",
-        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the rendered rate goes through formatFixed, not toFixed"
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the rendered rate goes through formatFixed, not toFixed",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the corpus walk orders case ids by code point, as Python does",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the composition map is copied, not borrowed",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a case with very many matching incidents is graded, not crashed"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. This one is the parity evidence for the carried DATA rather than for code: it pins the corpus content digest to the value interlock's own loader produces over interlock's own tree, which proves both that the files arrived unaltered and that this port's digest construction (id, NUL, filename, NUL, bytes, NUL, over cases sorted by id) agrees with the source's. Interlock has no such test because it has only one copy of the corpus and nothing to compare against. Six more close properties a 36-mutation sweep found unguarded; each is recorded with its verdict under mutation_sweep below. Five are inherited (interlock's suite cannot tell the mutated module from the real one either, verified against 65f36c5 in each case) and one is a port artifact. Production behaviour is unchanged throughout."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. This one is the parity evidence for the carried DATA rather than for code: it pins the corpus content digest to the value interlock's own loader produces over interlock's own tree, which proves both that the files arrived unaltered and that this port's digest construction (id, NUL, filename, NUL, bytes, NUL, over cases sorted by id) agrees with the source's. Interlock has no such test because it has only one copy of the corpus and nothing to compare against. Six more close properties a 36-mutation sweep found unguarded; each is recorded with its verdict under mutation_sweep below. Five are inherited (interlock's suite cannot tell the mutated module from the real one either, verified against 65f36c5 in each case) and one is a port artifact. Production behaviour is unchanged throughout. Three more were added after the codex review gate found three PORT DIVERGENCES (not inherited gaps) in the same pass: the corpus walk sorted by UTF-16 code unit where Python sorts by code point, the composition map was borrowed rather than copied, and the earliest-alarm minimum spread an unbounded array into Math.min. All three are fixed in the module and pinned here."
     },
     "approved_non_running": []
   },
@@ -663,6 +666,11 @@
         "mutation": "the rate helper uses toFixed instead of formatFixed",
         "verdict": "inherited liveness gap, closed with a target-only test",
         "note": "The same shape as the one closed in the false-termination belt: D-0104's oracle proves formatFixed correct but not that this module calls it, and no ported case drives a rate to an exact tie. The new case makes the miss rate 1/8 = 0.125, where CPython prints 0.12 and toFixed prints 0.13."
+      },
+      {
+        "mutation": "(codex review, not the sweep) sort order, composition copy, spread minimum",
+        "verdict": "three PORT DIVERGENCES, all fixed and pinned",
+        "note": "Found by the review gate rather than by the sweep, and worth recording beside it because they are the class the sweep is worst at: a mutation list asks 'is this property tested', and these are places where the port silently did something Python does not. (1) JavaScript's `<` and default sort compare UTF-16 code units, Python compares code points; they disagree for every supplementary character, and the corpus digest is taken over cases in SORTED order -- so the cross-runtime digest identity this belt claims was true only for BMP names. `comparePythonStrings` in src/measurement/format.ts now backs every string sort in fixtures.ts and latency.ts. (2) `composition` was assigned from the caller's Map rather than copied, so a caller could set a new denominator into a published evaluation. (3) `Math.min(...array)` throws past roughly a hundred thousand elements where Python's min() has no ceiling, so a noisy detector would crash this harness and not interlock's."
       }
     ]
   }

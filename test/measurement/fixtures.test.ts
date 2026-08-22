@@ -1135,6 +1135,86 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     // Named explicitly so a failure says which formatter it got.
     expect((0.125).toFixed(2), "the tie toFixed gets wrong").toBe("0.13");
   });
+  test("the corpus walk orders case ids by code point, as Python does", () => {
+    // Target-only, and it protects the claim this belt makes hardest: the
+    // corpus content digest is taken over cases in SORTED order and is
+    // documented as the corpus's identity across both runtimes. JavaScript's
+    // default sort compares UTF-16 code units and Python compares code points,
+    // and the two disagree for every supplementary character -- so a corpus with
+    // one in a case name would digest differently here while both sides
+    // believed they agreed.
+    //
+    // U+10000 encodes as the surrogate pair D800 DC00, so JavaScript's own sort
+    // puts it FIRST; Python puts it after U+E000.
+    const root = caseRoot("fixtures");
+    const astral = `${String.fromCodePoint(0x10000)}_gap`;
+    const bmp = `${String.fromCodePoint(0xe000)}_gap`;
+    writeCase(root, astral, "one", { label: positiveLabel({ incident_class: astral }) });
+    writeCase(root, bmp, "one", { label: positiveLabel({ incident_class: bmp }) });
+    writeCase(root, "observation_unavailable", "probe_down", { label: negativeLabel() });
+
+    const order = loadCorpus(root).cases.map((one) => one.classDir);
+    // Python's order. The native sort would have put the astral name first.
+    expect(order).toEqual(["observation_unavailable", bmp, astral]);
+    expect([astral, bmp].sort(), "what the native sort would have done").toEqual([astral, bmp]);
+  });
+
+  test("the composition map is copied, not borrowed", () => {
+    // Target-only. Every other collection on FixtureEvaluation goes through
+    // frozenList; composition was assigned straight from the caller's argument,
+    // and a Map is assignable to ReadonlyMap -- so a caller keeping its
+    // reference could set a new denominator into a published evaluation and
+    // silently change every rate rendered from it.
+    const mutable = new Map([
+      ["positive", 2],
+      ["negative", 2],
+      ["total", 4],
+    ]);
+    const evaluation = new FixtureEvaluation({
+      corpusRoot: "/nowhere",
+      contentDigest: "0".repeat(64),
+      t0Ms: T0,
+      composition: mutable,
+      outcomes: [],
+    });
+    mutable.set("positive", 999);
+    expect(evaluation.composition.get("positive")).toBe(2);
+    expect((evaluation.composition as unknown as { set?: unknown }).set).toBeUndefined();
+  });
+
+  test("a case with very many matching incidents is graded, not crashed", () => {
+    // Target-only. `Math.min(...array)` is the obvious spelling of "the
+    // earliest alarm" and it is not safe: the spread becomes one argument per
+    // element and V8 throws past roughly a hundred thousand of them. Python's
+    // min() takes an iterable and has no such ceiling, so a detector noisy
+    // enough to emit that many incidents for one case would crash this harness
+    // and not interlock's -- turning a report about a bad detector into no
+    // report at all.
+    //
+    // 200_000 is comfortably past the limit and still runs in well under a
+    // second, because the incidents are constructed once and the clock mints
+    // one instant.
+    const corpus = loadCorpus(minimalCorpus(caseRoot("fixtures")));
+    const clock = new SyntheticClock(T0);
+    const at = clock.at(75_000);
+    const noisy = Array.from(
+      { length: 200_000 },
+      () =>
+        new ProducedIncident({
+          incidentClass: "relay_gap",
+          factState: "EXPLICIT_BLOCK",
+          createdAtMs: at,
+        }),
+    );
+    const evaluation = evaluate(corpus, {
+      clock,
+      outcomes: outcomes({ [RELAY_CASE]: noisy, [OUTAGE_CASE]: [] }),
+    });
+    const outcome = outcomeFor(evaluation, RELAY_CASE);
+    expect(outcome.verdict).toBe(DETECTED);
+    expect(outcome.latencyMs).toBe(45_000);
+    expect(outcome.matchingIncidents).toBe(200_000);
+  });
 });
 
 // ---------------------------------------------------------------------------

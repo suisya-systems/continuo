@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { formatFixed, pythonRepr } from "./format.js";
+import { comparePythonStrings, formatFixed, pythonRepr } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 /**
@@ -547,7 +547,7 @@ export class FixtureCorpus {
     for (const one of this.cases) {
       tally.set(one.classDir, (tally.get(one.classDir) ?? 0) + 1);
     }
-    return readOnlyMap([...tally].sort(([left], [right]) => (left < right ? -1 : 1)));
+    return readOnlyMap([...tally].sort(([left], [right]) => comparePythonStrings(left, right)));
   }
 
   case(caseId: string): FixtureCase {
@@ -710,7 +710,11 @@ export class FixtureEvaluation {
     this.corpusRoot = fields.corpusRoot;
     this.contentDigest = fields.contentDigest;
     this.t0Ms = fields.t0Ms;
-    this.composition = fields.composition;
+    // Copied, not merely assigned: a `Map` is assignable to `ReadonlyMap`, so
+    // a caller keeping its reference could `set` a new denominator into a
+    // published evaluation and silently change every rate rendered from it.
+    // Every other collection on this class already goes through frozenList.
+    this.composition = readOnlyMap(fields.composition);
     this.outcomes = frozenList(fields.outcomes);
     Object.freeze(this);
   }
@@ -855,7 +859,7 @@ function parseLabel(payload: unknown, casePath: string): ExpectedLabel {
   if (missing.length > 0) {
     throw refuseLabel(
       casePath,
-      `missing required field(s) ${[...missing].sort().join(", ")}; section 3.2 ` +
+      `missing required field(s) ${[...missing].sort(comparePythonStrings).join(", ")}; section 3.2 ` +
         `requires all seven, and every default that could be chosen for a ` +
         `missing one makes the fixture easier to pass`,
     );
@@ -864,7 +868,7 @@ function parseLabel(payload: unknown, casePath: string): ExpectedLabel {
   if (unknown.length > 0) {
     throw refuseLabel(
       casePath,
-      `unknown field(s) ${[...unknown].sort().join(", ")}; a field nothing reads ` +
+      `unknown field(s) ${[...unknown].sort(comparePythonStrings).join(", ")}; a field nothing reads ` +
         `is a label the grader ignores`,
     );
   }
@@ -1067,7 +1071,9 @@ export function loadCase(
         `outcome to grade against`,
     );
   }
-  const stray = [...present].filter((name) => !CASE_FILES.includes(name)).sort();
+  const stray = [...present]
+    .filter((name) => !CASE_FILES.includes(name))
+    .sort(comparePythonStrings);
   if (stray.length > 0) {
     throw new StrayEntryRefused(
       `${casePath} holds ${stray.join(", ")} beside the two case files; an input ` +
@@ -1118,7 +1124,7 @@ export function loadCase(
 function digestOf(cases: readonly FixtureCase[]): string {
   const digest = createHash("sha256");
   const NUL = Buffer.from([0]);
-  const ordered = [...cases].sort((left, right) => (left.caseId < right.caseId ? -1 : 1));
+  const ordered = [...cases].sort((left, right) => comparePythonStrings(left.caseId, right.caseId));
   for (const one of ordered) {
     for (const filename of CASE_FILES) {
       digest.update(Buffer.from(one.caseId, "utf8"));
@@ -1149,7 +1155,7 @@ export function loadCorpus(root: string): FixtureCorpus {
   }
 
   const cases: FixtureCase[] = [];
-  for (const classEntry of readdirSync(root).sort()) {
+  for (const classEntry of readdirSync(root).sort(comparePythonStrings)) {
     if (classEntry === "README.md" || classEntry.startsWith(".")) {
       continue;
     }
@@ -1159,7 +1165,7 @@ export function loadCorpus(root: string): FixtureCorpus {
         `${classPath} is not a class directory; section 3.2's layout is <root>/<class>/<case>/`,
       );
     }
-    for (const caseEntry of readdirSync(classPath).sort()) {
+    for (const caseEntry of readdirSync(classPath).sort(comparePythonStrings)) {
       if (caseEntry === "README.md" || caseEntry.startsWith(".")) {
         continue;
       }
@@ -1260,7 +1266,7 @@ function gradePositive(
     return new CaseOutcome({
       caseId: one.caseId,
       verdict: DETECTED,
-      latencyMs: Math.min(...inBudget) - onsetMs,
+      latencyMs: smallest(inBudget) - onsetMs,
       deadlineMs,
       matchingIncidents: inBudget.length,
       lateLatencyMs: null,
@@ -1279,7 +1285,7 @@ function gradePositive(
     // but it is a different miss from silence, and the report says which: one is
     // a detector that is slow, the other a detector that is blind, and the fixes
     // have nothing in common.
-    lateLatencyMs: late.length > 0 ? Math.min(...late) - onsetMs : null,
+    lateLatencyMs: late.length > 0 ? smallest(late) - onsetMs : null,
     otherClassIncidents: otherClasses,
     factStateMismatches: mismatchedStates,
     forbiddenApplied: forbidden,
@@ -1361,14 +1367,14 @@ export function evaluate(
   const { clock, outcomes } = options;
   const caseIds = new Set(corpus.cases.map((one) => one.caseId));
 
-  const unknown = [...outcomes.keys()].filter((id) => !caseIds.has(id)).sort();
+  const unknown = [...outcomes.keys()].filter((id) => !caseIds.has(id)).sort(comparePythonStrings);
   if (unknown.length > 0) {
     throw new UnknownCaseInOutcomes(
       `outcomes name case(s) not in this corpus: ${unknown.join(", ")} ` +
         `(corpus root ${corpus.root}); the report would be about cases nobody graded`,
     );
   }
-  const missing = [...caseIds].filter((id) => !outcomes.has(id)).sort();
+  const missing = [...caseIds].filter((id) => !outcomes.has(id)).sort(comparePythonStrings);
   if (missing.length > 0) {
     throw new OutcomeMissing(
       `no detector outcome for case(s): ${missing.join(", ")}; pass an empty ` +
@@ -1550,7 +1556,7 @@ function rate(value: number | null): string {
 
 /** `", ".join(sorted(set(values)))`, which is what the source renders. */
 function uniqueSorted(values: readonly string[]): readonly string[] {
-  return [...new Set(values)].sort();
+  return [...new Set(values)].sort(comparePythonStrings);
 }
 
 function isDirectory(path: string): boolean {
@@ -1576,4 +1582,24 @@ function describe(value: unknown): string {
     return value ? "True" : "False";
   }
   return JSON.stringify(value) ?? String(value);
+}
+
+/**
+ * The smallest of a non-empty list, without spreading it into arguments.
+ *
+ * `Math.min(...values)` is the obvious spelling and it is not safe here: the
+ * spread becomes one argument per element, and V8 throws `RangeError: Maximum
+ * call stack size exceeded` past roughly a hundred thousand of them. Python's
+ * `min()` takes an iterable and has no such ceiling, so a detector noisy enough
+ * to emit that many incidents for one case would crash this harness and not
+ * interlock's -- turning a report about a bad detector into no report at all.
+ */
+function smallest(values: readonly number[]): number {
+  let least = values[0] as number;
+  for (const value of values) {
+    if (value < least) {
+      least = value;
+    }
+  }
+  return least;
 }
