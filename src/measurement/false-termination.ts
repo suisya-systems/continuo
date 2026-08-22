@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { formatFixed, pythonRepr } from "./format.js";
+import { formatFixed, pythonRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 /**
@@ -832,7 +832,9 @@ export function renderFalseTerminationReport(report: FalseTerminationReport): st
     }
     for (const actionId of ids) {
       const decision = report.adjudications.get(actionId);
-      lines.push(`      ${actionId}  settled by: ${decision?.source ?? SOURCE_NONE}`);
+      // D-0109: action.action_id is unconstrained TEXT, so an id carrying a
+      // newline would forge a line of this itemisation.
+      lines.push(`      ${reportValue(actionId)}  settled by: ${decision?.source ?? SOURCE_NONE}`);
       for (const [source, verdict] of decision?.overruled ?? []) {
         lines.push(
           `          overruled ${source} = ${verdict} ` +
