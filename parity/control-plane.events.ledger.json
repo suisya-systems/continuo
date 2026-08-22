@@ -1,0 +1,597 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_events.py",
+      "collected": 57,
+      "inventory": "parity/source-inventory/control_plane.test_events.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/events.test.ts",
+    "target_only_tests": {
+      "count": 2,
+      "ids": [
+        "test/control_plane/events.test.ts::the shared transaction helper > a deferred transaction body is refused rather than awaited (target-only)",
+        "test/control_plane/events.test.ts::the shared transaction helper > a deferred append side effect is refused rather than awaited (target-only)"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Both here pin a hazard the TRANSLATION introduces rather than one the source has: Python's transaction() is an @contextmanager and its side_effect is a plain callable, neither of which can be async. The callback forms they become in TypeScript can be handed a deferred function, which would return at its first await having written nothing while the surrounding transaction went on to COMMIT. D-0103 already settled this question for the measurement lane; txn.ts refuses such a callback at both sites and these two tests are what pin the refusals."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 57,
+    "ported": 53,
+    "adapted": 3,
+    "not_ported": 1,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_transaction_refuses_a_connection_the_driver_would_commit_for_itself",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "No reachable trigger on better-sqlite3. The source's only assertion is pytest.raises(TransactionUsageError): transaction() refuses a connection whose sqlite3 isolation_level is not None -- the state in which the driver opens a transaction of its own before a DML statement and commits it later, publishing a step of a multi-statement invariant behind the caller's back. better-sqlite3 has no isolation_level and no such mode: it is unconditionally autocommit outside an explicit BEGIN, so no connection can be constructed for the refusal to fire on and there is no production branch to exercise. A first draft translated this into assertions about the driver's own behaviour; that was strictly WEAKER than the source -- it pinned no refusal, and gutting transaction() to a bare pass-through left it green under mutation -- so it is recorded not-ported rather than kept as coverage it was not (escalated per docs/test-translation-conventions.md rule 0; operator decision, 2026-08-22). The driver facts it measured now live in test/contract/better-sqlite3-transaction-state.test.ts, which is where this port keeps claims about the driver, and are not counted as ported coverage. What unblocks it: a better-sqlite3 release that introduces an implicit-transaction mode -- the contract test is written to notice that.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_in_autocommit_makes_such_a_connection_usable",
+      "target_id": "test/control_plane/events.test.ts::the shared transaction helper > in autocommit makes such a connection usable",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "inAutocommit is the identity on better-sqlite3 (there is no isolation_level to set to None), so 'makes usable' has no state change behind it. The source's assertions translate verbatim and are kept; the source's connection.commit() has no analogue and is replaced by a read through a SECOND connection, which is the only way on this driver to assert the write actually committed rather than merely being visible to its own handle.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_transaction_rolls_the_whole_block_back_on_any_exception",
+      "target_id": "test/control_plane/events.test.ts::the shared transaction helper > transaction rolls the whole block back on any exception",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_nested_transaction_joins_the_outer_one_instead_of_committing_early",
+      "target_id": "test/control_plane/events.test.ts::the shared transaction helper > a nested transaction joins the outer one instead of committing early",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_append_fans_out_one_pending_consumption_row_per_subscribed_consumer",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > append fans out one pending consumption row per subscribed consumer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_delivery_subscriber_gets_an_outbox_row_in_the_same_transaction_and_a_compute_one_does_not",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a delivery subscriber gets an outbox row in the same transaction and a compute one does not",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_delivery_payload_renders_per_recipient_without_a_second_row_on_the_spine",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > delivery payload renders per recipient without a second row on the spine",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_side_effect_receives_the_seq_the_event_was_assigned",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > the side effect receives the seq the event was assigned",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_failing_side_effect_leaves_no_event_no_consumption_and_no_outbox_row",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a failing side effect leaves no event no consumption and no outbox row",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_re_append_of_the_same_dedup_key_is_an_idempotent_no_op",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a re append of the same dedup key is an idempotent no op",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_re_append_creates_no_second_consumption_row_for_a_consumer_added_between_the_two",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a re append creates no second consumption row for a consumer added between the two",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_reusing_an_event_id_for_a_different_fact_is_an_error_not_a_duplicate",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > reusing an event id for a different fact is an error not a duplicate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_consumer_registered_after_the_append_receives_nothing_for_it",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a consumer registered after the append receives nothing for it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_removed_subscription_and_a_retired_consumer_are_not_subscribers",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a removed subscription and a retired consumer are not subscribers",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_unsubscribing_something_that_is_not_subscribed_is_refused_not_a_no_op",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > unsubscribing something that is not subscribed is refused not a no op",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_backfilling_registration_gets_the_history_it_asked_for_and_none_of_what_it_did_not",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a backfilling registration gets the history it asked for and none of what it did not",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_registration_without_backfill_gets_no_history_at_all",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a registration without backfill gets no history at all",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_subscription_added_in_a_later_transaction_does_not_backfill",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a subscription added in a later transaction does not backfill",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_subscription_in_a_second_transaction_does_not_inherit_the_first_ones_backfill",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a subscription in a second transaction does not inherit the first ones backfill",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_transaction_scope_lives_exactly_as_long_as_its_transaction",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a transaction scope lives exactly as long as its transaction",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_registering_the_same_consumer_twice_is_refused",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > registering the same consumer twice is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_delivery_subscription_without_a_recipient_is_refused_at_registration",
+      "target_id": "test/control_plane/events.test.ts::the append transaction -- section 5.4 > a delivery subscription without a recipient is refused at registration",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_mark_consumed_settles_the_row_and_raises_the_attempt_count",
+      "target_id": "test/control_plane/events.test.ts::settling -- fenced, typed, and never silent > mark consumed settles the row and raises the attempt count",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_settle_by_a_stale_consumer_epoch_is_refused_and_the_refusal_is_typed",
+      "target_id": "test/control_plane/events.test.ts::settling -- fenced, typed, and never silent > a settle by a stale consumer epoch is refused and the refusal is typed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_settle_against_an_expired_lease_is_refused",
+      "target_id": "test/control_plane/events.test.ts::settling -- fenced, typed, and never silent > a settle against an expired lease is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_settled_consumption_is_not_settled_twice",
+      "target_id": "test/control_plane/events.test.ts::settling -- fenced, typed, and never silent > a settled consumption is not settled twice",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_mark_failed_leaves_the_consumption_undrained_and_the_error_readable",
+      "target_id": "test/control_plane/events.test.ts::settling -- fenced, typed, and never silent > mark failed leaves the consumption undrained and the error readable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_retry_that_lands_after_a_failure_clears_the_error_and_keeps_the_attempts",
+      "target_id": "test/control_plane/events.test.ts::settling -- fenced, typed, and never silent > a retry that lands after a failure clears the error and keeps the attempts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_mark_skipped_appends_a_consumption_skipped_event_in_the_same_transaction",
+      "target_id": "test/control_plane/events.test.ts::skipping -- section 5.3's evidence requirement > mark skipped appends a consumption skipped event in the same transaction",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_skip_refused_by_the_fence_appends_no_consumption_skipped_event",
+      "target_id": "test/control_plane/events.test.ts::skipping -- section 5.3's evidence requirement > a skip refused by the fence appends no consumption skipped event",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_every_skipped_consumption_has_a_consumption_skipped_event_naming_it",
+      "target_id": "test/control_plane/events.test.ts::skipping -- section 5.3's evidence requirement > every skipped consumption has a consumption skipped event naming it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_one_consumer_draining_does_not_move_another_consumers_numbers_the_relay_scan_regression",
+      "target_id": "test/control_plane/events.test.ts::drain -- section 5.5, per consumer and never global > one consumer draining does not move another consumers numbers the relay scan regression",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_drain_frontier_is_derived_from_the_rows_and_never_stored",
+      "target_id": "test/control_plane/events.test.ts::drain -- section 5.5, per consumer and never global > drain frontier is derived from the rows and never stored",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_failed_row_still_counts_as_backlog_and_holds_the_frontier",
+      "target_id": "test/control_plane/events.test.ts::drain -- section 5.5, per consumer and never global > a failed row still counts as backlog and holds the frontier",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_head_of_line_age_is_measured_from_our_ingest_clock_not_the_providers",
+      "target_id": "test/control_plane/events.test.ts::drain -- section 5.5, per consumer and never global > head of line age is measured from our ingest clock not the providers",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_undrained_is_per_consumer_and_carries_the_event_it_is_about",
+      "target_id": "test/control_plane/events.test.ts::drain -- section 5.5, per consumer and never global > undrained is per consumer and carries the event it is about",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_event_type_vocabulary_is_the_modules_own_and_not_a_schema_constraint",
+      "target_id": "test/control_plane/events.test.ts::the module's own vocabulary > the event type vocabulary is the modules own and not a schema constraint",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_malformed_argument_is_refused_before_anything_is_written",
+      "target_id": "test/control_plane/events.test.ts::the module's own vocabulary > a malformed argument is refused before anything is written",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_consumer_inside_the_backlog_tolerance_is_not_named",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > a consumer inside the backlog tolerance is not named",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_backlog_threshold_follows_the_revision_the_caller_bound",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > the backlog threshold follows the revision the caller bound",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_pass_never_resolves_a_revision_for_itself",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > the pass never resolves a revision for itself",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "inspect.signature(...).parameters has no ESM analogue. Translated the way migrator.test.ts translates dir(m), in two halves: a runtime half (Function.length is 2 for both, so no parameter carries a default, and an options object missing revisionId or nowMs is REFUSED rather than resolved, for both functions) and a source-scan half (both functions declare exactly `readonly revisionId` and `readonly nowMs` with no `?`, both destructure with no default, and orphanedOutbox's parameter list equals backloggedConsumers' -- the source's parameters.keys() == parameters.keys()). Anti-vacuity assertions on both halves: a source read that came back empty, or a declaration regex that matched nothing, fails before the rest.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_revision_that_decides_no_backlog_tolerance_refuses_rather_than_passing",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > a revision that decides no backlog tolerance refuses rather than passing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_count_threshold_is_refused_and_not_read_as_milliseconds",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > a count threshold is refused and not read as milliseconds",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_pass_is_per_consumer_and_one_drain_does_not_hide_another",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > the pass is per consumer and one drain does not hide another",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_age_is_taken_at_the_frontier_row_and_not_at_the_oldest_ingest",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > the age is taken at the frontier row and not at the oldest ingest",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_failed_row_keeps_a_consumer_in_the_pass_and_a_settle_removes_it",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > a failed row keeps a consumer in the pass and a settle removes it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_skipped_consumption_does_not_count_as_backlog",
+      "target_id": "test/control_plane/events.test.ts::the undrained-events pass > a skipped consumption does not count as backlog",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_an_unacked_message_is_orphaned_strictly_past_the_delivery_tolerance",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > an unacked message is orphaned strictly past the delivery tolerance",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_delivery_threshold_follows_the_revision_the_caller_bound",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > the delivery threshold follows the revision the caller bound",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_delivered_but_unacked_message_is_the_case_the_pass_exists_for",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > a delivered but unacked message is the case the pass exists for",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_pass_mutates_nothing_at_all",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > the pass mutates nothing at all",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_orphan_query_uses_the_partial_index_written_to_serve_it",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > the orphan query uses the partial index written to serve it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "connection.set_trace_callback has no better-sqlite3 equivalent that can be installed and removed on a live connection: the driver's logger (`verbose`) is construction-only. The traced connection is therefore a second handle on the same file, with a flag reproducing the install/remove window exactly; the statement EXPLAINed is still the one orphanedOutbox executed, captured from the driver with its parameters already expanded, which is the property the source case exists for. All plan assertions (SEARCH present, outbox_undelivered present, SCAN absent; and the degraded form's SCAN / no SEARCH) are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_two_forms_the_plan_test_separates_return_the_same_rows",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > the two forms the plan test separates return the same rows",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_the_two_passes_answer_about_different_rows_of_the_same_append",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > the two passes answer about different rows of the same append",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_retired_consumer_is_not_backlogged_however_long_its_rows_sit",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > a retired consumer is not backlogged however long its rows sit",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_retiring_one_consumer_does_not_hide_another_that_is_still_stuck",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > retiring one consumer does not hide another that is still stuck",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_events.py::test_a_malformed_reconcile_argument_is_refused_before_policy_is_read",
+      "target_id": "test/control_plane/events.test.ts::the orphaned-outbox pass > a malformed reconcile argument is refused before policy is read",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "BEGIN IMMEDIATE -- the module's first named load-bearing property -- is pinned by no case.",
+      "status": "inherited, not fixed",
+      "detail": "Both docstrings open by explaining why the transaction must be BEGIN IMMEDIATE and not a deferred BEGIN: a deferred transaction takes the write lock at its first write, so two appenders can both read the subscription table before either discovers the conflict. Nothing in interlock's suite asserts which form is issued, so nothing here does either -- replacing BEGIN IMMEDIATE with BEGIN would leave both suites green. Recorded rather than fixed: adding the assertion would make the port stronger than its source. A fix belongs upstream, or in a change that moves both sides together."
+    },
+    {
+      "topic": "requireJson's validation of a caller-rendered delivery payload is pinned by no case.",
+      "status": "inherited, not fixed",
+      "detail": "It is the one place a malformed payload could reach the outbox's json_valid CHECK. The source has no case for it either."
+    },
+    {
+      "topic": "backloggedConsumers and orphanedOutbox are the DETECTION half of section 5.6 only.",
+      "status": "inherited by design, disclosed",
+      "detail": "Nothing in this module acts on what they find -- no reconcile driver writes an incident from them. interlock's own module docstring says so plainly, and interlock#74 forbids adding a reconcile driver (acceptance criterion 6, no scope creep). Carried across as stated."
+    },
+    {
+      "topic": "The transaction scope map is a WeakMap keyed by the connection object, where the source keys by id(connection).",
+      "status": "divergence, deliberate and disclosed",
+      "detail": "Python's id() can be reused once an object is freed; the source discusses that hazard only to dismiss it as unreachable while the running block holds the connection alive. A WeakMap keyed by the object has no such hazard to dismiss. This makes continuo marginally stronger than interlock, which acceptance criterion 5 requires be disclosed rather than quietly kept. No ported case distinguishes them."
+    },
+    {
+      "topic": "transaction() refuses a deferred body; the source cannot have that failure mode.",
+      "status": "divergence introduced by the translation, disclosed",
+      "detail": "Python's @contextmanager cannot be handed an async body in the way a TypeScript callback can. The refusal, and its target-only test, exist because the callback translation introduces the hazard -- it is containment for a translation artefact, not ported behaviour. Follows the shape D-0103 already established for the measurement lane."
+    },
+    {
+      "topic": "Numeric reads use Number(), where Python narrows with int().",
+      "status": "divergence, accepted under continuo D-0021",
+      "detail": "See continuo DECISIONS.md D-0021. Unreachable from any ported case."
+    },
+    {
+      "topic": "A COMMIT that itself fails leaves the transaction open while its scope is dropped.",
+      "status": "inherited, not fixed",
+      "detail": "Under the rollback journal (D-0012) a concurrent long-lived reader can make COMMIT fail with SQLITE_BUSY, and SQLite then leaves the transaction active so it can be retried or rolled back. The scope is nonetheless removed in the finally, so a later transaction() call sees inTransaction and merely JOINS the abandoned transaction -- its writes never commit and the locks stay held. interlock's txn.py has the identical structure: COMMIT in the else: clause, `del _SCOPES[key]` in the finally, and no handling of a failed commit anywhere. Reproduced rather than repaired; repairing it here would make continuo diverge from the source on a recovery path neither suite exercises. Disclosed under continuo D-0022 (repair reserved for a dedicated change after parity is reached). Raised by the Codex review gate (2026-08-22, P1) and recorded so it is a disclosed review topic. A fix belongs upstream in interlock, or in a change that moves both sides together."
+    },
+    {
+      "topic": "The transaction scope is installed before BEGIN IMMEDIATE succeeds.",
+      "status": "inherited, not fixed",
+      "detail": "If BEGIN IMMEDIATE fails because another writer holds the database, the scope stays in the map although no transaction exists, and currentScope() then answers for a transaction that was never opened. interlock sets `_SCOPES[key] = scope` on the line before `connection.execute('BEGIN IMMEDIATE')`, in the same order. Disclosed under continuo D-0022 (repair reserved for a dedicated change after parity is reached). Raised by the Codex review gate (2026-08-22, P2)."
+    },
+    {
+      "topic": "markSkipped joined to an outer transaction can settle the row without its audit event.",
+      "status": "inherited, not fixed",
+      "detail": "appendEvent answers a duplicate dedup_key by returning an AppendedEvent rather than raising, so when markSkipped has joined a caller's transaction and the generated dedup key is already taken, the consumption has already moved to 'skipped' and the outer transaction commits it without the consumption_skipped event this call was supposed to produce. Dedup keys are caller-controlled, so it is reachable. interlock's mark_skipped and append_event have the same shape -- _DuplicateFact is caught inside append_event and converted to a normal return -- so the behaviour is at parity. Disclosed under continuo D-0022 (repair reserved for a dedicated change after parity is reached). Raised by the Codex review gate (2026-08-22, P2)."
+    }
+  ]
+}
