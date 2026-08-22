@@ -1,6 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { appendEvent } from "./events.js";
 import { pythonJsonList, pythonJsonObject } from "./python_json.js";
+import { pythonList, pythonTuple } from "./python_repr.js";
 import { transaction } from "./txn.js";
 
 /**
@@ -553,7 +554,7 @@ export function enqueueRelay(
 
   if (!RELAYED_STAGES.includes(toStage)) {
     throw new TypeError(
-      `only ${pyTuple(RELAYED_STAGES)} are relayed stages; '${toStage}' is not one`,
+      `only ${pythonTuple(RELAYED_STAGES)} are relayed stages; '${toStage}' is not one`,
     );
   }
   return transaction(connection, (tx) => {
@@ -1357,7 +1358,7 @@ function _requireActor(
       }
       throw new InadmissibleTransitionRefused(
         `${pyStr(fromStage)} -> ${toStage} (${kind}) is a ` +
-          `${pyList(Array.from(edge.actorKinds).sort())} edge; '${actorKind}' may not take it`,
+          `${pythonList(Array.from(edge.actorKinds).sort())} edge; '${actorKind}' may not take it`,
       );
     }
   }
@@ -1561,7 +1562,7 @@ function _closeInTransaction(
   if (!reachableFrom.has(stage)) {
     throw new InadmissibleTransitionRefused(
       `outcome '${outcome}' is reached from ` +
-        `${pyList(Array.from(reachableFrom).sort())}, not from '${stage}'`,
+        `${pythonList(Array.from(reachableFrom).sort())}, not from '${stage}'`,
     );
   }
   _insertTransition(connection, {
@@ -1610,14 +1611,4 @@ function _closeInTransaction(
 /** `null` as Python would render it in an f-string; a string is itself. */
 function pyStr(value: string | null): string {
   return value === null ? "None" : value;
-}
-
-/** `repr(sorted(...))`-shaped text: a Python list of single-quoted strings. */
-function pyList(values: readonly string[]): string {
-  return `[${values.map((v) => `'${v}'`).join(", ")}]`;
-}
-
-/** A Python tuple of single-quoted strings, for a tuple constant's repr. */
-function pyTuple(values: readonly string[]): string {
-  return `(${values.map((v) => `'${v}'`).join(", ")})`;
 }

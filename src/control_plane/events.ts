@@ -1,6 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { resolveToleranceMs } from "./policy.js";
 import { pythonJsonDumpsSorted } from "./python_json.js";
+import { pythonRepr } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import { currentScope, refuseDeferredCallback, refuseDeferredResult, transaction } from "./txn.js";
 
@@ -314,40 +315,26 @@ function renderConsumption(row: ConsumptionRow | undefined): string {
     ["created_at_ms", row.createdAtMs],
     ["settled_at_ms", row.settledAtMs],
   ];
-  return `{${columns.map(([name, value]) => `'${name}': ${reprOf(value)}`).join(", ")}}`;
-}
-
-/** Python-`repr`-style rendering of an arbitrary value, for refusal text. */
-function reprOf(value: unknown): string {
-  if (typeof value === "string") {
-    return `'${value}'`;
-  }
-  if (value === null || value === undefined) {
-    return "None";
-  }
-  if (typeof value === "boolean") {
-    return value ? "True" : "False";
-  }
-  return String(value);
+  return `{${columns.map(([name, value]) => `'${name}': ${pythonRepr(value)}`).join(", ")}}`;
 }
 
 function requireIdentifier(field: string, value: unknown): void {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new EventSpineUsageError(`${field} must be a non-empty string, got ${reprOf(value)}`);
+    throw new EventSpineUsageError(`${field} must be a non-empty string, got ${pythonRepr(value)}`);
   }
 }
 
 function requireEpochMs(field: string, value: unknown): void {
   if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new EventSpineUsageError(
-      `${field} must be an int of epoch milliseconds, got ${reprOf(value)}`,
+      `${field} must be an int of epoch milliseconds, got ${pythonRepr(value)}`,
     );
   }
 }
 
 function requirePositiveEpoch(field: string, value: unknown): void {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new EventSpineUsageError(`${field} must be a positive int, got ${reprOf(value)}`);
+    throw new EventSpineUsageError(`${field} must be a positive int, got ${pythonRepr(value)}`);
   }
 }
 
@@ -802,14 +789,14 @@ export function registerConsumer(
   requireIdentifier("lease_resource", leaseResource);
   if (kind !== "delivery" && kind !== "compute") {
     throw new EventSpineUsageError(
-      `kind must be 'delivery' or 'compute', got ${reprOf(kind)}; the column has ` +
+      `kind must be 'delivery' or 'compute', got ${pythonRepr(kind)}; the column has ` +
         "a CHECK and the two kinds differ in whether consumption IS a delivery",
     );
   }
   requireEpochMs("registered_at_ms", registeredAtMs);
   if (typeof registeredFromSeq !== "number" || !Number.isInteger(registeredFromSeq)) {
     throw new EventSpineUsageError(
-      `registered_from_seq must be an int, got ${reprOf(registeredFromSeq)}`,
+      `registered_from_seq must be an int, got ${pythonRepr(registeredFromSeq)}`,
     );
   }
   if (registeredFromSeq < 0) {
@@ -996,7 +983,7 @@ export function subscribe(
       // point is that if it ever were reached it fails the way the source does.
       if (typeof registeredFromSeq !== "number") {
         throw new TypeError(
-          `consumer ${reprOf(consumerId)} has no row to back-fill from, ` +
+          `consumer ${pythonRepr(consumerId)} has no row to back-fill from, ` +
             "which the foreign key should have made impossible",
         );
       }
@@ -1051,7 +1038,7 @@ export function unsubscribe(
       .run({ consumer_id: consumerId, event_type: eventType, removed_at_ms: removedAtMs });
     if (cursor.changes === 0) {
       throw new EventSpineUsageError(
-        `${reprOf(consumerId)} has no live subscription to ${reprOf(eventType)} to remove`,
+        `${pythonRepr(consumerId)} has no live subscription to ${pythonRepr(eventType)} to remove`,
       );
     }
   });
@@ -1129,7 +1116,7 @@ function settle(
   if (cursor.changes === 0) {
     const observed = readConsumption(connection, { consumerId, eventSeq });
     throw new StaleConsumerRefused(
-      `${what} refused for consumer ${reprOf(consumerId)} at event seq ${eventSeq}: ` +
+      `${what} refused for consumer ${pythonRepr(consumerId)} at event seq ${eventSeq}: ` +
         `epoch ${writerEpoch} is not the live epoch of the consumer's lease, ` +
         "the lease has expired at the caller's clock, or the consumption is " +
         `already settled (observed: ${renderConsumption(observed)})`,

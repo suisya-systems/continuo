@@ -1,4 +1,5 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import { pythonRepr, pythonTuple } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import { transaction } from "./txn.js";
 
@@ -413,42 +414,11 @@ export class AiInvocationUsageError extends Error {
 // argument checks
 // --------------------------------------------------------------------------
 
-/** `null` as Python would render it in an f-string; a string is itself. */
-function reprOf(value: unknown): string {
-  if (typeof value === "string") {
-    return `'${value}'`;
-  }
-  // `String(null)` is "null" and `String(undefined)` is "undefined"; Python's
-  // repr of the absence these stand for is `None`. These messages are how an
-  // operator reads back what was rejected, so absence has to render as the
-  // source renders it. Booleans likewise: Python prints True/False.
-  if (value === null || value === undefined) {
-    return "None";
-  }
-  if (typeof value === "boolean") {
-    return value ? "True" : "False";
-  }
-  // A plain object renders as `[object Object]` under `String`, which drops the
-  // very thing the message is for: Python interpolates `{usage!r}` so the
-  // operator can see WHICH mapping was rejected. Rendered Python-dict-shaped,
-  // per D-0017 rules 3 and 4.
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).map(
-      ([key, item]) => `'${key}': ${reprOf(item)}`,
-    );
-    return `{${entries.join(", ")}}`;
-  }
-  return String(value);
-}
-
-/** `repr(USAGE_STATUSES)`-shaped text: a Python tuple of single-quoted strings. */
-function pyTuple(values: readonly string[]): string {
-  return `(${values.map((v) => `'${v}'`).join(", ")})`;
-}
-
 function requireIdentifier(field: string, value: unknown): void {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new AiInvocationUsageError(`${field} must be a non-empty string, got ${reprOf(value)}`);
+    throw new AiInvocationUsageError(
+      `${field} must be a non-empty string, got ${pythonRepr(value)}`,
+    );
   }
 }
 
@@ -464,7 +434,7 @@ function requireInt(field: string, value: unknown): void {
   // where `bool` is a subclass of `int` and needs an explicit exclusion.
   if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new AiInvocationUsageError(
-      `${field} must be an int, got ${reprOf(value)}; the clock and the counts ` +
+      `${field} must be an int, got ${pythonRepr(value)}; the clock and the counts ` +
         "are the caller's and are never derived from the database",
     );
   }
@@ -596,7 +566,7 @@ export class ProviderUsage {
 function validateUsage(usage: ProviderUsage): void {
   if (!(usage instanceof ProviderUsage)) {
     throw new AiInvocationUsageError(
-      `usage must be a ProviderUsage, got ${reprOf(usage)}; the provider seam ` +
+      `usage must be a ProviderUsage, got ${pythonRepr(usage)}; the provider seam ` +
         "is a typed object so that a mapping with a provider's own field " +
         "names cannot cross it",
     );
@@ -604,8 +574,8 @@ function validateUsage(usage: ProviderUsage): void {
   requireIdentifier("usage.adapter_version", usage.adapterVersion);
   if (!(USAGE_STATUSES as readonly string[]).includes(usage.usageStatus)) {
     throw new UnknownUsageStatusRefused(
-      `usage_status must be one of ${pyTuple(USAGE_STATUSES)}, got ` +
-        `${reprOf(usage.usageStatus)}; an unknown status belongs to no branch of ` +
+      `usage_status must be one of ${pythonTuple(USAGE_STATUSES)}, got ` +
+        `${pythonRepr(usage.usageStatus)}; an unknown status belongs to no branch of ` +
         "the coverage arithmetic and would leave the invocation in no " +
         "denominator at all",
     );
@@ -616,8 +586,8 @@ function validateUsage(usage: ProviderUsage): void {
 
   if ((usage.usageStatus === "reported") !== (usage.outputTokens !== null)) {
     throw new UsageStatusContradictsTokensRefused(
-      `usage_status ${reprOf(usage.usageStatus)} and output_tokens ` +
-        `${reprOf(usage.outputTokens)} disagree: 'reported' means the provider ` +
+      `usage_status ${pythonRepr(usage.usageStatus)} and output_tokens ` +
+        `${pythonRepr(usage.outputTokens)} disagree: 'reported' means the provider ` +
         "returned an output figure and every other status means it did not. " +
         "A 'reported' row without tokens counts as covered while adding " +
         "nothing to the sum; a missing-status row with tokens is imputed " +
@@ -631,8 +601,8 @@ function validateUsage(usage: ProviderUsage): void {
     throw new UsageWithoutRecordRefused(
       "usage_status 'unavailable' means no usage record at all " +
         "(measurement-harness.md section 2.3), but input_tokens " +
-        `${reprOf(usage.inputTokens)} / cache_read_tokens ` +
-        `${reprOf(usage.cacheReadTokens)} say one arrived; report a record that ` +
+        `${pythonRepr(usage.inputTokens)} / cache_read_tokens ` +
+        `${pythonRepr(usage.cacheReadTokens)} say one arrived; report a record that ` +
         "arrived incomplete as 'partial'",
     );
   }
@@ -749,7 +719,7 @@ export function startInvocation(
       .get(invocationId);
     if (already !== undefined) {
       throw new DuplicateInvocationRefused(
-        `invocation ${reprOf(invocationId)} was already started at ` +
+        `invocation ${pythonRepr(invocationId)} was already started at ` +
           `${already.started_at_ms}; the id is this writer's idempotency key, so a ` +
           "repeat makes two invocations indistinguishable in every report " +
           "rather than deduplicating one",
@@ -877,7 +847,7 @@ export function completeInvocation(
       .get(invocationId);
     if (row === undefined) {
       throw new InvocationNotStartedRefused(
-        `invocation ${reprOf(invocationId)} was never started; the usage ` +
+        `invocation ${pythonRepr(invocationId)} was never started; the usage ` +
           "fill-in is not an upsert, and inserting here would invent a " +
           "started_at_ms out of the completion instant -- a zero latency " +
           "and no recorded ceiling for every such invocation",
@@ -888,7 +858,7 @@ export function completeInvocation(
     const maxOutputTokens = row.max_output_tokens;
     if (alreadyFinishedAtMs !== null) {
       throw new InvocationAlreadyCompleteRefused(
-        `invocation ${reprOf(invocationId)} was already completed at ` +
+        `invocation ${pythonRepr(invocationId)} was already completed at ` +
           `${alreadyFinishedAtMs}; the row takes exactly one usage ` +
           "fill-in (production-schema.md section 4) and a second report " +
           "is a different fact, not a correction of the first",
@@ -897,7 +867,7 @@ export function completeInvocation(
     if (finishedAtMs < startedAtMs) {
       throw new CompletionPrecedesStartRefused(
         `finished_at_ms ${finishedAtMs} precedes started_at_ms ` +
-          `${startedAtMs} for invocation ${reprOf(invocationId)}; latency is ` +
+          `${startedAtMs} for invocation ${pythonRepr(invocationId)}; latency is ` +
           "measured off these two columns and a negative duration is a " +
           "mixed clock rather than a small number",
       );
@@ -910,7 +880,7 @@ export function completeInvocation(
       const ceiling = maxOutputTokens * modelResponseCount;
       if (usage.outputTokens > ceiling) {
         throw new OutputExceedsRequestCeilingRefused(
-          `invocation ${reprOf(invocationId)} reports ` +
+          `invocation ${pythonRepr(invocationId)} reports ` +
             `${usage.outputTokens} output tokens against a ceiling of ` +
             `${maxOutputTokens} per request x ${modelResponseCount} ` +
             `responses = ${ceiling}; the provider cannot return more ` +
