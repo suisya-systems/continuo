@@ -2,6 +2,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { formatFixed } from "./format.js";
+import { frozenList, readOnlyMap } from "./immutable.js";
 
 /**
  * G6 -- false termination, counted at the applied effect and nowhere else.
@@ -345,16 +346,22 @@ export class FalseTerminationReport {
     this.periodStartMs = fields.periodStartMs;
     this.periodEndMs = fields.periodEndMs;
     this.generatedAtMs = fields.generatedAtMs;
-    this.recommendedTerminate = fields.recommendedTerminate;
-    this.declinedRefused = fields.declinedRefused;
-    this.stillPending = fields.stillPending;
-    this.appliedAfterPeriodEnd = fields.appliedAfterPeriodEnd;
-    this.appliedFromEarlierRecommendation = fields.appliedFromEarlierRecommendation;
-    this.appliedTerminate = fields.appliedTerminate;
-    this.falseTerminationIds = fields.falseTerminationIds;
-    this.justifiedIds = fields.justifiedIds;
-    this.undeterminedIds = fields.undeterminedIds;
-    this.adjudications = fields.adjudications;
+    // Copied and frozen, not merely assigned. The source's fields are `tuple`s
+    // and a `MappingProxyType`, which are immutable at RUNTIME; a `readonly`
+    // type annotation is not, and `Object.freeze(this)` alone is shallow, so
+    // `report.appliedTerminate.push(id)` would still succeed. These five id
+    // lists are a partition of the denominator -- mutate one and the rate stops
+    // describing the itemisation printed beside it, with nothing to notice.
+    this.recommendedTerminate = frozenList(fields.recommendedTerminate);
+    this.declinedRefused = frozenList(fields.declinedRefused);
+    this.stillPending = frozenList(fields.stillPending);
+    this.appliedAfterPeriodEnd = frozenList(fields.appliedAfterPeriodEnd);
+    this.appliedFromEarlierRecommendation = frozenList(fields.appliedFromEarlierRecommendation);
+    this.appliedTerminate = frozenList(fields.appliedTerminate);
+    this.falseTerminationIds = frozenList(fields.falseTerminationIds);
+    this.justifiedIds = frozenList(fields.justifiedIds);
+    this.undeterminedIds = frozenList(fields.undeterminedIds);
+    this.adjudications = readOnlyMap(fields.adjudications);
     Object.freeze(this);
   }
 
@@ -366,7 +373,7 @@ export class FalseTerminationReport {
    * facts about the gate.
    */
   get recommendedButNotApplied(): readonly string[] {
-    return [...this.declinedRefused, ...this.stillPending];
+    return frozenList([...this.declinedRefused, ...this.stillPending]);
   }
 
   /**
@@ -466,15 +473,20 @@ export function adjudicate(options: {
         overruled.push([lower, lowerVerdict] as const);
       }
     }
-    return { actionId, verdict, source, overruled };
+    return Object.freeze({
+      actionId,
+      verdict,
+      source,
+      overruled: frozenList(overruled),
+    });
   }
 
-  return {
+  return Object.freeze({
     actionId,
     verdict: VERDICT_UNDETERMINED,
     source: SOURCE_NONE,
-    overruled: [],
-  };
+    overruled: frozenList([]),
+  });
 }
 
 /**
@@ -550,7 +562,9 @@ export function subsequentActivityVerdicts(
       verdicts.set(action.actionId, VERDICT_NOT_STUCK);
     }
   }
-  return verdicts;
+  // The source returns a MappingProxyType, so the caller cannot edit the
+  // evidence after the fact and re-run an adjudication against it.
+  return readOnlyMap(verdicts);
 }
 
 /**
@@ -686,17 +700,19 @@ export function readTerminateActions(
     applied_at_ms: unknown;
   }[];
 
-  return rows.map(
-    (row) =>
-      new TerminateAction({
-        actionId: String(row.action_id),
-        runId: row.run_id === null ? null : String(row.run_id),
-        incidentId: row.incident_id === null ? null : String(row.incident_id),
-        sessionId: row.session_id === null ? null : String(row.session_id),
-        status: String(row.status),
-        createdAtMs: Number(row.created_at_ms),
-        appliedAtMs: row.applied_at_ms === null ? null : Number(row.applied_at_ms),
-      }),
+  return frozenList(
+    rows.map(
+      (row) =>
+        new TerminateAction({
+          actionId: String(row.action_id),
+          runId: row.run_id === null ? null : String(row.run_id),
+          incidentId: row.incident_id === null ? null : String(row.incident_id),
+          sessionId: row.session_id === null ? null : String(row.session_id),
+          status: String(row.status),
+          createdAtMs: Number(row.created_at_ms),
+          appliedAtMs: row.applied_at_ms === null ? null : Number(row.applied_at_ms),
+        }),
+    ),
   );
 }
 

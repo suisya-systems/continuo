@@ -44,6 +44,7 @@ import { createProductionControlPlane } from "../../src/control_plane/migrator.j
 import {
   adjudicate,
   FalseTerminationRefusal,
+  FalseTerminationReport,
   GROUND_TRUTH_PREFERENCE,
   measureFalseTermination,
   QUERY_DEFINITIONS,
@@ -848,6 +849,81 @@ describe("the report itself", () => {
     // Named explicitly so a failure says which formatter it got, rather than
     // only that a substring was missing.
     expect(((1 / 32) * 100).toFixed(2), "the tie toFixed gets wrong").toBe("3.13");
+  });
+
+  test("the report is immutable at runtime, as the source's is (target-only)", () => {
+    // Target-only: translates no source case, because in Python there is
+    // nothing to assert -- the fields ARE tuples and a MappingProxyType, and
+    // mutating one raises. In TypeScript `readonly` is erased at runtime and
+    // `Object.freeze(this)` is shallow, so the same property has to be built
+    // and therefore has to be pinned.
+    //
+    // It matters beyond tidiness here: the five id lists are a PARTITION of the
+    // denominator. Push one id into `appliedTerminate` and the rate no longer
+    // describes the itemisation printed beside it, and nothing notices.
+    const db = productionDb();
+    makeSubject(db, { runId: "r1", sessionId: "s1" });
+    makeAction(db, {
+      actionId: "a-applied",
+      status: STATUS_APPLIED,
+      createdAtMs: PERIOD_START,
+      appliedAtMs: PERIOD_START,
+      runId: "r1",
+    });
+    const report = measure(db, {
+      fixtureLabels: new Map([["a-applied", VERDICT_NOT_STUCK]]),
+    });
+
+    // The casts are what an untyped JavaScript consumer reaches with; the
+    // `readonly` types already stop typed code.
+    expect(() => (report.appliedTerminate as string[]).push("forged")).toThrow(TypeError);
+    expect(() => (report.falseTerminationIds as string[]).push("forged")).toThrow(TypeError);
+    expect(() => (report.recommendedTerminate as string[]).pop()).toThrow(TypeError);
+    expect(report.appliedTerminate).toEqual(["a-applied"]);
+
+    // The adjudications mapping is MappingProxyType's equivalent: the mutators
+    // are absent, so reaching for one fails at the call rather than quietly
+    // editing a published report.
+    const adjudications = report.adjudications as unknown as {
+      set?: unknown;
+      delete?: unknown;
+      clear?: unknown;
+    };
+    expect(adjudications.set).toBeUndefined();
+    expect(adjudications.delete).toBeUndefined();
+    expect(adjudications.clear).toBeUndefined();
+    expect(report.adjudications.get("a-applied")?.verdict).toBe(VERDICT_NOT_STUCK);
+
+    // ...and the nested Adjudication, whose `overruled` is a tuple in the
+    // source.
+    const decision = report.adjudications.get("a-applied");
+    expect(decision).toBeDefined();
+    const overruled = decision?.overruled as [string, string][] | undefined;
+    expect(overruled).toBeDefined();
+    expect(() => (overruled as [string, string][]).push(["forged", VERDICT_STUCK])).toThrow(
+      TypeError,
+    );
+
+    // Copied, not merely frozen in place: mutating the array the caller passed
+    // in must not reach inside the report either.
+    const labels = ["a-applied"];
+    const other = new FalseTerminationReport({
+      periodStartMs: PERIOD_START,
+      periodEndMs: PERIOD_END,
+      generatedAtMs: NOW_MS,
+      recommendedTerminate: labels,
+      declinedRefused: [],
+      stillPending: [],
+      appliedAfterPeriodEnd: [],
+      appliedFromEarlierRecommendation: [],
+      appliedTerminate: [],
+      falseTerminationIds: [],
+      justifiedIds: [],
+      undeterminedIds: [],
+      adjudications: new Map(),
+    });
+    labels.push("added afterwards");
+    expect(other.recommendedTerminate).toEqual(["a-applied"]);
   });
 
   test("the report states what it does not count", () => {

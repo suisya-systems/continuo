@@ -32,8 +32,8 @@
       },
       {
         "from": "frozen dataclass with @property members",
-        "to": "class with readonly fields, getters, and Object.freeze in the constructor",
-        "why": "TerminateAction and FalseTerminationReport both derive values (subject_kind, subject_id, rate_lower, rate_upper, rate_is_settled) that the ported cases read as properties. Getters keep that spelling and keep the derivation in one place; frozen keeps the source's immutability.",
+        "to": "class with readonly fields and getters, whose collections are copied through frozenList / readOnlyMap (src/measurement/immutable.ts) and whose instance is then Object.freeze'd",
+        "why": "TerminateAction and FalseTerminationReport both derive values (subjectKind, subjectId, rateLower, rateUpper, rateIsSettled) that the ported cases read as properties. Getters keep that spelling and keep the derivation in one place. Immutability needed building rather than annotating: the source's fields are `tuple`s and a `MappingProxyType` and raise on mutation, while TypeScript's `readonly` is erased at runtime and Object.freeze(this) is shallow -- so `report.appliedTerminate.push(id)` would otherwise succeed and break the partition the rate is computed over. Copied as well as frozen, so the array a caller still holds cannot reach inside a built report.",
         "affects": "every entry that reads a derived field"
       },
       {
@@ -50,7 +50,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 10,
+      "count": 11,
       "ids": [
         "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the rebuilt corpus is the one the vector was produced from",
         "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the vector is not vacuous",
@@ -61,9 +61,10 @@
         "test/measurement/format.test.ts::the fixed-format oracle (target-only) > a non-finite figure is a caller bug, not a value to render",
         "test/measurement/format.test.ts::isAscii (target-only) > it is Python's str.isascii",
         "test/measurement/format.test.ts::isAscii (target-only) > it counts code points, so a lone surrogate is not ASCII",
-        "test/measurement/false-termination.test.ts::the report itself > the rendered rate goes through formatFixed, not toFixed (target-only)"
+        "test/measurement/false-termination.test.ts::the report itself > the rendered rate goes through formatFixed, not toFixed (target-only)",
+        "test/measurement/false-termination.test.ts::the report itself > the report is immutable at runtime, as the source's is (target-only)"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All nine are in test/measurement/format.test.ts and pin src/measurement/format.ts, which has no interlock counterpart to translate: in Python the behaviour is the standard library's, so there is nothing there to assert. They exist because the port had to REIMPLEMENT that behaviour (D-0104), and a reimplementation can only be checked against the thing it reimplements -- the same argument, and the same shape, as the sqlite3_complete corpus (D-0013). The comparison is a differential oracle face: scripts/oracle/dump_fixed_format.py writes CPython's answers to parity/oracle/fixed-format-vector.json and the test may only compare. NOTE for the reviewer: these ids are in a different target file from this ledger's test_file, so scripts/parity-check.mjs verifies that each declared one EXISTS but does not sweep that file for unmapped tests. Everything in it is target-only by construction. A tenth target-only test lives in this ledger's own test file: 'the rendered rate goes through formatFixed, not toFixed'. It is a LIVENESS test in the sense of rule 5 of docs/test-translation-conventions.md -- the oracle proves formatFixed is correct, but not that this module calls it, and a mutation sweep confirmed that swapping in toFixed left all twenty ported cases green. It drives the report to a rate of 1/32 = 3.125 percent, an exact tie where the two formatters disagree (3.12 against 3.13)."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All nine are in test/measurement/format.test.ts and pin src/measurement/format.ts, which has no interlock counterpart to translate: in Python the behaviour is the standard library's, so there is nothing there to assert. They exist because the port had to REIMPLEMENT that behaviour (D-0104), and a reimplementation can only be checked against the thing it reimplements -- the same argument, and the same shape, as the sqlite3_complete corpus (D-0013). The comparison is a differential oracle face: scripts/oracle/dump_fixed_format.py writes CPython's answers to parity/oracle/fixed-format-vector.json and the test may only compare. NOTE for the reviewer: these ids are in a different target file from this ledger's test_file, so scripts/parity-check.mjs verifies that each declared one EXISTS but does not sweep that file for unmapped tests. Everything in it is target-only by construction. A tenth target-only test lives in this ledger's own test file: 'the rendered rate goes through formatFixed, not toFixed'. It is a LIVENESS test in the sense of rule 5 of docs/test-translation-conventions.md -- the oracle proves formatFixed is correct, but not that this module calls it, and a mutation sweep confirmed that swapping in toFixed left all twenty ported cases green. It drives the report to a rate of 1/32 = 3.125 percent, an exact tie where the two formatters disagree (3.12 against 3.13). An eleventh pins runtime immutability: the source's fields are tuples and a MappingProxyType, which raise on mutation, whereas TypeScript's `readonly` is erased at runtime and Object.freeze is shallow -- so the property had to be BUILT in the port (frozenList / readOnlyMap in src/measurement/immutable.ts) and therefore had to be pinned. Raised by the codex review gate as a P2 against a claim this ledger itself made."
     },
     "approved_non_running": []
   },
