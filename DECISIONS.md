@@ -1682,8 +1682,10 @@ termination in eight hundred applied is `0.125` percent.
 
 **Decision.** `src/measurement/format.ts` provides `formatFixed(value, digits)`, which reproduces
 Python's formatter including its tie-breaking, and every rendered figure in the harness goes through
-it. The rounding is done on the **exact decimal expansion** of the double, not on the decimal literal
-someone typed, because "is this a tie" is a question about the stored binary value. `isAscii` lives
+it. The value is decomposed into the `mantissa * 2 ** exponent` it literally is, straight out of the
+IEEE 754 bits, and the digits are produced by exact `BigInt` division -- so the only rounding
+anywhere is the one being decided. "Is this a tie" is a question about the stored binary value, and
+it is answered exactly rather than approximately. `isAscii` lives
 beside it as `str.isascii()`, which several ported cases assert on rendered output (`D-0006`).
 
 A reimplementation is exactly the kind of artefact that reads correct and is not, so it is pinned
@@ -1699,8 +1701,9 @@ against the thing it reimplements, as a **differential oracle face**
   be rebuilt on the other side. The vector records the corpus length and the test checks it before
   comparing, so a changed corpus arrives as an instruction to regenerate rather than as an
   off-by-one comparison against the wrong answers.
-- 4,663 values x 4 widths. Every tie class is enumerated exhaustively rather than sampled, because
-  the tie is the only place the two languages disagree.
+- 4,795 values x 4 widths. Every tie class is enumerated exhaustively rather than sampled, and
+  each is probed one ULP either side, because the tie -- and the value that merely looks like one --
+  are the only places the two languages disagree.
 
 This face needs **no interlock checkout**: the oracle is CPython itself, reached through the standard
 library, which makes it the cheapest of the faces to regenerate.
@@ -1724,13 +1727,23 @@ library, which makes it the cheapest of the faces to regenerate.
 - Every later module in this belt that renders a figure must use `formatFixed`, not `toFixed`. The
   mutation sweep on this PR includes a `toFixed`-instead-of-`formatFixed` mutation for exactly that
   reason.
+- **The first implementation was wrong, and a review caught what the corpus had not.** It took the
+  expansion from `toFixed(20)` and classified a tie by looking for a `5` followed by zeros. But
+  `toFixed` *rounds*, so a value merely close to a tie is rendered as one: `0.00005` at four places
+  has the double `0.0000500000000000000023960868011929648...`, strictly above the halfway point --
+  CPython rounds it up to `0.0001` and the transcription rounded it half-to-even down to `0.0000`.
+  Widening the expansion does not fix the class (a double needs up to 1074 decimal places and
+  `toFixed` accepts 100); only exact arithmetic does. The corpus missed it because it held no
+  near-tie values, so the corpus now probes **one ULP either side of every tie** as well as the tie
+  itself. Recorded here because it is the more useful half of the lesson: the oracle is necessary and
+  it is not sufficient, since a corpus can only answer for the inputs somebody thought to put in it.
 - **It corrected a wrong expectation the moment it ran.** A hand-written case asserted
   `formatFixed(99.995, 2) === "99.99"`, reading `99.995` as a tie that half-to-even sends down. It
   is not a tie: the nearest double is `99.99500000000000454747350886464118957519531250`, strictly
   above the halfway point, and CPython prints `100.00`. The corpus comparison was already green;
   the hand-written expectation was the thing that was wrong. That is the argument for the oracle in
   one line.
-- The vector is 268 KB and read in full on every test run. That is deliberate over a smaller
+- The vector is roughly 280 KB and read in full on every test run. That is deliberate over a smaller
   sampled corpus: ties are sparse, and a corpus that samples is a corpus that misses them.
 - `formatFixed` **throws** on a non-finite value rather than rendering `inf` / `nan`. Python and
   JavaScript spell those differently, no ported case pins either spelling, and every figure in this

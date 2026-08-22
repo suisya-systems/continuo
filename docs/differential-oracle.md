@@ -108,8 +108,9 @@ has its own oracle:
 
 The corpus is **rebuilt, not committed**, as 2b's is, and for the same reason. It is therefore built
 with no RNG at all: Python's Mersenne Twister is not reproducible in JavaScript, so a sampled corpus
-could not be reconstructed on the other side. It is 4,663 values -- every tie class enumerated
-exhaustively rather than sampled, since the tie is the only place the two languages disagree -- and a
+could not be reconstructed on the other side. It is 4,795 values -- every tie class enumerated
+exhaustively rather than sampled, and each probed one ULP either side, since a tie and a value that
+merely looks like one are the only places the two languages disagree -- and a
 committed corpus length turns "somebody edited the corpus" into an explicit instruction to regenerate
 rather than an off-by-one comparison against the wrong answers.
 
@@ -121,9 +122,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/oracle/dump_fixed_format.py \
   parity/oracle/fixed-format-vector.json
 ```
 
-It earned its place immediately, though not in the way the other two did: the comparison was green on
-its first run and what it caught was a wrong **expectation** in the hand-written half of the same
-test file. See section 6c.
+It earned its place twice over, and the second time is the more instructive: see section 6c.
 
 ## 3. What is normalised, and why each part is there
 
@@ -246,9 +245,9 @@ somebody has to check, not one the translation process delivers on its own.
 It also settles a small design question in the dump: interior whitespace in `sql` is deliberately
 not normalised. Had it been, this would have compared equal.
 
-### 6c. Fixed-point rendering: a wrong expectation, not a wrong implementation
+### 6c. Fixed-point rendering: what the corpus caught, and what it did not
 
-The fixed-format corpus agreed with CPython on all 4,663 values at all four widths on its first run.
+The fixed-format corpus agreed with CPython on all of its values at all four widths on its first run.
 What failed was a hand-written case sitting beside it, which asserted
 `formatFixed(99.995, 2) === "99.99"` -- reading `99.995` as a tie that half-to-even sends down.
 
@@ -261,6 +260,18 @@ oracle correcting the **test author** rather than the implementation. A suite of
 examples would have encoded that misunderstanding as the expected answer and then failed a correct
 implementation -- which is the failure mode of pinning a reimplementation with examples somebody
 reasoned their way to.
+
+**And then the review found what the corpus had not.** The first implementation classified ties from
+a `toFixed(20)` expansion, which is not exact: `toFixed` rounds, so a value merely *close* to a tie is
+rendered as one. `0.00005` at four places is the case -- its double is strictly above the halfway
+point, CPython rounds it up to `0.0001`, and the transcription rounded it half-to-even down to
+`0.0000`. The corpus was green because it contained no near-tie values.
+
+The fix was exact `BigInt` arithmetic over the IEEE 754 decomposition, and the corpus now probes one
+ULP either side of every tie. The lesson is the one worth carrying to the next face: **an oracle is
+necessary and it is not sufficient.** It answers only for the inputs somebody thought to put in the
+corpus, so "the oracle is green" is a claim about coverage as much as about correctness, and the
+corpus deserves the same adversarial attention as the code.
 
 ## 7. Faces designed but not implemented here
 

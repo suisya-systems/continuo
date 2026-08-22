@@ -34,14 +34,26 @@
 /**
  * `format(value, `.${digits}f`)` from Python, including its tie-breaking.
  *
- * The rounding is done on the **exact decimal expansion** of the double rather
- * than on the double itself, because "is this a tie" is a question about the
- * stored binary value and not about the decimal literal someone typed.
- * `toFixed(EXPANSION_DIGITS)` is specified to be correctly rounded, and every
- * value that is a tie at `digits` places is exactly representable well inside
- * that width, so a tie arrives here as a run of zeros after the `5` and is
- * recognised as one. A non-tie arrives with its true digits and is rounded
- * normally, which is what both languages already agreed on.
+ * The rounding is done on the **exact** value of the double, using integer
+ * arithmetic, because "is this a tie" is a question about the stored binary
+ * value and the answer is not recoverable from any truncated decimal rendering
+ * of it.
+ *
+ * An earlier version took the expansion from `toFixed(20)` and classified a tie
+ * by looking for a `5` followed by zeros. That is wrong in the direction that
+ * matters, and a review caught it: `toFixed` **rounds**, so a value that is
+ * merely very close to a tie is rendered as one. `0.00005` at four places is the
+ * worked example -- its double is
+ * `0.0000500000000000000023960868011929648...`, strictly above the halfway
+ * point, so CPython rounds it up to `0.0001`; `toFixed(20)` renders it as
+ * `0.00005000000000000000`, which reads as an exact tie and rounds half-to-even
+ * *down* to `0.0000`. Widening the expansion does not fix the class: a double
+ * needs up to 1074 decimal places to write exactly, and `toFixed` accepts at
+ * most 100.
+ *
+ * So the value is decomposed into `mantissa * 2 ** exponent` -- which is what it
+ * literally is -- and the digits are produced by exact `BigInt` division. There
+ * is no rounding anywhere except the one this function is deciding.
  */
 export function formatFixed(value: number, digits: number): string {
   if (!Number.isFinite(value)) {
@@ -55,44 +67,38 @@ export function formatFixed(value: number, digits: number): string {
         `bug in the caller rather than a value to render`,
     );
   }
+  if (!Number.isInteger(digits) || digits < 0 || digits > 100) {
+    throw new RangeError(`formatFixed digits must be an integer in [0, 100], got ${digits}`);
+  }
 
   const negative = value < 0 || Object.is(value, -0);
-  const expanded = Math.abs(value).toFixed(EXPANSION_DIGITS);
-  const [whole = "0", fraction = ""] = expanded.split(".");
+  const { mantissa, exponent } = decompose(Math.abs(value));
 
-  const kept = fraction.slice(0, digits).padEnd(digits, "0");
-  const rest = fraction.slice(digits);
-
-  let roundUp = false;
-  if (rest !== "") {
-    const first = rest[0] ?? "0";
-    if (first > "5") {
-      roundUp = true;
-    } else if (first === "5") {
-      const tie = /^0*$/.test(rest.slice(1));
-      if (tie) {
-        // The half-to-even rule: round up only when the digit being kept is
-        // odd, so the result's last digit is always even. This is the one
-        // branch `toFixed` gets differently.
-        const last = digits === 0 ? (whole.at(-1) ?? "0") : (kept.at(-1) ?? "0");
-        roundUp = (Number(last) & 1) === 1;
-      } else {
-        roundUp = true;
-      }
+  // The integer to render is round-half-even(|value| * 10 ** digits), and
+  // |value| * 10 ** digits is exactly `mantissa * 10 ** digits * 2 ** exponent`.
+  const scaled = mantissa * 10n ** BigInt(digits);
+  let rounded: bigint;
+  if (exponent >= 0) {
+    // No fractional part at all: the product is an integer and there is nothing
+    // to round.
+    rounded = scaled << BigInt(exponent);
+  } else {
+    const denominator = 1n << BigInt(-exponent);
+    const quotient = scaled / denominator;
+    const remainder = scaled % denominator;
+    const twice = remainder * 2n;
+    if (twice > denominator) {
+      rounded = quotient + 1n;
+    } else if (twice < denominator) {
+      rounded = quotient;
+    } else {
+      // The exact tie, and the one branch `toFixed` decides differently: round
+      // so the kept digit is even.
+      rounded = quotient % 2n === 0n ? quotient : quotient + 1n;
     }
   }
 
-  let magnitude = `${whole}${kept}`;
-  if (roundUp) {
-    magnitude = incrementDecimalString(magnitude);
-  }
-
-  const pad = digits + 1;
-  const padded = magnitude.padStart(pad, "0");
-  const head = padded.slice(0, padded.length - digits);
-  const tail = padded.slice(padded.length - digits);
-  const rendered = digits === 0 ? head : `${head}.${tail}`;
-
+  const rendered = placeDecimalPoint(rounded.toString(), digits);
   // The sign is kept even when the magnitude rounds to zero: Python prints
   // `-0.00` for a small negative value and for `-0.0`, and dropping it here
   // would be a second, quieter divergence than the one this function exists to
@@ -101,28 +107,35 @@ export function formatFixed(value: number, digits: number): string {
 }
 
 /**
- * How many decimal places the exact expansion is taken to.
+ * A non-negative finite double as the exact `mantissa * 2 ** exponent` it is.
  *
- * `toFixed` accepts up to 100 and is correctly rounded at every width. Twenty
- * is far past the widest tie that can exist at the precisions this harness
- * formats, and short enough to keep the string work trivial.
+ * Read straight out of the IEEE 754 bits rather than derived with `Math.log2`
+ * and friends, because every floating-point step on the way to an exact
+ * decomposition is a place the exactness can be lost -- which is the whole
+ * defect this replaced.
  */
-const EXPANSION_DIGITS = 20;
+function decompose(value: number): { mantissa: bigint; exponent: number } {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  const bits = view.getBigUint64(0);
+  const biasedExponent = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & 0xf_ffff_ffff_ffffn;
 
-/** `"1299" -> "1300"`, on a string of digits with no sign and no point. */
-function incrementDecimalString(digits: string): string {
-  const out = digits.split("");
-  let index = out.length - 1;
-  while (index >= 0) {
-    const digit = Number(out[index]);
-    if (digit < 9) {
-      out[index] = String(digit + 1);
-      return out.join("");
-    }
-    out[index] = "0";
-    index -= 1;
+  if (biasedExponent === 0) {
+    // Subnormal: no implicit leading 1, and the exponent is fixed at the
+    // smallest normal's.
+    return { mantissa: fraction, exponent: -1074 };
   }
-  return `1${out.join("")}`;
+  return { mantissa: fraction | (1n << 52n), exponent: biasedExponent - 1075 };
+}
+
+/** `("1234", 2) -> "12.34"`, zero-padding a magnitude too short to split. */
+function placeDecimalPoint(magnitude: string, digits: number): string {
+  if (digits === 0) {
+    return magnitude;
+  }
+  const padded = magnitude.padStart(digits + 1, "0");
+  return `${padded.slice(0, padded.length - digits)}.${padded.slice(padded.length - digits)}`;
 }
 
 /**

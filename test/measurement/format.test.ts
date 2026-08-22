@@ -68,6 +68,23 @@ function corpus(): number[] {
     }
   }
 
+  // Near-ties: the class a review found the first implementation getting wrong.
+  // A value that is merely CLOSE to a tie must not be classified as one, and the
+  // distance can be a single ULP -- 0.00005 renders as 0.0001 at four places
+  // because its double is 0.00005000000000000000239..., strictly above the
+  // halfway point. So every tie above is also probed one ULP either side, and
+  // the small decimal literals that look like ties are included outright.
+  for (const literal of [
+    0.00005, 0.0005, 0.005, 0.05, 0.5, 5e-6, 5e-7, 0.00015, 0.0015, 0.015, 0.15, 1.5, 0.00025,
+    0.0025, 0.025, 0.25, 2.5, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1,
+  ]) {
+    for (const signed of [literal, -literal]) {
+      values.push(signed);
+      values.push(nextAfter(signed, Number.POSITIVE_INFINITY));
+      values.push(nextAfter(signed, Number.NEGATIVE_INFINITY));
+    }
+  }
+
   let value = -1000.0;
   for (let index = 0; index < 600; index += 1) {
     values.push(value);
@@ -79,6 +96,32 @@ function corpus(): number[] {
 
   values.push(0.0, -0.0, 1e-9, -1e-9, 1e15, -1e15);
   return values;
+}
+
+/**
+ * `math.nextafter(value, toward)`: the adjacent double in that direction.
+ *
+ * Needed because the corpus probes one ULP either side of every near-tie, and
+ * JavaScript has no built-in. Implemented on the bit pattern, which is what
+ * "adjacent double" means: consecutive doubles of the same sign have
+ * consecutive magnitudes as unsigned 64-bit integers.
+ */
+function nextAfter(value: number, toward: number): number {
+  if (Number.isNaN(value) || Number.isNaN(toward) || value === toward) {
+    return toward;
+  }
+  if (value === 0) {
+    return toward > 0 ? Number.MIN_VALUE : -Number.MIN_VALUE;
+  }
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  const bits = view.getBigUint64(0);
+  // Away from zero when the step direction and the sign agree, toward zero
+  // otherwise. Comparing against `value` rather than against the sign bit keeps
+  // the two zeros from needing a special case here.
+  const awayFromZero = toward > value === value > 0;
+  view.setBigUint64(0, awayFromZero ? bits + 1n : bits - 1n);
+  return view.getFloat64(0);
 }
 
 interface Vector {
@@ -163,6 +206,23 @@ describe("the fixed-format oracle (target-only)", () => {
 
     // One in eight hundred, as a percentage: the tie a real report reaches.
     expect(formatFixed((1 / 800) * 100, 2)).toBe("0.12");
+  });
+
+  test("a value that merely LOOKS like a tie is not treated as one", () => {
+    // The regression for the defect a review found in the first implementation,
+    // which classified ties from a `toFixed(20)` expansion. `toFixed` rounds, so
+    // a value very close to a tie was rendered as one and then sent the wrong
+    // way by half-to-even.
+    //
+    // The stored double for 0.00005 is
+    // 0.0000500000000000000023960868011929648..., strictly ABOVE the halfway
+    // point, so it rounds up on any rule. CPython prints 0.0001.
+    expect(formatFixed(0.00005, 4)).toBe("0.0001");
+    // Its neighbour below the tie goes the other way, which is what makes the
+    // pair a real discrimination rather than one lucky value.
+    expect(formatFixed(nextAfter(0.00005, Number.NEGATIVE_INFINITY), 4)).toBe("0.0000");
+    // And a value whose double lands below the tie rounds down.
+    expect(formatFixed(5e-6, 4)).toBe("0.0000");
   });
 
   test("a carry propagates out of the fraction and into a new digit", () => {

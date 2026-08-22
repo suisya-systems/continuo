@@ -28,12 +28,13 @@ Then review the diff and commit it. The test never writes this file.
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
 #: Bumped whenever the corpus construction below changes, so a vector produced
 #: by an older script is recognisable as one rather than silently compared.
-CORPUS_VERSION = 1
+CORPUS_VERSION = 2
 
 #: The widths the harness actually formats at, plus 0 and 1 to exercise the
 #: carry into the integer part and the single-digit tie.
@@ -90,6 +91,23 @@ def corpus() -> list[float]:
     for n in (32, 50, 64, 80, 100, 128, 160, 200, 250, 256, 400, 500, 800):
         for k in range(0, n + 1):
             values.append(k / n * 100)
+
+    # Near-ties: the class a review found the first implementation getting
+    # wrong. A value that is merely CLOSE to a tie must not be classified as
+    # one, and the distance can be a single ULP -- 0.00005 renders as 0.0001 at
+    # four places because its double is 0.00005000000000000000239..., strictly
+    # above the halfway point. So every tie above is also probed one ULP either
+    # side, and the small decimal literals that look like ties are included
+    # outright.
+    for literal in (
+        0.00005, 0.0005, 0.005, 0.05, 0.5, 5e-06, 5e-07,
+        0.00015, 0.0015, 0.015, 0.15, 1.5, 0.00025, 0.0025, 0.025, 0.25, 2.5,
+        1e-05, 1e-04, 1e-03, 1e-02, 1e-01,
+    ):
+        for signed in (literal, -literal):
+            values.append(signed)
+            values.append(math.nextafter(signed, math.inf))
+            values.append(math.nextafter(signed, -math.inf))
 
     # A deterministic spread: a walk with an irrational-ish stride so the
     # values do not share a common decimal structure.

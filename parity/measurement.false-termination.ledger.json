@@ -86,6 +86,12 @@
       "matches_source": true,
       "note": "interlock#74 acceptance criterion 5 requires the limitations disclosed in interlock PR #72 (detector-only among them) to stay disclosed rather than be silently fixed.",
       "where_a_fix_belongs": "upstream, and out of scope for the parity port by interlock#74 acceptance criterion 6 (no reconcile driver, no new features)."
+    },
+    {
+      "behaviour": "renderFalseTerminationReport interpolates action_id into the report verbatim. The action table's DDL permits any non-empty SQLite TEXT value, so an id containing non-ASCII text breaks the rendering's ASCII guarantee (D-0006), and one containing a newline can inject structurally misleading report lines.",
+      "matches_source": true,
+      "note": "Verified identical upstream: interlock's render_false_termination_report interpolates the same f-string (measurement/false_termination.py, the `settled by:` line) and the module contains no escaping or validation of action_id anywhere. Its own test asserts rendered.isascii() only over ASCII fixture ids, so its suite is equally silent. Raised by the codex review gate on this PR as a P2. NOT fixed here: escaping would make continuo's rendered report differ from interlock's for the same database, which is the one thing a parity port must not do quietly, and interlock#74 acceptance criterion 5 requires known limitations to stay disclosed rather than be silently repaired. ESCALATED to the operator rather than decided in the lane, because it is a genuine tension between fidelity and continuo's own D-0006 output contract.",
+      "where_a_fix_belongs": "upstream, or in a change that moves both sides together -- an ASCII-safe escape applied in interlock's renderer and in continuo's in the same breath, so the two keep producing the same bytes."
     }
   ],
   "entries": [
