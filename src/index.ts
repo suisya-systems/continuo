@@ -16,9 +16,10 @@
  * is a name an installed consumer cannot reach at all -- `dist` containing the
  * module is not the same as the module being importable.
  *
- * `migratorSeams` is deliberately absent. It is a test seam that reproduces
- * Python's late binding (D-0014), and a consumer replacing an entry on it would
- * be reaching into the migrator's internals through a door left open for tests.
+ * `migratorSeams` and `schemaSeams` are deliberately absent. Each is a test
+ * seam that reproduces Python's late binding (D-0014), and a consumer
+ * replacing an entry on either would be reaching into a module's internals
+ * through a door left open for tests.
  */
 export {
   type ControlPlaneOpenOptions,
@@ -49,6 +50,19 @@ export {
   MigrationStepsRefused,
   MissingStateRefused,
 } from "./control_plane/refusals.js";
+export {
+  type ControlPlaneState,
+  createControlPlane,
+  expectedSchemaFingerprint,
+  loadSchemaSql,
+  openControlPlane,
+  RECONSTRUCTION_QUERIES,
+  reconstruct,
+  SCHEMA_REVISION,
+  SPIKE_MARKING,
+  SPIKE_SCHEMA_PATH,
+  STATE_TABLES,
+} from "./control_plane/schema.js";
 export { SPIKE_APPLICATION_ID } from "./control_plane/spike.js";
 /**
  * The G6 measurement harness.

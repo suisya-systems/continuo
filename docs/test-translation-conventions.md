@@ -352,6 +352,11 @@ Belt-specific helpers live under the belt's own directory until they have earned
 - [ ] Every collected source node id has a ledger entry, including every `parametrize` expansion.
 - [ ] Target ids are `parametrize()`-stable, not template-interpolated.
 - [ ] Every `pytest.raises` keeps **both** halves -- type and message -- via `expectRefusal`.
+- [ ] No `match` string is satisfied by the case's own temp path. Refusals interpolate the database
+      path, `caseRoot(label)` puts the label into it, and `match` is a *search*, so a label sharing a
+      word with a refusal message makes that assertion unfailable -- see `DECISIONS.md` D-0020, where
+      `caseRoot("spike-schema")` silently reduced four cases to a bare `instanceof` check. Keep
+      labels short module nicknames, and check the literal against the path.
 - [ ] Every fixture's cleanup is registered at acquisition.
 - [ ] No `skip`, `todo` or `xfail` that the ledger does not name.
 - [ ] No seam without a liveness test.

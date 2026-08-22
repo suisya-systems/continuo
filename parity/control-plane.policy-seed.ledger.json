@@ -1,0 +1,371 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_policy_seed.py",
+      "collected": 35,
+      "inventory": "parity/source-inventory/control_plane.test_policy_seed.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/policy-seed.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "note": "No target-only tests. This file drives createProductionControlPlane and the rows seeded by 0002_policy_seed.sql, both already ported, so it needed no seam and no new production surface."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 35,
+    "ported": 27,
+    "adapted": 8,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_seed_is_one_revision_carrying_the_decisions_that_set_it",
+      "target_id": "test/control_plane/policy-seed.test.ts::the revision itself > the seed is one revision carrying the decisions that set it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_first_revision_is_effective_from_zero_rather_than_from_a_wall_clock",
+      "target_id": "test/control_plane/policy-seed.test.ts::the revision itself > the first revision is effective from zero rather than from a wall clock",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_every_seeded_row_hangs_off_that_one_revision",
+      "target_id": "test/control_plane/policy-seed.test.ts::the revision itself > every seeded row hangs off that one revision",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_exactly_the_classes_of_section_3_2_are_seeded",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > exactly the classes of section 3 2 are seeded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[ci_outcome_undrained]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[ci_outcome_undrained]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[consumer_backlog]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[consumer_backlog]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[lease_orphan]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[lease_orphan]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[observation_unavailable]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[observation_unavailable]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[relay_delivery_stall]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[relay_delivery_stall]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[relay_gap]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[relay_gap]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[session_no_evidence]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[session_no_evidence]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[watcher_error_streak]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[watcher_error_streak]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[watcher_scope_uncovered]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[watcher_scope_uncovered]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_each_detection_latency_row_matches_the_document[watcher_silence]",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > each detection latency row matches the document[watcher_silence]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_every_class_is_evaluated_on_the_base_reconcile_period",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.2 -- the classes > every class is evaluated on the base reconcile period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_absolute_classes_satisfy_t_plus_p_le_l",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.3 -- P is a consequence of the budgets, not a choice > the absolute classes satisfy t plus p le l",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_reconcile_period_is_the_largest_the_tightest_budget_admits",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.3 -- P is a consequence of the budgets, not a choice > the reconcile period is the largest the tightest budget admits",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_binding_classes_are_the_ones_the_document_names",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.3 -- P is a consequence of the budgets, not a choice > the binding classes are the ones the document names",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_relative_classes_are_left_relative",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.3 -- P is a consequence of the budgets, not a choice > the relative classes are left relative",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_watcher_silence_budget_bounds_a_scopes_interval",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 3.3 -- P is a consequence of the budgets, not a choice > the watcher silence budget bounds a scopes interval",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_exactly_the_stage_tolerances_of_section_4_are_seeded",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 4 -- gate stage tolerances > exactly the stage tolerances of section 4 are seeded",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source compares a dict keyed by the (gate_type, stage) tuple against the transcribed GATE_STAGE_TOLERANCE dict. JavaScript has no tuple keys, so both sides are built as (gate_type, stage, tolerance_ms) triples and compared as sorted arrays with toEqual. This is at least as strong: a duplicated (gate_type, stage) pair would silently collapse in the Python dict comprehension and fails the array comparison here. Values, including the NULL/null tolerances, are compared unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_human_stage_is_untimed_because_a_slow_human_is_not_a_gap",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 4 -- gate stage tolerances > the human stage is untimed because a slow human is not a gap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_answered_leg_carries_the_tightest_tolerance_in_the_system",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 4 -- gate stage tolerances > the answered leg carries the tightest tolerance in the system",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Python's chained comparison `answered == min(values) == 2 * MINUTE_MS` has no JavaScript equivalent; written as the two assertions the chain expands to (answered === min(values) and min(values) === 2 * MINUTE_MS). Identical truth condition, and a failure now names which half broke.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_terminal_stage_has_no_tolerance_row",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 4 -- gate stage tolerances > the terminal stage has no tolerance row",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_undecided_gate_types_are_not_seeded",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 4 -- gate stage tolerances > undecided gate types are not seeded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_exactly_the_owners_of_section_6_1_are_seeded",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 6.1 -- gate ownership, resolved > exactly the owners of section 6 1 are seeded",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same tuple-key adaptation as the tolerance table: the source's dict keyed by (gate_type, stage) with a (ball_holder, standing_owner) value becomes a sorted array of 4-tuples compared with toEqual. Strictly stronger for the same reason (duplicate keys cannot collapse); no value is relaxed.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_ball_holder_moves_with_the_stage_and_the_standing_owner_does_not",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 6.1 -- gate ownership, resolved > the ball holder moves with the stage and the standing owner does not",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_ownership_lives_only_in_policy_and_never_on_the_gate_row",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 6.1 -- gate ownership, resolved > ownership lives only in policy and never on the gate row",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source reads column names as `row[1]` from `PRAGMA table_info(gate)` over the sqlite3 cursor's positional tuples; better-sqlite3's `pragma()` returns objects, so the same column is read as `row.name`. Same PRAGMA, same three absence assertions.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_every_stage_that_can_hold_a_gate_has_a_ball_holder",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 6.1 -- gate ownership, resolved > every stage that can hold a gate has a ball holder",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_terminal_stage_has_no_ball_holder_row",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 6.1 -- gate ownership, resolved > the terminal stage has no ball holder row",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_the_standing_owner_of_both_gate_types_survives_the_absent_forwarded_row",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 6.1 -- gate ownership, resolved > the standing owner of both gate types survives the absent forwarded row",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_no_stage_carries_a_tolerance_without_a_ball_holder_to_name",
+      "target_id": "test/control_plane/policy-seed.test.ts::section 6.1 -- gate ownership, resolved > no stage carries a tolerance without a ball holder to name",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source uses sets of (gate_type, stage) tuples with `timed <= owned` and a scan over `timed | owned`. JavaScript Sets compare by reference for arrays, so membership is taken over a Set of JSON-serialized pairs and the subset check is a per-pair assertion (which also names the offending pair on failure); the union scan becomes a scan over the concatenation, which is equivalent for the `any(stage == 'forwarded')` predicate. Both assertions of the source are kept.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_a_second_revision_supersedes_by_insertion_rather_than_by_update[policy_detection_latency]",
+      "target_id": "test/control_plane/policy-seed.test.ts::the seed is data, and it is versioned data > a second revision supersedes by insertion rather than by update[policy_detection_latency]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same reason as the other two expansions: the column list for the INSERT ... SELECT is read from `PRAGMA table_info` as `row.name` (object rows) instead of `column[1]` (positional tuples). The generated statement, the parameters and both assertions are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_a_second_revision_supersedes_by_insertion_rather_than_by_update[policy_gate_stage_tolerance]",
+      "target_id": "test/control_plane/policy-seed.test.ts::the seed is data, and it is versioned data > a second revision supersedes by insertion rather than by update[policy_gate_stage_tolerance]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "PRAGMA table_info column names read as `row.name` rather than `column[1]`, because better-sqlite3 returns object rows where Python's sqlite3 returns positional tuples. Statement and assertions unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_policy_seed.py::test_a_second_revision_supersedes_by_insertion_rather_than_by_update[policy_gate_stage_owner]",
+      "target_id": "test/control_plane/policy-seed.test.ts::the seed is data, and it is versioned data > a second revision supersedes by insertion rather than by update[policy_gate_stage_owner]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "PRAGMA table_info column names read as `row.name` rather than `column[1]`, because better-sqlite3 returns object rows where Python's sqlite3 returns positional tuples. Statement and assertions unchanged.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "The expectation tables are transcribed from docs/time-base-policy.md by hand, not derived from 0002_policy_seed.sql.",
+      "status": "inherited, and the point of the file",
+      "detail": "DETECTION_LATENCY, GATE_STAGE_TOLERANCE, the ownership table and RECONCILE_PERIOD_MS are deliberate duplication: the test is the comparison between two independently written copies of the same decision. A helper that generated the expectations from the migration would assert only that SQLite can read back what it stored. Reproduced exactly as in the source."
+    },
+    {
+      "topic": "'no stage carries a tolerance without a ball holder to name' is vacuous if the tolerance set is empty.",
+      "status": "inherited, not fixed",
+      "detail": "The source asserts the set relation `timed <= owned`, which is trivially true for an empty `timed`; the port expands it to a per-pair assertion, which is vacuous in the same case and for the same reason. Neither side would catch a regression that dropped every non-NULL tolerance. Adding a non-empty guard would make the port stronger than its source, so it is disclosed instead."
+    },
+    {
+      "topic": "The supersession cases assert the original revision's row count is unchanged, not that the copy inserted the expected number of rows.",
+      "status": "inherited, not fixed",
+      "detail": "Neither the source nor the port asserts that the copying INSERT ... SELECT actually wrote `original` rows under the later revision, so an INSERT that wrote nothing would still pass. Faithful to interlock at 65f36c5."
+    },
+    {
+      "topic": "The standing-owner comparison keys by gate_type from a SELECT DISTINCT.",
+      "status": "inherited, not fixed",
+      "detail": "A gate type carrying two different standing owners collapses to whichever row came last, so the equality can pass on data the assertion means to reject. Present identically in the source."
+    }
+  ]
+}
