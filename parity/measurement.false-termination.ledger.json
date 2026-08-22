@@ -50,7 +50,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 11,
+      "count": 12,
       "ids": [
         "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the rebuilt corpus is the one the vector was produced from",
         "test/measurement/format.test.ts::the fixed-format oracle (target-only) > the vector is not vacuous",
@@ -62,9 +62,10 @@
         "test/measurement/format.test.ts::isAscii (target-only) > it is Python's str.isascii",
         "test/measurement/format.test.ts::isAscii (target-only) > it counts code points, so a lone surrogate is not ASCII",
         "test/measurement/false-termination.test.ts::the report itself > the rendered rate goes through formatFixed, not toFixed (target-only)",
-        "test/measurement/false-termination.test.ts::the report itself > the report is immutable at runtime, as the source's is (target-only)"
+        "test/measurement/false-termination.test.ts::the report itself > the report is immutable at runtime, as the source's is (target-only)",
+        "test/measurement/false-termination.test.ts::a deliberate divergence from interlock (target-only) > an action id cannot forge a line of the itemisation"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All nine are in test/measurement/format.test.ts and pin src/measurement/format.ts, which has no interlock counterpart to translate: in Python the behaviour is the standard library's, so there is nothing there to assert. They exist because the port had to REIMPLEMENT that behaviour (D-0104), and a reimplementation can only be checked against the thing it reimplements -- the same argument, and the same shape, as the sqlite3_complete corpus (D-0013). The comparison is a differential oracle face: scripts/oracle/dump_fixed_format.py writes CPython's answers to parity/oracle/fixed-format-vector.json and the test may only compare. NOTE for the reviewer: these ids are in a different target file from this ledger's test_file, so scripts/parity-check.mjs verifies that each declared one EXISTS but does not sweep that file for unmapped tests. Everything in it is target-only by construction. A tenth target-only test lives in this ledger's own test file: 'the rendered rate goes through formatFixed, not toFixed'. It is a LIVENESS test in the sense of rule 5 of docs/test-translation-conventions.md -- the oracle proves formatFixed is correct, but not that this module calls it, and a mutation sweep confirmed that swapping in toFixed left all twenty ported cases green. It drives the report to a rate of 1/32 = 3.125 percent, an exact tie where the two formatters disagree (3.12 against 3.13). An eleventh pins runtime immutability: the source's fields are tuples and a MappingProxyType, which raise on mutation, whereas TypeScript's `readonly` is erased at runtime and Object.freeze is shallow -- so the property had to be BUILT in the port (frozenList / readOnlyMap in src/measurement/immutable.ts) and therefore had to be pinned. Raised by the codex review gate as a P2 against a claim this ledger itself made."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All nine are in test/measurement/format.test.ts and pin src/measurement/format.ts, which has no interlock counterpart to translate: in Python the behaviour is the standard library's, so there is nothing there to assert. They exist because the port had to REIMPLEMENT that behaviour (D-0104), and a reimplementation can only be checked against the thing it reimplements -- the same argument, and the same shape, as the sqlite3_complete corpus (D-0013). The comparison is a differential oracle face: scripts/oracle/dump_fixed_format.py writes CPython's answers to parity/oracle/fixed-format-vector.json and the test may only compare. NOTE for the reviewer: these ids are in a different target file from this ledger's test_file, so scripts/parity-check.mjs verifies that each declared one EXISTS but does not sweep that file for unmapped tests. Everything in it is target-only by construction. A tenth target-only test lives in this ledger's own test file: 'the rendered rate goes through formatFixed, not toFixed'. It is a LIVENESS test in the sense of rule 5 of docs/test-translation-conventions.md -- the oracle proves formatFixed is correct, but not that this module calls it, and a mutation sweep confirmed that swapping in toFixed left all twenty ported cases green. It drives the report to a rate of 1/32 = 3.125 percent, an exact tie where the two formatters disagree (3.12 against 3.13). An eleventh pins runtime immutability: the source's fields are tuples and a MappingProxyType, which raise on mutation, whereas TypeScript's `readonly` is erased at runtime and Object.freeze is shallow -- so the property had to be BUILT in the port (frozenList / readOnlyMap in src/measurement/immutable.ts) and therefore had to be pinned. Raised by the codex review gate as a P2 against a claim this ledger itself made. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
     },
     "approved_non_running": []
   },
@@ -87,12 +88,6 @@
       "matches_source": true,
       "note": "interlock#74 acceptance criterion 5 requires the limitations disclosed in interlock PR #72 (detector-only among them) to stay disclosed rather than be silently fixed.",
       "where_a_fix_belongs": "upstream, and out of scope for the parity port by interlock#74 acceptance criterion 6 (no reconcile driver, no new features)."
-    },
-    {
-      "behaviour": "renderFalseTerminationReport interpolates action_id into the report verbatim. The action table's DDL permits any non-empty SQLite TEXT value, so an id containing non-ASCII text breaks the rendering's ASCII guarantee (D-0006), and one containing a newline can inject structurally misleading report lines.",
-      "matches_source": true,
-      "note": "Verified identical upstream: interlock's render_false_termination_report interpolates the same f-string (measurement/false_termination.py, the `settled by:` line) and the module contains no escaping or validation of action_id anywhere. Its own test asserts rendered.isascii() only over ASCII fixture ids, so its suite is equally silent. Raised by the codex review gate on this PR as a P2. NOT fixed here: escaping would make continuo's rendered report differ from interlock's for the same database, which is the one thing a parity port must not do quietly, and interlock#74 acceptance criterion 5 requires known limitations to stay disclosed rather than be silently repaired. Escalated rather than decided in the lane, because it is a genuine tension between fidelity and continuo's own D-0006 output contract. SETTLED by the operator on 2026-08-22: disclose and reproduce, do not escape. An upstream fix moving both sides together was considered and deferred.",
-      "where_a_fix_belongs": "upstream, or in a change that moves both sides together -- an ASCII-safe escape applied in interlock's renderer and in continuo's in the same breath, so the two keep producing the same bytes."
     }
   ],
   "entries": [
@@ -292,5 +287,17 @@
         "note": "NOT a coverage gap. The guard reads `status !== 'applied' || appliedAtMs === null`, and 0001_initial.sql carries CHECK ((status = 'applied') = (applied_at_ms IS NOT NULL)) -- so the row that would distinguish the two halves (a pending or refused action with applied_at_ms set) cannot exist. Verified by attempting the INSERT: SQLITE_CONSTRAINT_CHECK. A test for it would have to insert a row the schema forbids. Interlock's guard is the same shape and its suite is equally unable to distinguish it, so this is inherited redundancy rather than a translation defect; the guard is kept because it is what the source says and it states the intent locally."
       }
     ]
-  }
+  },
+  "divergences": [
+    {
+      "decision": "D-0109",
+      "behaviour": "renderFalseTerminationReport escapes an action_id before printing it: any character below U+0020 or from U+007F up becomes \\uXXXX. interlock interpolates it raw.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Disclosed on this belt and ruled 'reproduce and disclose' by the operator on 2026-08-22 under D-0022; repaired when D-0022 was withdrawn later the same day, interlock being frozen. action.action_id is unconstrained TEXT, so an id spelling a newline plus six spaces produces a line of the itemisation that a reader cannot tell from one the harness wrote -- and the renderer's own docstring claims ASCII output, which was true of the words it authored and not of the values it printed. The escaping was verified the way lane C's 'green guarantees nothing' note asks: the reportValue call was reverted at this site and the case above was confirmed to fail FOR THAT REASON. Three of the ten sites checked that way were initially passing for a different reason and were rewritten before this belt shipped.",
+      "parity_cost": "continuo's rendered report differs from interlock's wherever an action id carries a control character or a non-ASCII one. Ordinary ids render identically, character for character.",
+      "evidence": "test/measurement/false-termination.test.ts::a deliberate divergence from interlock (target-only) > an action id cannot forge a line of the itemisation",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this renderer."
+    }
+  ]
 }

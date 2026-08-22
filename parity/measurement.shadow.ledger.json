@@ -62,13 +62,14 @@
       }
     ],
     "target_only_tests": {
-      "count": 3,
+      "count": 4,
       "ids": [
         "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > a fixture label outside the vocabulary is refused even when no episode wears it",
         "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > two subject classes spelling the same parts do not pair",
-        "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > a negative onset buckets downward, not toward zero"
+        "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > a negative onset buckets downward, not toward zero",
+        "test/measurement/shadow.test.ts::hostile values in the rendering (target-only) > an episode id cannot forge a line and cannot reach a cp932 console"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close gaps a 33-mutation sweep found, and all three are INHERITED: the same mutation was applied to interlock's own shadow.py at 65f36c5 and its 37 cases still passed in each case (measured, not inferred). Each is recorded with its verdict under mutation_sweep below, and each was confirmed to kill its mutation and only its mutation."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close gaps a 33-mutation sweep found, and all three are INHERITED: the same mutation was applied to interlock's own shadow.py at 65f36c5 and its 37 cases still passed in each case (measured, not inferred). Each is recorded with its verdict under mutation_sweep below, and each was confirmed to kill its mutation and only its mutation. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
     }
   },
   "totals": {
@@ -464,5 +465,17 @@
       }
     ],
     "note": "The three survivors were re-run against the new target-only cases and each is now killed by its own case and no other. A first attempt at this sweep reported 33/33 caught and was DISCARDED as invalid: the scratch harness had no CONTINUO_TEST_SEED, so every run failed at config load and every mutation looked caught. The sweep above asserts a green baseline in the same harness before mutating. The codex review gate raised two P2 observations against this port; both are recorded rather than silently actioned -- one as the inherited limitation above, the other (ReadonlySet is a compile-time constraint where Python's frozenset is a runtime one) as a repo-wide convention question rather than a shadow-specific defect, since every closed vocabulary in continuo -- CI_PROVIDERS, CI_VERDICTS, EVENT_TYPES, THRESHOLD_KINDS and six more -- is spelled the same way."
-  }
+  },
+  "divergences": [
+    {
+      "decision": "D-0109",
+      "behaviour": "renderShadowReconciliation escapes the episode ids, shapes, evidence keys and values, the shadow source and the absence reason before printing them. interlock interpolates all of them raw.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "This entry is NEW: nothing was disclosed here before. The inventory the operator asked for on 2026-08-22 was compiled from the LEDGERS, which recorded three instances of this class, and the sweep that followed found the same class in four more renderers by reading them. That the ledger showed fewer instances than the code held is itself worth recording: a disclosure list is only as complete as the pass that produced it. Every value here arrives from the v1 adapter or the database, and an episode id containing a newline forges a line of the awaiting-adjudication list -- the list a human works from when deciding whether a candidate miss is real. Verified the way lane C's 'green guarantees nothing' note asks: the reportValue call was reverted at this site and the case was confirmed to fail FOR THAT REASON.",
+      "parity_cost": "continuo's rendered reconciliation differs from interlock's wherever an episode id, shape or evidence value is not printable ASCII.",
+      "evidence": "test/measurement/shadow.test.ts::hostile values in the rendering (target-only) > an episode id cannot forge a line and cannot reach a cp932 console",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this renderer."
+    }
+  ]
 }

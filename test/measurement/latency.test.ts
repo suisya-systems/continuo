@@ -53,10 +53,10 @@ import {
   renderLatencyReport,
   SHADOW_ABSENT,
   SHADOW_PRESENT,
-  shadowFromBothBucket,
   ShadowReference,
   ShadowReferenceUnstated,
   ShadowSource,
+  shadowFromBothBucket,
   UnknownEpisodeDetection,
 } from "../../src/measurement/latency.js";
 import { openForMeasurement } from "../../src/measurement/reader.js";

@@ -68,7 +68,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 13,
+      "count": 15,
       "ids": [
         "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > TOOL_VERSION is the version package.json declares",
         "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > an integral coverage ratio renders as Python spells a float",
@@ -82,9 +82,11 @@
         "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > aggregate mode uses MAX(seq) where the table has one",
         "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a database with an empty migration ledger has no head to record",
         "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a non-ASCII query text is escaped, not printed",
-        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a published catalogue and header cannot be edited through the caller's map"
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a published catalogue and header cannot be edited through the caller's map",
+        "test/measurement/provenance.test.ts::deliberate divergences from interlock (target-only) > the digest does not move when two rows tie across storage classes",
+        "test/measurement/provenance.test.ts::deliberate divergences from interlock (target-only) > the Markdown rendering escapes a value and a field name the console cannot take"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Four pin PORT DIVERGENCES this port had to design around -- the version literal, an integral float rendering as 1.0 rather than 1, an INTEGER hashing apart from the REAL that equals it, and a digest that stays exact past 2^53 -- and none of them has a source case because none of the three underlying differences exists in Python. The other eight close gaps a 37-mutation sweep found, all INHERITED: each mutation was applied to interlock's own provenance.py at 65f36c5 and its 61 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A thirteenth was added after the codex review gate found two exported frozen types adopting the caller's Map instead of copying it: Python's frozen dataclasses do the same and its factory is the only constructor the source uses, so nothing upstream notices, but both types are exported here and a caller holding that Map could change the rendered query text after the digest was computed."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Four pin PORT DIVERGENCES this port had to design around -- the version literal, an integral float rendering as 1.0 rather than 1, an INTEGER hashing apart from the REAL that equals it, and a digest that stays exact past 2^53 -- and none of them has a source case because none of the three underlying differences exists in Python. The other eight close gaps a 37-mutation sweep found, all INHERITED: each mutation was applied to interlock's own provenance.py at 65f36c5 and its 61 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A thirteenth was added after the codex review gate found two exported frozen types adopting the caller's Map instead of copying it: Python's frozen dataclasses do the same and its factory is the only constructor the source uses, so nothing upstream notices, but both types are exported here and a caller holding that Map could change the rendered query text after the digest was computed. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
     }
   },
   "totals": {
@@ -116,18 +118,6 @@
       "matches_source": false,
       "note": "A disclosed divergence in the refusal TYPE, not in what is accepted: both stop, at the same instant, and neither renders a header. The source's failure escapes the ControlPlaneRefusal family and arrives as an arithmetic error with no explanation; this port keeps it inside the family the caller is already catching and says what the limit is. No ported case reaches it.",
       "where_a_fix_belongs": "upstream, if interlock ever wants that boundary inside its refusal hierarchy."
-    },
-    {
-      "behaviour": "The content fingerprint is not canonical for two rows that differ only by SQLite storage class. ORDER BY compares INTEGER 1 and REAL 1.0 as EQUAL, while the type tag hashes them apart, so two databases holding that pair in opposite insertion orders can produce two digests over the same content.",
-      "matches_source": true,
-      "note": "Raised by the codex review gate (P2) and NOT repaired, deliberately. interlock's implementation has the same ORDER BY and the same type tags, so the soft spot is upstream. A storage-class tie-breaker would fix it here and would also move every digest this port produces away from the digest interlock produces over the same rows -- and comparing those two digests is the whole reason the field is a parity surface. The direction of the failure is the safe one: it can report two reads of the same content as different (a false alarm a reader investigates), never two different contents as the same. Disclosed in the module at the ORDER BY itself.",
-      "where_a_fix_belongs": "upstream, in interlock's ordering, and then here in the same shape."
-    },
-    {
-      "behaviour": "renderHeaderMarkdown does not escape non-ASCII in a cell, and does not escape anything at all in a dotted FIELD NAME -- so a query name, an exclusion reason or an unmatched key containing a pipe, a newline or a backtick produces a malformed table row.",
-      "matches_source": true,
-      "note": "Both raised by the codex review gate (P2) and reproduced rather than repaired. interlock's _cell escapes the same two characters in a VALUE and interpolates the field name raw, so the port matches it byte for byte; escaping more would make continuo's Markdown differ from interlock's for the same header. The ASCII half is also outside continuo's own policy by that policy's own words -- docs/cli-output-policy.md governs what continuo AUTHORS, not what it handles, and says a path that echoes external text 'has to deal with encoding on its own terms'. The JSON rendering IS ASCII-safe (ensure_ascii), which is the rendering section 6 puts on the console.",
-      "where_a_fix_belongs": "upstream in interlock's _cell, or in the CLI belt at the point where a report is actually written to a console."
     }
   ],
   "entries": [
@@ -738,6 +728,26 @@
       "parity_cost": "continuo's rendered report differs from interlock's for any period containing an unfinished invocation: the header gains an imputation_rule.unconfirmed_response_count key and imputation_rule.supports_acceptance_claim flips to false. interlock#74 AC3 compares these documents, so this is the one place the two are intended to disagree, and it is reachable from this ledger. The constructor's arity also diverges: unconfirmedResponseCount is REQUIRED, with no default, because an optional count falling back to zero would leave a public construction path producing the very contradiction the decision removes. Four ported cases in this file build an ImputationRule directly and now pass `unconfirmedResponseCount: 0`; the state they build and everything they assert is unchanged.",
       "evidence": "test/measurement/ac9.test.ts::a deliberate divergence from interlock (target-only) > the header's acceptance predicate agrees with the report's",
       "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this field."
+    },
+    {
+      "decision": "D-0109",
+      "behaviour": "renderHeaderMarkdown escapes non-ASCII in a cell AND escapes the dotted field name the same way it escapes a value. interlock escapes a pipe and a newline in a value only, and interpolates the field name raw.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Disclosed on this belt under D-0022 and repaired on that rule's withdrawal. A dotted field name is built from map KEYS -- a query name, an exclusion reason, an unmatched-bucket name -- so a key carrying a pipe shifts every value after it one column left and one carrying a newline ends the row. The JSON rendering has been ASCII-safe from the start (ensure_ascii); this makes the Markdown one match, so both renderings honour the claim their docstrings make. The escaping was verified the way lane C's 'green guarantees nothing' note asks: the reportValue call was reverted at this site and the case above was confirmed to fail FOR THAT REASON. Three of the ten sites checked that way were initially passing for a different reason and were rewritten before this belt shipped.",
+      "parity_cost": "continuo's Markdown header differs from interlock's wherever a value or a key is not printable ASCII. The JSON rendering is unchanged.",
+      "evidence": "test/measurement/provenance.test.ts::deliberate divergences from interlock (target-only) > the Markdown rendering escapes a value and a field name the console cannot take",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this renderer."
+    },
+    {
+      "decision": "D-0110",
+      "behaviour": "The content fingerprint orders rows by every column AND by each column's storage class (typeof). interlock orders by the columns alone.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Disclosed on this belt under D-0022 and repaired on that rule's withdrawal. SQLite's ORDER BY compares INTEGER 1 and REAL 1.0 as EQUAL while feedValue hashes them apart, so the source's ordering is not a total order over the values it hashes and two databases holding identical content produce two digests -- the one claim the field makes. typeof() separates only rows the value comparison left equal, so no other digest moves. The earlier disclosure argued that a tie-breaker would move continuo's digests away from interlock's; it moves them only for tables containing such a tie, and for those the interlock digest is not a function of content in the first place.",
+      "parity_cost": "A digest over a table holding a cross-storage-class tie differs from interlock's. Every other digest is unchanged.",
+      "evidence": "test/measurement/provenance.test.ts::deliberate divergences from interlock (target-only) > the digest does not move when two rows tie across storage classes",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this digest."
     }
   ]
 }
