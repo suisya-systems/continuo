@@ -176,6 +176,59 @@ export {
   shadowFromBothBucket,
   UnknownEpisodeDetection,
 } from "./latency.js";
+/**
+ * Section 6's provenance header: the part of a report that makes the rest of it
+ * a measurement.
+ *
+ * `TOOL_VERSION` is re-exported from here as well because the source's
+ * `__all__` carries it: the header states which build produced it, and a
+ * consumer checking that statement should not have to know which module the
+ * literal lives in.
+ *
+ * One name is qualified. `PeriodRefused` exists in this module AND in
+ * {@link ./windows.js}, and they are two different classes in interlock too --
+ * one refuses a report period, the other an observation period. Python
+ * namespaces them; a flat barrel cannot, so the newcomer takes the qualified
+ * name and each module still exports the bare one under its own path.
+ */
+export {
+  ADAPTER_VERSIONS_QUERY,
+  AGGREGATE_STATEMENT,
+  BOUNDED_IMPUTATION_RULE,
+  buildHeader,
+  CONTENT_STATEMENT,
+  CoverageSummary,
+  coverageFromAc9,
+  DatabaseFingerprint,
+  DETECTOR_VERSIONS_QUERY,
+  FINGERPRINT_AGGREGATE,
+  FINGERPRINT_CONTENT,
+  FINGERPRINT_MODES,
+  FingerprintModeRefused,
+  FixtureSuiteRef,
+  fingerprintDatabase,
+  fixtureSuiteRef,
+  HEADER_QUERIES,
+  type HeaderValue,
+  ImputationRule,
+  imputationFromAc9,
+  iso8601Ms,
+  NotAProductionDatabase,
+  PeriodRefused as ReportPeriodRefused,
+  ProvenanceRefusal,
+  PythonFloat,
+  QueryCatalogue,
+  QueryDefinitionsRefused,
+  queryCatalogue,
+  ReportHeader,
+  RevisionNotInPeriod,
+  renderHeaderJson,
+  renderHeaderMarkdown,
+  SchemaMigrationHead,
+  SENSITIVITY_IMPUTATION_RULE,
+  TableNotReadable,
+  TOOL_VERSION,
+} from "./provenance.js";
 export {
   AsynchronousReportRefused,
   ControlPlaneRefusal,

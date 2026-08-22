@@ -1,0 +1,712 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. provenance is the ninth file of this lane. It was blocked for most of the belt not by its own imports -- provenance.py needs no ai_invocation module, only the table -- but by its TESTS: the shared populate() helper seeds one invocation through ai_invocation.start_invocation, and 51 of the 61 cases depend on it. The operator ruled on 2026-08-22 that the lane would wait for that module rather than hand-write the row (the flagship fingerprint case is explicitly written through the real writer, and a hand-built row would leave 49 cases green over rows nobody writes)."
+    },
+    "file": {
+      "path": "tests/measurement/test_provenance.py",
+      "collected": 61,
+      "inventory": "parity/source-inventory/measurement.test_provenance.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/provenance.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "frozen dataclass, tuple fields, MappingProxyType",
+        "to": "frozen class, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention every module of this lane uses. readOnlyMap preserves insertion order, which asMapping depends on: section 6 orders the homogeneity verdict first so a reader who stops after the first screen does not stop before it.",
+        "affects": "every entry that reads a header field"
+      },
+      {
+        "from": "json.dumps(..., indent=2, ensure_ascii=True) and str(value) in a table cell",
+        "to": "a renderer in this module, built on pythonJsonString",
+        "why": "JSON.stringify is not json.dumps: it escapes no non-ASCII and it prints an integral float as an integer. Both differences are invisible to any assertion that parses the text, which is D-0017 rule 4's argument for the control plane's persisted JSON applied to a rendered one. pythonJsonString is the existing one-renderer-per-behaviour helper.",
+        "affects": "every rendering entry"
+      },
+      {
+        "from": "repr(value) for a REAL column, and json.dumps of coverage.ratio",
+        "to": "pythonFloatRepr (src/measurement/format.ts), pinned by parity/oracle/float-repr-vector.json",
+        "why": "Python and JavaScript disagree on three things about a float: the .0 on an integral value, the magnitude at which exponential notation starts (1e16/1e-4 against 1e21/1e-7), and the two-digit signed exponent. All three reach the digest or the header. New oracle face, same shape as the fixed-format one (D-0104).",
+        "affects": "the fingerprint entries and the rendering entries"
+      },
+      {
+        "from": "sqlite3's int/float distinction in _feed_value",
+        "to": "safeIntegers(true) on the fingerprint's row statement",
+        "why": "Python's sqlite3 returns an int for INTEGER and a float for REAL, so isinstance separates them. better-sqlite3 returns a JavaScript number for both, so 1 and 1.0 would hash alike -- collapsing the distinction the type tag exists to make. safeIntegers returns every INTEGER as a BigInt, which restores the five-way split and also keeps the digest exact past 2^53 (D-0007). The SQL text is unchanged.",
+        "affects": "the fingerprint entries"
+      },
+      {
+        "from": "claude_org_runtime.__about__.__version__",
+        "to": "src/about.ts TOOL_VERSION, pinned to package.json by a target-only case",
+        "why": "The source reads one literal so a build cannot report a version it is not. This port has two places a version can live, and a runtime read of package.json resolves differently from src/ and dist/ -- so the literal is pinned by a test instead, which keeps the single-source-of-truth property without a path that can be wrong in the installed build.",
+        "affects": "the header-fields entries"
+      },
+      {
+        "from": "pytest's `db` fixture and try/finally connection pairs",
+        "to": "a per-test productionDb() plus withWritable / withMeasurement (rule 8)",
+        "why": "The convention every measurement test file in this port uses.",
+        "affects": "every entry that touches a database"
+      }
+    ],
+    "target_only_tests": {
+      "count": 12,
+      "ids": [
+        "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > TOOL_VERSION is the version package.json declares",
+        "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > an integral coverage ratio renders as Python spells a float",
+        "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > the fingerprint separates an integer from the real that equals it",
+        "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > the fingerprint is exact past 2^53",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > the strong mode is what a caller who does not choose gets",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a table that is not there is refused for being absent, not for being empty",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a column added under a report's feet moves the digest",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > the length prefix keeps two rows apart that the tag alone does not",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > the digest is over content, so insertion order does not move it",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > aggregate mode uses MAX(seq) where the table has one",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a database with an empty migration ledger has no head to record",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a non-ASCII query text is escaped, not printed"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Four pin PORT DIVERGENCES this port had to design around -- the version literal, an integral float rendering as 1.0 rather than 1, an INTEGER hashing apart from the REAL that equals it, and a digest that stays exact past 2^53 -- and none of them has a source case because none of the three underlying differences exists in Python. The other eight close gaps a 37-mutation sweep found, all INHERITED: each mutation was applied to interlock's own provenance.py at 65f36c5 and its 61 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation."
+    }
+  },
+  "totals": {
+    "source_cases": 61,
+    "ported": 60,
+    "adapted": 0,
+    "not_ported": 1,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "The barrel exposes provenance's PeriodRefused as ReportPeriodRefused.",
+      "why": "windows.ts exports a PeriodRefused too, and they are two different classes in interlock as well -- one refuses a report period, the other an observation period. Python namespaces them per module; a flat barrel cannot, so the newcomer is qualified and each module still exports the bare name under its own path."
+    },
+    {
+      "what": "TOOL_VERSION is exported from src/about.ts and re-exported through provenance.ts and both barrels.",
+      "why": "The source's __all__ carries TOOL_VERSION on the provenance module for the same reason: a consumer checking which build produced a report should not have to know which module the literal lives in."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "An aggregate-mode fingerprint cannot distinguish two reads that differ only by an in-place UPDATE, and a report can be generated in that mode.",
+      "matches_source": true,
+      "note": "Deliberate and reproduced exactly, including the demonstration: one ported case asserts the content digest MOVES on a usage_status backfill and its twin asserts the aggregate digest does NOT. The mode carries AGGREGATE_STATEMENT into both renderings so a report produced that way says in terms that its fingerprint does not establish identity of content.",
+      "where_a_fix_belongs": "nowhere; the weaker mode is section 6's own rejected form, kept reachable and labelled."
+    },
+    {
+      "behaviour": "iso8601Ms refuses an instant past 9999-12-31T23:59:59.999Z with a PeriodRefused, where Python raises OverflowError from datetime's own ceiling.",
+      "matches_source": false,
+      "note": "A disclosed divergence in the refusal TYPE, not in what is accepted: both stop, at the same instant, and neither renders a header. The source's failure escapes the ControlPlaneRefusal family and arrives as an arithmetic error with no explanation; this port keeps it inside the family the caller is already catching and says what the limit is. No ported case reaches it.",
+      "where_a_fix_belongs": "upstream, if interlock ever wants that boundary inside its refusal hierarchy."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_content_fingerprint_moves_on_an_in_place_update_that_moves_no_count",
+      "target_id": "test/measurement/provenance.test.ts::the fingerprint > the content fingerprint moves on an in-place update that moves no count",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_aggregate_fingerprint_is_blind_to_the_same_edit",
+      "target_id": "test/measurement/provenance.test.ts::the fingerprint > the aggregate fingerprint is blind to the same edit",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_an_aggregate_report_says_its_fingerprint_proves_nothing_about_content",
+      "target_id": "test/measurement/provenance.test.ts::the fingerprint > an aggregate report says its fingerprint proves nothing about content",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_two_reports_over_an_unchanged_database_fingerprint_identically",
+      "target_id": "test/measurement/provenance.test.ts::the fingerprint > two reports over an unchanged database fingerprint identically",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_fingerprint_covers_the_tables_it_names_and_no_others",
+      "target_id": "test/measurement/provenance.test.ts::the fingerprint > the fingerprint covers the tables it names and no others",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_fingerprint_separates_null_from_empty_and_keeps_value_boundaries",
+      "target_id": "test/measurement/provenance.test.ts::the fingerprint > the fingerprint separates NULL from empty and keeps value boundaries",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_table_that_is_not_there_is_refused_not_skipped",
+      "target_id": "test/measurement/provenance.test.ts::the fingerprint > a table that is not there is refused, not skipped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_detector_versions_is_a_set_over_the_period",
+      "target_id": "test/measurement/provenance.test.ts::the version sets and the banner > detector_versions is a set over the period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_second_detector_version_raises_the_banner_in_both_renderings",
+      "target_id": "test/measurement/provenance.test.ts::the version sets and the banner > a second detector version raises the banner in both renderings",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_policy_revision_change_inside_the_period_raises_the_banner",
+      "target_id": "test/measurement/provenance.test.ts::the version sets and the banner > a policy revision change inside the period raises the banner",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_revision_superseded_at_its_own_instant_never_reaches_the_header",
+      "target_id": "test/measurement/provenance.test.ts::the version sets and the banner > a revision superseded at its own instant never reaches the header",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_homogeneous_period_says_so_rather_than_printing_nothing",
+      "target_id": "test/measurement/provenance.test.ts::the version sets and the banner > a homogeneous period says so rather than printing nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_adapter_versions_is_a_set_over_the_period",
+      "target_id": "test/measurement/provenance.test.ts::the version sets and the banner > adapter_versions is a set over the period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_query_digest_moves_when_a_query_text_moves",
+      "target_id": "test/measurement/provenance.test.ts::the queries are data > the query digest moves when a query text moves",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_query_digest_is_over_the_set_not_the_writing_order",
+      "target_id": "test/measurement/provenance.test.ts::the queries are data > the query digest is over the set, not the writing order",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_header_carries_its_own_queries_as_text",
+      "target_id": "test/measurement/provenance.test.ts::the queries are data > the header carries its own queries as text",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_name_carrying_two_texts_is_refused",
+      "target_id": "test/measurement/provenance.test.ts::the queries are data > a name carrying two texts is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[period_start_ms]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[period_start_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[period_start_iso]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[period_start_iso]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[period_end_ms]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[period_end_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[period_end_iso]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[period_end_iso]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[generated_at_ms]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[generated_at_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[tool_version]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[tool_version]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[db_path]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[db_path]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[application_id]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[application_id]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[database_is_production]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[database_is_production]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[user_version]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[user_version]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[schema_migration_head.version]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[schema_migration_head.version]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[schema_migration_head.name]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[schema_migration_head.name]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[db_fingerprint]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[db_fingerprint]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[fingerprint_mode]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[fingerprint_mode]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[policy_revision_id]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[policy_revision_id]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[detector_versions]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[detector_versions]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[adapter_versions]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[adapter_versions]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[query_definitions]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[query_definitions]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[query_definitions_sha256]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[query_definitions_sha256]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[fixture_suite_ref.commit]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[fixture_suite_ref.commit]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[fixture_suite_ref.positive]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[fixture_suite_ref.positive]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[fixture_suite_ref.negative]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[fixture_suite_ref.negative]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[imputation_rule.bounded]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[imputation_rule.bounded]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[imputation_rule.sensitivity]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[imputation_rule.sensitivity]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[imputation_rule.unbounded_missing]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[imputation_rule.unbounded_missing]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[coverage.covered]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[coverage.covered]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[coverage.total]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[coverage.total]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[coverage.excluded]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[coverage.excluded]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[censored]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[censored]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[censored_left]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[censored_left]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_every_section_6_field_is_in_both_renderings[unmatched]",
+      "target_id": "test/measurement/provenance.test.ts::every section-6 field, in both renderings > every section 6 field is in both renderings[unmatched]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_period_bounds_are_printed_as_both_epoch_ms_and_iso",
+      "target_id": "test/measurement/provenance.test.ts::the header's own fields > the period bounds are printed as both epoch ms and ISO",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_header_names_the_database_and_that_it_is_a_production_one",
+      "target_id": "test/measurement/provenance.test.ts::the header's own fields > the header names the database and that it is a production one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_non_production_database_cannot_be_given_a_production_header",
+      "target_id": "test/measurement/provenance.test.ts::the header's own fields > a non-production database cannot be given a production header",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_revision_not_in_force_in_the_period_is_refused",
+      "target_id": "test/measurement/provenance.test.ts::the header's own fields > a revision not in force in the period is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_report_cannot_be_generated_before_its_period_closed",
+      "target_id": "test/measurement/provenance.test.ts::the header's own fields > a report cannot be generated before its period closed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_censored_counts_are_carried_and_must_be_counts",
+      "target_id": "test/measurement/provenance.test.ts::the header's own fields > the censored counts are carried and must be counts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_unmatched_counts_are_carried_verbatim",
+      "target_id": "test/measurement/provenance.test.ts::the header's own fields > the unmatched counts are carried verbatim",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_coverage_ratio_is_none_and_not_zero_over_an_empty_cohort",
+      "target_id": "test/measurement/provenance.test.ts::the adapters onto the sections that produce the figures > the coverage ratio is null and not zero over an empty cohort",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_the_fixture_suite_ref_splits_positive_from_negative",
+      "target_id": "test/measurement/provenance.test.ts::the adapters onto the sections that produce the figures > the fixture suite ref splits positive from negative",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_report_with_no_corpus_states_the_absence",
+      "target_id": "test/measurement/provenance.test.ts::the adapters onto the sections that produce the figures > a report with no corpus states the absence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_both_renderings_are_ascii_and_encode_on_a_cp932_console",
+      "target_id": "test/measurement/provenance.test.ts::the renderings themselves > both renderings are ASCII and encode on a cp932 console",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_a_pipe_in_a_query_cannot_shift_the_markdown_columns",
+      "target_id": "test/measurement/provenance.test.ts::the renderings themselves > a pipe in a query cannot shift the Markdown columns",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_provenance.py::test_coverage_and_imputation_come_off_the_real_ac9_report",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "absent",
+      "reason": "Deferred to this lane's ac9 belt, which is the next file. The case is an INTEGRATION case: it builds a cohort with selectCohort, measures it with measureAc9, and asserts that coverageFromAc9 and imputationFromAc9 copy that report's own numbers rather than recounting them. measurement/ac9.py is not ported yet, so the case has nothing to integrate with -- and porting it against a hand-built stand-in would assert that the adapters copy numbers I made up, which is the opposite of what it checks. Both adapters ARE ported here and exported; what waits is the case that wires them to the real AC-9 report. It will be carried in parity/measurement.ac9.ledger.json with this ledger named as its origin.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "37 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 29,
+    "survivors": [
+      {
+        "mutation": "the fingerprint default flips from content to aggregate",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every case on both sides passes the mode explicitly, so the default is unexercised. Section 6 makes the strong mode the default precisely so a caller who did not know there was a choice does not publish the weaker claim."
+      },
+      {
+        "mutation": "the absent-table check is removed from _columns_of",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The empty-columns backstop then refuses instead, with the same type and also naming the table, so the ported case passes either way on both sides. The two sentences tell an operator different things -- a typo in the table list, or a table that exists and is somehow shapeless -- so the new case asserts which one was said."
+      },
+      {
+        "mutation": "the column names are not fed to the hasher",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "No case on either side changes a table's shape. The source's reason is a schema change under a report's feet: the digest must move even where no row moved. The new case adds a column to an EMPTY table, so the shape is the only thing that changed."
+      },
+      {
+        "mutation": "the length prefix is dropped from _feed, keeping the delimiter",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported boundary case pins the SEPARATOR rather than the length: with the delimiter kept, ('as','b') and ('a','sb') still hash apart, so the case passes on both sides against an encoding that is only conditionally injective. Dropping the delimiter too IS caught by it -- measured. The new case is a pair the delimiter alone cannot separate: a value containing the delimiter sequence, where ('x','ys:z') and ('xs:y','z') spell one stream."
+      },
+      {
+        "mutation": "rows are ordered by rowid instead of by every column",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "No case on either side holds two rows whose rowid order differs from their column order. The source's reason is a VACUUM: it renumbers rowids and changes nothing a report can read, so a digest that moved for it would cry wolf at exactly the reader trying to establish that two reads agree. The new case inserts the same two rows in the two orders and asserts one digest."
+      },
+      {
+        "mutation": "aggregate mode always uses MAX(rowid), never MAX(seq)",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "None of the three tables every ported case fingerprints has a seq column, on either side, so the branch is unreachable from the suite. The new case builds a table where the two maxima differ and moves only seq."
+      },
+      {
+        "mutation": "an empty schema_migration ledger is accepted",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Unreachable through the real opener on both sides. The new case builds the state by hand rather than by emptying a real ledger -- the production schema has a trigger saying a migration record is never deleted, and defeating it would be testing against a database the schema forbids."
+      },
+      {
+        "mutation": "the JSON rendering stops escaping non-ASCII",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every case on both sides is ASCII, including the cp932 case that looks like it covers this -- it asserts over ASCII inputs. A query name or text is caller-supplied and this organization writes prose in Japanese; a raw character there crashes the report on the console section 6 says it is printed to. The new case also asserts the text survives a round trip, so the escaping is a rendering choice and not a change to what the report says it ran."
+      }
+    ],
+    "note": "All eight survivors were re-run against the new target-only cases and each is now killed by its own case and no other. The length-prefix entry above corrects a weaker first mutation of mine: dropping only the digits left the delimiter in place, and the delimiter alone is what the ported case actually pins."
+  }
+}
