@@ -62,16 +62,17 @@
       }
     ],
     "target_only_tests": {
-      "count": 6,
+      "count": 7,
       "ids": [
         "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > a read-only file with the connection guard down is still refused",
         "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > a probe that leaves the guard lowered is refused",
         "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > two record classes spelling the same key do not pair",
         "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > the writer audit prints its own VIOLATED line",
         "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > an ownership input past SQLite's parameter ceiling is chunked, not refused",
-        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > the whole report is read inside one snapshot"
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > the whole report is read inside one snapshot",
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > a record key carrying the identity separator cannot forge a pairing"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All six close gaps a 25-mutation sweep found, and all six are INHERITED: each mutation was applied to interlock's own canary.py at 65f36c5 and its 21 cases still passed (measured, not inferred). Each is recorded with its verdict under mutation_sweep below and each was confirmed to kill its mutation and only its mutation."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Six close gaps a 25-mutation sweep found, and those six are INHERITED: each mutation was applied to interlock's own canary.py at 65f36c5 and its 21 cases still passed (measured, not inferred). Each is recorded with its verdict under mutation_sweep below and each was confirmed to kill its mutation and only its mutation. The seventh is different in kind: it is a PORT DIVERGENCE the codex review gate caught, not an inherited gap. Python keys a record identity by the tuple (record_class, record_key), which cannot be ambiguous; a JavaScript Map compares tuples by reference, so this port spells the pair as one string, and the first spelling joined the halves with a unit separator. Both halves are caller-supplied here -- the class name through recordClasses, the key through the v1 adapter -- so ('a', 'b<US>c') and ('a<US>b', 'c') spelled one identity and would have paired as a dual write neither store made. The encoding is length-prefixed now (the device provenance.py uses on every hashed field) and the new case is that ambiguity built on purpose; it kills both the class-dropping mutation and a regression to the bare join."
     }
   },
   "totals": {
@@ -331,6 +332,6 @@
         "note": "Nothing on either side observes the transaction, so removing the snapshot changes no assertion -- while the defect it prevents is a report whose writer audit and ownership ledger describe two different states of the database, reported as a divergence that never existed. The new case observes connection.inTransaction from inside a SQLite user function called by a record class's own statement, so the reading is taken from within the measurement rather than around it."
       }
     ],
-    "note": "All six survivors were re-run against the new target-only cases and each is now killed by its own case and no other. Each was also applied to interlock's canary.py at 65f36c5, where its 21 cases stayed green -- which is what makes 'inherited' a measurement here rather than an argument."
+    "note": "All six survivors were re-run against the new target-only cases and each is now killed by its own case and no other. Each was also applied to interlock's canary.py at 65f36c5, where its 21 cases stayed green -- which is what makes 'inherited' a measurement here rather than an argument. A seventh target-only case was added after the sweep, for the identity-encoding divergence the review gate found; it is recorded under target_only_tests rather than here because no mutation of the shipped code produced it."
   }
 }

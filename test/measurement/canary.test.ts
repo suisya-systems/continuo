@@ -802,6 +802,51 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     expect(audit.interlockRecordCount).toBe(1);
   });
 
+  test("a record key carrying the identity separator cannot forge a pairing", () => {
+    // Target-only, and a PORT DIVERGENCE the codex review gate caught. Python
+    // keys the identity by the tuple `(record_class, record_key)`, which cannot
+    // be ambiguous; a JavaScript Map compares tuples by reference, so this port
+    // has to spell the pair as one string. The first spelling joined the two
+    // halves with a unit separator, and BOTH halves are caller-supplied here --
+    // the class name through `recordClasses`, the key through the v1 adapter --
+    // so nothing ruled the separator out and two different records could spell
+    // one identity. The encoding is length-prefixed now; this case is the
+    // ambiguity, built on purpose.
+    const path = productionDb();
+    const forged = new RecordClass({
+      // Its records spell ("a<US>b", "c"), which a bare join renders exactly as
+      // the v1 record ("a", "b<US>c") below.
+      name: "a\u001fb",
+      keyShape: "anything",
+      sql: "SELECT 'c' AS record_key, 0 AS first_written_at_ms, 0 AS last_written_at_ms",
+    });
+
+    const audit = withMeasurement(path, (connection) =>
+      auditWriters(connection, {
+        windowFromMs: PERIOD_START,
+        windowToMs: PERIOD_END,
+        v1Ledger: V1WriterLedger.observed({
+          source: V1_SOURCE,
+          records: [
+            // ("a", "b<US>c") against the database's ("a<US>b", "c"): one
+            // string under a bare join, two records under any injective
+            // encoding.
+            new WrittenRecord({
+              recordClass: "a",
+              recordKey: "b\u001fc",
+              firstWrittenAtMs: PERIOD_START,
+              lastWrittenAtMs: PERIOD_START,
+              store: V1_STORE,
+            }),
+          ],
+        }),
+        recordClasses: [forged, new RecordClass({ name: "a", keyShape: "k", sql: forged.sql })],
+      }),
+    );
+
+    expect(audit.findingCount).toBe(0);
+  });
+
   test("the writer audit prints its own VIOLATED line", () => {
     // Target-only, and INHERITED: the ported case asserts `VIOLATED` appears in
     // the rendering, and the ownership section prints its own VIOLATED line for

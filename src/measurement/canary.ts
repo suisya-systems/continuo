@@ -466,14 +466,26 @@ export const QUERY_DEFINITIONS: ReadonlyMap<string, string> = readOnlyMap([
 ]);
 
 /**
- * The separator inside a record identity, the ASCII unit separator, chosen for
- * the reason shadow.ts chooses it for a correlation token: Python's key here is
- * the tuple `(record_class, record_key)` and a JavaScript Map needs one string,
- * so the two components are joined by a character neither of them can contain.
- * A separator that could occur would let two different records spell one
- * identity and pair as a dual write that never happened.
+ * `(recordClass, recordKey)` as one string, length-prefixed so the encoding is
+ * injective.
+ *
+ * Python keys this by the tuple itself, which cannot be ambiguous; a JavaScript
+ * Map compares tuples by reference, so the two components have to become one
+ * string. A plain separator is not enough here, and that is the difference from
+ * shadow.ts's correlation token: there the four key shapes are the module's own
+ * and no component can contain a unit separator, whereas BOTH halves of this
+ * identity are caller-supplied -- the class name through the `recordClasses`
+ * argument, the key through the v1 adapter's ledger -- so nothing rules the
+ * separator out. Under a bare join `("a", "b<US>c")` and `("a<US>b", "c")` spell
+ * one identity and pair as a dual write neither store made.
+ *
+ * The length prefix is the same device `provenance.py` uses on every hashed
+ * field, for the same reason: with the class's length written down first there
+ * is exactly one way to split the string back.
  */
-const IDENTITY_SEPARATOR = "\u001f";
+function recordIdentity(recordClass: string, recordKey: string): string {
+  return `${recordClass.length}:${recordClass}${recordKey}`;
+}
 
 /**
  * One authoritative record, and the store that wrote it.
@@ -507,7 +519,7 @@ export class WrittenRecord {
 
   /** `(recordClass, recordKey)`, as the string both sides are matched on. */
   get identity(): string {
-    return `${this.recordClass}${IDENTITY_SEPARATOR}${this.recordKey}`;
+    return recordIdentity(this.recordClass, this.recordKey);
   }
 }
 
