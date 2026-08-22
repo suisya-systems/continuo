@@ -30,7 +30,7 @@
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FROM = join(ROOT, "src", "control_plane", "migrations");
@@ -39,8 +39,14 @@ const INTO = join(ROOT, "dist", "control_plane", "migrations");
 // Imported from dist rather than re-declared: this script runs after `tsc`, so
 // the compiled module is present, and using it means the packaging rule cannot
 // drift away from the discovery rule.
+//
+// `pathToFileURL`, never the bare path. Dynamic `import()` takes a URL, and on
+// Windows an absolute path starts with a drive letter, which the ESM loader
+// reads as a URL scheme and rejects: ERR_UNSUPPORTED_ESM_URL_SCHEME, "Received
+// protocol 'd:'". On POSIX the bare path happens to resolve, so this is
+// invisible everywhere except the cell that catches it.
 const { LEDGER_COMPANIONS, STEP_FILENAME } = await import(
-  join(ROOT, "dist", "control_plane", "migrator.js")
+  pathToFileURL(join(ROOT, "dist", "control_plane", "migrator.js")).href
 );
 
 function fail(message) {
