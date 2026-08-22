@@ -19,6 +19,35 @@
  */
 
 /**
+ * AC-9's numerator, its companion series, and the four figures (section 2.4).
+ *
+ * The kind constants are exported because the difference between the last two
+ * figures is load-bearing: one is a lower bound and one is an assumption, and a
+ * consumer that could not tell them apart could publish the assumption as a
+ * bound. `QUERY_DEFINITIONS` is qualified as `AC9_QUERY_DEFINITIONS` for the
+ * reason cohort's, shadow's and canary's are.
+ */
+export {
+  Ac9MeasurementRefused,
+  Ac9Report,
+  BaselineRefused,
+  COHORT_INVOCATIONS_QUERY,
+  Figure,
+  FigureExceedsExactRangeRefused,
+  KIND_ASSUMPTION,
+  KIND_FACT,
+  KIND_LOWER_BOUND,
+  MeasuredBaseline,
+  measureAc9,
+  OUTPUT_TOKEN_REDUCTION_TARGET,
+  PROMPT_REDUCTION_TARGET,
+  QUERY_DEFINITIONS as AC9_QUERY_DEFINITIONS,
+  renderAc9Report,
+  UNATTRIBUTED_INVOCATIONS_QUERY,
+  UnknownUsageStatusInLedgerRefused,
+  V1_MEASURED_BASELINE,
+} from "./ac9.js";
+/**
  * AC-9's denominator: the run cohort and the four reasons a run is not in it
  * (section 2.1).
  *
