@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { pythonRepr } from "./format.js";
+import { comparePythonStrings, pythonRepr } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 // The bucket names are imported, never re-spelled: a second copy of a closed
 // set agrees with the original right up until the day one of them is renamed,
@@ -578,7 +578,7 @@ export function measureLatency(
   const { windows, detections, shadow, nowMs } = options;
 
   const known = new Map(windows.windows.map((window) => [window.episodeId, window]));
-  for (const episodeId of [...detections.keys()].sort()) {
+  for (const episodeId of [...detections.keys()].sort(comparePythonStrings)) {
     if (!known.has(episodeId)) {
       throw new UnknownEpisodeDetection(
         `detection for episode_id=${pythonRepr(episodeId)} was supplied, but the ` +

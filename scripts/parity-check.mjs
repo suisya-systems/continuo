@@ -60,6 +60,7 @@ const LEDGERS = [
   "parity/measurement.false-termination.ledger.json",
   "parity/measurement.windows.ledger.json",
   "parity/measurement.latency.ledger.json",
+  "parity/measurement.fixtures.ledger.json",
 ];
 
 /**
