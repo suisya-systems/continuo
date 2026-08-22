@@ -19,6 +19,10 @@ spaces distinct.
 - **Every entry states what would falsify it.** A decision taken on facts that can change records
   the fact and the version it was measured at, so a later reader can tell "still true" from "was
   true in 2026".
+- **The port's belts hold disjoint number ranges**, so three lanes appending at once conflict only
+  in the index table above and never over an ID. `D-0019`+ is the control-plane belt, `D-0100`+ the
+  measurement belt, `D-0200`+ the fencing and settings belt. The ranges are an allocation, not a
+  meaning: nothing about an entry follows from which range it is in.
 
 ## Index
 
@@ -42,6 +46,10 @@ spaces distinct.
 | D-0016 | Mapping Python sqlite3 exception classes to better-sqlite3 result codes | accepted |
 | D-0017 | What refusal message text may change in translation, and what may not | accepted |
 | D-0018 | The differential oracle, and the one face this pilot implements | accepted |
+| D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
+| D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
+| D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
+| D-0103 | A report snapshot refuses a deferred body rather than awaiting or draining it | accepted |
 
 ---
 
@@ -1193,3 +1201,290 @@ to be equal after a change on either side, or the vector being regenerated from 
 other than the one recorded alongside it -- the vector is only evidence of parity against the
 interlock revision it was produced from, so a stale `source_revision` makes the comparison
 meaningless rather than merely out of date.
+
+---
+
+## D-0100 — The read-only capability is an open flag, not a `mode=ro` URI
+
+**Context.** Interlock's measurement harness is read-only **by capability, not by convention**
+(`ACCEPTANCE.md` section 3 condition 5, interlock `D-0040`), and it says so with two independent
+mechanisms: the SQLite `file:...?mode=ro` URI and `PRAGMA query_only = ON`. Two mechanisms exist so
+that neither one's failure is load-bearing, and the module proves both in force before it reads a
+row.
+
+Continuo cannot carry the first mechanism as written. **better-sqlite3 does not accept URI
+filenames.** Measured on better-sqlite3 13.0.3 / Node 22.17.0: opening
+`file:///tmp/.../t.sqlite3?mode=ro` fails with `SQLITE_CANTOPEN: unable to open database file` --
+the driver does not set `SQLITE_OPEN_URI`, so the whole string is taken as a path. There is no
+option to enable it.
+
+**Decision.** The first mechanism is the driver's `readonly: true` open flag, which sets the same
+`SQLITE_OPEN_READONLY` the URI was asking for. Everything else about the module is unchanged: both
+mechanisms are still armed, still read back, and still proved independently sufficient by their own
+ported cases.
+
+The substitution reaches exactly three places, and no more:
+
+- `openReadOnlyImpl` in `src/measurement/reader.ts`, which is the seam the degraded-capability cases
+  replace.
+- Two refusal messages that named the URI in their text ("was not opened mode=ro" becomes "was not
+  opened read-only"; the inconclusive-probe message likewise). This is a `D-0017` message-text
+  change: the text named a mechanism that does not exist here, so keeping it would have made the
+  refusal point an operator at a URI they could not have written.
+- The hand-built read-only connections in `test/measurement/reader.test.ts`.
+
+**What was measured, and why the probe still means something.** The risk in this substitution is
+that the probe becomes vacuous -- {@link proveReadOnly} lowers `query_only` and offers the file a
+write, and it is only evidence if the *file handle* is what refuses. Measured on the same build:
+
+| connection | `query_only` | a write | result |
+|---|---|---|---|
+| `readonly: true` | lowered to 0 | `PRAGMA user_version = <current>` | refused, `SQLITE_READONLY` |
+| read-write | `ON` | same | refused, `SQLITE_READONLY` |
+| read-write | lowered to 0 | same | **accepted** |
+| read-write, blocked by `BEGIN IMMEDIATE` | lowered to 0 | same | refused, `SQLITE_BUSY` |
+
+Row 1 is the property that matters: with the connection-level guard down, the read-only *handle*
+still refuses, so the probe is answering a question about the file and not about the pragma. Rows 2
+and 3 are the two mechanisms' independence. Row 4 is the contention case the probe must report as
+inconclusive rather than as proof, and it is distinguishable by code (`D-0102`).
+
+**Alternatives.**
+
+- **Patch better-sqlite3 or reach the URI through a `PRAGMA` (rejected).** There is no pragma that
+  opens a file, and vendoring a patched driver to spell one flag differently is a maintenance
+  liability out of all proportion to the change.
+- **Drop to one mechanism and rely on `query_only` alone (rejected).** That is precisely what the
+  two-mechanism design refuses. `query_only` is a connection-level setting a later edit can lower;
+  the open flag is a property of the handle and cannot be raised after the fact.
+- **Keep the URI text in the refusal messages (rejected).** A message is an instruction to an
+  operator. Naming a mechanism this build does not use sends them to look for a URI that is not
+  there.
+
+**Consequences.**
+
+- One source case's message assertion changes wording (`the public probe refuses a writable
+  connection`, matching `was not opened read-only` instead of `was not opened mode=ro`), and two
+  cases assert the absence of that same new wording. All three are recorded as `adapted` in
+  `parity/measurement.ledger.json` rather than passing silently.
+- Interlock's URI is built from the **resolved** path, because a relative path inside a SQLite URI
+  is resolved against the process working directory and would silently name a different file. That
+  hazard does not exist here -- there is no URI to build -- so the port does not resolve the path,
+  and the difference is noted at `openReadOnlyImpl` so a later reader does not "restore" a
+  resolution step that is now meaningless.
+- `docs/measurement-harness.md` section 1 is adjusted to say the same thing, which is one of the
+  language-specific adjustments that document carries.
+
+**Status.** accepted
+
+**Source.** Measured 2026-08-22 on better-sqlite3 13.0.3 / Node 22.17.0 (Linux), against interlock
+`65f36c5`. Falsified by: better-sqlite3 gaining URI support (at which point the URI form becomes
+available again, though the flag stays equivalent and there would be no reason to switch), or by any
+build where a `readonly: true` connection accepts a write with `query_only` lowered -- which would
+mean row 1 above no longer holds and the probe had stopped proving anything.
+
+---
+
+## D-0101 — Module-private names a source case reaches are exported and marked `@internal`
+
+**Context.** Python has no enforced module privacy. A test can reach `reader._require_query_only` or
+`reader._the_error_says_the_database_is_read_only` through the module dictionary, and interlock's
+suite does exactly that for both: one case proves that "issued" and "in force" are separated by the
+`PRAGMA` read-back and by nothing else, and one drives the read-only classifier with two errors
+SQLite actually raised rather than with strings pasted into the test.
+
+TypeScript has no such reach. A module-level function that is not exported is unreachable from a
+test file, full stop.
+
+**Decision.** Where a source case reaches a module-private name, the target exports that name and
+marks it `@internal` in its doc comment, with a line saying which source case reaches it and that
+interlock's is private. It is not re-exported from `src/measurement/index.ts` or `src/index.ts`, so
+it is not package API; the barrel test (`the package exports no way to write`) keeps that honest.
+
+**Alternatives.**
+
+- **Drop the two cases (rejected).** Both assert properties nothing else in the file covers. The
+  classifier case in particular is the regression test for a defect that certified a writable handle
+  as read-only.
+- **Re-derive the property through the public API (rejected).** `requireQueryOnly` can only be
+  reached publicly by first constructing a connection whose `query_only` silently did not take,
+  which is a state SQLite will not produce on demand -- the source simulates it by calling the check
+  directly, and so must the port.
+- **A separate "internals" export object, e.g. `readerInternals` (rejected).** It is the same
+  exported reachability with an extra indirection, and it reads like the seam record (`D-0014`),
+  which is a different thing with different rules -- a seam is *replaced* by tests, an internal is
+  merely *called* by them. Conflating the two would invite someone to patch an internal and expect
+  production to notice.
+
+**Consequences.**
+
+- Two entries in `parity/measurement.ledger.json` are `adapted` on this ground, and each says so.
+- `knip` supplies the pressure that keeps the rule narrow, at no extra configuration: test files are
+  knip entry points (`knip.json`), so an exported internal is "used" only for as long as some test
+  calls it. An internal whose case is deleted becomes an unused export and turns the `knip` gate red,
+  rather than lingering as public surface nobody asked for.
+- The rule is deliberately narrow. It licenses an export for a name a **source case already
+  reached**, not for one the translator finds convenient.
+
+**Status.** accepted
+
+**Source.** 2026-08-22, translating `tests/measurement/test_reader.py` at interlock `65f36c5`.
+Falsified by: TypeScript or the runner gaining a way to reach a module-private binding from a test
+(there is none today, and `vi.mock` replaces a module for its importers rather than exposing its
+internals).
+
+---
+
+## D-0102 — The read-only error classifier keeps only the result-code branch
+
+**Context.** `prove_read_only` is only evidence when the refusal it got back **names read-only**. An
+earlier version accepted any `OperationalError`, and a writable connection blocked by another
+writer's RESERVED lock raises exactly that with "database is locked" -- so a live control plane
+became a way of certifying a read-write handle as read-only. The classifier that fixes this is
+`_the_error_says_the_database_is_read_only`, and interlock's has **two** branches: the result code
+if the interpreter exposes one, and a case-insensitive search for `readonly` / `read-only` in the
+message otherwise.
+
+The second branch is not defensive depth in interlock -- it is the branch that does the work.
+`sqlite3.Error.sqlite3_errorcode` exists only on Python 3.11+ and interlock's build runs 3.10, so
+the string comparison is the live mechanism there and the code branch is the one that "takes over
+silently when the interpreter is upgraded".
+
+**Decision.** Continuo keeps the **code branch only**. better-sqlite3 puts a `SQLITE_`-prefixed
+`code` on every error it raises (this is already the basis of `D-0016`), so the branch interlock
+documents as preferred is the one that always applies, and there is no interpreter version at which
+it is absent. The match is by prefix, `SQLITE_READONLY`, because SQLite's extended codes
+(`SQLITE_READONLY_DBMOVED` and friends) carry the same primary result code and are the same answer
+to the question.
+
+**Alternatives.**
+
+- **Carry the string branch across as an unreachable fallback (rejected).** A branch no input can
+  reach is a branch no test can pin, and an untested fallback in a security-shaped classifier is
+  worse than no fallback: the day something does reach it, nobody has ever checked that it is right.
+  This is the same argument `src/sqlite/errors.ts` already makes for not writing unused predicates.
+- **Match the message as well, as a belt-and-braces check (rejected).** It would make the classifier
+  *stricter* than interlock's in a way no source case asks for, and SQLite's message text is not a
+  compatibility surface. A rewording upstream would then turn a correct probe into an inconclusive
+  one and stop reports for no reason.
+- **Match `SQLITE_READONLY` exactly rather than by prefix (rejected).** It would classify every
+  extended read-only code as inconclusive, which is a refusal for a database that genuinely is
+  read-only.
+
+**Consequences.**
+
+- The classifier is total on this input space in a way interlock's is not: there is no "the error had
+  no code" path, so no input falls through for a reason unrelated to what SQLite decided.
+- The source case that drives the classifier translates straight and gets *stronger*, not weaker: it
+  still supplies two errors SQLite actually raised, and the assertion is now against the code SQLite
+  set rather than against words in a sentence.
+- Recorded as `adapted` for the one entry it touches, because a reviewer comparing the two functions
+  side by side will see one branch missing and should find the reason here rather than reconstruct
+  it.
+
+**Status.** accepted
+
+**Source.** 2026-08-22, against better-sqlite3 13.0.3 (every raised error carries `code`) and
+interlock `65f36c5` (`measurement/reader.py`, which records the 3.10 constraint in its own
+docstring). Falsified by: better-sqlite3 raising a SQLite-originated error with no `code`, which
+would reopen the question of what to do with an unclassifiable refusal -- the answer would still be
+"refuse as inconclusive", but the classifier would then need the absent-code case written down.
+
+---
+
+## D-0103 — A report snapshot refuses a deferred body rather than awaiting or draining it
+
+**Context.** Interlock's `measurement_snapshot` is a Python `@contextmanager`, used with `with`. A
+`with` body cannot return early and carry on later: the scope ends when the body ends, and the read
+transaction is released exactly then.
+
+TypeScript has no `with`, so the port expresses the scope as a callback -- and a callback **can**
+return early and carry on later. An `async` body returns a pending Promise at its first `await`, at
+which point `measurementSnapshot`'s `finally` runs and rolls the snapshot back. Every read after
+that `await` then executes on its own separate state of the database, which is silently the exact
+defect the snapshot exists to remove, arriving through the mechanism meant to remove it, with no
+error anywhere and a `db_fingerprint` still attesting a single state.
+
+This is a hazard the **translation** created. It is not in interlock and could not be.
+
+**Decision.** A thenable result is **refused**, not awaited. The refusal is guarded twice:
+
+- **Compile time.** The callback's return type is `T & (T extends PromiseLike<unknown> ? never :
+  unknown)`, which collapses to `never` for a Promise-returning body, so the call site does not
+  compile. Verified: `Argument of type '() => Promise<number>' is not assignable to parameter of
+  type '(connection: Database) => never'`.
+- **Runtime, before invocation.** A function's laziness is knowable from its own kind without
+  calling it (`Object.prototype.toString` reads an internal class the syntax sets and no userland
+  property can forge). Three kinds defer and all three are refused by one rule: `async` returns at
+  its first `await`, `function*` returns an iterator having executed **nothing at all**, and `async
+  function*` does both. This check runs before the snapshot is opened, so this branch genuinely
+  **prevents** the work: the body never runs and no lock is ever taken.
+- **Runtime, after invocation.** An ordinary function that *returns* a Promise or an iterator is
+  none of those kinds, and by the time the value is in hand the body has already been entered. Nothing can
+  un-start it, so this branch is **containment and a report, not prevention**, and it is written
+  down that way rather than claimed as a guarantee. It does two things: the check runs **inside** the
+  `try`, so the existing `finally` still releases the snapshot -- refusing must not leak the lock it
+  is refusing to hold -- and an abandoned **native** Promise gets a no-op rejection handler, because
+  the caller never receives it and an unhandled rejection terminates Node by default, which would
+  turn a refusal into a crash. Only a native one: a merely structural thenable's `then` is arbitrary
+  user code, and calling it there would run that code synchronously inside the still-held snapshot,
+  where it could read through the lock this branch exists to release, block, or throw and replace the
+  refusal with its own error. The residual exposure -- a non-native promise-like rejecting unobserved
+  -- is the smaller of the two hazards and is accepted knowingly rather than traded for the larger
+  one. An iterator result is discriminated by a callable `next` **and** a self-iteration
+  protocol, not by `Symbol.iterator` alone: an array of rows is iterable and already fully evaluated,
+  and it is the most obvious thing a report body returns, so refusing it would be a worse bug than
+  the one being fixed.
+
+Thenables are detected structurally (a callable `.then`) rather than by `instanceof Promise`, because
+a Promise from another realm and a userland thenable suspend in exactly the same way.
+
+**Alternatives.**
+
+- **Await the body and make the function async (rejected).** It would hold a SHARED lock -- which
+  blocks *every* writer on the control plane, including the watcher, the dispatcher and the CI
+  ingest (see the cost note on `measurementSnapshot`) -- across an arbitrary suspension the harness
+  does not control. That is a worse thing to do than refuse. Nothing in the harness is asynchronous:
+  better-sqlite3 is a synchronous driver and every read in a report is a synchronous call, so the
+  shape being refused is one the harness has no reason to produce.
+- **Compile-time guard only (rejected).** The port publishes a package; an untyped consumer reaches
+  this function with no type check between them, and this failure is silent by construction.
+- **Runtime guard only (rejected).** A mistake a type can catch should not wait for a test run.
+- **Only the post-invocation thenable check (rejected).** It was the first implementation and it is
+  not enough: it reports the problem after the body has begun, so for the case that *can* be caught
+  early -- an `async function`, which is the overwhelmingly common way to write one -- it gave up
+  prevention for no reason.
+- **Letting the abandoned Promise reject unobserved (rejected).** Node's default for an unhandled
+  rejection is to terminate the process, so a refusal designed to keep a report honest would instead
+  take the process down some milliseconds later, at a point with no connection to the cause.
+- **Return the connection and let callers begin/end by hand (rejected).** It reintroduces the
+  un-exited scope the callback form exists to make impossible, which is a larger hole than the one
+  being closed.
+
+**Consequences.**
+
+- One target-only test, `an asynchronous report body is refused, not awaited (target-only)`. It is
+  declared in `parity/measurement.ledger.json` and is **not** counted as ported coverage -- it
+  translates no source case, because there is no source case to translate.
+- `AsynchronousReportRefused` is port-only surface, exported from `src/measurement/index.ts` and
+  re-exported from `src/index.ts` -- the package exports only `.` (`D-0002`), so a name absent from
+  the root entry point is one an installed consumer cannot reach at all. It descends from
+  `ControlPlaneRefusal`, so a caller catching the family catches this too.
+- The branches are pinned separately by the target-only test, because they promise different things:
+  the before-invocation branches assert the body never ran and no transaction was opened, the
+  after-invocation branches assert only that the snapshot was released and no unhandled rejection
+  escaped. A single test over one of them would read as a guarantee the others do not make. The test
+  also pins the **negative** case -- an ordinary iterable result is accepted -- so the discrimination
+  cannot silently widen into "refuse anything iterable".
+- Every later belt that translates a Python `@contextmanager` to a callback inherits this question.
+  The answer is this entry: refuse, guard at both levels, and do not quietly make the scope async.
+
+**Status.** accepted
+
+**Source.** Raised as a P1 by the `codex exec review` gate on this PR, 2026-08-22, against
+`src/measurement/reader.ts`; the split into a preventing and a containing branch came from the same
+gate's second round, which observed that the first implementation detected the Promise only after the
+body had started. Compile-time behaviour verified with `tsc -p tsconfig.json --noEmit` on
+TypeScript 5.8.3 the same day. Falsified by: the harness acquiring a genuinely asynchronous read path
+(it has none while better-sqlite3 is the driver), which would make "refuse" the wrong answer and
+require deciding what may hold the control plane's SHARED lock across a suspension.
