@@ -298,3 +298,26 @@ export function comparePythonStrings(left: string, right: string): number {
   }
   return leftPoints.length - rightPoints.length;
 }
+
+/**
+ * Python's `repr()` of a tuple of strings: `('a', 'b')`, and `('a',)` at one.
+ *
+ * The trailing comma on a one-element tuple is not decoration -- in Python
+ * `('a')` is the string and `('a',)` is the tuple, so a refusal message that
+ * dropped it would print something that reads as a different type from the one
+ * the code holds. It matters here because interlock's `DuplicateCorrelationKey`
+ * interpolates a correlation key's `parts` with `!r`, and a `pr_merge` key of
+ * one component is a thing this port has to be able to spell the same way.
+ *
+ * Elements go through {@link pythonRepr}, so quoting and escaping are the same
+ * as everywhere else a value reaches an operator-facing message.
+ */
+export function pythonTupleRepr(parts: readonly string[]): string {
+  if (parts.length === 0) {
+    return "()";
+  }
+  if (parts.length === 1) {
+    return `(${pythonRepr(parts[0] as string)},)`;
+  }
+  return `(${parts.map((part) => pythonRepr(part)).join(", ")})`;
+}
