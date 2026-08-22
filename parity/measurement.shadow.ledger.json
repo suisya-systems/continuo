@@ -1,0 +1,468 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. shadow is the seventh file of this lane and was unblocked by the control-plane belt's CI ingestion (ci_ingest, repo_link): it imports prVerdict rather than folding CI severity a second time, which is the property that keeps 'indeterminate outranks passed' true in exactly one place."
+    },
+    "file": {
+      "path": "tests/measurement/test_shadow.py",
+      "collected": 37,
+      "inventory": "parity/source-inventory/measurement.test_shadow.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/shadow.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "frozen dataclass, tuple fields, MappingProxyType",
+        "to": "frozen class, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention established in the false-termination belt. Every dataclass here is frozen and its list and mapping fields are copied through the helpers; readOnlyMap preserves insertion order, which the ported case asserting counts() emits section 3.3's five buckets in order depends on.",
+        "affects": "every entry that reads an episode, a pair or a reconciliation field"
+      },
+      {
+        "from": "__post_init__ validation",
+        "to": "validation in the constructor, before any field is assigned",
+        "why": "A TypeScript constructor has no post-init hook, and validating after assignment would leave a refused object briefly constructible. The refusal types, messages and order of checks are unchanged, so a test asserting which refusal fires still asserts the same one.",
+        "affects": "the six refusal entries over CorrelationKey and ShadowEpisode"
+      },
+      {
+        "from": "f-string !r interpolation of caller-supplied strings",
+        "to": "pythonRepr (src/measurement/format.ts), plus pythonTupleRepr for the key's parts",
+        "why": "The refusal text contract established in the reader belt and settled by the operator as reproduce-and-disclose. pythonTupleRepr is new here and exists for one message: DuplicateCorrelationKey interpolates CorrelationKey.parts with !r, and Python's one-element tuple prints a trailing comma -- ('a',) is a tuple and ('a') is a string, so dropping it would print a different type from the one the code holds.",
+        "affects": "every refusal-message entry"
+      },
+      {
+        "from": "_rows(cursor) reading column names off cursor.description",
+        "to": "better-sqlite3's own row objects",
+        "why": "The source's helper exists because setting row_factory on a connection this module did not open would change what every other caller of that connection receives. better-sqlite3 returns plain objects per statement with no connection-level state to disturb, so the hazard the helper guards against does not exist and the helper has nothing to do. The columns read, and their aliases, are unchanged.",
+        "affects": "the four reader entries"
+      },
+      {
+        "from": "pytest's `db` fixture and `writable`/`open_for_measurement` try/finally pairs",
+        "to": "a per-test productionDb() plus withWritable / withMeasurement (rule 8)",
+        "why": "The convention every measurement test file in this port uses: a fixture becomes a call, and the two connection kinds stay distinct so the read-only capability under test is never relaxed to build a fixture.",
+        "affects": "every entry that touches a database"
+      },
+      {
+        "from": "frozenset for the censored-id set and POSITIONAL_SUBJECT_CLASSES",
+        "to": "ReadonlySet",
+        "why": "Membership semantics are identical for the string sets used here, and the port takes the set by Iterable so a caller may hand over an array without the module deciding what a 'set' is.",
+        "affects": "the censoring entries"
+      }
+    ],
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > a fixture label outside the vocabulary is refused even when no episode wears it",
+        "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > two subject classes spelling the same parts do not pair",
+        "test/measurement/shadow.test.ts::properties the ported cases leave unguarded (target-only) > a negative onset buckets downward, not toward zero"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close gaps a 33-mutation sweep found, and all three are INHERITED: the same mutation was applied to interlock's own shadow.py at 65f36c5 and its 37 cases still passed in each case (measured, not inferred). Each is recorded with its verdict under mutation_sweep below, and each was confirmed to kill its mutation and only its mutation."
+    }
+  },
+  "totals": {
+    "source_cases": 37,
+    "ported": 37,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "The barrel exposes shadow's CENSORED, MISS, SHADOW_PRESENT, SHADOW_ABSENT and QUERY_DEFINITIONS under qualified names (SHADOW_CENSORED, SHADOW_MISS, SHADOW_REFERENCE_PRESENT, SHADOW_REFERENCE_ABSENT, SHADOW_QUERY_DEFINITIONS).",
+      "why": "Python namespaces these per module -- shadow.CENSORED and windows.CENSORED are two names for two different facts (a reconciliation bucket and a window classification), and shadow.MISS and fixtures.MISS likewise (a v1_only adjudication and a graded case that was missed) -- and a flat barrel cannot carry two exports of one spelling. The values are unchanged and each module still exports the bare name under its own path, exactly as the source does. This is the same treatment cohort's QUERY_DEFINITIONS received, applied to a wider collision."
+    },
+    {
+      "what": "The four reader statements are exported as named constants (CI_OUTCOME_EPISODES_QUERY and its three siblings) and collected in QUERY_DEFINITIONS, which the source does not do.",
+      "why": "The source embeds each statement in its function body. interlock D-0040 requires the report's provenance header to carry the text of every query it ran, and the header module reads that text from a catalogue; false_termination.py and cohort.py already export one, so shadow's statements are lifted to module constants to be reachable the same way. The SQL is byte-identical to the source's (verified by comparison, not by eye), and the liveness statement keeps its {placeholders} marker in the same position the f-string interpolates."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "The v1 side is whatever the adapter hands over. Nothing here can tell an adapter that reported half of v1's episodes from one that reported all of them, so a partial read is reported as Interlock improvement.",
+      "matches_source": true,
+      "note": "Structural upstream and reproduced. The separable-adapter design is the point (this module must not open v1's files), and the one confusion it CAN prevent -- an empty read read as 'v1 saw nothing' -- it prevents by degrading to the no-shadow-reference state and making the empty claim reachable only through attestsEmpty.",
+      "where_a_fix_belongs": "upstream, in the adapter's own provenance."
+    },
+    {
+      "behaviour": "The positional escalation key is sound only while both systems saw the same escalations in the same order, and a tie in created_at_ms is broken by gate_id, which is an arbitrary order rather than a real one.",
+      "matches_source": true,
+      "note": "Named by the source in three places and carried into the report verbatim (POSITIONAL_KEY_CAVEAT). The failure direction is safe -- unmatched episodes on both sides rather than a confident wrong pairing -- and section 7 reads a run of them as the signal that the key needs replacing.",
+      "where_a_fix_belongs": "upstream, and only with a v1 register id Interlock can see."
+    },
+    {
+      "behaviour": "renderShadowReconciliation prints POSITIONAL_KEY_CAVEAT only when an episode in the unmatched_key bucket is positional. A worker_escalation episode that DID compute its key and found no counterpart is filed interlock_only or v1_only, so a report full of unpaired escalations -- the ordering divergence the caveat is about -- can print no caveat at all.",
+      "matches_source": true,
+      "note": "Reproduced verbatim: interlock's renderer guards on `any(episode.positional_key for episode in report.unmatched_key)` and nothing else. Raised by the codex review gate as a design observation (P2) and NOT fixed here, because widening the guard would make continuo's report say something interlock's does not for the same data, which is the divergence a parity port exists to prevent. The caveat is still reachable on the report object (positionalCaveat) and on every key the escalation reader produces (CorrelationKey.positional), so a consumer that wants it can render it; what is missing is only the renderer's own decision to print it.",
+      "where_a_fix_belongs": "upstream, in interlock's renderer, and then here in the same shape."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_ci_outcome_key_composes_from_ci_observation_joined_to_repository",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > the ci_outcome key composes from ci_observation joined to repository",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_case_differing_repo_slug_still_matches_the_v1_spelling",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > a case-differing repo slug still matches the v1 spelling",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_pr_merge_key_omits_the_head_and_onsets_at_the_provider_merge",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > the pr_merge key omits the head and onsets at the provider merge",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_escalations_are_numbered_over_the_runs_whole_history_not_the_window",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > escalations are numbered over the run's whole history, not the window",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_escalation_without_a_run_lands_in_unmatched_key_rather_than_being_dropped",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > an escalation without a run lands in unmatched_key rather than being dropped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_session_liveness_key_buckets_the_onset_and_not_the_detection",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > the session_liveness key buckets the onset and not the detection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_session_liveness_recovers_the_run_through_the_session_binding",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > session liveness recovers the run through the session binding",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_incident_with_no_elapsed_ms_cannot_state_an_onset_and_is_unmatched",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > an incident with no elapsed_ms cannot state an onset and is unmatched",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_liveness_reader_refuses_to_guess_which_fact_states_are_the_class",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > the liveness reader refuses to guess which fact_states are the class",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_read_interlock_episodes_covers_every_subject_class",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > readInterlockEpisodes covers every subject class",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_selection_window_that_is_empty_or_inverted_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::the four correlation keys > a selection window that is empty or inverted is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_empty_v1_input_is_the_no_shadow_reference_state_not_all_interlock_only",
+      "target_id": "test/measurement/shadow.test.ts::the no-shadow-reference state > an empty v1 input is the no-shadow-reference state, not all interlock_only",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_absent_reference_must_say_why_and_the_reason_reaches_the_report",
+      "target_id": "test/measurement/shadow.test.ts::the no-shadow-reference state > an absent reference must say why, and the reason reaches the report",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_attesting_empty_is_the_explicit_way_to_say_v1_saw_nothing",
+      "target_id": "test/measurement/shadow.test.ts::the no-shadow-reference state > attesting empty is the explicit way to say v1 saw nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_v1_only_episode_is_never_counted_as_a_miss_without_a_classification",
+      "target_id": "test/measurement/shadow.test.ts::v1_only: neither counted nor discarded without a verdict > a v1_only episode is never counted as a miss without a classification",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_fixture_label_settles_a_candidate_and_a_false_positive_is_not_a_miss",
+      "target_id": "test/measurement/shadow.test.ts::v1_only: neither counted nor discarded without a verdict > a fixture label settles a candidate, and a false positive is not a miss",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_undetermined_is_a_settled_answer_and_is_not_a_miss",
+      "target_id": "test/measurement/shadow.test.ts::v1_only: neither counted nor discarded without a verdict > undetermined is a settled answer and is not a miss",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_fixture_label_outside_the_vocabulary_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::v1_only: neither counted nor discarded without a verdict > a fixture label outside the vocabulary is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_five_buckets_partition_the_input_with_no_double_counting",
+      "target_id": "test/measurement/shadow.test.ts::the partition, and censoring's precedence > the five buckets partition the input with no double counting",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_pair_is_censored_when_either_half_is_and_no_miss_is_fabricated",
+      "target_id": "test/measurement/shadow.test.ts::the partition, and censoring's precedence > a pair is censored when either half is, and no miss is fabricated",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_censored_ids_come_from_the_windows_module_and_not_from_here",
+      "target_id": "test/measurement/shadow.test.ts::the partition, and censoring's precedence > censored ids come from the windows module and not from here",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_keyless_censored_episode_is_censored_and_does_not_inflate_the_key_bucket",
+      "target_id": "test/measurement/shadow.test.ts::the partition, and censoring's precedence > a keyless censored episode is censored and does not inflate the key bucket",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_positional_caveat_rides_on_the_key_and_on_the_report",
+      "target_id": "test/measurement/shadow.test.ts::the positional key, said out loud > the positional caveat rides on the key and on the report",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_two_escalations_at_one_ordinal_are_refused_with_the_caveat_attached",
+      "target_id": "test/measurement/shadow.test.ts::the positional key, said out loud > two escalations at one ordinal are refused with the caveat attached",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_matched_pair_that_disagrees_on_shape_is_a_finding_and_not_a_miss",
+      "target_id": "test/measurement/shadow.test.ts::the positional key, said out loud > a matched pair that disagrees on shape is a finding and not a miss",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_episode_with_neither_key_nor_gap_or_with_both_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::refusals that keep an episode from vanishing > an episode with neither key nor gap, or with both, is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_empty_key_component_is_a_missing_component_and_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::refusals that keep an episode from vanishing > an empty key component is a missing component and is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_key_of_another_subject_class_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::refusals that keep an episode from vanishing > a key of another subject class is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_subject_class_outside_the_table_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::refusals that keep an episode from vanishing > a subject class outside the table is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_one_episode_id_on_both_sides_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::refusals that keep an episode from vanishing > one episode id on both sides is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_empty_or_inverted_report_period_is_refused",
+      "target_id": "test/measurement/shadow.test.ts::refusals that keep an episode from vanishing > an empty or inverted report period is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_buckets_are_section_3_3_s_five_and_counts_emits_all_of_them_at_zero",
+      "target_id": "test/measurement/shadow.test.ts::the report's own shape > the buckets are section 3.3's five and counts emits all of them at zero",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_the_rendered_report_is_ascii_and_survives_a_cp932_console",
+      "target_id": "test/measurement/shadow.test.ts::the report's own shape > the rendered report is ASCII and survives a cp932 console",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_malformed_liveness_incident_outside_the_window_is_not_selected",
+      "target_id": "test/measurement/shadow.test.ts::the report's own shape > a malformed liveness incident outside the window is not selected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_malformed_liveness_incident_inside_the_window_says_it_was_bounded",
+      "target_id": "test/measurement/shadow.test.ts::the report's own shape > a malformed liveness incident inside the window says it was bounded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_a_liveness_incident_with_no_run_is_windowed_on_its_derivable_onset",
+      "target_id": "test/measurement/shadow.test.ts::the report's own shape > a liveness incident with no run is windowed on its derivable onset",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_shadow.py::test_an_episode_selected_on_a_bound_may_not_carry_a_correlation_key",
+      "target_id": "test/measurement/shadow.test.ts::the report's own shape > an episode selected on a bound may not carry a correlation key",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "33 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 30,
+    "survivors": [
+      {
+        "mutation": "reconcile stops checking that each fixture label is one of ADJUDICATIONS",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported case labels the shape its own v1 episode carries, so with the early check gone the V1OnlyEpisode constructor refuses the same value a moment later and the case passes either way -- on both sides: the same mutation applied to interlock's shadow.py leaves its 37 cases green. The two checks are not the same check. A label whose shape no episode in the period wears reaches no constructor at all, and that is precisely the typo the early check exists for: a corpus that believes it settles a shape it has misspelled settles nothing, and the report is computed against it in silence."
+      },
+      {
+        "mutation": "CorrelationKey.token() drops the subject class and joins only the parts",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "No case on either side gives two episodes of different subject classes the same components, so the class's presence in the token is unexercised -- verified against interlock, whose suite also stays green under the mutation. The docstring names the failure exactly: a merge episode reported as agreeing with a CI outcome. It manufactures a `both` out of what should be one interlock_only and one candidate miss, which is the direction the reconciliation must never invent."
+      },
+      {
+        "mutation": "the 60 s onset bucket rounds toward zero (Math.trunc) instead of downward (Math.floor)",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every case on both sides onsets after T0, and the two roundings agree on every non-negative instant, so the source's own comment about negative onsets is unexercised in interlock too (measured). A negative onset is reachable from rows the schema permits: created_at_ms and elapsed_ms are both non-negative and their difference need not be. Under truncation an onset of -1000 and an onset of 0 share bucket 0, which is two distinct conditions on one run collapsing into a single episode identity -- the exact collision the bucket's granularity is chosen to avoid."
+      }
+    ],
+    "note": "The three survivors were re-run against the new target-only cases and each is now killed by its own case and no other. A first attempt at this sweep reported 33/33 caught and was DISCARDED as invalid: the scratch harness had no CONTINUO_TEST_SEED, so every run failed at config load and every mutation looked caught. The sweep above asserts a green baseline in the same harness before mutating. The codex review gate raised two P2 observations against this port; both are recorded rather than silently actioned -- one as the inherited limitation above, the other (ReadonlySet is a compile-time constraint where Python's frozenset is a runtime one) as a repo-wide convention question rather than a shadow-specific defect, since every closed vocabulary in continuo -- CI_PROVIDERS, CI_VERDICTS, EVENT_TYPES, THRESHOLD_KINDS and six more -- is spelled the same way."
+  }
+}
