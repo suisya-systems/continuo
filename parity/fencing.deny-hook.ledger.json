@@ -1,0 +1,237 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "fencing",
+      "collected": 124,
+      "inventory": "parity/source-inventory/fencing.all.txt"
+    },
+    "file": {
+      "path": "tests/fencing/test_deny_hook.py",
+      "collected": 21,
+      "inventory": "parity/source-inventory/fencing.test_deny_hook.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/fencing/deny-hook.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "note": "This file carries no target-only test. Every case in it translates one interlock node id. The lane's target-only tests are declared on parity/fencing.battery-coverage.ledger.json (the CPython differential oracle) and parity/fencing.spawn-precondition.ledger.json (seam liveness and the canary-acceptance wiring). Target-only tests are never counted as ported coverage."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 21,
+    "ported": 16,
+    "adapted": 5,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheHookDenies::test_every_probe_is_denied_through_the_hook",
+      "target_id": "test/fencing/deny-hook.test.ts::the hook denies > every probe is denied through the hook",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheHookDenies::test_all_roles_deny_all_their_probes_through_the_hook",
+      "target_id": "test/fencing/deny-hook.test.ts::the hook denies > all roles deny all their probes through the hook",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheHookDenies::test_the_payload_carries_both_output_shapes",
+      "target_id": "test/fencing/deny-hook.test.ts::the hook denies > the payload carries both output shapes",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheHookDenies::test_an_unfenced_operation_gets_no_opinion_rather_than_an_allow",
+      "target_id": "test/fencing/deny-hook.test.ts::the hook denies > an unfenced operation gets no opinion rather than an allow",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_missing_fence_file_denies",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > missing fence file denies",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_malformed_fence_file_denies",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > malformed fence file denies",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_fence_file_with_no_rules_denies",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > fence file with no rules denies",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_event_with_no_tool_name_denies_rather_than_guessing",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > event with no tool name denies rather than guessing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_a_rule_scoped_to_a_tool_denies_an_unreadable_payload",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > a rule scoped to a tool denies an unreadable payload",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_empty_stdin_denies",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > empty stdin denies",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_non_json_stdin_denies",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > non json stdin denies",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestFailOpenIsTestedForExplicitly::test_an_internal_error_denies_instead_of_escaping_as_a_traceback",
+      "target_id": "test/fencing/deny-hook.test.ts::fail open is tested for explicitly > an internal error denies instead of escaping as a traceback",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED in the launch and in nothing else. The source is `monkeypatch.setattr(hook_module, \"read_fence\", boom)` followed by an in-process `main([...])`. The port's equivalent of the monkeypatch is a replacement of `hookSeams.readFence` (D-0014), and that is what happens -- but `main()` reads stdin synchronously to EOF before it reaches the fence, exactly as `sys.stdin.read()` does, so calling it inside the runner would block on the runner's own stdin whenever that is a terminal. So the seam is replaced and `main()` is called inside a child Node process whose stdin is closed. The source's assertion is kept in full (`main` RETURNED `EXIT_DENY`, read back from a file the child writes, with `EXIT_DENY` taken from the hook module rather than hard-coded), and the case is STRONGER for the adaptation: the child's own exit status is asserted too, which is the thing the case is named for and would be 1 if the error had escaped as a traceback.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheFenceMustBelongToTheRole::test_a_fence_for_another_role_is_denied",
+      "target_id": "test/fencing/deny-hook.test.ts::the fence must belong to the role > a fence for another role is denied",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "STRENGTHENED, and only in the direction the rulebook requires. The source asserts `\"curator\" in decision.reason and \"worker\" in decision.reason`; the port asserts both names in their QUOTED form (`'curator'`, `'worker'`), which is how the hook interpolates them through the Python `repr` transcription. A bare substring test is unfalsifiable here: the same reason carries the fence PATH, and the path is built from the per-case temporary root, so a root that happened to contain the word would satisfy the source's assertion against a hook that never named a role at all. That is the D-0020 failure mode, in the one file whose refusal message is built from a path the case itself chose. The property pinned is the source's; the assertion is a superset of it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheFenceMustBelongToTheRole::test_the_matching_role_is_evaluated_normally",
+      "target_id": "test/fencing/deny-hook.test.ts::the fence must belong to the role > the matching role is evaluated normally",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheFenceMustBelongToTheRole::test_the_rendered_command_passes_the_role",
+      "target_id": "test/fencing/deny-hook.test.ts::the fence must belong to the role > the rendered command passes the role",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestExitStatusContract::test_a_deny_never_uses_exit_1",
+      "target_id": "test/fencing/deny-hook.test.ts::exit status contract > a deny never uses exit 1",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestExitStatusContract::test_no_opinion_exits_zero_and_says_nothing",
+      "target_id": "test/fencing/deny-hook.test.ts::exit status contract > no opinion exits zero and says nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestExitStatusContract::test_a_deny_is_readable_on_both_stdout_and_stderr",
+      "target_id": "test/fencing/deny-hook.test.ts::exit status contract > a deny is readable on both stdout and stderr",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheRenderedCommandIsTheOneThatWorks::test_the_rendered_command_denies_a_probe",
+      "target_id": "test/fencing/deny-hook.test.ts::the rendered command is the one that works > the rendered command denies a probe",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's last class differs from the rest of its file by LAUNCH MECHANISM: every other case runs the hook as `python -m claude_org_runtime.fencing.hook`, and these run the command string the renderer emits, which invokes the file BY PATH -- the difference that once hid a real hole (relative imports failing with ImportError and exit 1). Node has no `-m`, and `hook.mjs` is only ever launched by path (D-0204), so in the port both launches collapse onto `node <hook.mjs>` and this class no longer differs by mechanism. It is kept because it still varies everything else it was written to vary -- the argv comes out of the rendered settings through `shlex.split`, the child runs in a foreign working directory, and the environment is stripped -- and the source's `_clean_env` (which pops PYTHONPATH so the package is deliberately not importable from the child) becomes removal of NODE_PATH and NODE_OPTIONS, the two variables that can add a module search root or inject a loader. STRENGTHENED to re-secure what the collapse costs: the case additionally asserts the payload's `interlock.rule_id` equals the probe's rule id. Interlock's hook EXITS 1 when it cannot load itself, so the source's `returncode != 1` distinguishes \"the fence denied this probe\" from \"the hook could not load\"; continuo's hook denies with 2 in both cases, so without the rule-id assertion an unloadable hook would satisfy every other assertion in the case.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheRenderedCommandIsTheOneThatWorks::test_the_rendered_command_never_exits_1_even_when_it_cannot_work",
+      "target_id": "test/fencing/deny-hook.test.ts::the rendered command is the one that works > the rendered command never exits 1 even when it cannot work",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's last class differs from the rest of its file by LAUNCH MECHANISM: every other case runs the hook as `python -m claude_org_runtime.fencing.hook`, and these run the command string the renderer emits, which invokes the file BY PATH -- the difference that once hid a real hole (relative imports failing with ImportError and exit 1). Node has no `-m`, and `hook.mjs` is only ever launched by path (D-0204), so in the port both launches collapse onto `node <hook.mjs>` and this class no longer differs by mechanism. It is kept because it still varies everything else it was written to vary -- the argv comes out of the rendered settings through `shlex.split`, the child runs in a foreign working directory, and the environment is stripped -- and the source's `_clean_env` (which pops PYTHONPATH so the package is deliberately not importable from the child) becomes removal of NODE_PATH and NODE_OPTIONS, the two variables that can add a module search root or inject a loader. The assertions are the source's unchanged (`returncode == EXIT_DENY`, `stdout[\"decision\"] == \"block\"`), with `EXIT_DENY` read from the hook module rather than written as a literal. No fence file is written, which is the state the source relies on here too.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_deny_hook.py::TestTheRenderedCommandIsTheOneThatWorks::test_every_role_rendered_command_runs",
+      "target_id": "test/fencing/deny-hook.test.ts::the rendered command is the one that works > every role rendered command runs",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's last class differs from the rest of its file by LAUNCH MECHANISM: every other case runs the hook as `python -m claude_org_runtime.fencing.hook`, and these run the command string the renderer emits, which invokes the file BY PATH -- the difference that once hid a real hole (relative imports failing with ImportError and exit 1). Node has no `-m`, and `hook.mjs` is only ever launched by path (D-0204), so in the port both launches collapse onto `node <hook.mjs>` and this class no longer differs by mechanism. It is kept because it still varies everything else it was written to vary -- the argv comes out of the rendered settings through `shlex.split`, the child runs in a foreign working directory, and the environment is stripped -- and the source's `_clean_env` (which pops PYTHONPATH so the package is deliberately not importable from the child) becomes removal of NODE_PATH and NODE_OPTIONS, the two variables that can add a module search root or inject a loader. STRENGTHENED for the same reason as `test_the_rendered_command_denies_a_probe`, per role: the payload's `interlock.rule_id` must equal the probe's rule id, so a hook that denied without ever reading the role's fence cannot pass. `dataclasses.replace(ctx, fence_path=...)` maps to `replaceFenceContext`.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "`returncode != 1` no longer distinguishes a fence deny from a hook that could not load, because this hook's deny status is 2 rather than interlock's 1.",
+      "status": "translation hazard, found and closed inside this file rather than left open",
+      "detail": "interlock's hook exits 1 when it cannot load itself, so the source's `returncode != 1` is exactly what separates \"the fence denied this probe\" from \"the hook broke and denied by default\". continuo's hook denies with exit 2 (D-0204/D-0207), so a straight translation of `returncode != 1` plus `decision == \"block\"` is satisfied by a hook that never read a fence. Two cases in the rendered-command class -- \"the rendered command denies a probe\" and \"every role rendered command runs\" -- therefore carry an added assertion that the denied `rule_id` is the PROBE's rule id, which only a hook that actually read the published fence can produce. The added assertion is a strengthening in the direction the rulebook requires, not a divergence: it pins the property the source's exit-code check pinned on its own runtime. Cross-reference: this is one of three cases in this port where the suite was green while proving nothing; the three are written up together in docs/test-translation-conventions.md, section 10 (\"Make it fail on purpose, and confirm it fails for the reason you expect\")."
+    }
+  ]
+}

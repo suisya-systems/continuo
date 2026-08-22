@@ -65,6 +65,12 @@ spaces distinct.
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
+| D-0204 | The `PreToolUse` deny hook ships as hand-written JavaScript | accepted |
+| D-0205 | The spawn precondition's wiring is asserted as a module-graph dependency | accepted |
+| D-0206 | The fence ledger takes no cross-process lock, and interlock is a single writer | accepted |
+| D-0207 | The hook's argv surface reproduces argparse's two passes, rather than being waived | accepted |
+| D-0208 | The deny hook must be the program the hook command runs, not a string it mentions | accepted |
+| D-0209 | `npm test` builds first, because the deny hook's dependencies come from `dist/` | accepted |
 
 ---
 
@@ -2660,3 +2666,512 @@ stage's predecessor. None exists today; if one appears, this decision is what sh
 **Source.** Operator decision, 2026-08-22, on lane A's survey of `ADMISSIBLE`'s advance edges and all
 twelve `enqueue_relay` call sites.
 
+## D-0204 — The `PreToolUse` deny hook ships as hand-written JavaScript
+
+**Status.** accepted (2026-08-22)
+
+**Context.** The deny hook is not imported; it is **launched as a subprocess by path**. Interlock's
+`fencing/spawn.py` computes `default_hook_script()` as `Path(__file__).resolve().with_name("hook.py")`,
+the rendered role document carries the command line
+`{python} {hook_script} --role worker --fence {fence_path}`, and interlock's own hook tests run that
+file as a child process and feed it a `PreToolUse` payload on stdin. Two things follow that a
+TypeScript port cannot argue away:
+
+- **The script token must name a real existing file.** `checkHookResolvable` in
+  `src/fencing/renderer.ts` walks every surviving `shlex` token of the hook command and refuses with
+  `hook-unresolvable` when a token ending in `.sh` / `.py` / `.mjs` / `.js` / `.cjs` is not a file on
+  disk. A hook that exists only as a compiler input is a fence that refuses to render.
+- **Node 22 cannot execute a `.ts` file**, and Node 22 is a required CI cell under `D-0003`
+  (`engines.node` is `>=22.14.0 <23 || >=24.0.0 <25`; the matrix is 22 and 24 on ubuntu and
+  windows). Measured on this machine, Node **v22.17.0**, 2026-08-22: running a `.ts` file inside
+  this package raises `TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts"`. The
+  same file runs only under `--experimental-strip-types`, which additionally prints an
+  `ExperimentalWarning` on stderr -- and a hook whose stderr carries a warning banner is a hook
+  whose transcript the CLI and the ported tests have to be taught to ignore.
+
+So the artifact has to be a file Node runs directly, unflagged, from the source tree during
+`npm test` and from `dist/` in an installed package.
+
+**Decision.** The hook ships as **`src/fencing/hook.mjs`, hand-written JavaScript**, and that file
+is the artifact -- copied into `dist/` rather than compiled into it, so the path
+`default_hook_script()` computes resolves to the same content in both trees. This is a **deliberate
+deviation** from the repository's TypeScript policy, taken for exactly one file and stated here so
+nobody has to rediscover why it is not `.ts`. It is mitigated with JSDoc type annotations, which
+give an editor and a reviewer the same shapes the rest of the port declares in TypeScript.
+
+**Revisit when** Node's type stripping is stable and on by default in **every** required CI cell --
+at that point the constraint above disappears and the hook can become TypeScript like everything
+else. Tracked in `suisya-systems/continuo#18` with the other post-parity repairs (`D-0022`).
+
+**Alternatives.**
+
+- **`hook.ts` compiled, with a thin `.mjs` entry point that imports it (rejected -- it does not
+  work).** The entry point has the same problem one level down: a `.mjs` cannot import a `.ts` at
+  runtime either, so the entry would have to import from `dist/`, which is the third alternative
+  below wearing a different hat.
+- **Run the hook through a loader (`tsx`, `--import`) in the tests only (rejected).** It makes the
+  suite exercise a launch path that exists **only for tests**: production would start
+  `node hook.mjs` while the tests start `node --import tsx hook.ts`, and the fail-closed behaviour
+  the cases pin would be pinned on the wrong process. That is the same shape `D-0014` rejected for
+  parameter injection -- "the test would then exercise a path that exists for tests, and the case
+  would no longer prove anything about what production does" -- and it is worse here, because the
+  thing not being proven is the deny decision itself.
+- **Point the hook path into `dist/` and build before testing (rejected).** `npm test` would stop
+  working standalone: a clean checkout, or a source edit without a rebuild, would run the previous
+  build's hook, and the failure mode of a stale fail-closed hook is a **stale deny set** that no
+  assertion in the suite is looking at. It also makes the renderer's `hook-unresolvable` refusal
+  depend on build state rather than on the tree.
+- **Keep invoking interlock's `hook.py` through a Python interpreter (rejected).** It would make the
+  TypeScript package depend on a Python runtime at spawn time, which is precisely the dependency the
+  port exists to remove, and it would leave the port's own hook semantics untested.
+
+**Consequence worth stating plainly.** The fail-closed core -- the one component whose job is to
+deny a tool call when anything at all is wrong with its input -- is the single file in this port
+without type checking. That **raises** the value of its differential and subprocess tests rather
+than lowering it: with no compiler between the source and the deny decision, the tests that run the
+real file as a real child process on real stdin bytes are the only thing standing behind it, so the
+hook's cases are ported as subprocess cases and are not permitted to degrade into in-process
+function calls.
+
+**Falsified by.** Node shipping unflagged, non-experimental type stripping across the whole required
+matrix of `D-0003`; or the hook ceasing to be launched by path (a CLI that loaded the hook in
+process would remove the constraint entirely and, with it, this decision's reason to exist).
+
+---
+
+## D-0205 — The spawn precondition's wiring is asserted as a module-graph dependency
+
+**Status.** accepted (2026-08-22)
+
+**Context.** interlock#71's canary acceptance does not ask for a fail-closed spawn precondition to
+**exist**; it asks for it to be **wired into the production spawn path**. `fencing/spawn.py` states
+the obligation in its own module docstring, and the shape it names is negative:
+
+> The shape that matters is negative: on a broken configuration the spawner callable is **never
+> invoked**. Not invoked with a narrowed fence, not invoked with a warning logged -- not invoked. A
+> downgraded spawn is the failure mode the criterion names, and it is the one a "best effort"
+> renderer produces.
+
+interlock#74 acceptance criterion 4 asks how that obligation is re-expressed once the host is an ESM
+module graph rather than a Python package. It has to be re-expressed rather than translated, because
+the Python original's wiring is not written down anywhere a test can read: `FencedSpawner.spawn`
+calls `self._admit(role, ctx)` and only then `spawner(outcome.plan)`, and the fact that no other
+code path reaches the spawner is a property of the module, not an assertion in the suite.
+
+**The failure mode.** A precondition that exists as a function nobody's spawn code calls is not a
+precondition; it is dead code with the shape of one. And a test that only calls the precondition
+directly **cannot tell those two apart** -- it is green in both worlds. This is the same error
+direction `D-0200` and `D-0203` name for the fence itself: the port denies less than interlock does,
+no error is raised, and every test reports success. The way it arrives here is a refactor rather than
+an input: someone adds a second way to start a child, or moves the render/battery step behind a flag,
+and nothing in the suite notices that the fence stopped being a precondition.
+
+**Decision.** Two obligations, and the second is the one that is new.
+
+1. **The production spawn path imports and calls the precondition directly.** No registry, no
+   configuration key, no "the caller is expected to call `admit` first". The module that starts a
+   child is the module that imports the precondition, so the dependency is visible in the import
+   graph and survives being read.
+2. **A target-only test asserts that the dependency exists**, not merely that the precondition
+   behaves correctly when called. Concretely, that test drives the **production** spawn entry point
+   with a deliberately broken configuration -- one of the brokenness classes `spawn.py` enumerates:
+   config deleted (`document-unreadable` / `role-absent`), hook path unresolvable
+   (`hook-unresolvable`), sandbox profile absent (`sandbox-profile-absent`), or a fence whose own
+   breach battery fails to deny every rule -- and asserts on the **injected spawner callable**: call
+   count is exactly `0`. Not "called with a narrowed fence", not "called once and a warning logged"
+   -- zero. The spawner is injected for this reason and no other, the same way `spawn.py` injects it
+   ("`spawner` is injected so the precondition is testable without a real `claude -p` child"), and
+   the injection point is a production parameter, not a test seam.
+   The behavioural half is paired with a **static half**: a check that the production module's
+   import graph actually reaches the precondition module, so that deleting the call and satisfying
+   the behavioural assertion some other way (an early return, a duplicated inline check) is caught
+   as the divergence it is.
+
+These are **target-only** cases in the sense of `docs/test-translation-conventions.md`: they have no
+interlock original, because in Python the obligation was carried by review and by the module's
+docstring. They are recorded as target-only in this lane's parity ledger with this decision as their
+justification, so a later reader does not mistake them for cases invented without provenance.
+
+**What is actually in the tree at the time of writing.** `src/fencing/spawn.ts` does **not exist
+yet** -- PR 1 shipped `rules.ts`, `renderer.ts`, `battery.ts`, `roles.json` and the CPython
+transcription layer, and the spawn port is a later PR in this lane. This entry is therefore written
+as the constraint that port must satisfy, taken from `spawn.py` as read on 2026-08-22, and not as a
+description of code already present. The pieces it depends on **are** present and were read: the
+renderer already raises `hook-unresolvable` and the other `RefusalReason` codes the precondition
+consumes. When `spawn.ts` lands, the two obligations above are its acceptance conditions, and the
+PR that adds it names them.
+
+**Alternatives.**
+
+- **Assert only the precondition's own behaviour (rejected).** It is the test everybody writes and
+  it cannot distinguish a wired precondition from dead code, which is the entire question interlock#71
+  asked. It would let the port claim the canary acceptance while providing none of it.
+- **Wire the precondition by an import-time side effect -- a module that registers itself when
+  imported (rejected).** ESM has no faithful analogue of Python's module-level wiring: import order
+  is determined by the graph rather than by execution, a tree-shaking bundler is entitled to drop a
+  module imported only for its effects, and Vitest's module registry can re-evaluate a module
+  between tests. Beyond fidelity it is simply worse to reason about -- "the fence is applied because
+  something, somewhere, imported this file" is not a property a reviewer can check by reading the
+  spawn path.
+- **A lint rule forbidding direct calls to the child-starting API (rejected as the primary
+  mechanism).** It constrains this repository's source only, says nothing at runtime, and is
+  trivially silenced with an inline disable comment. It may be added later as a second line of
+  defence; it cannot be the first.
+
+**Falsified by.** The production spawn path gaining a **second entry point that does not route
+through the precondition** -- at that moment the module-graph dependency stops being equivalent to
+the obligation, and the assertion has to be restated over both entry points (or the second one
+removed). Also by interlock replacing the injected-`spawner` shape with a different seam, which
+would change what "the spawner was never invoked" is asserted against.
+
+---
+
+## D-0206 — The fence ledger takes no cross-process lock, and interlock is a single writer
+
+**Status.** accepted (2026-08-22, operator decision)
+
+**Context.** `FenceLedger.transaction` in `fencing/spawn.py` takes an exclusive `fcntl.flock` on a
+`.lock` sibling of the ledger, and degrades to the in-process lock alone where `fcntl` is
+unavailable -- the module imports it under `try` / `except ImportError` and sets it to `None`, which
+is the Windows path. So interlock itself already ships two behaviours here, and the weaker of the
+two is one it runs in production on a supported platform.
+
+**Node has no `flock` in core, on any platform.** There is no equivalent to fall back to, only a
+choice between a native dependency and doing without.
+
+**Decision.** Take interlock's own `fcntl is None` branch on every platform: the ledger serialises
+writers **within a process** and takes no cross-process lock. Interlock is documented as a single
+writer to a given ledger path.
+
+**What is lost, exactly.** Only this: two continuo processes publishing a fence to the **same path**
+concurrently can interleave their publish-then-record sequences. Everything else is unchanged and
+worth stating so nobody re-derives it under pressure:
+
+- Each ledger **line** is still atomic -- it is a single `O_APPEND` write, and the kernel does not
+  split those.
+- Within one process nothing is lost at all: every call on this path is synchronous.
+- Publication of the fence file itself is unaffected; it is a temp-sibling write plus `rename`, and
+  `rename` is atomic independently of any of this.
+
+**One visible artefact difference.** No `.lock` file is created any more. A test that asserted on
+the contents of the ledger's directory would see the difference; the parity ledger records it.
+
+**Why a hand-written lockfile was rejected, which is the part that matters.** The obvious
+substitute is an `O_EXCL` lockfile. It is worse than the gap it closes, and the asymmetry is not
+close:
+
+> `flock` is released by the **kernel** when the holder dies. An `O_EXCL` lockfile is not. A single
+> `SIGKILL`ed spawner therefore leaves a stale lock that blocks every later process indefinitely --
+> and the operation it blocks is **the recording of a refusal**, which `spawn.py` states must never
+> wait.
+
+Trading a narrow concurrency window for a permanent deadlock on the fail-closed path inverts the
+subsystem's whole polarity. A lease with a timeout would reintroduce the window it was meant to
+close, plus a clock dependency and a new way to be wrong.
+
+**Alternatives.**
+
+- **Add a native `flock` binding (rejected).** It would restore the guarantee exactly, and this is
+  the option to revisit if multi-process publication ever becomes real. It was rejected now because
+  it buys a guarantee nothing in the port currently needs, at the cost of a second native dependency
+  on a package that has deliberately kept to one (`D-0003`, `D-0009`) -- and a native module is
+  precisely the kind of dependency that turns "install" into a support surface across the Windows
+  and Node cells this project treats as required.
+- **A hand-written lockfile (rejected).** See above; it converts a window into a deadlock.
+- **Serialise through a database row (not considered seriously).** The fence ledger is a JSONL file
+  on purpose: it has to be readable and appendable when the control plane is exactly what is
+  unavailable.
+
+**Falsified by.** Interlock gaining a real multi-process publication path to one ledger, or continuo
+growing one -- at which point the native binding is the option to reopen, not the lockfile. Tracked
+with the port's other deferred items in suisya-systems/continuo#18.
+
+---
+
+## D-0207 — The hook's argv surface reproduces argparse's two passes, rather than being waived
+
+**Status.** accepted (2026-08-22)
+
+**Context.** `src/fencing/hook.mjs`'s first version parsed its command line in a single eager sweep:
+walk the tokens left to right, act on each one as it is met, stop at the first thing that does not
+fit. CPython's `argparse` does not work that way. It runs **two passes** -- `_parse_optional`
+classifies every token first, deciding per token whether it is an option, a value, or the `--`
+end-of-options marker, and only then does `_parse_known_args` consume options and their arguments --
+and it reports leftovers at end-of-parse rather than at the point it met them. `-h`/`--help` is an
+*action*, not a flag inspected up front, so it fires in positional order.
+
+Those are not stylistic differences; they change the answer. A differential over **900 random one-to
+three-token argv vectors**, drawn from a realistic alphabet (`-h`, `--help`, `--`, `--=`, `--fence`,
+`--fen`, `--role`, `-x`, `-1`, `-1.5`, a real fence path, junk, and empty strings), found **123
+exit-code divergences (13.7%)** against CPython 3.12.3's `argparse`. **14 of them were fail-open** --
+the port exiting 0 where interlock exits 2 -- and all 14 had one shape, a help token ahead of an
+ambiguous `--...=` token:
+
+```
+interlock-fence-hook -h  --=     interlock rc=2 (ambiguous option)   port rc=0   FAIL-OPEN
+interlock-fence-hook -x  --help  interlock rc=0 (help)               port rc=2   fail-closed
+```
+
+argparse rejects `-h --=` because `--=` is classified -- and found to be an ambiguous abbreviation of
+`--help`, `--fence` and `--role` -- before `-h` ever runs. The single-pass port ran `-h` first,
+printed help, and exited 0. For this file exit 0 means *no opinion*, which the CLI reads as "carry
+on": a hook that exits 0 permitted the call.
+
+**Decision.** `parseArguments` is rewritten as argparse's own structure rather than as an
+approximation of its results. It classifies every token (`_parse_optional`, including
+`_get_option_tuples` prefix matching and the ambiguity report), then consumes (`consume_optional`,
+`_match_argument`), then reports missing required actions and **all** extras at end-of-parse. `--`
+is modelled. `-h`/`--help` fires as an action in positional order. The `--help` text, the `usage:`
+line, the `expected one argument` wording, prefix abbreviation, the `--fence=VALUE` inline form and
+the `_negative_number_matcher` transcription are unchanged and still byte-verified.
+
+The reasoning that decided this against waiving the surface, stated so it is not re-argued:
+
+- **A single remaining fail-open instance removes the justification for waiving the argv surface.**
+  A waiver is a claim that the divergences are cosmetic. One vector on which the port permits a call
+  interlock blocks is not cosmetic, and it is not made cosmetic by the other 886 agreeing. The
+  measurement that would have supported a waiver is the one that refuted it.
+- **The hook is a shipped artifact, and the argv shapes the current renderer emits are not an upper
+  bound on reachability.** `hook.mjs` is installed, named by path in a rendered `roles.json`, and
+  launched as a process. A later caller, an operator running it by hand to see what it says, a
+  changed renderer, a CLI that re-quotes the command line -- each reaches this parser with argv the
+  renderer never emits. Pinning today's production shape pins the one case that was never in doubt.
+- **This file's contract is that no path reaches the interpreter's own error handling.** The source
+  says so in its own header, and the port carries it: the import guard, the catch-all in `main`, the
+  `uncaughtException` and `unhandledRejection` handlers all exist to keep exit 1 -- the status
+  interlock's A6 measured being *absorbed* by the CLI -- unreachable. An argv surface exempted from
+  that contract would be inconsistent with the rest of the module: the parser is the first thing the
+  process runs, and it is the one place a divergence decides the exit status by itself, with no fence
+  read and no decision to fall back on.
+
+**Alternatives.**
+
+- **Waive the argv surface: port only the argv cases interlock's own tests exercise, and add a
+  target-only test pinning the production argv shape (rejected).** It is cheaper and it is the shape
+  a waiver normally takes -- but it trades away the only property this file exists to have. It
+  answers "does the hook parse what the renderer emits", which was never the question; the question
+  is what the hook does with argv nobody predicted, and the answer under a waiver is "whatever the
+  single-pass sweep happens to do", which the differential showed is sometimes exit 0. It also puts
+  the waiver in the worst possible place: a fail-open in the deny hook is invisible, because the
+  evidence of a working fence is that the forbidden operation did not happen, and nothing downstream
+  is allowed to read the exit status as a health check.
+- **Keep the single pass and special-case the 14 measured vectors (rejected).** It fixes the sample,
+  not the parser. The 14 are what one seed found in a 900-vector sample of a three-token space; the
+  next reader of this file has no way to tell which of the remaining shapes are still wrong.
+- **Depend on a third-party argparse-compatible parser (rejected).** It moves a fail-closed decision
+  into a dependency whose version can change under the fence, and `hook.mjs` deliberately loads
+  nothing outside its own directory layout (see the module header: an environment variable naming the
+  code the fence runs would be a fence bypass). The parser is ~200 lines of transcription; the
+  dependency is a supply chain.
+
+**Verified by.** Re-running the differential after the rewrite: 900 vectors, **0 exit-code
+divergences, 0 fail-open, 900/900 stderr byte-equal, 900/900 stdout byte-equal, exit 1 never
+occurred**. Widened to all 1,332 one- and two-token combinations of a 36-token alphabet plus 4,000
+random three-to-four-token vectors (5,332 total): 0 divergences, 100% stderr byte-equality. At
+process level, 576 distinct argv vectors run as real child processes of the built hook produced only
+exit 0 and exit 2, and every exit 0 was the help print.
+
+**Falsified by.** CPython changing `argparse`'s classification order or its message text -- the
+port's oracle is CPython 3.12.3, and the transcription is of that version's `_parse_known_args`,
+`_parse_optional`, `_get_option_tuples` and `_match_argument`. Also falsified if the hook stops being
+launched by path with a caller-controlled command line, at which point the argv surface stops being
+reachable and this decision stops having a subject.
+
+---
+
+## D-0208 — The deny hook must be the program the hook command runs, not a string it mentions
+
+**Status.** accepted (2026-08-22)
+
+**Context.** The renderer decides whether a `PreToolUse` hook command invokes interlock's deny hook,
+and everything the fence is worth rests on that decision: only a command classified as *invoking* is
+checked for `--fence` and `--role`, and only a role with at least one such command renders at all.
+Interlock decides it with a substring test (`renderer.py:412`):
+
+```python
+if str(ctx.hook_script) in hook["command"]:
+```
+
+A command that merely **mentions** the hook path therefore passes. Measured against interlock at
+`65f36c5` rather than reasoned about -- driving `render_fence` with
+
+```
+/bin/echo {hook_script} --role worker --fence {fence_path}
+```
+
+returns a fence of **17 rules**. Every other check agrees: `_check_command_resolves` finds
+`/bin/echo` on PATH and finds the script token on disk, `_check_invocation` finds `--fence` and
+`--role` carrying exactly the right values, and the matcher is universal. The CLI then runs `echo`,
+the deny hook never executes, and the render succeeds -- a session that believes it is fenced and is
+not. It is the fail-open shape `D-0204` and `D-0207` are otherwise built to keep unreachable, one
+layer earlier: no wrong decision is made, because no decision is made at all. Continuo reproduced it
+faithfully during the port, and the same 17-rule render was measured here before this change.
+
+**Decision.** A hook command invokes the deny hook only if the hook script is the program that
+actually runs. The command is tokenised with `split()` from `src/fencing/shlex.js` -- the CPython
+transcription pinned by the `D-0200` differential vector, not a hand-rolled splitter, because a
+mis-parsed token boundary would move this decision -- and the hook script must be
+
+**argv[1], with argv[0] equal to `ctx.python`** -- the interpreter the renderer itself recorded,
+which is exactly what the shipped `{python} {hook_script} ...` renders to. That is the only accepted
+shape; there is no second one.
+
+**Position alone is not sufficient, and that is the crux of the entry.** The command
+
+```
+true /path/hook.mjs --fence X --role worker
+```
+
+places the hook at argv[1], exactly where the real command places it, and would satisfy a naive
+position check -- `true` resolves on PATH just as `echo` does, and exits 0 having run nothing. It is
+the `argv[0] === ctx.python` half that rejects it. A repair that checked only the argv position would
+have looked correct, passed a test written against the `echo` shape, and left the hole open.
+
+A command that does not tokenise is not treated as invoking the hook, and the render still refuses:
+`checkCommandResolves` raises `rule-syntax` on the same string, and with no invoking hook left
+`hook-absent` follows.
+
+**Amended 2026-08-22, before this decision shipped: the hook at argv[0] is no longer accepted.**
+This entry originally admitted a second shape -- the hook script at argv[0], "a directly executable
+hook, run by the kernel through its shebang". **That branch was a hole on Windows**, and it was a
+hole this port invented: interlock decides the question with a substring test and has no notion of
+argv positions at all. The shipped `src/fencing/hook.mjs` has **no shebang** and is mode **0644**.
+On POSIX the branch is masked -- `checkCommandResolves` tests the launcher with `access(X_OK)` and
+refuses it `hook-unresolvable` -- but **on Windows `X_OK` is only an existence check** (Windows has
+no executable bit), so there the render **succeeded**. `cmd` cannot execute a `.mjs` directly, so
+the deny hook then failed to launch and **the child ran unfenced with the spawn recorded as
+admitted**. Windows is a required CI cell (`D-0003`), so a check that is sound on one platform and
+open on another is not a check.
+
+Requiring the recorded interpreter is strictly tighter, closes the hole on every platform rather
+than special-casing Windows, and **costs nothing**: all four roles in `src/fencing/roles.json`
+render `{python} {hook_script} ...`, and interlock's own `hook.py` is likewise not executable, so
+the argv[0] shape is one **nothing in this project or its source ever produces**. Validating it
+properly instead -- shebang present *and* executable bit *and* not Windows -- was rejected: it would
+keep a platform-conditional branch alive to accept a shape with no producer. Deployments that
+genuinely need it are covered by the falsifier below.
+
+**This is a deliberate divergence from interlock, and it is recorded as one.** The direction of the
+difference is that **interlock renders a document continuo refuses**. Under `D-0023`, which superseded `D-0022` --
+interlock is frozen, so no upstream fix will come and "disclose but do not repair" no longer has an
+upstream to defer to -- an inherited defect is repaired here, continuo is authoritative, and the
+parity ledger carries the difference as an intentional divergence rather than an inherited
+limitation, so it stays traceable when parity is judged against interlock.
+`parity/fencing.renderer.ledger.json` holds the reproduction and the 17-rule measurement.
+
+**What a role document must now look like.** Every `PreToolUse` command that is meant to enforce the
+fence must begin with the recorded interpreter followed by the hook: `{python} {hook_script} --role
+<role> --fence {fence_path}`. A wrapper, a shell, a launcher, a bare hook path, or any other
+program in front of the hook is refused with `hook-absent`, whatever else the command line says. The
+**shipped `src/fencing/roles.json` is unaffected**: all four roles (`worker`, `curator`,
+`dispatcher`, `secretary`) already use the `{python} {hook_script} ...` form, and all four still
+render.
+
+**Alternatives.**
+
+- **Keep the substring test and disclose it (rejected).** That was the pre-freeze answer, and the
+  premise it rested on -- that a repair belongs upstream, or in a change moving both sides together
+  -- no longer exists. What remains is a documented fail-open in a fence.
+- **Check the argv position only (rejected).** Refuted above by `true /path/hook.mjs ...`: it admits
+  any launcher willing to ignore its arguments.
+- **Compare a resolved/canonical path instead of the recorded string (rejected here).** It would
+  additionally accept a symlink or a relative spelling of the same file, which sounds strictly
+  better, but it makes the check depend on the filesystem at render time and diverges further from
+  the source than the property requires. `FenceContext` already canonicalises `hookScript` through
+  `str(Path(...))`, and the rendered command is built from that same string, so the equality holds
+  for every command the renderer itself emits.
+
+**Verified by.** Execution, not inspection. The 40 translated renderer cases (39 collected; one
+source case is not ported) were run before and after with every `FenceRefusal`'s codes printed:
+**identical code sets, case for case** -- in particular
+`test_a_hook_pointed_at_another_fence_refuses` still refuses with `hook-invocation-wrong` on the
+`--fence` mismatch and does not fail earlier on the new check. Four target-only cases were added
+(interlock has none, because interlock has the defect): the `/bin/echo` shape refuses with
+`hook-absent`, the `true` shape refuses with `hook-absent`, the shipped `{python} {hook_script}`
+shape still renders, and -- after the amendment -- an *executable* hook at argv[0] (mode 0755, so
+the launcher check is satisfied on both platforms) refuses with exactly `{hook-absent}`. Reverting
+the check to the substring test makes the decoy cases fail, and re-measures both shapes rendering 17
+rules.
+
+The amendment was re-measured the same way, on the same four shapes, with every refusal's codes
+logged across all 45 renderer cases under one fixed order seed: the `echo` decoy refuses
+`hook-absent` before and after, the `true` decoy refuses `hook-absent` before and after, the shipped
+`{python} {hook_script}` shape renders 17 rules before and after, and the bare `{hook_script}` shape
+at argv[0] moves from **renders 17 rules** to **refuses `hook-absent`** at mode 0755 (at the shipped
+mode 0644 it moves from `hook-unresolvable` to `hook-absent, hook-unresolvable`). The full-suite
+code log differs in **exactly one line** -- the added refusal from the rewritten target-only case.
+**No ported case changed its refusal codes.**
+
+**Falsified by.** A deployment where the deny hook legitimately has to run behind another program --
+a sandbox launcher, a wrapper that sets an environment, `sudo` -- at which point the accepted shapes
+must be widened deliberately, by naming the wrapper in the context, rather than by relaxing this back
+to a substring.
+
+---
+
+## D-0209 — `npm test` builds first, because the deny hook's dependencies come from `dist/`
+
+**Status.** accepted (2026-08-22)
+
+**Context.** `D-0204` ships the `PreToolUse` deny hook as hand-written JavaScript so that Node can
+launch it directly, and interlock's suite launches it **as a real subprocess** -- that is the only
+way to observe the property the file exists for, which is what the hook does to a process's exit
+status and stdout when it denies.
+
+A subprocess is plain Node. It has no Vite, so its `import` of `./state.js` cannot be redirected to
+`state.ts` the way an in-process test's can. The hook therefore resolves its three dependencies from
+the **built** tree. In-process cases pass without a build and subprocess cases do not: with
+`dist/fencing/state.js` moved aside, **9 of the deny hook's 21 cases fail**.
+
+The failure is naturally silent, which is what makes this worth a decision rather than a one-line
+script edit. A missing build makes the hook deny with `fence-unavailable` -- so every
+`decision == "block"` assertion in the suite still passes. A suite can be fully green against a hook
+that never read a fence.
+
+**This looks like something `D-0204` already rejected, and the difference matters.** That entry
+turned down "point the hook path into `dist/` and build before testing" for two reasons:
+
+1. `npm test` would stop working standalone, and a **stale** build's hook would run -- a stale
+   fail-closed hook is a stale deny set that no assertion is looking at;
+2. the renderer's `hook-unresolvable` refusal would depend on build state rather than on the tree.
+
+Reason 2 does not apply here: the hook's **path** stays in `src/fencing/hook.mjs`, so
+`defaultHookScript()` and the renderer's file-existence check still answer about the source tree.
+Only the hook's **dependencies** come from `dist/`, and only when it is launched as a real process.
+
+Reason 1 is answered rather than ignored: the staleness it describes is a hazard of building
+*sometimes*. Building **always**, as part of `test` itself, removes it -- there is no run in which
+the hook's dependencies are older than the sources they were compiled from.
+
+**Decision.** A `pretest` script runs `npm run build`. npm invokes it automatically before `test`,
+so `npm test`, `npm run verify` and every CI cell get the built tree without any of them having to
+remember. Measured cost: about **2.5 seconds**, warm or clean.
+
+**Why not fix it in CI instead.** The repository's own workflow runs `npm run build` *after* both
+`npm test` steps, so moving those lines would fix CI and leave every developer's local `npm test`
+broken in the silent direction described above. A guarantee that lives in the workflow file is one a
+local run does not get.
+
+**Where this belongs in the wider picture.** This is one of three places in this port where the suite
+was green while proving nothing; the three are written up together in
+`docs/test-translation-conventions.md`, section 10 ("Make it fail on purpose, and confirm it fails for the reason you expect"), which also states the
+check that catches the shape.
+
+**Consequence for the other lanes.** `npm test` now costs ~2.5s more for everyone, including lanes
+that never touch fencing. That is the price of the guarantee, and it is paid in the one place where
+forgetting it is invisible.
+
+**Alternatives.**
+
+- **Build only the fencing subset on demand from inside the test (rejected).** A second, partial
+  build path that has to be kept in step with the real one, and it would run per test file.
+- **Assert the build exists and fail loudly instead of building (rejected as the whole answer, kept
+  as a belt).** The suite does still fail with "run `npm run build` first" if the dependencies are
+  missing -- a guard is cheaper to read than a mystery -- but a guard that only complains leaves
+  every fresh checkout red on first run.
+- **Give the hook a source-tree fallback (rejected).** It would have to load `.ts`, which is the
+  thing `D-0204` established Node cannot do on a required cell.
+
+**Falsified by.** Node gaining stable, default-on type stripping across every required cell, which
+would let the hook be TypeScript and load its dependencies from source -- the same condition
+`D-0204` records for revisiting, tracked in suisya-systems/continuo#18.

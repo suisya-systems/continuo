@@ -33,6 +33,7 @@
  * else is a `TypeError` in Python and a {@link PyTypeError} here.
  */
 
+import { formatNumber } from "./pyjson.js";
 import { pyRepr } from "./pyrepr.js";
 
 /**
@@ -60,6 +61,37 @@ export class PyTypeError extends TypeError {
     // a fail-closed `catch (e) { if (e instanceof PyTypeError) ... }` into a
     // rethrow or, worse, into a swallowed error.
     Object.setPrototypeOf(this, PyTypeError.prototype);
+  }
+}
+
+/**
+ * Python's `ValueError`, for the operations Python attempts and then refuses.
+ *
+ * The distinction from {@link PyTypeError} is not cosmetic: `dict()` reports
+ * the two failures it can have with two different classes -- an argument that
+ * is not iterable at all is a `TypeError`, an argument that iterates to
+ * something other than key/value pairs is a `ValueError` -- and a caller that
+ * catches only one of them (interlock's `fence_from_json` catches both, its
+ * `write_fence` catches neither) must see the same split here.
+ *
+ * `extends Error`, deliberately NOT `extends TypeError`. `ShlexError` and
+ * `PythonRegexError` are the other two stand-ins for a CPython `ValueError` in
+ * this subsystem and both are plain `Error` subclasses; more importantly,
+ * making this a `TypeError` would put it inside every `catch (e) { if (e
+ * instanceof TypeError) }` in the port -- including `fence_from_json`'s, where
+ * it belongs, but also anywhere a future `except TypeError` is transcribed,
+ * which would silently widen a catch CPython keeps narrow.
+ */
+export class PyValueError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PyValueError";
+    // Extending a built-in under a downlevel emit target loses the prototype
+    // chain, and `instanceof` then silently reports false -- which would turn
+    // `fenceFromJson`'s `except (KeyError, TypeError, ValueError)` into a
+    // rethrow, so a malformed persisted fence would escape as an internal
+    // error instead of the refusal an operator can read.
+    Object.setPrototypeOf(this, PyValueError.prototype);
   }
 }
 
@@ -264,6 +296,174 @@ export function pySet(items: readonly unknown[]): Set<unknown> {
  */
 export function pyHashable(value: unknown): boolean {
   return !Array.isArray(value) && !isPlainObject(value);
+}
+
+/**
+ * Python's `dict(value)`, including both of the ways it REFUSES.
+ *
+ * `state.py:85` builds the persisted payload with `dict(fence.settings)`, and
+ * that call is the only validation a `Fence.settings` ever gets: the dataclass
+ * checks nothing, so a fence whose settings are a string, a number or a list is
+ * CONSTRUCTED and then dies here. The spread that used to stand in for it
+ * (`{...settings}`) refuses nothing at all, and the three shapes below are what
+ * that costs -- measured against CPython, not reasoned about:
+ *
+ *     dict("ab")        ValueError: dictionary update sequence element #0 has
+ *                       length 1; 2 is required     | spread: {"0":"a","1":"b"}
+ *     dict(7)           TypeError: 'int' object is not iterable
+ *                                                   | spread: {}
+ *     dict([["a", 1]])  {"a": 1}                    | spread: {"0":["a",1]}
+ *
+ * Every one of those spread results is a fence that PUBLISHES: a settings
+ * payload interlock would have refused to write is written, and the file the
+ * provider loads carries either nonsense or nothing where the operator wrote
+ * something. The middle row is the worst of the three, because an empty
+ * settings object is a syntactically perfect file with no denials in it.
+ *
+ * Not reachable from {@link ../fencing/spawn.ts | FencedSpawner} -- a rendered
+ * fence always carries an object -- but `fenceToJson`, `writeFence` and `Fence`
+ * are all exported, so the exported API is exactly where the divergence lives.
+ *
+ * ## The one thing this cannot reproduce, stated rather than hidden
+ *
+ * A Python `dict` key may be any hashable value and keeps its type; a
+ * JavaScript object key is always a string. `dict([[1, "a"]])` is `{1: "a"}` in
+ * CPython and `{"1": "a"}` here. The coercion applied is `json.dumps`'s own key
+ * coercion (`1` -> `"1"`, `True` -> `"true"`, `None` -> `"null"`, via
+ * {@link ../fencing/pyjson.ts | formatNumber} for numbers), because the only
+ * thing this project ever does with the resulting dict is serialise it -- so
+ * the coercion happens one step earlier than CPython performs it and the BYTES
+ * on disk agree. Two consequences that do not: `{1: "a", "1": "b"}` is two
+ * entries in CPython and one here, and CPython's `sort_keys=True` raises
+ * `TypeError: '<' not supported between instances of 'str' and 'int'` on a
+ * mixed-type key set where this port sorts the coerced strings and writes the
+ * file. Neither is reachable from a JSON-sourced document, whose keys are
+ * strings by construction.
+ */
+export function pyDict(value: unknown): Record<string, unknown> {
+  // `isinstance(value, Mapping)`: a mapping is COPIED key by key, not treated
+  // as an iterable of pairs. `pyKeys`, so the copy keeps the source order the
+  // way CPython's dict does -- see `rememberKeyOrder`.
+  if (isPlainObject(value)) {
+    const keys = pyKeys(value);
+    const copied: Record<string, unknown> = {};
+    for (const key of keys) {
+      // `defineProperty`, never `copied[key] = ...`. Plain assignment routes the
+      // single key `"__proto__"` through the inherited accessor on
+      // `Object.prototype` instead of creating an own property: the setting
+      // vanishes from the copy AND the copy's prototype is replaced.
+      //
+      // A Python dict has no such key -- `{"__proto__": 1}` is an ordinary
+      // entry -- and `"__proto__"` is a perfectly valid JSON key, so a role
+      // document may carry one. The damage is quiet and durable: `fenceToJson`
+      // would drop it while `settings.local.json`, written down a different
+      // path, keeps it, and the restart diff would then report "the settings
+      // changed" on every comparison, for a fence nobody changed.
+      //
+      // `renderer.ts` carries `setOwn` for this same hazard; this is the same
+      // fix at the other site that rebuilds an object from a JSON document.
+      Object.defineProperty(copied, key, {
+        value: value[key],
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    return rememberKeyOrder(copied, keys);
+  }
+  // `pyIterate` maps `null`/`undefined` to `[]` as a convenience for the
+  // renderer's `pyOr` call sites. Here that convenience would turn `dict(None)`
+  // into an empty settings payload -- published, not refused -- where CPython
+  // raises. The null check therefore comes first and by hand.
+  if (value === null || value === undefined) {
+    throw new PyTypeError(`'${pyTypeName(value)}' object is not iterable`);
+  }
+  const out: Record<string, unknown> = {};
+  const order: string[] = [];
+  const seen = new Set<string>();
+  // A string iterates its CHARACTERS, which is why `dict("ab")` fails at the
+  // element and not at the argument: `'a'` is a perfectly good sequence, it is
+  // just one item long.
+  const items = pyIterate(value);
+  for (let index = 0; index < items.length; index += 1) {
+    const pair = dictSequenceItem(items[index], index);
+    if (pair.length !== 2) {
+      throw new PyValueError(
+        `dictionary update sequence element #${index} has length ${pair.length}; 2 is required`,
+      );
+    }
+    const rawKey = pair[0];
+    // Order matters and is measured: `dict([[["x"], 1]])` has a well-formed
+    // 2-element element and still raises, because the KEY is a list. CPython
+    // checks the length first and the hash second, so a 3-element element with
+    // an unhashable head reports the length, not the hash.
+    if (!pyHashable(rawKey)) {
+      throw new PyTypeError(`unhashable type: '${pyTypeName(rawKey)}'`);
+    }
+    const key = dictKey(rawKey);
+    if (!seen.has(key)) {
+      seen.add(key);
+      order.push(key);
+    }
+    // A repeated key keeps its FIRST position and takes the LAST value, which
+    // is what `order` above and this assignment together reproduce.
+    out[key] = pair[1];
+  }
+  return rememberKeyOrder(out, order);
+}
+
+/**
+ * One element of a `dict()` update sequence, as a sequence.
+ *
+ * CPython reports a non-sequence element with its own message rather than the
+ * `not iterable` one the argument itself would get, so the two are not
+ * interchangeable: `dict(7)` and `dict([7])` say different things, and the
+ * ledger stores whichever one an operator has to act on.
+ */
+function dictSequenceItem(element: unknown, index: number): unknown[] {
+  const unusable = new PyTypeError(
+    `cannot convert dictionary update sequence element #${index} to a sequence`,
+  );
+  // Same `pyIterate` null convenience as above: `dict([None])` is this message
+  // in CPython, and an empty list here would become the length-0 `ValueError`.
+  if (element === null || element === undefined) {
+    throw unusable;
+  }
+  try {
+    return pyIterate(element);
+  } catch (exc) {
+    if (exc instanceof PyTypeError) {
+      throw unusable;
+    }
+    throw exc;
+  }
+}
+
+/**
+ * A Python dict key as the JavaScript object property it has to become.
+ *
+ * `json.dumps`'s coercion, applied early -- see the note in {@link pyDict} for
+ * why early, and for what that costs.
+ */
+function dictKey(key: unknown): string {
+  if (typeof key === "string") {
+    return key;
+  }
+  if (key === null || key === undefined) {
+    return "null";
+  }
+  if (typeof key === "boolean") {
+    return key ? "true" : "false";
+  }
+  if (typeof key === "number") {
+    // `formatNumber`, not `String`: CPython writes `-0.0` and `1e+300` where
+    // `String` writes `0` and `1e+300` -- and the persisted fence is compared
+    // byte for byte across a restart.
+    return formatNumber(key);
+  }
+  // A `bigint` is the only remaining hashable JavaScript value, and `String`
+  // renders it the way CPython renders an `int` key.
+  return String(key);
 }
 
 /**

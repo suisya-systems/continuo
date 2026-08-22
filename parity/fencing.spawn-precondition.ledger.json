@@ -1,0 +1,227 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "fencing",
+      "collected": 124,
+      "inventory": "parity/source-inventory/fencing.all.txt"
+    },
+    "file": {
+      "path": "tests/fencing/test_spawn_precondition.py",
+      "collected": 18,
+      "inventory": "parity/source-inventory/fencing.test_spawn_precondition.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/fencing/spawn-precondition.test.ts",
+    "target_only_tests": {
+      "count": 4,
+      "ids": [
+        "test/fencing/spawn-precondition.test.ts::seam liveness (target-only) > FencedSpawner.spawn calls runBattery through the seam record",
+        "test/fencing/spawn-precondition.test.ts::seam liveness (target-only) > FencedSpawner.writeSettings is reached as a prototype method",
+        "test/fencing/spawn-precondition.test.ts::the canary acceptance is wired, not merely implemented (target-only) > no brokenness class reaches the spawner through the production entry point",
+        "test/fencing/spawn-precondition.test.ts::the canary acceptance is wired, not merely implemented (target-only) > the spawn module imports the renderer and the battery as values"
+      ],
+      "note": "Four target-only tests, translating NO interlock node id and NEVER counted as ported coverage. Two are seam liveness (rulebook rule 5: a seam a refactor stopped routing through would leave every case that replaces it green, because the replacement is simply never reached and the assertions -- which are about refusals -- still hold for the wrong reason). Two are continuo's expression of interlock#71's canary acceptance, which interlock#74 AC4 requires the port to carry rather than drop: interlock states the obligation as \"the fencing spawn precondition is wired into the production spawn path\", and in a module graph that is asserted, not asserted about -- one case drives every brokenness class through the production entry point and shows the spawner is never invoked, the other pins that src/fencing/spawn.ts imports the renderer and the battery as VALUES rather than as types, so a type-only import (which erases at compile time and would silently unwire the precondition) fails. See DECISIONS.md D-0205."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 18,
+    "ported": 13,
+    "adapted": 5,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestASoundFenceSpawns::test_a_good_configuration_admits",
+      "target_id": "test/fencing/spawn-precondition.test.ts::a sound fence spawns > a good configuration admits",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestASoundFenceSpawns::test_the_plan_publishes_the_fence_the_hook_will_read",
+      "target_id": "test/fencing/spawn-precondition.test.ts::a sound fence spawns > the plan publishes the fence the hook will read",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestASoundFenceSpawns::test_the_cli_args_pass_permission_mode_explicitly",
+      "target_id": "test/fencing/spawn-precondition.test.ts::a sound fence spawns > the cli args pass permission mode explicitly",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestBrokenConfigurationsRefuse::test_config_deleted",
+      "target_id": "test/fencing/spawn-precondition.test.ts::broken configurations refuse > config deleted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestBrokenConfigurationsRefuse::test_hook_path_unresolvable",
+      "target_id": "test/fencing/spawn-precondition.test.ts::broken configurations refuse > hook path unresolvable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestBrokenConfigurationsRefuse::test_sandbox_profile_absent",
+      "target_id": "test/fencing/spawn-precondition.test.ts::broken configurations refuse > sandbox profile absent",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestBrokenConfigurationsRefuse::test_a_refusal_is_never_a_narrowed_spawn",
+      "target_id": "test/fencing/spawn-precondition.test.ts::broken configurations refuse > a refusal is never a narrowed spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestBrokenConfigurationsRefuse::test_no_fence_or_settings_file_is_published_on_a_refusal",
+      "target_id": "test/fencing/spawn-precondition.test.ts::broken configurations refuse > no fence or settings file is published on a refusal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheChildStartsOutsideTheLedgerLock::test_the_ledger_is_not_held_while_the_child_runs",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the child starts outside the ledger lock > the ledger is not held while the child runs",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED per D-0206. The source pins that the spawner callback runs OUTSIDE the ledger's cross-process lock: `FenceLedger.transaction` takes an exclusive `fcntl.flock` on a `.lock` sibling, and holding it for the duration of a blocking `claude -p` child would block every other role -- including one trying to record a REFUSAL, which interlock's own comment says must never wait. continuo takes no cross-process lock on any platform (D-0206: Node has no `flock` in core, and a hand-written `O_EXCL` lockfile converts a narrow window into a permanent deadlock on the fail-closed path), so it runs interlock's own `fcntl is None` branch -- the behaviour interlock itself ships on Windows. What the ported case pins is therefore the weaker but still load-bearing half that branch also has, and it pins it exactly as the source does: a second `FencedSpawner` is constructed, spawned and RECORDS its own refusal from INSIDE the first one's spawner callback. If the admission path ever grew a re-entrant in-process lock, or the child were moved inside the transaction, this deadlocks or fails to record, which is the source's failure too. Weaker than the source in the cross-process dimension and no weaker in any other; recorded here rather than left for a later reader to rediscover while wondering why nothing broke.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheChildStartsOutsideTheLedgerLock::test_the_admission_is_recorded_before_the_child_starts",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the child starts outside the ledger lock > the admission is recorded before the child starts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestPublicationIsAllOrNothing::test_a_failed_settings_write_leaves_no_fence_behind",
+      "target_id": "test/fencing/spawn-precondition.test.ts::publication is all or nothing > a failed settings write leaves no fence behind",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`monkeypatch.setattr(FencedSpawner, \"_write_settings\", boom)` patches the CLASS, so an instance built before the patch is affected too -- ordering the source relies on and the port keeps. The port patches `FencedSpawner.prototype.writeSettings` with `patchSeam` (D-0101 exports the method `@internal` for exactly this; `patchSeam` supplies monkeypatch's snapshot-at-patch and LIFO restore rather than a file-level undo, rulebook rule 5). One thing had to be ADDED rather than translated: the thrown error carries an errno-style `code` (`ENOSPC`). Node has no `OSError` class, so `isOSError` in src/fencing/spawn.ts classifies a filesystem failure by the string `code` Node puts on it -- a plain `Error` would escape the publication catch and fail the case with a raw throw instead of exercising the refusal path the source exercises. Every assertion of the source is kept, including `spawner.calls == []`, which is the one that says the child never started (D-0205).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestPublicationIsAllOrNothing::test_a_failed_republish_restores_the_previous_fence",
+      "target_id": "test/fencing/spawn-precondition.test.ts::publication is all or nothing > a failed republish restores the previous fence",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`monkeypatch.setattr(FencedSpawner, \"_write_settings\", boom)` patches the CLASS, so an instance built before the patch is affected too -- ordering the source relies on and the port keeps. The port patches `FencedSpawner.prototype.writeSettings` with `patchSeam` (D-0101 exports the method `@internal` for exactly this; `patchSeam` supplies monkeypatch's snapshot-at-patch and LIFO restore rather than a file-level undo, rulebook rule 5). One thing had to be ADDED rather than translated: the thrown error carries an errno-style `code` (`ENOSPC`). Node has no `OSError` class, so `isOSError` in src/fencing/spawn.ts classifies a filesystem failure by the string `code` Node puts on it -- a plain `Error` would escape the publication catch and fail the case with a raw throw instead of exercising the refusal path the source exercises. Every assertion of the source is kept, including `spawner.calls == []`, which is the one that says the child never started (D-0205). The rollback assertion stays on BYTES (`read_bytes()` in the source, `readFileSync` returning a Buffer here): a rollback that re-rendered equivalent JSON with a different key order or indentation would be a different file arriving at a live session, and neither suite accepts it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheRefusalIsRecordedDurably::test_the_refusal_is_on_disk_with_its_reasons",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the refusal is recorded durably > the refusal is on disk with its reasons",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheRefusalIsRecordedDurably::test_the_record_survives_a_fresh_reader",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the refusal is recorded durably > the record survives a fresh reader",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheRefusalIsRecordedDurably::test_every_refusal_is_recorded_not_just_the_first",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the refusal is recorded durably > every refusal is recorded not just the first",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheRefusalIsRecordedDurably::test_the_ledger_is_append_only",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the refusal is recorded durably > the ledger is append only",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheSpawnerSelfChecks::test_a_rule_whose_probe_cannot_be_synthesized_refuses_and_is_recorded",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the spawner self checks > a rule whose probe cannot be synthesized refuses and is recorded",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`monkeypatch.setattr(spawn_module, \"run_battery\", ...)` rebinds a module-level name that `FencedSpawner.spawn` resolves at call time. ESM bindings cannot be rebound from outside and `vi.mock` does not reach an intra-module call, so src/fencing/spawn.ts routes its own call through the exported `spawnSeams` record and the case replaces that entry with `patchSeam` (D-0014, rulebook rule 5). This reproduces Python's late binding rather than working around it: what production calls is what the case replaced. The seam is not decorative -- a target-only liveness case in the same file asserts `FencedSpawner.spawn` reaches `runBattery` through the record, so a refactor that called the function directly would turn red instead of leaving this case green for the wrong reason. Assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_spawn_precondition.py::TestTheSpawnerSelfChecks::test_a_fence_that_fails_its_own_battery_refuses_the_spawn",
+      "target_id": "test/fencing/spawn-precondition.test.ts::the spawner self checks > a fence that fails its own battery refuses the spawn",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`monkeypatch.setattr(spawn_module, \"run_battery\", ...)` rebinds a module-level name that `FencedSpawner.spawn` resolves at call time. ESM bindings cannot be rebound from outside and `vi.mock` does not reach an intra-module call, so src/fencing/spawn.ts routes its own call through the exported `spawnSeams` record and the case replaces that entry with `patchSeam` (D-0014, rulebook rule 5). This reproduces Python's late binding rather than working around it: what production calls is what the case replaced. The seam is not decorative -- a target-only liveness case in the same file asserts `FencedSpawner.spawn` reaches `runBattery` through the record, so a refactor that called the function directly would turn red instead of leaving this case green for the wrong reason. Assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "A ledger JSONL line spells an integral timestamp `\"at\": 0` where interlock spells it `\"at\": 0.0`.",
+      "status": "intentional divergence, tracked for repair (JavaScript has one number type)",
+      "detail": "`FenceLedger.append` records `at` from the injected clock. Python's `time.time()` is a float and `json.dumps` prints `0.0`; JavaScript has a single `number` type, so `pyJsonDumps` prints `0` for a value that is integral. This is the ONLY field in which a continuo ledger line differs from interlock's for the same inputs, and it cannot change a fence decision: nothing in the fencing subsystem reads `at` back for anything but display and ordering, and the ordering is the file's own append order. No ported case compares a ledger line byte-for-byte (the closest, `test_the_ledger_is_append_only`, reads the file as text and counts lines), so the difference is invisible to both suites. It is being repaired rather than left: suisya-systems/continuo#18, \"PR 2.5: pyjson number round-trip\", makes pyJsonDumps carry the int/float distinction so an integral float prints as `0.0`. Until it lands, this entry is the disclosure.",
+      "tracking": "suisya-systems/continuo#18"
+    },
+    {
+      "topic": "No `.lock` sibling of the ledger file is ever created.",
+      "status": "intentional divergence (D-0206, operator decision)",
+      "detail": "interlock's `FenceLedger.transaction` takes an exclusive `fcntl.flock` on `<ledger>.lock`, and degrades to the in-process lock alone where `fcntl` is unavailable -- which is the path it runs in production on Windows. Node has no `flock` in core on any platform, so continuo takes that same degraded branch everywhere (D-0206), and the visible artefact is that the `.lock` file no longer appears beside the ledger. What is lost is exactly one thing: two continuo processes publishing a fence to the SAME path concurrently can interleave their publish-then-record sequences. Each ledger LINE is still atomic (one `O_APPEND` write), within one process nothing is lost at all (every call on the path is synchronous), and publication of the fence file itself is a temp-sibling write plus `rename` and is unaffected. No case in the ported file asserts on the ledger DIRECTORY's contents -- the closest, `test_the_ledger_is_append_only`, reads the ledger FILE -- so no translated assertion depends on the difference. A hand-written `O_EXCL` lockfile was rejected on the record: `flock` is released by the kernel when the holder dies and a lockfile is not, so a SIGKILLed spawner would leave a stale lock blocking every later process, and the operation it blocks is the recording of a refusal, which must never wait. The option to reopen, if multi-process publication to one ledger ever becomes real, is a native binding.",
+      "tracking": "suisya-systems/continuo#18"
+    },
+    {
+      "topic": "The text of a publication failure's refusal reason is Node's error message, not CPython's `str(OSError)`.",
+      "status": "adapted message text (D-0017); the refusal CODE is identical",
+      "detail": "src/fencing/spawn.ts formats a failed publication as `cannot publish fence: ${describe(exc)}` where `describe` is the transcription of CPython's `str(exc)` -- which never prefixes the class name. The message it wraps is the RUNTIME's, so a real ENOSPC reads `ENOSPC: no space left on device, open '<path>'` here where interlock reads `[Errno 28] No space left on device: '<path>'`. D-0017 governs: the refusal reason CODE (`RefusalReason.DOCUMENT_UNREADABLE`) and the sentence the port author writes are parity surface; the operating system's own sentence inside it is not, because no faithful translation of it exists. The two ported cases that reach this path assert on the outcome, the untouched filesystem and the recorded refusal rather than on the wrapped text, so nothing in the suite depends on the difference; a case that matched the message would be matching the platform."
+    }
+  ]
+}
