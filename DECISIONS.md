@@ -49,6 +49,7 @@ spaces distinct.
 | D-0019 | One parity ledger per source test file | accepted |
 | D-0020 | A temp-directory label may not contain refusal vocabulary | accepted |
 | D-0021 | Values read from SQLite are not re-narrowed to reproduce Python's `int()` | accepted |
+| D-0022 | Inherited defects are disclosed and repaired after parity, not during | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -1650,3 +1651,78 @@ body had started. Compile-time behaviour verified with `tsc -p tsconfig.json --n
 TypeScript 5.8.3 the same day. Falsified by: the harness acquiring a genuinely asynchronous read path
 (it has none while better-sqlite3 is the driver), which would make "refuse" the wrong answer and
 require deciding what may hold the control plane's SHARED lock across a suspension.
+
+---
+
+## D-0022 — Inherited defects are disclosed and repaired after parity, not during
+
+**Context.** The review gate on the event-spine belt raised three defects in `txn.ts` / `events.ts`,
+two of them P1:
+
+- a `COMMIT` that fails (`SQLITE_BUSY` from a concurrent reader, which the rollback journal makes
+  reachable -- `D-0012`) leaves the transaction **open** while its scope is dropped, so the next
+  `transaction()` call sees `inTransaction` and silently *joins* an orphaned transaction: its writes
+  never commit and the locks stay held;
+- `markSkipped`, joined to a caller's transaction, can settle a consumption as `skipped` and commit
+  it **without** the `consumption_skipped` audit event, because `appendEvent` answers a duplicate
+  `dedup_key` by returning rather than raising, and dedup keys are caller-controlled;
+- the transaction scope is installed **before** `BEGIN IMMEDIATE` succeeds, so a failed `BEGIN`
+  leaves `currentScope()` answering for a transaction that was never opened.
+
+Every one is real. Every one is also **structurally identical in interlock**: `txn.py` puts `COMMIT`
+in an `else:` clause with `del _SCOPES[key]` in the `finally` and no failed-commit handling anywhere;
+`_SCOPES[key] = scope` is the line before `connection.execute("BEGIN IMMEDIATE")`; and
+`mark_skipped` reaches `append_event`, which catches `_DuplicateFact` and converts it to a normal
+return. None of the three is pinned by a case in either suite.
+
+That is the tension this entry settles. A correctness review says fix them. `interlock#74`'s
+acceptance criterion 5 says known limitations stay **disclosed** rather than silently repaired, and
+the whole premise of the port is that continuo does what interlock does. A review that cannot see
+interlock will keep raising these every round, so the disagreement is one of *criteria*, not of a
+fix that has not converged yet.
+
+**Decision.** For a defect that is (a) reproduced faithfully from interlock, (b) pinned by no case on
+either side, and (c) raised by review rather than by a failing test: **disclose it in the affected
+file's parity ledger under `inherited_limitations`, do not repair it during the port, and repair it
+in a dedicated change after parity is reached.** A remediation belt for these three is reserved.
+
+The three are recorded in `parity/control-plane.events.ledger.json`, each naming the interlock
+construct it mirrors and the review that raised it.
+
+**Alternatives.**
+
+- **Repair them now and record each as a disclosed deviation (rejected by the operator; it was the
+  porting lane's recommendation).** The argument for it: none is behaviour anyone depends on, no
+  ported case observes any of them, and criterion 5 forbids *silent* fixes rather than recorded ones
+  -- so a documented repair arguably satisfies it while leaving the thing that actually runs less
+  fragile. The argument against, which decided it: every repair is a place where "continuo does what
+  interlock does" stops being true, and it is claimed at exactly the moment the parity audit and the
+  differential oracle are being used to establish that sentence. Deferring costs a known, disclosed
+  interval of fragility; repairing costs the clarity of the parity claim itself.
+- **Repair only the two P1s (rejected).** The severity split is the reviewer's, not a property of the
+  code, and it would make the rule un-restatable -- which is what turns a rule into case-by-case
+  judgement and then into drift.
+- **Leave them undisclosed because the source has them (never considered).** That is the failure
+  criterion 5 is written against.
+
+**Consequences.**
+
+- **The review gate will keep flagging these.** That is expected and is not a regression: the
+  ledger, not the reviewer, is the record of what was decided. A later belt must not "discover" them
+  and quietly repair them -- the ledger entries exist so the next reader finds the decision instead.
+- The repairs are reserved as a post-parity change, so they land against a green baseline where a
+  behavioural difference from interlock is a deliberate, reviewable diff rather than noise inside a
+  translation.
+- This entry generalises: it is the standing rule for the belts still to come, not a one-off ruling
+  about three findings.
+
+**Falsifier.** If one of these is shown to be reachable from a ported case -- i.e. the suites *can*
+tell the two implementations apart -- it stops being an inherited limitation and becomes a parity
+failure to fix immediately. Likewise if interlock repairs one upstream, continuo follows rather than
+waiting.
+
+**Status.** accepted
+
+**Source.** Codex review gate, 2026-08-22, rounds 1 and 2 (two P1, one P2); escalated by lane A per
+`docs/test-translation-conventions.md` rule 0 and decided by the operator.
+

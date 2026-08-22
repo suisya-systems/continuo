@@ -27,6 +27,35 @@ export {
   openControlPlaneConnection,
 } from "./control_plane/connection.js";
 export {
+  type AppendedEvent,
+  appendEvent,
+  BACKLOG_INCIDENT_CLASS,
+  type BackloggedConsumer,
+  backlogDepth,
+  backloggedConsumers,
+  CONSUMER_FENCE_SQL,
+  type ConsumptionRow,
+  DEGRADED_ORPHANED_OUTBOX_SQL,
+  drainFrontier,
+  EVENT_TYPES,
+  EventSpineRefusal,
+  EventSpineUsageError,
+  headOfLineAgeMs,
+  markConsumed,
+  markFailed,
+  markSkipped,
+  ORPHANED_OUTBOX_SQL,
+  type OrphanedOutboxRow,
+  OUTBOX_DELIVERY_INCIDENT_CLASS,
+  orphanedOutbox,
+  registerConsumer,
+  StaleConsumerRefused,
+  subscribe,
+  type UndrainedRow,
+  undrained,
+  unsubscribe,
+} from "./control_plane/events.js";
+export {
   type AppliedMigration,
   appliedMigrations,
   createProductionControlPlane,
@@ -84,6 +113,13 @@ export {
   STATE_TABLES,
 } from "./control_plane/schema.js";
 export { SPIKE_APPLICATION_ID } from "./control_plane/spike.js";
+export {
+  currentScope,
+  inAutocommit,
+  TransactionUsageError,
+  transaction,
+} from "./control_plane/txn.js";
+
 /**
  * The G6 measurement harness.
  *
