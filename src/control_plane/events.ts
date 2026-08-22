@@ -1,5 +1,6 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { resolveToleranceMs } from "./policy.js";
+import { pythonJsonDumpsSorted } from "./python_json.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import { currentScope, refuseDeferredCallback, refuseDeferredResult, transaction } from "./txn.js";
 
@@ -1357,7 +1358,7 @@ export function markSkipped(
         ingestedAtMs,
         runId: original.run_id,
         producerEpoch: writerEpoch,
-        payload: pythonJsonDumps({
+        payload: pythonJsonDumpsSorted({
           consumer_id: consumerId,
           skipped_event_seq: eventSeq,
           skipped_event_id: original.event_id,
@@ -1382,39 +1383,6 @@ export function markSkipped(
     }
     throw error;
   }
-}
-
-/**
- * `json.dumps(value, sort_keys=True)`, byte for byte.
- *
- * Two differences from `JSON.stringify` have to be reproduced, not one, and
- * missing either changes text that is **persisted** in `event.payload`:
- *
- * - **Key order.** `sort_keys=True` sorts; `JSON.stringify` emits insertion
- *   order.
- * - **Separators.** `json.dumps` defaults to `", "` and `": "` -- with the
- *   spaces. `JSON.stringify` emits neither. This is the half that is easy to
- *   miss, because both texts parse to the same object, so no assertion that
- *   reads through `JSON.parse` can see the difference. The differential oracle
- *   compares stored bytes, and would.
- *
- * Only the shape this module writes is handled -- a flat object of strings and
- * numbers -- and anything else is refused rather than silently emitted as text
- * Python would not have produced.
- */
-function pythonJsonDumps(value: Record<string, string | number>): string {
-  const entries = Object.keys(value)
-    .sort()
-    .map((key) => {
-      const item = value[key];
-      if (typeof item !== "string" && typeof item !== "number") {
-        throw new TypeError(
-          `pythonJsonDumps handles only flat string/number payloads; '${key}' is ${typeof item}`,
-        );
-      }
-      return `${JSON.stringify(key)}: ${JSON.stringify(item)}`;
-    });
-  return `{${entries.join(", ")}}`;
 }
 
 // --------------------------------------------------------------------------
