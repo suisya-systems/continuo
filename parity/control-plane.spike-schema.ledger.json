@@ -621,8 +621,8 @@
     },
     {
       "topic": "openControlPlane does not re-verify the writable connection it returns, so a database replaced in the verify-close-reopen window is returned unverified.",
-      "status": "inherited, not fixed",
-      "detail": "interlock's control_plane/schema.py open_control_plane runs _verify_readonly(target), then sqlite3.connect(target), then returns -- with no second verification over the handle it hands back. So a foreign, differently-versioned or corrupt database substituted between the close and the reopen is opened rather than refused. The port reproduces this exactly. Note the asymmetry is interlock's own: the PRODUCTION opener (migrator.open_production_control_plane) DOES close the same window, and continuo's migrator.ts carries that -- the ported cases under 'the verify-close-reopen window' in migrator.test.ts are precisely about it. Closing the gap on the spike side would make continuo's spike opener stronger than interlock's, which interlock#74 acceptance criterion 5 forbids doing silently. Raised by the Codex review gate (2026-08-22, P2) and recorded here so it is a disclosed review topic rather than an oversight. A fix belongs upstream in interlock, or in a change that moves both sides together."
+      "status": "REPAIRED -- deliberate divergence from interlock (continuo D-0024)",
+      "detail": "The returned handle is now verified again on itself, closing the window between the read-only verification's close and the writable open. This was not a new design: migrator.ts's openProductionControlPlane has closed the same window in exactly this shape since the pilot, and the ported cases under 'the verify-close-reopen window' are about it. The correct answer was already in this repository, one module away, while the spike opener carried the gap -- which is the argument for repairing where the code is rather than disclosing (D-0023)."
     }
   ]
 }

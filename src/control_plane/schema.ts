@@ -340,7 +340,39 @@ export function openControlPlane(path: string): SqliteDatabase {
   verifyReadonly(target);
 
   const connection = schemaSeams.connect(target);
-  configureConnection(connection);
+  try {
+    configureConnection(connection);
+    // Verified AGAIN, on the handle actually returned.
+    //
+    // `verifyReadonly` ran on a read-only connection that is now closed, so
+    // between that close and this open the file is unobserved: another process
+    // can replace it, and this function would return a connection to a
+    // database it never checked -- the one thing it exists not to do.
+    //
+    // This is not a new design. `migrator.ts`'s `openProductionControlPlane`
+    // has closed the same window since the pilot, in exactly this shape, and
+    // the ported cases under "the verify-close-reopen window" are about it.
+    // The spike opener was left in the older shape because interlock's own
+    // `schema.py` is: it verifies, connects, and returns. So the correct
+    // answer was already in this repository, one module away, while this one
+    // carried the gap -- which is the argument for repairing an inherited
+    // defect where the code is, rather than disclosing it (D-0023).
+    verify(target, connection);
+  } catch (error) {
+    connection.close();
+    // Classified, not rethrown raw. If the file was replaced in the window this
+    // second pass exists to close, `configureConnection` or `verify` can fail
+    // with a driver error -- and this function's contract is that a database it
+    // could not verify is reported as CorruptStateRefused, never as whatever
+    // SQLite happened to say. `verifyReadonly` already classifies for exactly
+    // this reason; the second pass has the same obligation.
+    if (isSqliteError(error)) {
+      throw new CorruptStateRefused(`${target} is not a readable database: ${describe(error)}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
   return connection;
 }
 

@@ -1295,8 +1295,42 @@ export function markSkipped(
   requireEpochMs("settled_at_ms", settledAtMs);
   requireEpochMs("ingested_at_ms", ingestedAtMs);
 
+  const dedupKey = `consumption_skipped/${consumerId}/${eventSeq}`;
+
   try {
     return transaction(connection, (tx) => {
+      // The duplicate is detected BEFORE anything is written, not by letting
+      // the append raise and relying on the rollback to undo the settle.
+      //
+      // That reliance is what interlock does, and it holds only while this
+      // function OWNS the transaction. Joined to a caller's transaction,
+      // `transaction()` does not roll back -- the owner does -- so the settle
+      // above the append survived, and the outer commit published a
+      // consumption marked 'skipped' with no `consumption_skipped` event to
+      // explain it. Dedup keys are caller-controlled, so it is reachable.
+      //
+      // Reading first is safe against a racing writer for the same reason the
+      // append's own check is: `BEGIN IMMEDIATE` holds the write lock from the
+      // transaction's first statement, so nothing can take the key between
+      // this read and the insert. And it makes the source's own stated intent
+      // -- "a re-append is a genuine no-op rather than a partially applied
+      // one" -- true in the case where its mechanism is not in force.
+      // Repaired under D-0023.
+      const already = tx
+        .prepare<{ dedup_key: string }, { event_id: string }>(
+          "SELECT event_id FROM event WHERE dedup_key = :dedup_key",
+        )
+        .get({ dedup_key: dedupKey });
+      if (already !== undefined) {
+        return Object.freeze({
+          seq: null,
+          eventId: already.event_id,
+          duplicate: true,
+          consumptions: Object.freeze([]),
+          messages: Object.freeze([]),
+        });
+      }
+
       settle(tx, {
         sql: `
                 UPDATE event_consumption
@@ -1339,7 +1373,7 @@ export function markSkipped(
         eventType: "consumption_skipped",
         subjectKind: original.subject_kind,
         subjectId: original.subject_id,
-        dedupKey: `consumption_skipped/${consumerId}/${eventSeq}`,
+        dedupKey,
         producer: consumerId,
         occurredAtMs: settledAtMs,
         ingestedAtMs,
@@ -1356,9 +1390,10 @@ export function markSkipped(
       });
     });
   } catch (error) {
-    // Unreachable in practice -- the settle above refuses first -- kept for
-    // structural fidelity with the source's own try/except around this
-    // same call.
+    // Now genuinely unreachable: the pre-check above returns the duplicate
+    // before the append can raise. Kept for structural fidelity with the
+    // source's own try/except around this same call, and as the belt-and-
+    // braces answer if a future edit removes the pre-check.
     if (error instanceof DuplicateFact) {
       return Object.freeze({
         seq: null,
