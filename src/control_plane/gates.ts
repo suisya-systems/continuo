@@ -572,6 +572,37 @@ export function enqueueRelay(
     if (existing !== undefined) {
       return existing.message_id;
     }
+    // The relay must target the stage the gate is about to enter -- the DIRECT
+    // predecessor, read off ADMISSIBLE rather than hardcoded here.
+    //
+    // Checked only when a relay is about to be CREATED. The idempotent
+    // re-enqueue above must stay idempotent: a Secretary killed after
+    // `advanceOnAck` committed replays the pipeline with the gate already AT
+    // `toStage`, and the predecessor no longer holds. Refusing there would
+    // break the recovery path this function exists to serve -- the crash
+    // window it is idempotent for is exactly the one that moves the stage.
+    //
+    // Without this, `enqueueRelay` checked only that the stage is relayable, so
+    // a `forwarded` relay could be enqueued and acked while the gate was still
+    // `received`; after the ordinary presented and answered advances,
+    // `advanceOnAck(toStage: 'forwarded')` accepted that ack and recorded the
+    // answer as forwarded although the acknowledged payload predates the
+    // answer. interlock has the same gap (D-0026).
+    //
+    // The rule is "the direct predecessor", not "anything reachable", because
+    // reachable leaves the same hole open: `received` reaches `forwarded`.
+    const advance = ADMISSIBLE.find((edge) => edge.kind === "advance" && edge.toStage === toStage);
+    if (advance === undefined) {
+      throw new TypeError(`no admissible advance reaches '${toStage}'`);
+    }
+    if (gate.stage !== advance.fromStage) {
+      throw new InadmissibleTransitionRefused(
+        `gate ${gateId} is at '${gate.stage}', and a relay to '${toStage}' is enqueued from ` +
+          `'${advance.fromStage}': a relay put in front of a recipient before the gate reaches ` +
+          "the stage it answers can be acked early, and the stale ack is then accepted against " +
+          "an answer it predates",
+      );
+    }
     tx.prepare<[string, string | null, string, string, string, number]>(
       `
             INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key,

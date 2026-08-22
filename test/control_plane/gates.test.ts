@@ -1665,6 +1665,113 @@ describe("section 9.2 -- the projection", () => {
 // seam liveness, and the coupling the explicit parametrize ids gave up
 // --------------------------------------------------------------------------
 
+describe("the relay targets the stage the gate is about to enter (target-only)", () => {
+  test("a relay enqueued ahead of the gate's stage is refused", () => {
+    // TARGET-ONLY, pinning a DELIBERATE DIVERGENCE from interlock (D-0026).
+    //
+    // interlock's `enqueue_relay` checks only that the target is a relayed
+    // stage. So a `forwarded` relay can be put in front of a worker while the
+    // gate is still `received`; it is acked there, and after the ordinary
+    // presented and answered advances `advance_on_ack(to_stage='forwarded')`
+    // accepts that ack -- recording the answer as forwarded although the
+    // acknowledged payload predates the answer it is supposed to carry.
+    //
+    // continuo refuses it, from ADMISSIBLE's own advance edge rather than a
+    // hardcoded pair. The rule is the DIRECT predecessor and not "anything
+    // reachable", because reachable leaves the same hole open: `received`
+    // reaches `forwarded`.
+    //
+    // Chosen on evidence, not on principle: all twelve `enqueue_relay` call
+    // sites in interlock enqueue at the direct predecessor, and there is no
+    // production caller at all, so nothing legitimate is blocked. If a later
+    // reconcile driver genuinely needs to enqueue ahead, this is the test that
+    // will fail, and D-0026 says to relax the rule deliberately at that point
+    // rather than treat the refusal as inviolable.
+    const cp = cpFixture();
+    const gateId = aGate(cp, "gate-ahead");
+
+    expectRefusal(
+      () =>
+        enqueueRelay(cp, {
+          gateId,
+          toStage: "forwarded",
+          recipient: "worker-7",
+          payload: "{}",
+          messageId: "msg/ahead",
+          enqueuedAtMs: T0 + MINUTE,
+        }),
+      InadmissibleTransitionRefused,
+      /is at 'received'/,
+    );
+
+    // ...and the relay the gate IS at the predecessor for is still accepted, so
+    // the guard refuses the early one rather than everything.
+    //
+    // (The recovery path is pinned by the case below: the guard runs only when
+    // a relay is about to be CREATED, never on the idempotent re-enqueue.)
+    expect(
+      enqueueRelay(cp, {
+        gateId,
+        toStage: "presented",
+        recipient: "secretary",
+        payload: "{}",
+        messageId: "msg/ok",
+        enqueuedAtMs: T0 + MINUTE,
+      }),
+    ).toBe("msg/ok");
+  });
+});
+
+describe("the predecessor check does not break recovery (target-only)", () => {
+  test("a re-enqueue after the stage advanced still returns the message in force", () => {
+    // TARGET-ONLY, and the other half of D-0026.
+    //
+    // `enqueueRelay` is idempotent so that a Secretary killed after its commit
+    // can replay on recovery and get back the id already in force rather than
+    // sending a human a second copy. The crash window that matters is exactly
+    // the one that MOVES the stage: if the kill lands after `advanceOnAck`
+    // committed, the replay arrives with the gate already at `toStage`, where
+    // the predecessor no longer holds.
+    //
+    // A first draft of the predecessor check ran before the existing-relay
+    // lookup and threw there, breaking the recovery path the function exists
+    // to serve. The guard now runs only when a relay is about to be created.
+    const cp = cpFixture();
+    const gateId = aGate(cp, "gate-replay");
+    const messageId = enqueueRelay(cp, {
+      gateId,
+      toStage: "presented",
+      recipient: "secretary",
+      payload: "{}",
+      messageId: "msg/replay",
+      enqueuedAtMs: T0 + MINUTE,
+    });
+    deliver(cp, messageId, T0 + MINUTE + 1_000);
+    ack(cp, messageId, T0 + MINUTE + 2_000);
+    advanceOnAck(cp, {
+      gateId,
+      toStage: "presented",
+      actorKind: "secretary",
+      actorId: "secretary-1",
+      occurredAtMs: T0 + MINUTE + 3_000,
+      recordedAtMs: T0 + MINUTE + 3_000,
+    });
+    expect(stageOf(cp, gateId)).toBe("presented");
+
+    // The replay: same call, gate now AT the stage it targets.
+    expect(
+      enqueueRelay(cp, {
+        gateId,
+        toStage: "presented",
+        recipient: "secretary",
+        payload: "{}",
+        messageId: "msg/replay-again",
+        enqueuedAtMs: T0 + 2 * MINUTE,
+      }),
+    ).toBe(messageId);
+  });
+});
+
 describe("seam liveness (target-only)", () => {
   test("closeGate appends to the spine through the seam record", () => {
     // TARGET-ONLY. Two ported cases replace `gatesSeams.appendEvent` to drive a

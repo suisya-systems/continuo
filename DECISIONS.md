@@ -53,6 +53,7 @@ spaces distinct.
 | D-0023 | Inherited defects are repaired in continuo, at the first belt that touches them | accepted |
 | D-0024 | The control_plane inherited-defect repairs, and what a failed COMMIT costs | accepted |
 | D-0025 | An expensive, identical fixture is built once per test file and copied per case | accepted |
+| D-0026 | A gate relay targets the stage the gate is about to enter | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -2589,6 +2590,82 @@ it belongs to another lane.
 **Falsified by.** interlock resuming. Every one of these would then be a bug report upstream, and
 continuo would follow whatever interlock decided rather than keeping its own answer.
 ---
+
+## D-0026 — A gate relay targets the stage the gate is about to enter
+
+**Context.** `D-0024` repaired six inherited `control_plane` defects and deliberately left a seventh
+open, because fixing it meant deciding what `ADMISSIBLE`'s edges mean rather than how to translate
+them. This entry settles that one.
+
+`enqueueRelay` checked only that its target was in `RELAYED_STAGES`. So a `forwarded` relay could be
+put in front of a worker while the gate was still `received`, acked there, and then -- after the
+ordinary `presented` and `answered` advances -- accepted by `advanceOnAck(toStage: "forwarded")`.
+The gate would record the answer as forwarded on the strength of an acknowledgement of a payload
+that **predates the answer it is supposed to carry**. interlock has the same gap.
+
+**Decision.** A relay must target the stage the gate is **about to enter**: its `toStage` must be
+reachable from the gate's *current* stage by one `advance` edge of `ADMISSIBLE`. The predecessor is
+read off the table, not hardcoded, so the rule cannot drift from the state machine it is derived
+from.
+
+**Direct predecessor, not "anything reachable."** The reachable reading leaves the defect in place:
+`received` reaches `forwarded`, which is the attack exactly. The two `RELAYED_STAGES` each have a
+single direct predecessor (`presented` <- `received`, `forwarded` <- `answered`), so the rule is
+total and unambiguous.
+
+The `open` edge does not enter into it. Its target is `received`, which is not a relayed stage, so
+`enqueueRelay` can never consult that row -- including or excluding it changes nothing.
+
+**Decided on evidence rather than on principle**, and the evidence is worth recording because it is
+the whole basis of the choice. Every `enqueueRelay` call site in interlock -- twelve, all in
+`tests/control_plane/test_gates.py`, with no production caller at all, because the reconcile driver
+does not exist -- enqueues at the direct predecessor. Eleven target `presented` immediately after the
+gate is opened, at `received`; the twelfth targets `forwarded` and its helper advances the gate to
+`answered` first. Enqueuing ahead appears nowhere. interlock is frozen, so those twelve are the
+complete record of what the design intended.
+
+> **This rule is a statement about how relays are used, not a claim that enqueuing ahead is
+> inherently wrong.** If a later reconcile driver has a genuine reason to put a relay in front of a
+> recipient before the gate reaches the stage it answers, the right response is to relax this
+> deliberately -- widening the rule, saying why, and superseding this entry -- not to work around
+> the refusal. The target-only test that pins it is the thing that will fail, and it is written to
+> say so. A future designer should not be bound by a decision whose reasoning they cannot see.
+
+**Alternatives.**
+
+- **Anything reachable from the current stage (rejected).** Blocks nothing the direct-predecessor
+  rule blocks, and leaves the defect that prompted the change.
+- **Leave it inherited and disclosed (rejected).** That was `D-0022`'s answer, withdrawn by `D-0023`
+  when interlock froze: no upstream fix is coming, so disclosure without repair is abandonment.
+- **Validate in `advanceOnAck` instead of at enqueue time (considered).** It would catch the same
+  stale ack one step later, but the outbox row and the message would already exist and a recipient
+  may already have acted on them. Refusing at enqueue keeps the bad state from being created.
+
+**The check runs only when a relay is CREATED**, never on the idempotent re-enqueue. That is not a
+detail: `enqueueRelay` is idempotent so a Secretary killed after its commit can replay on recovery
+and get back the id already in force rather than sending a human a second copy -- and the crash
+window that matters is exactly the one that **moves the stage**. A replay arriving after
+`advanceOnAck` committed finds the gate already at `toStage`, where the predecessor no longer holds.
+A first draft of this decision checked before the existing-relay lookup and refused there, breaking
+the recovery path the function exists to serve. Pinned by its own target-only test, confirmed by
+mutation.
+
+**Consequences.**
+
+- The refusal is `InadmissibleTransitionRefused`, which is the family a caller already handles for a
+  transition the table does not admit -- the relay's target is exactly that.
+- The gates ledger entry moves from `inherited, disclosed` to a deliberate divergence naming this
+  decision, keeping the trail `D-0023` requires.
+- All 48 existing ported cases pass unchanged, which is the same evidence as the survey, arrived at
+  from the other direction.
+
+**Falsifier.** A caller that legitimately needs to enqueue a relay before the gate reaches the target
+stage's predecessor. None exists today; if one appears, this decision is what should be revisited.
+
+**Status.** accepted
+
+**Source.** Operator decision, 2026-08-22, on lane A's survey of `ADMISSIBLE`'s advance edges and all
+twelve `enqueue_relay` call sites.
 
 ## D-0204 — The `PreToolUse` deny hook ships as hand-written JavaScript
 

@@ -16,12 +16,14 @@
   "target": {
     "test_file": "test/control_plane/gates.test.ts",
     "target_only_tests": {
-      "count": 2,
+      "count": 4,
       "ids": [
         "test/control_plane/gates.test.ts::seam liveness (target-only) > closeGate appends to the spine through the seam record",
-        "test/control_plane/gates.test.ts::seam liveness (target-only) > the terminal-outcome cases cover exactly GATE_OUTCOMES"
+        "test/control_plane/gates.test.ts::seam liveness (target-only) > the terminal-outcome cases cover exactly GATE_OUTCOMES",
+        "test/control_plane/gates.test.ts::the relay targets the stage the gate is about to enter (target-only) > a relay enqueued ahead of the gate's stage is refused",
+        "test/control_plane/gates.test.ts::the predecessor check does not break recovery (target-only) > a re-enqueue after the stage advanced still returns the message in force"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The first is the seam-liveness test docs/test-translation-conventions.md rule 5 requires: two ported cases replace gatesSeams.appendEvent to drive a commit race deterministically, and without this a refactor that made closeGate call the imported appendEvent directly would leave both of them green, because their assertions are about refusals and would still hold for the wrong reason. Confirmed by mutation: bypassing the seam turns it and both ported cases red. The second buys back a coupling the translation gave up -- the source parametrizes over GATE_OUTCOMES itself, while conventions rule 2 requires the target ids to be written out, so an outcome added to the taxonomy and not reflected in the id list is a failure here rather than a case that silently stopped existing."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The first is the seam-liveness test docs/test-translation-conventions.md rule 5 requires: two ported cases replace gatesSeams.appendEvent to drive a commit race deterministically, and without this a refactor that made closeGate call the imported appendEvent directly would leave both of them green, because their assertions are about refusals and would still hold for the wrong reason. Confirmed by mutation: bypassing the seam turns it and both ported cases red. The second buys back a coupling the translation gave up -- the source parametrizes over GATE_OUTCOMES itself, while conventions rule 2 requires the target ids to be written out, so an outcome added to the taxonomy and not reflected in the id list is a failure here rather than a case that silently stopped existing. The third pins a DELIBERATE DIVERGENCE from interlock (D-0026): a relay enqueued ahead of the gate's stage is refused here and accepted there. It is target-only because interlock has no case for it -- the behaviour being pinned is continuo's, not the source's. The fourth pins the other half of D-0026: the predecessor check runs only when a relay is about to be CREATED, never on the idempotent re-enqueue, because the crash window enqueueRelay is idempotent for is exactly the one that moves the stage. A first draft checked before the lookup and broke that recovery path; confirmed by mutation that this test catches it."
     },
     "approved_non_running": []
   },
@@ -481,8 +483,8 @@
     },
     {
       "topic": "enqueueRelay does not check that the relayed stage follows the gate's current stage.",
-      "status": "inherited, not fixed (continuo D-0023 (which superseded D-0022))",
-      "detail": "It validates only that toStage is one of RELAYED_STAGES. So a caller can enqueue and ack 'forwarded' while the gate is still at 'received'; after the ordinary presented and answered advances, advanceOnAck(toStage: 'forwarded') accepts that older ack and records the answer as forwarded although the acknowledged payload predates the answer. interlock's enqueue_relay has exactly the same single check (`if to_stage not in RELAYED_STAGES: raise ValueError`) and no predecessor-stage validation anywhere. Reproduced rather than repaired, per D-0023, which superseded D-0022; the repair is reserved for the post-parity change. Raised by the Codex review gate (2026-08-22, P1)."
+      "status": "REPAIRED -- deliberate divergence from interlock (continuo D-0026)",
+      "detail": "continuo refuses a relay whose target stage is not the one the gate is about to enter, taking the DIRECT predecessor from ADMISSIBLE's own advance edge rather than a hardcoded pair. interlock checks only that the target is a relayed stage, so a 'forwarded' relay can be enqueued and acked while the gate is still 'received', and the stale ack is then accepted against an answer it predates. The rule is the direct predecessor and not 'anything reachable', because reachable leaves the same hole open ('received' reaches 'forwarded'). Chosen on evidence: all twelve enqueue_relay call sites in interlock enqueue at the direct predecessor and there is no production caller, so nothing legitimate is blocked -- see D-0026, which also records that a later reconcile driver needing to enqueue ahead should relax this deliberately rather than treat it as inviolable. Pinned by a target-only test."
     },
     {
       "topic": "The gate-closed event payload is built from a gate read outside the append transaction.",
