@@ -611,6 +611,18 @@ export class SyntheticClock {
       );
     }
     const instant = this.#t0Ms + offsetMs;
+    if (!Number.isSafeInteger(instant)) {
+      // Both operands can be safe while their sum is not, and the failure is
+      // silent and worse than either: with t0 near 2^53, at(2) and at(3) round
+      // to the SAME instant, so two detections a millisecond apart become one
+      // and the latency computed from them is simply wrong. Python's ints add
+      // exactly, so the source has nothing to check here (D-0007).
+      throw new EvaluationRefusal(
+        `t0_ms=${this.#t0Ms} plus offset_ms=${offsetMs} is beyond ` +
+          `Number.MAX_SAFE_INTEGER, so the instant cannot be represented ` +
+          `exactly and two distinct offsets could mint the same one (D-0007)`,
+      );
+    }
     this.#minted.add(instant);
     return instant;
   }
@@ -1007,7 +1019,7 @@ function parseTrace(text: string, casePath: string): readonly Observation[] {
     }
     let payload: unknown;
     try {
-      payload = JSON.parse(line);
+      payload = parseFixtureJson(line);
     } catch (error) {
       throw new TraceMalformed(
         `${casePath}/${TRACE_FILENAME} line ${number}: not JSON (${String(error)})`,
@@ -1110,7 +1122,7 @@ export function loadCase(
 
   let labelPayload: unknown;
   try {
-    labelPayload = JSON.parse(readCaseFile(join(casePath, EXPECTED_FILENAME)));
+    labelPayload = parseFixtureJson(readCaseFile(join(casePath, EXPECTED_FILENAME)));
   } catch (error) {
     if (error instanceof FixtureRefusal) {
       throw error;
@@ -1611,6 +1623,13 @@ function describe(value: unknown): string {
   if (typeof value === "boolean") {
     return value ? "True" : "False";
   }
+  if (value instanceof NonIntegerNumber) {
+    // The token as it appears in the file. Python would print its own float
+    // repr (`1e3` as `1000.0`); showing the source text instead says what is
+    // actually written there, which is what an operator has to edit. No ported
+    // case asserts this wording (D-0017).
+    return value.source;
+  }
   return JSON.stringify(value) ?? String(value);
 }
 
@@ -1659,4 +1678,48 @@ function readCaseFile(path: string): string {
       { cause: error },
     );
   }
+}
+
+/**
+ * A JSON number whose token was not an integer literal.
+ *
+ * Python's `json.loads` gives `1.0` and `1e3` as `float`, and the source's
+ * `_require_int` does `isinstance(value, int)`, so both are refused. JavaScript
+ * has one number type: `JSON.parse` collapses `1.0`, `1e3` and `1000` to the
+ * same value, and by the time any check runs the distinction the source refuses
+ * on is gone.
+ *
+ * So the distinction is preserved at parse time instead. The reviver sees each
+ * value's **source text** and replaces a non-integer numeric token with this
+ * marker, which is not a `number` and is therefore refused by exactly the checks
+ * that would have refused a Python `float` -- including the negative-case rule,
+ * where a float in a windowed field is still "not null".
+ */
+class NonIntegerNumber {
+  readonly source: string;
+  constructor(source: string) {
+    this.source = source;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * `json.loads`, with the integer/float distinction Python keeps and JavaScript
+ * does not.
+ *
+ * Uses the reviver's source-text context (Node 21+), which is the only place the
+ * original token survives. A number whose token is not an integer literal
+ * becomes a {@link NonIntegerNumber}; everything else parses normally.
+ */
+function parseFixtureJson(text: string): unknown {
+  return JSON.parse(text, function reviveNumbers(_key: string, value: unknown, context?: unknown) {
+    if (typeof value !== "number") {
+      return value;
+    }
+    const source = (context as { source?: unknown } | undefined)?.source;
+    if (typeof source === "string" && !/^-?\d+$/.test(source)) {
+      return new NonIntegerNumber(source);
+    }
+    return value;
+  } as (key: string, value: unknown) => unknown);
 }

@@ -56,7 +56,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 12,
+      "count": 14,
       "ids": [
         "test/measurement/fixtures.test.ts::the shipped corpus > the carried corpus digests to interlock's own value (target-only)",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the missing-field check is what refuses a missing field, not a downstream type check",
@@ -69,7 +69,9 @@
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the composition map is copied, not borrowed",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a case with very many matching incidents is graded, not crashed",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a fixture file that is not valid UTF-8 is refused, not silently repaired",
-        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > an integer beyond MAX_SAFE_INTEGER is refused rather than silently rounded"
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > an integer beyond MAX_SAFE_INTEGER is refused rather than silently rounded",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a float-valued label number is refused, as Python's isinstance(int) does",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the clock refuses a sum beyond MAX_SAFE_INTEGER, not only its operands"
       ],
       "note": "Target-only tests translate no source case and are NOT counted as ported coverage. This one is the parity evidence for the carried DATA rather than for code: it pins the corpus content digest to the value interlock's own loader produces over interlock's own tree, which proves both that the files arrived unaltered and that this port's digest construction (id, NUL, filename, NUL, bytes, NUL, over cases sorted by id) agrees with the source's. Interlock has no such test because it has only one copy of the corpus and nothing to compare against. Six more close properties a 36-mutation sweep found unguarded; each is recorded with its verdict under mutation_sweep below. Five are inherited (interlock's suite cannot tell the mutated module from the real one either, verified against 65f36c5 in each case) and one is a port artifact. Production behaviour is unchanged throughout. Three more were added after the codex review gate found three PORT DIVERGENCES (not inherited gaps) in the same pass: the corpus walk sorted by UTF-16 code unit where Python sorts by code point, the composition map was borrowed rather than copied, and the earliest-alarm minimum spread an unbounded array into Math.min. All three are fixed in the module and pinned here."
     },
@@ -684,6 +686,11 @@
         "mutation": "(codex review round 2) lenient UTF-8 decoding, and integers beyond 2^53",
         "verdict": "two more PORT DIVERGENCES, both fixed and pinned",
         "note": "(1) Python's read_text(encoding='utf-8') raises UnicodeDecodeError; Node's readFileSync(.., 'utf8') substitutes U+FFFD and succeeds. Silent repair is the worst outcome available here because the digest is over the RAW BYTES -- the corpus would load, grade and report under a digest identifying bytes it did not evaluate. Fixed with the fatal TextDecoder D-0015 already uses for migration step files. (2) Python's ints are arbitrary precision, so the source accepts 9007199254740993 exactly; JSON.parse has already rounded it to ...992 and Number.isInteger still says yes. Now refused via Number.isSafeInteger on every millisecond input (label fields, trace offsets, and the synthetic clock). Refusing rejects an input the source accepts, which is a deliberate divergence in the safe direction and the posture D-0007 already records for this runtime beyond 2^53 -- a millisecond offset past 2^53 is some 285,000 years."
+      },
+      {
+        "mutation": "(codex review round 3) float-valued JSON numbers, and unsafe clock sums",
+        "verdict": "two more PORT DIVERGENCES, both fixed and pinned",
+        "note": "(1) Python's json.loads gives 1.0 and 1e3 as FLOAT and the source's _require_int does isinstance(value, int), so both are refused. JavaScript has one number type and JSON.parse collapses 300000.0, 3e5 and 300000 to the same value. Preserved at parse time from the reviver's SOURCE TEXT (Node 21+), which is the only place the original token survives: a non-integer numeric token becomes a marker object that is not a `number` and is therefore refused by exactly the checks that would have refused a Python float -- including the negative-case rule, where a float in a windowed field is still 'not null'. (2) The safe-integer check covered both operands but not their SUM: with t0 near 2^53, at(2) and at(3) mint the same instant, so two detections a millisecond apart become one."
       }
     ]
   }

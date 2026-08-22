@@ -1196,6 +1196,74 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     expectRefusal(() => new SyntheticClock(T0).at(beyondSafe), EvaluationRefusal);
   });
 
+  test("a float-valued label number is refused, as Python's isinstance(int) does", () => {
+    // Target-only, and a PORT DIVERGENCE the review caught. Python's json.loads
+    // gives `1.0` and `1e3` as FLOAT, and the source's _require_int does
+    // isinstance(value, int), so both are refused. JavaScript has one number
+    // type: JSON.parse collapses `300000.0`, `3e5` and `300000` to the same
+    // value, and by the time any check runs the distinction the source refuses
+    // on is gone.
+    //
+    // Preserved at parse time instead, from the reviver's source text. Written
+    // as raw JSON because a JS literal cannot carry the distinction either.
+    const root = caseRoot("fixtures");
+    const withFloat = writeCase(root, "relay_gap", "float_budget", {
+      label:
+        '{"incident_class":"relay_gap","onset_offset_ms":30000,' +
+        '"tolerance_ms":180000,"budget_ms":300000.0,' +
+        '"fact_state":"EXPLICIT_BLOCK","must_not_recommend":[],' +
+        '"provenance":"accident: x"}',
+    });
+    const refusal = expectRefusal(() => loadCase(withFloat), LabelMalformed);
+    expect(refusal.message).toContain("budget_ms must be an integer");
+    // The token as written in the file, so an operator knows what to edit.
+    expect(refusal.message).toContain("300000.0");
+
+    // Exponent notation is a float in Python too.
+    const withExponent = writeCase(root, "relay_gap", "exponent_onset", {
+      label:
+        '{"incident_class":"relay_gap","onset_offset_ms":3e4,' +
+        '"tolerance_ms":180000,"budget_ms":300000,' +
+        '"fact_state":"EXPLICIT_BLOCK","must_not_recommend":[],' +
+        '"provenance":"accident: x"}',
+    });
+    expectRefusal(() => loadCase(withExponent), LabelMalformed);
+
+    // ...and the trace's offsets follow the same rule.
+    const floatOffset = writeCase(root, "relay_gap", "float_offset", {
+      label: positiveLabel({ onset_offset_ms: 0 }),
+      trace: '{"offset_ms": 0.0, "kind": "x"}\n',
+    });
+    expectRefusal(() => loadCase(floatOffset), TraceMalformed);
+
+    // A negative case's windowed fields must still be null, and a float there
+    // is not null -- so the marker is refused by that rule too.
+    const floatOnNegative = writeCase(root, "observation_unavailable", "probe_down", {
+      label:
+        '{"incident_class":"none","onset_offset_ms":1.5,"tolerance_ms":null,' +
+        '"budget_ms":null,"fact_state":"OBSERVATION_UNAVAILABLE",' +
+        '"must_not_recommend":[],"provenance":"accident: x"}',
+    });
+    const negativeRefusal = expectRefusal(() => loadCase(floatOnNegative), LabelMalformed);
+    expect(negativeRefusal.message).toContain("onset_offset_ms");
+  });
+
+  test("the clock refuses a sum beyond MAX_SAFE_INTEGER, not only its operands", () => {
+    // Target-only, completing the safe-integer fix. Both operands can be safe
+    // while their sum is not, and that failure is worse than either: with t0
+    // near 2^53, at(2) and at(3) round to the SAME instant, so two detections a
+    // millisecond apart become one and the latency computed from them is simply
+    // wrong. Python's ints add exactly, so the source has nothing to check.
+    const nearTheCeiling = Number.MAX_SAFE_INTEGER - 1;
+    const clock = new SyntheticClock(nearTheCeiling);
+    // One past the ceiling is still exact.
+    expect(clock.at(1)).toBe(Number.MAX_SAFE_INTEGER);
+    // Two is not, and would collide with three.
+    expect(nearTheCeiling + 2, "the collision this refuses").toBe(nearTheCeiling + 3);
+    expectRefusal(() => clock.at(2), EvaluationRefusal);
+    expectRefusal(() => clock.at(3), EvaluationRefusal);
+  });
+
   test("the corpus walk orders case ids by code point, as Python does", () => {
     // Target-only, and it protects the claim this belt makes hardest: the
     // corpus content digest is taken over cases in SORTED order and is
