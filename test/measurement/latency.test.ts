@@ -824,3 +824,44 @@ describe("the report itself", () => {
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+
+describe("a deliberate divergence from interlock (target-only)", () => {
+  test("a present shadow reference must state the population it is over", () => {
+    // Target-only, and `D-0108`: a DELIBERATE, PERMANENT divergence, decided by
+    // the operator on 2026-08-22 when `D-0022` (disclose inherited defects, do
+    // not repair them) was withdrawn -- interlock is frozen, so there is no
+    // upstream repair to follow and no reason to carry a defect that will never
+    // be fixed anywhere else.
+    //
+    // interlock's __post_init__ checks only `distribution is None` for the
+    // present state, so a reference with a distribution and no both-bucket
+    // count is accepted and `render_latency_report` emits "over None
+    // both-bucket episode(s)" -- a heading that announces a comparison and
+    // names no population. Verified against interlock at 65f36c5.
+    //
+    // Same shape as D-0107's required count and the same argument: the type is
+    // exported, so the construction path is public, and a caller with nothing
+    // to count writes `0`.
+    const refusal = expectRefusal(
+      () =>
+        new ShadowReference({
+          status: SHADOW_PRESENT,
+          distribution: Distribution.of([10, 20]),
+          bothBucketCount: null,
+          reason: null,
+        }),
+      ShadowReferenceUnstated,
+    );
+    expect(refusal.message).toContain("both-bucket episodes");
+
+    // Zero is a statement and is accepted: the divergence is about an UNSTATED
+    // population, not an empty one.
+    const stated = new ShadowReference({
+      status: SHADOW_PRESENT,
+      distribution: Distribution.of([10, 20]),
+      bothBucketCount: 0,
+      reason: null,
+    });
+    expect(stated.bothBucketCount).toBe(0);
+  });
+});
