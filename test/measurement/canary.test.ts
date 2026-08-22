@@ -35,6 +35,7 @@
 
 import { realpathSync } from "node:fs";
 import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
@@ -45,6 +46,7 @@ import { observePullRequest, upsertRepository } from "../../src/control_plane/re
 import {
   auditWriters,
   buildOwnershipLedger,
+  type CanaryDivergenceReport,
   CanaryRefusal,
   DUAL_WRITE,
   evidenceOfReadOnly,
@@ -73,9 +75,7 @@ import {
 } from "../../src/measurement/reader.js";
 import {
   CorrelationKey,
-  reconcile,
   ShadowEpisode,
-  type ShadowReconciliation,
   SUBJECT_PR_MERGE,
   V1Reference,
 } from "../../src/measurement/shadow.js";
@@ -189,6 +189,7 @@ function reportOver(
     readonly v1WriterLedger: V1WriterLedger;
     readonly v1Ownership: V1OwnershipInput;
     readonly interlockEpisodes?: readonly ShadowEpisode[];
+    readonly recordClasses?: readonly RecordClass[];
   },
 ): CanaryDivergenceReport {
   return withMeasurement(dbPath, (connection) =>
@@ -201,6 +202,7 @@ function reportOver(
       fixtureLabels: new Map(),
       v1WriterLedger: options.v1WriterLedger,
       v1Ownership: options.v1Ownership,
+      ...(options.recordClasses === undefined ? {} : { recordClasses: options.recordClasses }),
     }),
   );
 }
@@ -990,18 +992,6 @@ describe("every externally-supplied field at once (target-only)", () => {
     return `${label}\u2014x\n    - forged: ${label}`;
   }
 
-  /** An empty reconciliation, for a case that is about the other sections. */
-  function reconcileEmpty(): ShadowReconciliation {
-    return reconcile({
-      periodStartMs: PERIOD_START,
-      periodEndMs: PERIOD_END,
-      interlockEpisodes: [],
-      v1Reference: V1Reference.attestsEmpty({ source: V1_SOURCE }),
-      censoredIds: [],
-      fixtureLabels: new Map(),
-    });
-  }
-
   test("a canary report whose every caller value is hostile still renders one report", () => {
     // Target-only, and the structural form of the D-0109 check. This report
     // embeds the shadow reconciliation as well as its own three sections, so it
@@ -1057,11 +1047,22 @@ describe("every externally-supplied field at once (target-only)", () => {
     expect(rendered.split("\n").filter((line) => line.trimStart().startsWith("- forged"))).toEqual(
       [],
     );
+    // The URI cannot be driven hostile at all, and that is worth pinning rather
+    // than asserting: pathToFileURL percent-encodes every non-ASCII byte and
+    // every control character, so `evidence.uri` is always printable ASCII
+    // however the database's directory is named. Its reportValue call is
+    // therefore unreachable -- kept as defence in depth against a change to how
+    // the line is built, and recorded as unreachable in the ledger.
+    const uriLine = rendered.split("\n").find((line) => line.startsWith("  uri: "));
+    expect(isAscii(uriLine as string)).toBe(true);
+    expect(pathToFileURL("/tmp/a\u2014b/c.sqlite3").href).toBe("file:///tmp/a%E2%80%94b/c.sqlite3");
+    expect(pathToFileURL("/tmp/a\nb/c.sqlite3").href).toBe("file:///tmp/a%0Ab/c.sqlite3");
   });
 
-  test("a caller-named record class is escaped where the finding prints it", () => {
-    // recordClasses is an argument, so the class NAME is the caller's too -- and
-    // it prints twice: in the audited-classes summary and in every finding line.
+  test("a caller-named record class is escaped where the audit prints it", () => {
+    // recordClasses is an ARGUMENT, so the class name is the caller's too, and
+    // it prints in the audited-classes summary and in every finding line. No
+    // other case supplies one: they all take the two shipped classes.
     const path = productionDb();
     const className = hostile("run");
     withWritable(path, (cp) => {
@@ -1091,20 +1092,28 @@ describe("every externally-supplied field at once (target-only)", () => {
     );
 
     expect(audit.findingCount).toBe(1);
+    expect(audit.recordClasses).toEqual([className]);
+    // The audit is rendered through the whole report, which is where the two
+    // call sites for a class name are.
     const rendered = renderCanaryDivergenceReport(
-      new CanaryDivergenceReport({
-        periodStartMs: PERIOD_START,
-        periodEndMs: PERIOD_END,
-        readOnly: withMeasurement(path, (connection) => evidenceOfReadOnly(connection)),
-        reconciliation: reconcileEmpty(),
-        writerAudit: audit,
-        ownership: withMeasurement(path, (connection) =>
-          buildOwnershipLedger(connection, {
-            windowFromMs: PERIOD_START,
-            windowToMs: PERIOD_END,
-            v1Ownership: V1OwnershipInput.attestsEmpty({ source: V1_SOURCE }),
-          }),
-        ),
+      reportOver(path, {
+        v1Reference: V1Reference.attestsEmpty({ source: V1_SOURCE }),
+        v1WriterLedger: V1WriterLedger.observed({
+          source: hostile("v1"),
+          records: [
+            new WrittenRecord({
+              recordClass: className,
+              recordKey: "r1",
+              firstWrittenAtMs: PERIOD_START,
+              lastWrittenAtMs: PERIOD_START,
+              store: hostile("v1-store"),
+            }),
+          ],
+        }),
+        v1Ownership: V1OwnershipInput.attestsEmpty({ source: V1_SOURCE }),
+        recordClasses: [
+          new RecordClass({ name: className, keyShape: "run_id", sql: RECORD_CLASS_RUN.sql }),
+        ],
       }),
     );
 

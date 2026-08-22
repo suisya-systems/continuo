@@ -1569,12 +1569,15 @@ describe("every externally-supplied field at once (target-only)", () => {
     // corpus contributes is chosen by whoever laid it out: the root path, the
     // class directory names, the case ids, and the fact_state and
     // recommendation strings inside each label.
-    const root = join(caseRoot("fixtures"), "corpus\u2014root\u00a0dir");
+    // Directory names carry the non-ASCII half of the hostility and NOT the
+    // newline: a case id IS a directory name, and a newline is invalid in one
+    // on Windows (an earlier case in this file failed only on those cells with
+    // an ENOENT from mkdir). The newline goes through the label and incident
+    // strings below, which are not paths.
+    const root = join(caseRoot("fixtures"), "corpus\u2014root");
     mkdirSync(root, { recursive: true });
     writeCase(root, "relay_gap", "missed\u2014case", { label: positiveLabel() });
-    writeCase(root, "relay_gap", "noisy\nCases needing a reader", {
-      label: negativeLabel(),
-    });
+    writeCase(root, "relay_gap", "noisy\u2014case", { label: negativeLabel() });
     writeCase(root, "observation_unavailable", "quiet", { label: negativeLabel() });
 
     const corpus = loadCorpus(root);

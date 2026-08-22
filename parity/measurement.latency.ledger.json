@@ -50,15 +50,16 @@
       }
     ],
     "target_only_tests": {
-      "count": 5,
+      "count": 6,
       "ids": [
         "test/measurement/latency.test.ts::the report itself > percentiles are ceil-rank, on a sample where floor would differ (target-only)",
         "test/measurement/latency.test.ts::the report itself > a class present in the shadow source with an EMPTY sample is absent for it (target-only)",
         "test/measurement/latency.test.ts::the report itself > classes are reported in first-seen order, not sorted (target-only)",
         "test/measurement/latency.test.ts::a deliberate divergence from interlock (target-only) > a present shadow reference must state the population it is over",
-        "test/measurement/latency.test.ts::hostile values in the rendering (target-only) > an incident class cannot forge a line and cannot reach a cp932 console"
+        "test/measurement/latency.test.ts::hostile values in the rendering (target-only) > an incident class cannot forge a line and cannot reach a cp932 console",
+        "test/measurement/latency.test.ts::every externally-supplied field at once (target-only) > a latency report whose every caller value is hostile still renders one report"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 22-mutation sweep and then confirmed against interlock 65f36c5 -- in each case the source's own suite cannot tell the mutated module from the real one either. Production behaviour is unchanged; these add coverage, not behaviour. This module has no seam (nothing in it is monkeypatched by the source) and renders no figure through D-0104's formatter, so neither of those liveness obligations applies. One more was added after this belt shipped: the evidence for D-0108, which repairs a defect this ledger previously disclosed under the withdrawn D-0022. See divergences. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 22-mutation sweep and then confirmed against interlock 65f36c5 -- in each case the source's own suite cannot tell the mutated module from the real one either. Production behaviour is unchanged; these add coverage, not behaviour. This module has no seam (nothing in it is monkeypatched by the source) and renders no figure through D-0104's formatter, so neither of those liveness obligations applies. One more was added after this belt shipped: the evidence for D-0108, which repairs a defect this ledger previously disclosed under the withdrawn D-0022. See divergences. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above. The D-0109 belt's follow-up added an 'every externally-supplied field at once' case for this renderer. It is structural rather than per-field: a case that drives ONE field hostile passes as soon as any other field is escaped, which is how four review rounds each found one more raw field. scripts/escaping-coverage.mjs measures whether it actually covers this module's reportValue sites by removing each in turn."
     },
     "approved_non_running": []
   },
