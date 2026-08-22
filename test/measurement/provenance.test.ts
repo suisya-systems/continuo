@@ -1355,19 +1355,27 @@ describe("deliberate divergences from interlock (target-only)", () => {
     // Raised by the codex review gate on the provenance belt and disclosed
     // there; repaired here by ordering on `typeof()` as well, which separates
     // only rows the value comparison left equal.
+    // Two columns, not one: the tie-breaker is APPENDED after every value
+    // column rather than interleaved with them, so that it separates only rows
+    // the values cannot. Interleaving would reorder `(1, 2)` against
+    // `(1.0, 1)`, which the second column already separates -- moving a digest
+    // that had no ambiguity in it. That over-reach is not distinguishable from
+    // outside without recomputing the hash, so it is pinned by the ordering
+    // expression's own shape and by review; this case pins the property the
+    // divergence exists for.
     const first = productionDb();
     withWritable(first, (cp) => {
-      cp.prepare("CREATE TABLE probe (value)").run();
-      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
-      cp.prepare("INSERT INTO probe (value) VALUES (1.0)").run();
+      cp.prepare("CREATE TABLE probe (value, other)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1.0, 7)").run();
     });
 
     const second = productionDb("other.sqlite3");
     withWritable(second, (cp) => {
-      cp.prepare("CREATE TABLE probe (value)").run();
+      cp.prepare("CREATE TABLE probe (value, other)").run();
       // The same two rows, inserted the other way round.
-      cp.prepare("INSERT INTO probe (value) VALUES (1.0)").run();
-      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1.0, 7)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
     });
 
     // The premise: SQLite really does hold one as an integer and one as a real,
@@ -1391,9 +1399,9 @@ describe("deliberate divergences from interlock (target-only)", () => {
     // matter in the first place.
     const onlyInteger = productionDb("only-integer.sqlite3");
     withWritable(onlyInteger, (cp) => {
-      cp.prepare("CREATE TABLE probe (value)").run();
-      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
-      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
+      cp.prepare("CREATE TABLE probe (value, other)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
     });
     expect(fingerprintOf(onlyInteger, { tables: ["probe"] }).digest).not.toBe(
       fingerprintOf(first, { tables: ["probe"] }).digest,

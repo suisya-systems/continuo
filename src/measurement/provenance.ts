@@ -503,9 +503,17 @@ function feedRows(
   // two digests over identical content, which is the one claim the field makes.
   // `typeof()` breaks the tie deterministically and changes nothing else: it
   // only ever separates rows the value comparison left equal.
-  const ordering = columns
-    .map((column) => `"${quoted(column)}", typeof("${quoted(column)}")`)
-    .join(", ");
+  // Every value column first, in the source's own order, and only then the
+  // storage classes. Interleaving them -- `col1, typeof(col1), col2, ...` --
+  // reorders rows that do not tie at all: `(INTEGER 1, 2)` and `(REAL 1.0, 1)`
+  // are separated by the second column under the source's ordering, and
+  // interleaving would sort them by the first column's TYPE instead, moving a
+  // digest that had no ambiguity in it. Appending keeps the divergence to
+  // exactly the rows the value comparison cannot separate.
+  const ordering = [
+    ...columns.map((column) => `"${quoted(column)}"`),
+    ...columns.map((column) => `typeof("${quoted(column)}")`),
+  ].join(", ");
   const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${ordering}`;
   // Iterated, not materialised. The source's `connection.execute(...)` is a
   // cursor and hashes row by row; `.all()` would hold every row of a

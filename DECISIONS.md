@@ -2441,8 +2441,15 @@ Two databases holding identical content therefore produce two digests -- which i
 the field exists to make, and the one thing an aggregate fingerprint was rejected for failing to
 support.
 
-**Decision.** The ordering is `ORDER BY "col", typeof("col"), ...` for every column. `typeof()`
-separates only rows the value comparison left equal, so no other digest moves.
+**Decision.** The ordering is every value column first, in the source's own order, and then every
+column's `typeof()` as a tie-breaker: `ORDER BY "a", "b", typeof("a"), typeof("b")`. `typeof()`
+then separates only rows the value comparison left completely equal, so no other digest moves.
+
+Appended rather than interleaved, and the difference is not cosmetic. `ORDER BY "a", typeof("a"),
+"b", ...` reorders rows that do not tie at all: `(INTEGER 1, 2)` and `(REAL 1.0, 1)` are separated
+by the second column under the source's ordering, and interleaving sorts them by the first column's
+storage class instead -- moving a digest that had no ambiguity in it. The first version of this
+change interleaved; the review gate caught it.
 
 Raised by the codex review gate on the provenance belt and disclosed there under `D-0022`; repaired
 here on that rule's withdrawal.
@@ -2460,8 +2467,13 @@ here on that rule's withdrawal.
   question entirely and costs the streaming read -- the digest would have to hold every row of the
   table before hashing any of it, which `ac9`'s cursor change deliberately avoided.
 
-**Consequences.** A digest over a table holding a cross-storage-class tie differs from interlock's.
-Recorded in `parity/measurement.provenance.ledger.json` under `divergences`.
+**Consequences.** A digest over a table holding a **complete-row** cross-storage-class tie differs
+from interlock's. Every other digest is unchanged, which is what the appended form buys.
+
+The over-reach the review caught is not distinguishable from outside without recomputing the hash --
+the test file's own rule forbids that -- so the appended form is held by the ordering expression's
+shape, by this entry, and by review, while the target-only case pins the property the divergence
+exists for. Recorded in `parity/measurement.provenance.ledger.json` under `divergences`.
 
 **Falsified by.** interlock adopting the same tie-breaker, or the schema gaining a constraint that
 makes a mixed-storage-class column impossible.
