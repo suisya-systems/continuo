@@ -190,6 +190,82 @@ export {
   ReadOnlyCapabilityRefused,
 } from "./reader.js";
 /**
+ * Section 3.3's shadow reconciliation: four correlation keys, five buckets.
+ *
+ * The bucket names are exported because a consumer has to be able to iterate
+ * them in the order the report emits them, and the caveats because a reader who
+ * sees a run of unmatched escalations without {@link POSITIONAL_KEY_CAVEAT} has
+ * no way to know the key is the first thing to doubt.
+ *
+ * Five names are qualified, all for the same reason and none of them a
+ * disagreement about the value. `CENSORED` is `censored` in both this module and
+ * {@link ./windows.js}, and they are not the same fact -- one is a window
+ * classification, the other the bucket a reconciliation files an unjudgeable
+ * episode in -- so the newcomer takes the qualified name rather than shadowing
+ * the one already exported. `QUERY_DEFINITIONS` is qualified for the reason
+ * `cohort.QUERY_DEFINITIONS` is: Python namespaces them per module and a flat
+ * barrel cannot. `MISS` collides with {@link ./fixtures.js}'s label of the same
+ * spelling (a graded case that was missed, not a v1_only episode adjudicated as
+ * one), and `SHADOW_PRESENT` / `SHADOW_ABSENT` with {@link ./latency.js}'s
+ * shadow-series availability, so all three take a qualified name here.
+ */
+export {
+  ADJUDICATIONS,
+  AdjudicationPending,
+  AWAITING_HUMAN,
+  BOTH,
+  BOUNDED_ONSET_CAVEAT,
+  CENSORED as SHADOW_CENSORED,
+  CI_OUTCOME_EPISODES_QUERY,
+  CorrelationKey,
+  censoredEpisodeIds,
+  DuplicateCorrelationKey,
+  DuplicateEpisodeIdRefused,
+  EpisodeKeyRefused,
+  FROM_FIXTURE_LABEL,
+  INTERLOCK_ONLY,
+  MatchedPair,
+  MISS as SHADOW_MISS,
+  ONSET_BASES,
+  ONSET_BUCKET_MS,
+  ONSET_OBSERVED,
+  ONSET_UPPER_BOUND,
+  POSITIONAL_KEY_CAVEAT,
+  POSITIONAL_SUBJECT_CLASSES,
+  PR_MERGE_EPISODES_QUERY,
+  QUERY_DEFINITIONS as SHADOW_QUERY_DEFINITIONS,
+  RECONCILIATION_BUCKETS,
+  readCiOutcomeEpisodes,
+  readInterlockEpisodes,
+  readPrMergeEpisodes,
+  readSessionLivenessEpisodes,
+  readWorkerEscalationEpisodes,
+  reconcile,
+  renderShadowReconciliation,
+  SESSION_LIVENESS_EPISODES_QUERY,
+  SHADOW_ABSENT as SHADOW_REFERENCE_ABSENT,
+  SHADOW_PRESENT as SHADOW_REFERENCE_PRESENT,
+  ShadowEpisode,
+  ShadowReconciliation,
+  ShadowReferenceAbsent,
+  ShadowReferenceRefused,
+  ShadowRefusal,
+  SUBJECT_CI_OUTCOME,
+  SUBJECT_CLASSES,
+  SUBJECT_PR_MERGE,
+  SUBJECT_SESSION_LIVENESS,
+  SUBJECT_WORKER_ESCALATION,
+  UNDETERMINED,
+  UNMATCHED_KEY,
+  UnknownAdjudication,
+  UnknownSubjectClass,
+  V1_FALSE_POSITIVE,
+  V1_ONLY,
+  V1OnlyEpisode,
+  V1Reference,
+  WORKER_ESCALATION_EPISODES_QUERY,
+} from "./shadow.js";
+/**
  * Section 3.5's observation window and its two censored buckets.
  *
  * The classification constants and `WINDOW_CLASSIFICATIONS` are exported

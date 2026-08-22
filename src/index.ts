@@ -263,6 +263,119 @@ export {
   transaction,
 } from "./control_plane/txn.js";
 /**
+ * Per-role fencing: the rule model, the renderer, and the breach battery.
+ *
+ * Listed by name for the reason the entries above are: the package exports only
+ * `.` (D-0002), so a name absent from here is one an installed consumer cannot
+ * reach -- and `dist/fencing/roles.json` being present is not the same as the
+ * renderer that reads it being importable.
+ *
+ * The surface mirrors interlock's `fencing/__init__.py` `__all__`, restricted to
+ * what is ported. Absent because they are not ported yet, not because they were
+ * judged internal: `EVENT_ADMITTED`, `EVENT_REFUSED`, `FenceLedger`,
+ * `FencedSpawner`, `SpawnOutcome`, `SpawnPlan`, `default_hook_script`,
+ * `FenceDiff`, `FenceStateError`, `diff_fences`, `read_fence`, `write_fence`.
+ * Each arrives with its own module and its own translated cases.
+ *
+ * The CPython transcriptions (`fnmatch`, `shlex`, `pypath`, `pyrepr`, `pyjson`,
+ * `pysemantics`, `pyregex`, `uescape`) are deliberately absent. In interlock
+ * those behaviours are the standard library, so they are not part of the
+ * package's surface there either; here they are an implementation detail of the
+ * fence, pinned by a differential vector (D-0200) rather than offered as API.
+ */
+export {
+  BatteryReport,
+  BreachProbe,
+  ProbeResult,
+  ProbeSynthesisError,
+  probeFor,
+  probeIds,
+  probesFor,
+  runBattery,
+} from "./fencing/battery.js";
+export {
+  bundledDocumentPath,
+  DISCARDED_ROLE_KEYS,
+  FenceContext,
+  FenceRefusal,
+  loadDocument,
+  RefusalReason,
+  type RefusalReasonCode,
+  type RoleDocument,
+  renderFence,
+  roleNames,
+} from "./fencing/renderer.js";
+export {
+  type Decision,
+  decide,
+  Fence,
+  FenceRule,
+  FenceRuleNotFound,
+  KIND_PERMISSION_DENY,
+  KIND_SANDBOX_DENY_READ,
+  KIND_SANDBOX_DENY_WRITE,
+  LAYER_PERMISSIONS,
+  LAYER_SANDBOX,
+  makeDecision,
+  parsePermissionRule,
+  parseSandboxEntry,
+  RuleSyntaxError,
+  type ToolInput,
+  WITNESS_TOKEN,
+  witnessSubject,
+} from "./fencing/rules.js";
+/**
+ * Section 5's AC-7 canary divergence report.
+ *
+ * Re-exported straight from the module rather than through the measurement
+ * barrel, and the reason is a ported invariant: interlock's
+ * `tests/measurement/test_reader.py` asserts that the measurement PACKAGE
+ * exports no name containing `migrate`, `create`, `write` or `lease`, so that a
+ * writer cannot be reached through the harness's own front door. canary's
+ * vocabulary is full of the word -- `WriterAudit`, `WrittenRecord`,
+ * `auditWriters`, `DUAL_WRITE` -- because what it audits IS writing, and none
+ * of those names is a writer. interlock keeps the invariant by re-exporting
+ * only reader's names from `measurement/__init__.py`; continuo's wider barrel
+ * exists only because D-0002 exports `.` alone, so the fix belongs to the
+ * barrel and not to the assertion. See DECISIONS.md D-0106.
+ */
+export {
+  auditWriters,
+  buildOwnershipLedger,
+  CanaryDivergenceReport,
+  CanaryRefusal,
+  DUAL_WRITE,
+  DualWriteFinding,
+  evidenceOfReadOnly,
+  FILE_REFUSED_THE_WRITE,
+  FINDING_KINDS,
+  INTERLOCK_STORE,
+  MODE_RO,
+  measureCanaryDivergence,
+  NO_VERDICT_NOTE,
+  OWNERSHIP_COLLISION,
+  OWNERSHIP_LEDGER_QUERY,
+  OwnedRun,
+  OwnershipCollisionFinding,
+  OwnershipInputRefused,
+  OwnershipLedger,
+  QUERY_DEFINITIONS as CANARY_QUERY_DEFINITIONS,
+  READ_ONLY_URI_QUERY,
+  RECORD_CLASS_PULL_REQUEST,
+  RECORD_CLASS_RUN,
+  RECORD_CLASSES,
+  ReadOnlyEvidence,
+  RecordClass,
+  readInterlockRecords,
+  renderCanaryDivergenceReport,
+  UndeclaredRecordClass,
+  V1InputRefused,
+  V1OwnershipInput,
+  V1WriterLedger,
+  WriterAudit,
+  WrittenRecord,
+} from "./measurement/canary.js";
+/**
  * The G6 measurement harness.
  *
  * Only the measurement-specific names are listed: the refusal family it shares
@@ -321,14 +434,20 @@ export {
  * name by having been ported first.
  */
 export {
+  ADJUDICATIONS,
   type Adjudication,
+  AdjudicationPending,
   AsynchronousReportRefused,
+  AWAITING_HUMAN,
   adjudicate,
+  BOTH,
+  BOUNDED_ONSET_CAVEAT,
   CASE_FILES,
   CaseIncomplete,
   CaseOutcome,
   CENSORED,
   CENSORED_LEFT,
+  CI_OUTCOME_EPISODES_QUERY,
   ClassDirectoryMismatch,
   ClassLatency,
   ClockNotSynthetic,
@@ -336,14 +455,19 @@ export {
   COHORT_REASONS,
   COHORT_RUNS_QUERY,
   CorpusCompositionRefused,
+  CorrelationKey,
+  censoredEpisodeIds,
   classify,
   classifyEpisodes,
   DETECTED,
   DetectionBeforeOnset,
   Distribution,
+  DuplicateCorrelationKey,
+  DuplicateEpisodeIdRefused,
   DuplicateEpisodeRefused,
   defaultGraceMs,
   Episode,
+  EpisodeKeyRefused,
   EpisodeOutsidePeriod,
   EpisodeWindow,
   EvaluationRefusal,
@@ -361,6 +485,7 @@ export {
   FixtureCorpus,
   FixtureEvaluation,
   FixtureRefusal,
+  FROM_FIXTURE_LABEL,
   formatFixed,
   GRACE_DECLARED,
   GRACE_REVISION_RECONCILE_PERIOD,
@@ -369,6 +494,7 @@ export {
   IN_FLIGHT_AT_PERIOD_END,
   IN_PERIOD,
   INGESTION_LAG_QUERY,
+  INTERLOCK_ONLY,
   IncidentBeforeOnset,
   IngestionLag,
   isAscii,
@@ -379,6 +505,7 @@ export {
   LatencyReport,
   loadCase,
   loadCorpus,
+  MatchedPair,
   MISS,
   measureFalseTermination,
   measureIngestionLag,
@@ -389,29 +516,55 @@ export {
   NONE_CLASS,
   noShadowReference,
   Observation,
+  ONSET_BASES,
+  ONSET_BUCKET_MS,
+  ONSET_OBSERVED,
+  ONSET_UPPER_BOUND,
   OutcomeMissing,
   OWNERSHIP_COLLISION_QUERY,
   OwnershipAssertionRefused,
   openForMeasurement,
   PeriodNotClosedRefused,
   PeriodRefused,
+  POSITIONAL_KEY_CAVEAT,
+  POSITIONAL_SUBJECT_CLASSES,
   PositiveCasesRequired,
+  PR_MERGE_EPISODES_QUERY,
   PRODUCTIVE_EVENT_TYPES_REQUIRED,
   PROVENANCE_KINDS,
   ProducedIncident,
   proveReadOnly,
+  RECONCILIATION_BUCKETS,
   ReadOnlyCapabilityRefused,
   RunCohort,
+  readCiOutcomeEpisodes,
+  readInterlockEpisodes,
+  readPrMergeEpisodes,
+  readSessionLivenessEpisodes,
   readTerminateActions,
+  readWorkerEscalationEpisodes,
+  reconcile,
   renderFalseTerminationReport,
   renderFixtureReport,
   renderLatencyReport,
+  renderShadowReconciliation,
   requireGraceMs,
   resolveBudgetMs,
+  SESSION_LIVENESS_EPISODES_QUERY,
   SHADOW_ABSENT,
+  SHADOW_CENSORED,
+  SHADOW_MISS,
   SHADOW_PRESENT,
+  SHADOW_QUERY_DEFINITIONS,
+  SHADOW_REFERENCE_ABSENT,
+  SHADOW_REFERENCE_PRESENT,
+  ShadowEpisode,
+  ShadowReconciliation,
   ShadowReference,
+  ShadowReferenceAbsent,
+  ShadowReferenceRefused,
   ShadowReferenceUnstated,
+  ShadowRefusal,
   ShadowSource,
   SOURCE_FIXTURE_LABEL,
   SOURCE_HUMAN_ADJUDICATION,
@@ -422,6 +575,11 @@ export {
   STATUS_PENDING,
   STATUS_REFUSED,
   StrayEntryRefused,
+  SUBJECT_CI_OUTCOME,
+  SUBJECT_CLASSES,
+  SUBJECT_PR_MERGE,
+  SUBJECT_SESSION_LIVENESS,
+  SUBJECT_WORKER_ESCALATION,
   SUBSEQUENT_ACTIVITY_QUERY,
   SubjectRequired,
   SyntheticClock,
@@ -437,11 +595,19 @@ export {
   TraceMalformed,
   terminalInstantMs,
   touchesPeriod,
+  UNDETERMINED,
+  UNMATCHED_KEY,
+  UnknownAdjudication,
   UnknownCaseInOutcomes,
   UnknownEpisodeDetection,
   UnknownGroundTruthVerdict,
   UnknownRunStatusRefused,
+  UnknownSubjectClass,
+  V1_FALSE_POSITIVE,
+  V1_ONLY,
   V1_OWNED,
+  V1OnlyEpisode,
+  V1Reference,
   VERDICT_NOT_STUCK,
   VERDICT_STUCK,
   VERDICT_UNDETERMINED,
@@ -449,6 +615,7 @@ export {
   WINDOW_CLASSIFICATIONS,
   WindowRefusal,
   WindowReport,
+  WORKER_ESCALATION_EPISODES_QUERY,
 } from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
 export { isConstraintError } from "./sqlite/errors.js";

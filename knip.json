@@ -3,5 +3,6 @@
   "entry": ["src/index.ts", "scripts/*.mjs", "test/**/*.test.ts", "vitest.config.ts"],
   "project": ["src/**/*.ts", "scripts/**/*.mjs", "test/**/*.ts"],
   "ignoreExportsUsedInFile": true,
+  "tags": ["-parityonly"],
   "vitest": false
 }

@@ -65,6 +65,11 @@ const LEDGERS = [
   "parity/measurement.latency.ledger.json",
   "parity/measurement.fixtures.ledger.json",
   "parity/measurement.cohort.ledger.json",
+  "parity/measurement.shadow.ledger.json",
+  "parity/measurement.canary.ledger.json",
+  // lane C -- fencing + settings
+  "parity/fencing.renderer.ledger.json",
+  "parity/fencing.battery-coverage.ledger.json",
 ];
 
 /**
