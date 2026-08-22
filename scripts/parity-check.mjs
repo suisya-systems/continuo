@@ -54,6 +54,8 @@ const LEDGERS = [
   "parity/control-plane.events.ledger.json",
   // lane B -- measurement
   "parity/measurement.ledger.json",
+  "parity/measurement.false-termination.ledger.json",
+  "parity/measurement.windows.ledger.json",
 ];
 
 /**

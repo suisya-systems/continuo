@@ -54,6 +54,8 @@ spaces distinct.
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
 | D-0103 | A report snapshot refuses a deferred body rather than awaiting or draining it | accepted |
+| D-0104 | Rendered figures match Python's formatter, pinned by an oracle | accepted |
+| D-0105 | Maps keyed by database-supplied ids are `Map`, never plain objects | accepted |
 
 ---
 
@@ -1367,6 +1369,78 @@ as a side effect of a translation, which is the specific failure `D-0007` exists
 on better-sqlite3 13.0.3 (`CREATE TABLE t(v INTEGER)` binding `3.5` reads back `3.5`; binding
 `'abc'` reads back `'abc'`), not taken from documentation.
 
+## D-0022 — Inherited defects are disclosed and repaired after parity, not during
+
+**Context.** The review gate on the event-spine belt raised three defects in `txn.ts` / `events.ts`,
+two of them P1:
+
+- a `COMMIT` that fails (`SQLITE_BUSY` from a concurrent reader, which the rollback journal makes
+  reachable -- `D-0012`) leaves the transaction **open** while its scope is dropped, so the next
+  `transaction()` call sees `inTransaction` and silently *joins* an orphaned transaction: its writes
+  never commit and the locks stay held;
+- `markSkipped`, joined to a caller's transaction, can settle a consumption as `skipped` and commit
+  it **without** the `consumption_skipped` audit event, because `appendEvent` answers a duplicate
+  `dedup_key` by returning rather than raising, and dedup keys are caller-controlled;
+- the transaction scope is installed **before** `BEGIN IMMEDIATE` succeeds, so a failed `BEGIN`
+  leaves `currentScope()` answering for a transaction that was never opened.
+
+Every one is real. Every one is also **structurally identical in interlock**: `txn.py` puts `COMMIT`
+in an `else:` clause with `del _SCOPES[key]` in the `finally` and no failed-commit handling anywhere;
+`_SCOPES[key] = scope` is the line before `connection.execute("BEGIN IMMEDIATE")`; and
+`mark_skipped` reaches `append_event`, which catches `_DuplicateFact` and converts it to a normal
+return. None of the three is pinned by a case in either suite.
+
+That is the tension this entry settles. A correctness review says fix them. `interlock#74`'s
+acceptance criterion 5 says known limitations stay **disclosed** rather than silently repaired, and
+the whole premise of the port is that continuo does what interlock does. A review that cannot see
+interlock will keep raising these every round, so the disagreement is one of *criteria*, not of a
+fix that has not converged yet.
+
+**Decision.** For a defect that is (a) reproduced faithfully from interlock, (b) pinned by no case on
+either side, and (c) raised by review rather than by a failing test: **disclose it in the affected
+file's parity ledger under `inherited_limitations`, do not repair it during the port, and repair it
+in a dedicated change after parity is reached.** A remediation belt for these three is reserved.
+
+The three are recorded in `parity/control-plane.events.ledger.json`, each naming the interlock
+construct it mirrors and the review that raised it.
+
+**Alternatives.**
+
+- **Repair them now and record each as a disclosed deviation (rejected by the operator; it was the
+  porting lane's recommendation).** The argument for it: none is behaviour anyone depends on, no
+  ported case observes any of them, and criterion 5 forbids *silent* fixes rather than recorded ones
+  -- so a documented repair arguably satisfies it while leaving the thing that actually runs less
+  fragile. The argument against, which decided it: every repair is a place where "continuo does what
+  interlock does" stops being true, and it is claimed at exactly the moment the parity audit and the
+  differential oracle are being used to establish that sentence. Deferring costs a known, disclosed
+  interval of fragility; repairing costs the clarity of the parity claim itself.
+- **Repair only the two P1s (rejected).** The severity split is the reviewer's, not a property of the
+  code, and it would make the rule un-restatable -- which is what turns a rule into case-by-case
+  judgement and then into drift.
+- **Leave them undisclosed because the source has them (never considered).** That is the failure
+  criterion 5 is written against.
+
+**Consequences.**
+
+- **The review gate will keep flagging these.** That is expected and is not a regression: the
+  ledger, not the reviewer, is the record of what was decided. A later belt must not "discover" them
+  and quietly repair them -- the ledger entries exist so the next reader finds the decision instead.
+- The repairs are reserved as a post-parity change, so they land against a green baseline where a
+  behavioural difference from interlock is a deliberate, reviewable diff rather than noise inside a
+  translation.
+- This entry generalises: it is the standing rule for the belts still to come, not a one-off ruling
+  about three findings.
+
+**Falsifier.** If one of these is shown to be reachable from a ported case -- i.e. the suites *can*
+tell the two implementations apart -- it stops being an inherited limitation and becomes a parity
+failure to fix immediately. Likewise if interlock repairs one upstream, continuo follows rather than
+waiting.
+
+**Status.** accepted
+
+**Source.** Codex review gate, 2026-08-22, rounds 1 and 2 (two P1, one P2); escalated by lane A per
+`docs/test-translation-conventions.md` rule 0 and decided by the operator.
+
 ## D-0100 — The read-only capability is an open flag, not a `mode=ro` URI
 
 **Context.** Interlock's measurement harness is read-only **by capability, not by convention**
@@ -1652,77 +1726,157 @@ TypeScript 5.8.3 the same day. Falsified by: the harness acquiring a genuinely a
 (it has none while better-sqlite3 is the driver), which would make "refuse" the wrong answer and
 require deciding what may hold the control plane's SHARED lock across a suspension.
 
----
+## D-0104 — Rendered figures match Python's formatter, pinned by an oracle
 
-## D-0022 — Inherited defects are disclosed and repaired after parity, not during
+**Context.** interlock#74's acceptance criterion 3 is that continuo's measurement CLI "produces
+reports with the same figures and fields on the shared fixture corpus". That makes the **rendered
+text of a number** a parity surface, not presentation: a report whose percentage reads `0.13` where
+interlock's reads `0.12` fails that criterion even though the underlying double is bit-identical.
 
-**Context.** The review gate on the event-spine belt raised three defects in `txn.ts` / `events.ts`,
-two of them P1:
+`Number.prototype.toFixed` is not the same function as Python's `format(v, '.Nf')`. They agree on
+every input except an **exact tie**, where Python rounds to even and JavaScript rounds away from
+zero:
 
-- a `COMMIT` that fails (`SQLITE_BUSY` from a concurrent reader, which the rollback journal makes
-  reachable -- `D-0012`) leaves the transaction **open** while its scope is dropped, so the next
-  `transaction()` call sees `inTransaction` and silently *joins* an orphaned transaction: its writes
-  never commit and the locks stay held;
-- `markSkipped`, joined to a caller's transaction, can settle a consumption as `skipped` and commit
-  it **without** the `consumption_skipped` audit event, because `appendEvent` answers a duplicate
-  `dedup_key` by returning rather than raising, and dedup keys are caller-controlled;
-- the transaction scope is installed **before** `BEGIN IMMEDIATE` succeeds, so a failed `BEGIN`
-  leaves `currentScope()` answering for a transaction that was never opened.
+| value   | Python `.2f` | JS `toFixed(2)` |
+|---------|--------------|-----------------|
+| `0.125` | `0.12`       | `0.13`          |
+| `0.375` | `0.38`       | `0.38`          |
+| `0.5` at width 0 | `0` | `1` |
 
-Every one is real. Every one is also **structurally identical in interlock**: `txn.py` puts `COMMIT`
-in an `else:` clause with `del _SCOPES[key]` in the `finally` and no failed-commit handling anywhere;
-`_SCOPES[key] = scope` is the line before `connection.execute("BEGIN IMMEDIATE")`; and
-`mark_skipped` reaches `append_event`, which catches `_DuplicateFact` and converts it to a normal
-return. None of the three is pinned by a case in either suite.
+`0.375` agrees only by coincidence -- rounding to even and rounding up give the same digit there,
+which is exactly how a spot-check of two or three values concludes that `toFixed` is fine.
 
-That is the tension this entry settles. A correctness review says fix them. `interlock#74`'s
-acceptance criterion 5 says known limitations stay **disclosed** rather than silently repaired, and
-the whole premise of the port is that continuo does what interlock does. A review that cannot see
-interlock will keep raising these every round, so the disagreement is one of *criteria*, not of a
-fix that has not converged yet.
+Ties are rare and they are reachable from real data. An exact tie at two places requires the
+fractional part to be one of `.125`, `.375`, `.625`, `.875` -- nothing else is both a tie and exactly
+representable as a double -- and every figure this harness prints is `count / count * 100`. One false
+termination in eight hundred applied is `0.125` percent.
 
-**Decision.** For a defect that is (a) reproduced faithfully from interlock, (b) pinned by no case on
-either side, and (c) raised by review rather than by a failing test: **disclose it in the affected
-file's parity ledger under `inherited_limitations`, do not repair it during the port, and repair it
-in a dedicated change after parity is reached.** A remediation belt for these three is reserved.
+**Decision.** `src/measurement/format.ts` provides `formatFixed(value, digits)`, which reproduces
+Python's formatter including its tie-breaking, and every rendered figure in the harness goes through
+it. The value is decomposed into the `mantissa * 2 ** exponent` it literally is, straight out of the
+IEEE 754 bits, and the digits are produced by exact `BigInt` division -- so the only rounding
+anywhere is the one being decided. "Is this a tie" is a question about the stored binary value, and
+it is answered exactly rather than approximately. `isAscii` lives
+beside it as `str.isascii()`, which several ported cases assert on rendered output (`D-0006`).
 
-The three are recorded in `parity/control-plane.events.ledger.json`, each naming the interlock
-construct it mirrors and the review that raised it.
+A reimplementation is exactly the kind of artefact that reads correct and is not, so it is pinned
+against the thing it reimplements, as a **differential oracle face**
+(`docs/differential-oracle.md`, `D-0018`):
+
+- `scripts/oracle/dump_fixed_format.py` asks CPython for its answer on every corpus input at four
+  widths and writes them to `parity/oracle/fixed-format-vector.json`.
+- `test/measurement/format.test.ts` rebuilds the corpus and compares. It may only compare; there is
+  no write path.
+- The corpus is **rebuilt, not committed** -- only Python's answers are. It is therefore built with
+  no RNG: Python's Mersenne Twister is not reproducible in JavaScript, so a sampled corpus could not
+  be rebuilt on the other side. The vector records the corpus length and the test checks it before
+  comparing, so a changed corpus arrives as an instruction to regenerate rather than as an
+  off-by-one comparison against the wrong answers.
+- 4,795 values x 4 widths. Every tie class is enumerated exhaustively rather than sampled, and
+  each is probed one ULP either side, because the tie -- and the value that merely looks like one --
+  are the only places the two languages disagree.
+
+This face needs **no interlock checkout**: the oracle is CPython itself, reached through the standard
+library, which makes it the cheapest of the faces to regenerate.
 
 **Alternatives.**
 
-- **Repair them now and record each as a disclosed deviation (rejected by the operator; it was the
-  porting lane's recommendation).** The argument for it: none is behaviour anyone depends on, no
-  ported case observes any of them, and criterion 5 forbids *silent* fixes rather than recorded ones
-  -- so a documented repair arguably satisfies it while leaving the thing that actually runs less
-  fragile. The argument against, which decided it: every repair is a place where "continuo does what
-  interlock does" stops being true, and it is claimed at exactly the moment the parity audit and the
-  differential oracle are being used to establish that sentence. Deferring costs a known, disclosed
-  interval of fragility; repairing costs the clarity of the parity claim itself.
-- **Repair only the two P1s (rejected).** The severity split is the reviewer's, not a property of the
-  code, and it would make the rule un-restatable -- which is what turns a rule into case-by-case
-  judgement and then into drift.
-- **Leave them undisclosed because the source has them (never considered).** That is the failure
-  criterion 5 is written against.
+- **Use `toFixed` and accept the divergence (rejected).** It is a silent, data-dependent difference
+  in the artefact the acceptance criterion is about, and it would surface as a one-digit diff in a
+  report years from now with nothing pointing at the cause.
+- **Round the value before formatting (rejected).** Pre-rounding a double introduces its own error
+  and does not address tie-breaking; it moves the disagreement rather than removing it.
+- **Pin with a hand-written table of examples (rejected).** This is the `sqlite3_complete` argument
+  (`D-0013`) again: a transcription is only checkable against the thing it transcribes, and
+  reviewing tie-breaking by eye is what human review is worst at. The oracle also caught a wrong
+  expectation *in the test* -- see Consequences.
+- **Format integers only and avoid decimals in reports (rejected).** The reports are rates. Section
+  3.4's headline is a percentage.
 
 **Consequences.**
 
-- **The review gate will keep flagging these.** That is expected and is not a regression: the
-  ledger, not the reviewer, is the record of what was decided. A later belt must not "discover" them
-  and quietly repair them -- the ledger entries exist so the next reader finds the decision instead.
-- The repairs are reserved as a post-parity change, so they land against a green baseline where a
-  behavioural difference from interlock is a deliberate, reviewable diff rather than noise inside a
-  translation.
-- This entry generalises: it is the standing rule for the belts still to come, not a one-off ruling
-  about three findings.
-
-**Falsifier.** If one of these is shown to be reachable from a ported case -- i.e. the suites *can*
-tell the two implementations apart -- it stops being an inherited limitation and becomes a parity
-failure to fix immediately. Likewise if interlock repairs one upstream, continuo follows rather than
-waiting.
+- Every later module in this belt that renders a figure must use `formatFixed`, not `toFixed`. The
+  mutation sweep on this PR includes a `toFixed`-instead-of-`formatFixed` mutation for exactly that
+  reason.
+- **The first implementation was wrong, and a review caught what the corpus had not.** It took the
+  expansion from `toFixed(20)` and classified a tie by looking for a `5` followed by zeros. But
+  `toFixed` *rounds*, so a value merely close to a tie is rendered as one: `0.00005` at four places
+  has the double `0.0000500000000000000023960868011929648...`, strictly above the halfway point --
+  CPython rounds it up to `0.0001` and the transcription rounded it half-to-even down to `0.0000`.
+  Widening the expansion does not fix the class (a double needs up to 1074 decimal places and
+  `toFixed` accepts 100); only exact arithmetic does. The corpus missed it because it held no
+  near-tie values, so the corpus now probes **one ULP either side of every tie** as well as the tie
+  itself. Recorded here because it is the more useful half of the lesson: the oracle is necessary and
+  it is not sufficient, since a corpus can only answer for the inputs somebody thought to put in it.
+- **It corrected a wrong expectation the moment it ran.** A hand-written case asserted
+  `formatFixed(99.995, 2) === "99.99"`, reading `99.995` as a tie that half-to-even sends down. It
+  is not a tie: the nearest double is `99.99500000000000454747350886464118957519531250`, strictly
+  above the halfway point, and CPython prints `100.00`. The corpus comparison was already green;
+  the hand-written expectation was the thing that was wrong. That is the argument for the oracle in
+  one line.
+- The vector is roughly 280 KB and read in full on every test run. That is deliberate over a smaller
+  sampled corpus: ties are sparse, and a corpus that samples is a corpus that misses them.
+- `formatFixed` **throws** on a non-finite value rather than rendering `inf` / `nan`. Python and
+  JavaScript spell those differently, no ported case pins either spelling, and every figure in this
+  harness is a ratio of counts behind an empty-denominator guard -- so reaching it is a caller bug
+  and guessing a spelling would be inventing parity where none was tested.
 
 **Status.** accepted
 
-**Source.** Codex review gate, 2026-08-22, rounds 1 and 2 (two P1, one P2); escalated by lane A per
-`docs/test-translation-conventions.md` rule 0 and decided by the operator.
+**Source.** Divergence measured 2026-08-22 on Node 22.17.0 / CPython 3.12.3. Falsified by: a
+JavaScript engine adopting round-half-even in `toFixed` (it is specified, so this would be a spec
+change, not an engine one), or by the vector ceasing to match after a CPython change -- in which case
+the question is which of the two is now the parity target, not which is right.
 
+---
+
+## D-0105 — Maps keyed by database-supplied ids are `Map`, never plain objects
+
+**Context.** Interlock passes ground truth around as `Mapping[str, str]` keyed by `action_id`, and
+reads it with `.get(action_id)`. The obvious TypeScript translation is a plain object or a
+`Record<string, string>`, and it is subtly wrong.
+
+A JavaScript object carries `Object.prototype`. An `action_id` is a string that arrives **from the
+database** -- it is not drawn from a closed set and nothing in the DDL constrains its spelling. A
+lookup for an id spelling `__proto__`, `constructor`, `toString` or `valueOf` therefore does not miss:
+it finds something inherited, and this code reads a found value as *a source having offered a
+verdict*. In `adjudicate` that is not a crash, which would be visible -- it is a silent wrong answer,
+and the wrong answer is "a ground-truth source spoke" when none did.
+
+Python's `dict` has no such behaviour, so there is nothing in the source that guards against it and
+nothing in the ported cases that would catch it.
+
+**Decision.** Any map keyed by a value that arrives from the database is a `Map` / `ReadonlyMap`.
+Objects and `Record<...>` are for maps whose keys are a closed set fixed in the source.
+
+This is applied uniformly rather than case by case, so there is no judgement call at each site about
+whether a particular id "could" collide.
+
+**Alternatives.**
+
+- **`Object.create(null)` (rejected).** It removes the prototype and keeps object syntax, but it is
+  a property of how each map was *constructed*, invisible at every use site, and lost the first time
+  someone writes `{ ...labels }` or `JSON.parse`. The failure mode is a map that looks identical and
+  behaves differently.
+- **`Object.hasOwn` at each lookup (rejected).** Correct where remembered, and this is precisely the
+  kind of guard that gets dropped when a call site is copied.
+- **Validate ids against a pattern on the way in (rejected).** It invents a constraint the schema
+  does not have, so the port would refuse databases interlock accepts.
+
+**Consequences.**
+
+- The ported cases spell map construction as `new Map([[...]])` rather than as an object literal, and
+  read with `.get` / `.has`. This changes how a case is written and never what it asserts; it is
+  recorded once in each ledger's `target.systematic_mappings` rather than as a per-case adaptation,
+  because a note repeated twenty times is a note nobody reads.
+- `Map` also preserves insertion order for any key type and has an honest `.size`, both of which the
+  rendering relies on.
+- Where a ported case asserts a whole mapping equals `{}` or `{"a": ...}`, the target converts with
+  `Object.fromEntries` at the assertion. That is safe in the direction it is used -- building a plain
+  object for comparison, never looking one up.
+
+**Status.** accepted
+
+**Source.** 2026-08-22, translating `tests/measurement/test_false_termination.py` at interlock
+`65f36c5`. Falsified by: the schema gaining a constraint that closes the set of `action_id` spellings,
+which would remove the hazard but not the reason to prefer the clearer container.
