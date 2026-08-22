@@ -1,0 +1,334 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt; repeated here so each ledger states the baseline its subsystem count is a part of."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. This ledger covers test_reader.py only; the remaining 13 files land in later PRs of this lane, each with its own ledger file. Every measurement module except reader.py imports a control_plane module continuo has not ported yet (policy, gates, ai_invocation, ci_ingest), which is why reader is first and alone."
+    },
+    "file": {
+      "path": "tests/measurement/test_reader.py",
+      "collected": 30,
+      "inventory": "parity/source-inventory/measurement.test_reader.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/reader.test.ts",
+    "target_only_tests": {
+      "count": 1,
+      "ids": [
+        "test/measurement/reader.test.ts::the report snapshot > the snapshot holds the read lock before the body runs (target-only)"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The one here pins a property a mutation sweep found unguarded on BOTH sides: measurementSnapshot issues a read of its own to materialise the SHARED lock, because SQLite's BEGIN is DEFERRED and takes nothing until a statement reads. Deleting that read leaves every ported case green, including the source's own snapshot case -- which calls _run_count() as its first in-scope statement, and that read takes the lock the materialising read should already have taken. The target-only case challenges the writer before the body reads anything, which is the only arrangement that separates the two implementations. It adds coverage, not behaviour: the production code is unchanged and still matches interlock's. Rule 5 of docs/test-translation-conventions.md also requires a liveness test for every seam, and both of this module's seams have one among the PORTED cases rather than needing a target-only addition: readerSeams.proveReadOnly is pinned by 'openForMeasurement proves the capability through the public probe', which asserts production routes through the record; readerSeams.openReadOnly is pinned by 'a connection that is not read-only is refused by the probe', which would stop refusing if production bypassed the seam, so that case cannot pass for the wrong reason."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 30,
+    "ported": 12,
+    "adapted": 17,
+    "not_ported": 1,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The read-only probe is refused as inconclusive whenever any writer holds the database, because a blocked write and a read-only file are told apart only by SQLite's result code and a blocked write yields no verdict on the file's access mode.",
+      "matches_source": true,
+      "note": "Interlock reaches the same outcome deliberately -- an unproved capability is refused on the same terms as an absent one -- and its own docstring states the operational consequence: a report against a busy control plane may simply not open. The port reproduces this rather than adding a retry, because a retry would be a behaviour change on the safety-critical path.",
+      "where_a_fix_belongs": "upstream, in interlock's measurement/reader.py, or in a change that moves both sides together."
+    },
+    {
+      "behaviour": "A report snapshot holds a SHARED lock for the whole report, blocking every writer on the control plane for its duration.",
+      "matches_source": true,
+      "note": "Stated as a cost rather than fixed, in interlock and here: the production database is not in WAL (D-0012 / interlock production-schema.md section 3), and the alternative -- an unlocked report -- is the incoherent one the snapshot exists to remove.",
+      "where_a_fix_belongs": "upstream; it is a consequence of the journal mode, not of this module."
+    },
+    {
+      "behaviour": "Interlock's suite does not pin the snapshot's materialising read: its snapshot case reads before challenging a writer, so a measurement_snapshot that took no SHARED lock until the report's first query would leave the whole suite green.",
+      "matches_source": true,
+      "note": "Found by a mutation sweep on the port, then confirmed against interlock 65f36c5. The port reproduces the production behaviour exactly (the materialising read is present, as it is upstream) and does NOT silently fix anything; it adds a target-only test so the property stops being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and because a test added to interlock is a change to the other side of the parity comparison.",
+      "where_a_fix_belongs": "upstream, as the same case added to interlock's tests/measurement/test_reader.py."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_write_through_the_harness_connection_is_refused",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > a write through the harness connection is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_same_write_succeeds_on_an_ordinary_connection",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > the same write succeeds on an ordinary connection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_query_only_alone_refuses_the_write_with_the_file_opened_read_write",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > query_only alone refuses the write with the file opened read-write",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_mode_ro_alone_refuses_the_write_with_query_only_off",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > the read-only open flag alone refuses the write with query_only off",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0100: interlock's first read-only mechanism is a `file:...?mode=ro` URI, which better-sqlite3 cannot express -- it does not accept URI filenames at all (measured: SQLITE_CANTOPEN). The port passes `readonly: true`, which sets the same SQLITE_OPEN_READONLY. The case is the one that proves mechanism 1 is independently sufficient, and it still does: the connection is opened read-only, `query_only` is lowered to 0 and read back as 0, and the write is still refused with SQLITE_READONLY -- so the refusal demonstrably comes from the file handle and not from the connection guard. Only the spelling of the open changed; the test name follows it so the file does not name a mechanism this build does not use.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_harness_connection_reports_query_only_in_force",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > the harness connection reports query_only in force",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_connection_that_is_not_mode_ro_is_refused_by_the_probe",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > a connection that is not read-only is refused by the probe",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`monkeypatch.setattr` on a module internal has no ESM equivalent (D-0014): the call site goes through the `readerSeams` record and the test replaces the entry there, which reproduces Python's late binding rather than working around it. D-0100: interlock's first read-only mechanism is a `file:...?mode=ro` URI, which better-sqlite3 cannot express -- it does not accept URI filenames at all (measured: SQLITE_CANTOPEN). The port passes `readonly: true`, which sets the same SQLITE_OPEN_READONLY. The source degrades the capability by patching `sqlite3.connect` to drop the URI; the port patches `readerSeams.openReadOnly` to open without the `readonly` flag. Same degradation, same refusal, and the same two follow-up assertions that the file is byte-identical and has no sidecar. The seam needs no separate liveness test: if production stopped routing through it the connection would be genuinely read-only, no refusal would be raised, and this case would fail.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_busy_database_is_refused_rather_than_certified_read_only",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > a busy database is refused rather than certified read-only",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`monkeypatch.setattr` on a module internal has no ESM equivalent (D-0014): the call site goes through the `readerSeams` record and the test replaces the entry there, which reproduces Python's late binding rather than working around it. D-0100: interlock's first read-only mechanism is a `file:...?mode=ro` URI, which better-sqlite3 cannot express -- it does not accept URI filenames at all (measured: SQLITE_CANTOPEN). The port passes `readonly: true`, which sets the same SQLITE_OPEN_READONLY. The third assertion is `\"was not opened mode=ro\" not in message`; the port asserts the absence of the message this build actually emits, `was not opened read-only`. Asserting the absence of a string no code can produce would have made the assertion vacuous. The two positive assertions (`inconclusive`, `database is locked`) are unchanged and hold verbatim -- SQLite renders SQLITE_BUSY with the same text here.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_probe_still_certifies_an_idle_read_only_database",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > the probe still certifies an idle read-only database",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_only_a_read_only_error_counts_as_proof_of_mode_ro",
+      "target_id": "test/measurement/reader.test.ts::the capability itself > only a read-only error counts as proof of the read-only open flag",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0101: the source reaches the module-private `reader._the_error_says_the_database_is_read_only`, which TypeScript cannot do, so the function is exported and marked `@internal`. D-0102: the classifier keeps only the result-code branch, because better-sqlite3 puts a code on every error it raises and interlock's string branch exists only because its Python 3.10 build has no code to read. The case is unchanged in substance and stronger in fact: it still drives the classifier with two errors SQLite actually raised (one read-only, one busy) rather than with pasted strings, and the verdict now rests on the code SQLite set rather than on words in a sentence.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_open_for_measurement_proves_the_capability_through_the_public_probe",
+      "target_id": "test/measurement/reader.test.ts::the public probe > openForMeasurement proves the capability through the public probe",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`monkeypatch.setattr` on a module internal has no ESM equivalent (D-0014): the call site goes through the `readerSeams` record and the test replaces the entry there, which reproduces Python's late binding rather than working around it. The source spies by patching `reader.prove_read_only`; the port patches `readerSeams.proveReadOnly`. This case is the seam's liveness test in the sense rule 5 of docs/test-translation-conventions.md requires: it asserts production routes through the record, with the recorded call's connection and target compared by identity to the handle `openForMeasurement` returned.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_public_probe_certifies_a_connection_the_caller_opened_read_only",
+      "target_id": "test/measurement/reader.test.ts::the public probe > the public probe certifies a connection the caller opened read-only",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0100: interlock's first read-only mechanism is a `file:...?mode=ro` URI, which better-sqlite3 cannot express -- it does not accept URI filenames at all (measured: SQLITE_CANTOPEN). The port passes `readonly: true`, which sets the same SQLITE_OPEN_READONLY. The caller-opened connection is built with the flag instead of the URI. Every assertion is unchanged: the probe returns nothing, the connection comes back with `query_only` still 1, and the file is byte-identical with no sidecar.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_public_probe_refuses_a_writable_connection",
+      "target_id": "test/measurement/reader.test.ts::the public probe > the public probe refuses a writable connection",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0100: interlock's first read-only mechanism is a `file:...?mode=ro` URI, which better-sqlite3 cannot express -- it does not accept URI filenames at all (measured: SQLITE_CANTOPEN). The port passes `readonly: true`, which sets the same SQLITE_OPEN_READONLY. The source's `pytest.raises(..., match=\"was not opened mode=ro\")` becomes a match on `was not opened read-only`, because that is the text this build emits and D-0017 allows a message to change when it named a mechanism the port does not have. Both halves of the `pytest.raises` are kept (type and message) via `expectRefusal`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_public_probe_refuses_a_busy_database_as_inconclusive",
+      "target_id": "test/measurement/reader.test.ts::the public probe > the public probe refuses a busy database as inconclusive",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0100: interlock's first read-only mechanism is a `file:...?mode=ro` URI, which better-sqlite3 cannot express -- it does not accept URI filenames at all (measured: SQLITE_CANTOPEN). The port passes `readonly: true`, which sets the same SQLITE_OPEN_READONLY. Same negative-assertion adjustment as `test_a_busy_database_is_refused_rather_than_certified_read_only`: the absence assertion names the wording this build emits. The two positive assertions are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_query_only_that_does_not_take_effect_is_refused",
+      "target_id": "test/measurement/reader.test.ts::the public probe > query_only that does not take effect is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0101: the source reaches the module-private `reader._require_query_only`, so the port exports it and marks it `@internal`. The case is otherwise identical, including the `match=` half of the `pytest.raises`. It cannot be re-expressed through the public API: it needs a connection whose `query_only` silently did not take, which SQLite will not produce on demand, which is why the source calls the check directly too.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_spike_database_is_refused_with_the_migrators_own_type",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not run",
+      "reason": "Requires interlock's `control_plane/schema.py` (the spike schema creator, `create_control_plane`), which continuo has not ported -- `src/control_plane/spike.ts` carries only the `application_id`, and the control-plane pilot deferred its own two spike cases on exactly this ground (see parity/control-plane.ledger.json). Deliberately NOT satisfied by hand-stamping `PRAGMA application_id = 0x494c4b35` on an otherwise ordinary database: that would exercise the production-side branch while proving nothing about a real spike database, and it would make the ledger report coverage the port does not have. Unblocked by the belt that ports schema.py; to be picked up in a later PR of this lane.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_database_behind_this_build_is_refused_without_being_migrated",
+      "target_id": "test/measurement/reader.test.ts::the migrator's verification, reused > a database behind this build is refused without being migrated",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_database_ahead_of_this_build_is_refused",
+      "target_id": "test/measurement/reader.test.ts::the migrator's verification, reused > a database ahead of this build is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_an_applied_step_whose_bytes_changed_is_refused",
+      "target_id": "test/measurement/reader.test.ts::the migrator's verification, reused > an applied step whose bytes changed is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_an_absent_database_is_refused_rather_than_measured_as_empty",
+      "target_id": "test/measurement/reader.test.ts::the migrator's verification, reused > an absent database is refused rather than measured as empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_file_that_is_not_a_database_is_refused",
+      "target_id": "test/measurement/reader.test.ts::the migrator's verification, reused > a file that is not a database is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_opening_leaves_the_file_byte_identical_and_makes_no_sidecar",
+      "target_id": "test/measurement/reader.test.ts::opening writes nothing > opening leaves the file byte-identical and makes no sidecar",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_refused_open_writes_nothing_either",
+      "target_id": "test/measurement/reader.test.ts::opening writes nothing > a refused open writes nothing either",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_opener_imports_no_writer_and_no_lease",
+      "target_id": "test/measurement/reader.test.ts::never migrates, never takes a lease > the opener imports no writer and no lease",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source walks the module's Python AST for Import / ImportFrom nodes. The port scans the module's source text with a regular expression over ESM's static `import ... from \"...\"` form, recording both the module specifiers and the bound names, exactly the granularity the source records. A regular expression is sufficient here where it would not be for Python because an ESM static import is a top-level statement of a fixed shape and cannot appear inside a function. The port ADDS a half the source does not need: an assertion that the module contains no dynamic `import(`, which is the one way a writer could be named without matching the static scan. Adding a TypeScript AST dependency for one test was rejected as a larger surface than the property is worth.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_opener_reuses_the_migrators_verifier_rather_than_its_own",
+      "target_id": "test/measurement/reader.test.ts::never migrates, never takes a lease > the opener reuses the migrator's verifier rather than its own",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts two things: that `verify_production_database` is imported, and that `reader.verify_production_database is m.verify_production_database`. The first translates directly. The second has no ESM analogue and needs none: a Python `from X import Y` copies a reference into the importing module's dictionary, where it CAN be rebound or shadowed -- which is why the source checks identity -- whereas an ESM named import IS the exporting module's live binding and cannot be a copy. The port therefore asserts that the name is imported AND that it is imported from `../control_plane/migrator.js` specifically, which together are the property (one implementation, and it is the migrator's) rather than evidence for it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_package_exports_no_way_to_write",
+      "target_id": "test/measurement/reader.test.ts::never migrates, never takes a lease > the package exports no way to write",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`__all__` has no TypeScript equivalent. The port reads the actual export names off the module namespace object (`import * as measurementPackage`), which is a stricter question than the source asks: `__all__` is a declaration a module can get out of step with its real contents, while the namespace object is what importers can actually reach. The forbidden-word list (migrate / create / write / lease) is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_writer_cannot_move_the_database_under_an_open_snapshot",
+      "target_id": "test/measurement/reader.test.ts::the report snapshot > a writer cannot move the database under an open snapshot",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`measurement_snapshot` is a Python `@contextmanager` used with `with`; TypeScript has no such statement, so the scope is a callback and the body is what runs inside the snapshot. The assertions are unchanged, and the callback form cannot be left un-exited the way a hand-written begin/end pair can, so the scope discipline is if anything harder to lose. The blocked writer's error is asserted by message (`locked`) as in the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_both_read_only_mechanisms_are_still_in_force_inside_the_snapshot",
+      "target_id": "test/measurement/reader.test.ts::the report snapshot > both read-only mechanisms are still in force inside the snapshot",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`measurement_snapshot` is a Python `@contextmanager` used with `with`; TypeScript has no such statement, so the scope is a callback and the body is what runs inside the snapshot. The assertions are unchanged, and the callback form cannot be left un-exited the way a hand-written begin/end pair can, so the scope discipline is if anything harder to lose. D-0100: interlock's first read-only mechanism is a `file:...?mode=ro` URI, which better-sqlite3 cannot express -- it does not accept URI filenames at all (measured: SQLITE_CANTOPEN). The port passes `readonly: true`, which sets the same SQLITE_OPEN_READONLY. All four in-scope assertions are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_a_snapshot_inside_a_snapshot_is_refused",
+      "target_id": "test/measurement/reader.test.ts::the report snapshot > a snapshot inside a snapshot is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`measurement_snapshot` is a Python `@contextmanager` used with `with`; TypeScript has no such statement, so the scope is a callback and the body is what runs inside the snapshot. The assertions are unchanged, and the callback form cannot be left un-exited the way a hand-written begin/end pair can, so the scope discipline is if anything harder to lose. The nested request is made from inside the outer callback, which is where the source makes it, and the outer scope's survival is asserted the same way (`inTransaction`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_snapshot_is_released_even_when_the_report_raises",
+      "target_id": "test/measurement/reader.test.ts::the report snapshot > the snapshot is released even when the report raises",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`measurement_snapshot` is a Python `@contextmanager` used with `with`; TypeScript has no such statement, so the scope is a callback and the body is what runs inside the snapshot. The assertions are unchanged, and the callback form cannot be left un-exited the way a hand-written begin/end pair can, so the scope discipline is if anything harder to lose. The source raises `ZeroDivisionError`, which has no TypeScript analogue. The port throws a locally declared error class and asserts that exact class and message travel out through the scope, which keeps the property the source's arbitrary exception was standing in for: whatever the report throws propagates, and the snapshot is released anyway.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_reader.py::test_the_snapshot_refuses_a_connection_whose_guard_is_down",
+      "target_id": "test/measurement/reader.test.ts::the report snapshot > the snapshot refuses a connection whose guard is down",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`measurement_snapshot` is a Python `@contextmanager` used with `with`; TypeScript has no such statement, so the scope is a callback and the body is what runs inside the snapshot. The assertions are unchanged, and the callback form cannot be left un-exited the way a hand-written begin/end pair can, so the scope discipline is if anything harder to lose. Both assertions are unchanged: the refusal type, and that no transaction was left open by the refused scope.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

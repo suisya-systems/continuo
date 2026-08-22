@@ -37,7 +37,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const LEDGERS = ["parity/control-plane.ledger.json"];
+const LEDGERS = ["parity/control-plane.ledger.json", "parity/measurement.ledger.json"];
 
 /**
  * Constructs that stop a test from running, or expect it to fail.
