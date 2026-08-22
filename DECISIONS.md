@@ -53,6 +53,8 @@ spaces distinct.
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
 | D-0103 | A report snapshot refuses a deferred body rather than awaiting or draining it | accepted |
+| D-0104 | Rendered figures match Python's formatter, pinned by an oracle | accepted |
+| D-0105 | Maps keyed by database-supplied ids are `Map`, never plain objects | accepted |
 
 ---
 
@@ -1650,3 +1652,147 @@ body had started. Compile-time behaviour verified with `tsc -p tsconfig.json --n
 TypeScript 5.8.3 the same day. Falsified by: the harness acquiring a genuinely asynchronous read path
 (it has none while better-sqlite3 is the driver), which would make "refuse" the wrong answer and
 require deciding what may hold the control plane's SHARED lock across a suspension.
+
+---
+
+## D-0104 — Rendered figures match Python's formatter, pinned by an oracle
+
+**Context.** interlock#74's acceptance criterion 3 is that continuo's measurement CLI "produces
+reports with the same figures and fields on the shared fixture corpus". That makes the **rendered
+text of a number** a parity surface, not presentation: a report whose percentage reads `0.13` where
+interlock's reads `0.12` fails that criterion even though the underlying double is bit-identical.
+
+`Number.prototype.toFixed` is not the same function as Python's `format(v, '.Nf')`. They agree on
+every input except an **exact tie**, where Python rounds to even and JavaScript rounds away from
+zero:
+
+| value   | Python `.2f` | JS `toFixed(2)` |
+|---------|--------------|-----------------|
+| `0.125` | `0.12`       | `0.13`          |
+| `0.375` | `0.38`       | `0.38`          |
+| `0.5` at width 0 | `0` | `1` |
+
+`0.375` agrees only by coincidence -- rounding to even and rounding up give the same digit there,
+which is exactly how a spot-check of two or three values concludes that `toFixed` is fine.
+
+Ties are rare and they are reachable from real data. An exact tie at two places requires the
+fractional part to be one of `.125`, `.375`, `.625`, `.875` -- nothing else is both a tie and exactly
+representable as a double -- and every figure this harness prints is `count / count * 100`. One false
+termination in eight hundred applied is `0.125` percent.
+
+**Decision.** `src/measurement/format.ts` provides `formatFixed(value, digits)`, which reproduces
+Python's formatter including its tie-breaking, and every rendered figure in the harness goes through
+it. The rounding is done on the **exact decimal expansion** of the double, not on the decimal literal
+someone typed, because "is this a tie" is a question about the stored binary value. `isAscii` lives
+beside it as `str.isascii()`, which several ported cases assert on rendered output (`D-0006`).
+
+A reimplementation is exactly the kind of artefact that reads correct and is not, so it is pinned
+against the thing it reimplements, as a **differential oracle face**
+(`docs/differential-oracle.md`, `D-0018`):
+
+- `scripts/oracle/dump_fixed_format.py` asks CPython for its answer on every corpus input at four
+  widths and writes them to `parity/oracle/fixed-format-vector.json`.
+- `test/measurement/format.test.ts` rebuilds the corpus and compares. It may only compare; there is
+  no write path.
+- The corpus is **rebuilt, not committed** -- only Python's answers are. It is therefore built with
+  no RNG: Python's Mersenne Twister is not reproducible in JavaScript, so a sampled corpus could not
+  be rebuilt on the other side. The vector records the corpus length and the test checks it before
+  comparing, so a changed corpus arrives as an instruction to regenerate rather than as an
+  off-by-one comparison against the wrong answers.
+- 4,663 values x 4 widths. Every tie class is enumerated exhaustively rather than sampled, because
+  the tie is the only place the two languages disagree.
+
+This face needs **no interlock checkout**: the oracle is CPython itself, reached through the standard
+library, which makes it the cheapest of the faces to regenerate.
+
+**Alternatives.**
+
+- **Use `toFixed` and accept the divergence (rejected).** It is a silent, data-dependent difference
+  in the artefact the acceptance criterion is about, and it would surface as a one-digit diff in a
+  report years from now with nothing pointing at the cause.
+- **Round the value before formatting (rejected).** Pre-rounding a double introduces its own error
+  and does not address tie-breaking; it moves the disagreement rather than removing it.
+- **Pin with a hand-written table of examples (rejected).** This is the `sqlite3_complete` argument
+  (`D-0013`) again: a transcription is only checkable against the thing it transcribes, and
+  reviewing tie-breaking by eye is what human review is worst at. The oracle also caught a wrong
+  expectation *in the test* -- see Consequences.
+- **Format integers only and avoid decimals in reports (rejected).** The reports are rates. Section
+  3.4's headline is a percentage.
+
+**Consequences.**
+
+- Every later module in this belt that renders a figure must use `formatFixed`, not `toFixed`. The
+  mutation sweep on this PR includes a `toFixed`-instead-of-`formatFixed` mutation for exactly that
+  reason.
+- **It corrected a wrong expectation the moment it ran.** A hand-written case asserted
+  `formatFixed(99.995, 2) === "99.99"`, reading `99.995` as a tie that half-to-even sends down. It
+  is not a tie: the nearest double is `99.99500000000000454747350886464118957519531250`, strictly
+  above the halfway point, and CPython prints `100.00`. The corpus comparison was already green;
+  the hand-written expectation was the thing that was wrong. That is the argument for the oracle in
+  one line.
+- The vector is 268 KB and read in full on every test run. That is deliberate over a smaller
+  sampled corpus: ties are sparse, and a corpus that samples is a corpus that misses them.
+- `formatFixed` **throws** on a non-finite value rather than rendering `inf` / `nan`. Python and
+  JavaScript spell those differently, no ported case pins either spelling, and every figure in this
+  harness is a ratio of counts behind an empty-denominator guard -- so reaching it is a caller bug
+  and guessing a spelling would be inventing parity where none was tested.
+
+**Status.** accepted
+
+**Source.** Divergence measured 2026-08-22 on Node 22.17.0 / CPython 3.12.3. Falsified by: a
+JavaScript engine adopting round-half-even in `toFixed` (it is specified, so this would be a spec
+change, not an engine one), or by the vector ceasing to match after a CPython change -- in which case
+the question is which of the two is now the parity target, not which is right.
+
+---
+
+## D-0105 — Maps keyed by database-supplied ids are `Map`, never plain objects
+
+**Context.** Interlock passes ground truth around as `Mapping[str, str]` keyed by `action_id`, and
+reads it with `.get(action_id)`. The obvious TypeScript translation is a plain object or a
+`Record<string, string>`, and it is subtly wrong.
+
+A JavaScript object carries `Object.prototype`. An `action_id` is a string that arrives **from the
+database** -- it is not drawn from a closed set and nothing in the DDL constrains its spelling. A
+lookup for an id spelling `__proto__`, `constructor`, `toString` or `valueOf` therefore does not miss:
+it finds something inherited, and this code reads a found value as *a source having offered a
+verdict*. In `adjudicate` that is not a crash, which would be visible -- it is a silent wrong answer,
+and the wrong answer is "a ground-truth source spoke" when none did.
+
+Python's `dict` has no such behaviour, so there is nothing in the source that guards against it and
+nothing in the ported cases that would catch it.
+
+**Decision.** Any map keyed by a value that arrives from the database is a `Map` / `ReadonlyMap`.
+Objects and `Record<...>` are for maps whose keys are a closed set fixed in the source.
+
+This is applied uniformly rather than case by case, so there is no judgement call at each site about
+whether a particular id "could" collide.
+
+**Alternatives.**
+
+- **`Object.create(null)` (rejected).** It removes the prototype and keeps object syntax, but it is
+  a property of how each map was *constructed*, invisible at every use site, and lost the first time
+  someone writes `{ ...labels }` or `JSON.parse`. The failure mode is a map that looks identical and
+  behaves differently.
+- **`Object.hasOwn` at each lookup (rejected).** Correct where remembered, and this is precisely the
+  kind of guard that gets dropped when a call site is copied.
+- **Validate ids against a pattern on the way in (rejected).** It invents a constraint the schema
+  does not have, so the port would refuse databases interlock accepts.
+
+**Consequences.**
+
+- The ported cases spell map construction as `new Map([[...]])` rather than as an object literal, and
+  read with `.get` / `.has`. This changes how a case is written and never what it asserts; it is
+  recorded once in each ledger's `target.systematic_mappings` rather than as a per-case adaptation,
+  because a note repeated twenty times is a note nobody reads.
+- `Map` also preserves insertion order for any key type and has an honest `.size`, both of which the
+  rendering relies on.
+- Where a ported case asserts a whole mapping equals `{}` or `{"a": ...}`, the target converts with
+  `Object.fromEntries` at the assertion. That is safe in the direction it is used -- building a plain
+  object for comparison, never looking one up.
+
+**Status.** accepted
+
+**Source.** 2026-08-22, translating `tests/measurement/test_false_termination.py` at interlock
+`65f36c5`. Falsified by: the schema gaining a constraint that closes the set of `action_id` spellings,
+which would remove the hazard but not the reason to prefer the clearer container.

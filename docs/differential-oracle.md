@@ -33,10 +33,10 @@ fall, which pragmas are in force while they run, whether a statement was reached
 different drivers represent the values that come back. Each of those can differ while both suites
 stay green, and each of them changes the database on disk.
 
-## 2. The two implemented faces
+## 2. The implemented faces
 
-The pilot implements two: **control-plane database state** (this section) and
-**statement completeness** (section 2b).
+The pilot implemented two: **control-plane database state** (2a) and **statement completeness**
+(2b). The measurement belt added a third, **fixed-point number rendering** (2c).
 
 ### 2a. Control-plane database state
 
@@ -89,6 +89,41 @@ Note this half needs **no interlock checkout** -- the oracle is SQLite itself, r
 Python's standard library -- so it is cheaper to regenerate than the database-state vector.
 
 This face also earned its place immediately: see section 6.
+
+### 2c. Fixed-point number rendering
+
+`src/measurement/format.ts` reimplements Python's `format(v, '.Nf')`, because
+`Number.prototype.toFixed` is not the same function: on an **exact tie** Python rounds to even and
+JavaScript rounds away from zero, so `0.125` renders as `0.12` in one and `0.13` in the other
+(`D-0104`). interlock#74's acceptance criterion 3 makes rendered figures a parity surface, and every
+figure the measurement harness prints is `count / count * 100` -- which reaches ties.
+
+Like the `sqlite3_complete` transcription, this is an artefact that reads correct and is not, so it
+has its own oracle:
+
+- `scripts/oracle/dump_fixed_format.py` asks CPython for its answer on every corpus input at four
+  widths (0, 1, 2, 4) and writes them to `parity/oracle/fixed-format-vector.json`.
+- `test/measurement/format.test.ts` rebuilds the corpus and asserts the reimplementation matches at
+  every position.
+
+The corpus is **rebuilt, not committed**, as 2b's is, and for the same reason. It is therefore built
+with no RNG at all: Python's Mersenne Twister is not reproducible in JavaScript, so a sampled corpus
+could not be reconstructed on the other side. It is 4,663 values -- every tie class enumerated
+exhaustively rather than sampled, since the tie is the only place the two languages disagree -- and a
+committed corpus length turns "somebody edited the corpus" into an explicit instruction to regenerate
+rather than an off-by-one comparison against the wrong answers.
+
+This face needs **no interlock checkout** either: the oracle is CPython itself. It is the cheapest of
+the three to regenerate.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/oracle/dump_fixed_format.py \
+  parity/oracle/fixed-format-vector.json
+```
+
+It earned its place immediately, though not in the way the other two did: the comparison was green on
+its first run and what it caught was a wrong **expectation** in the hand-written half of the same
+test file. See section 6c.
 
 ## 3. What is normalised, and why each part is there
 
@@ -211,11 +246,31 @@ somebody has to check, not one the translation process delivers on its own.
 It also settles a small design question in the dump: interior whitespace in `sql` is deliberately
 not normalised. Had it been, this would have compared equal.
 
+### 6c. Fixed-point rendering: a wrong expectation, not a wrong implementation
+
+The fixed-format corpus agreed with CPython on all 4,663 values at all four widths on its first run.
+What failed was a hand-written case sitting beside it, which asserted
+`formatFixed(99.995, 2) === "99.99"` -- reading `99.995` as a tie that half-to-even sends down.
+
+It is not a tie. The nearest double to `99.995` is
+`99.99500000000000454747350886464118957519531250`, strictly *above* the halfway point, so it rounds
+up on any rule at all and CPython prints `100.00`.
+
+This is a smaller finding than 6a and 6b and it is worth recording for a different reason: it is the
+oracle correcting the **test author** rather than the implementation. A suite of hand-picked
+examples would have encoded that misunderstanding as the expected answer and then failed a correct
+implementation -- which is the failure mode of pinning a reimplementation with examples somebody
+reasoned their way to.
+
 ## 7. Faces designed but not implemented here
 
 The oracle generalises to any surface where both implementations can be driven from the same fixed
-input vector and their output normalised. Three further faces are designed and deliberately left
-unbuilt in this pilot, which is scoped to establishing conventions rather than to coverage:
+input vector and their output normalised. Three further faces were designed and left unbuilt by the
+pilot, which was scoped to establishing conventions rather than to coverage. **The CLI-results face
+is the measurement belt's target**, because interlock#74's acceptance criterion 3 is stated in
+exactly those terms -- the same figures and fields on the shared fixture corpus -- and 2c is the
+first piece of it: a report cannot render the same figures if the two runtimes do not render a
+number the same way.
 
 - **CLI results.** Run the same argument vector through both CLIs and compare exit code, stdout and
   stderr after normalising paths, timings and any deliberate presentation difference. Blocked mainly
