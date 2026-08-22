@@ -74,3 +74,35 @@ export {
   proveReadOnly,
   ReadOnlyCapabilityRefused,
 } from "./reader.js";
+
+/**
+ * Section 3.5's observation window and its two censored buckets.
+ *
+ * The classification constants and `WINDOW_CLASSIFICATIONS` are exported
+ * because a consumer must be able to iterate the buckets in the order the
+ * report emits them, and because a report that named a bucket this module does
+ * not have would otherwise fail only at read time.
+ */
+export {
+  CENSORED,
+  CENSORED_LEFT,
+  classify,
+  classifyEpisodes,
+  DuplicateEpisodeRefused,
+  defaultGraceMs,
+  Episode,
+  EpisodeOutsidePeriod,
+  EpisodeWindow,
+  episodeWindow,
+  GRACE_DECLARED,
+  GRACE_REVISION_RECONCILE_PERIOD,
+  GraceNotDeclared,
+  IN_PERIOD,
+  PeriodRefused,
+  requireGraceMs,
+  resolveBudgetMs,
+  SubjectRequired,
+  WINDOW_CLASSIFICATIONS,
+  WindowRefusal,
+  WindowReport,
+} from "./windows.js";

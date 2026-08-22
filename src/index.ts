@@ -107,25 +107,49 @@ export { SPIKE_APPLICATION_ID } from "./control_plane/spike.js";
  * package exports only `.` (D-0002), so a name absent from here is one an
  * installed consumer cannot reach.
  */
+/**
+ * The G6 harness's observation window (section 3.5).
+ *
+ * Re-exported by name for the reason the entries above are: the package exports
+ * only `.` (D-0002), so a name absent from here is one an installed consumer
+ * cannot reach.
+ */
 export {
   type Adjudication,
   AsynchronousReportRefused,
   adjudicate,
+  CENSORED,
+  CENSORED_LEFT,
+  classify,
+  classifyEpisodes,
+  DuplicateEpisodeRefused,
+  defaultGraceMs,
+  Episode,
+  EpisodeOutsidePeriod,
+  EpisodeWindow,
+  episodeWindow,
   FalseTerminationRefusal,
   FalseTerminationReport,
   formatFixed,
+  GRACE_DECLARED,
+  GRACE_REVISION_RECONCILE_PERIOD,
   GROUND_TRUTH_PREFERENCE,
+  GraceNotDeclared,
+  IN_PERIOD,
   isAscii,
   measureFalseTermination,
   measurementSnapshot,
   NestedSnapshotRefused,
   openForMeasurement,
+  PeriodRefused,
   PRODUCTIVE_EVENT_TYPES_REQUIRED,
   proveReadOnly,
   QUERY_DEFINITIONS,
   ReadOnlyCapabilityRefused,
   readTerminateActions,
   renderFalseTerminationReport,
+  requireGraceMs,
+  resolveBudgetMs,
   SOURCE_FIXTURE_LABEL,
   SOURCE_HUMAN_ADJUDICATION,
   SOURCE_NONE,
@@ -134,6 +158,7 @@ export {
   STATUS_PENDING,
   STATUS_REFUSED,
   SUBSEQUENT_ACTIVITY_QUERY,
+  SubjectRequired,
   subsequentActivityVerdicts,
   TERMINATE_ACTIONS_QUERY,
   TERMINATE_SESSION_KIND,
@@ -142,6 +167,9 @@ export {
   VERDICT_NOT_STUCK,
   VERDICT_STUCK,
   VERDICT_UNDETERMINED,
+  WINDOW_CLASSIFICATIONS,
+  WindowRefusal,
+  WindowReport,
 } from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";
