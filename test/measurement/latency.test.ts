@@ -882,7 +882,7 @@ describe("hostile values in the rendering (target-only)", () => {
         generatedAtMs: PERIOD_END + 1,
         revisionId: 1,
         graceMs: 0,
-        graceSource: "declared",
+        graceSource: "declared\u2014by hand\nforged grace line",
         classes: [
           new ClassLatency({
             incidentClass: "stalled\n  Class forged",

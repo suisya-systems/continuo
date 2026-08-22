@@ -521,6 +521,14 @@ function feedRows(
     // the three terms together are total over exactly what gets hashed.
     ...columns.map((column) => `"${quoted(column)}" COLLATE BINARY`),
   ].join(", ");
+  // Three terms, not four. The review gate asked for a fourth for REAL 0.0
+  // against -0.0: numerically equal, both `typeof() = 'real'`, and COLLATE
+  // BINARY does not apply to numbers, so the three terms leave them in
+  // insertion order while feedValue would hash '0.0' and '-0.0' apart. The pair
+  // turns out to be unconstructible -- this SQLite normalises -0.0 to 0.0 on
+  // the way in, measured rather than assumed, and pinned by a target-only case
+  // so that a build which stopped normalising would fail here rather than
+  // silently produce two digests for one content.
   const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${ordering}`;
   // Iterated, not materialised. The source's `connection.execute(...)` is a
   // cursor and hashes row by row; `.all()` would hold every row of a
@@ -1434,7 +1442,11 @@ function renderPythonJson(value: HeaderValue, depth: number): string {
  */
 export function renderHeaderMarkdown(header: ReportHeader): string {
   const mapping = header.asMapping();
-  const lines: string[] = [...header.banner()];
+  // D-0109: the banner carries detector_version values read out of the database
+  // and a reason string built from them, so it needs the same escaping the
+  // table cells get -- it is the FIRST thing this rendering emits, and an
+  // unescaped newline there injects a line above everything.
+  const lines: string[] = header.banner().map((line) => reportValue(line));
   lines.push("");
   lines.push("| Field | Value |");
   lines.push("| --- | --- |");
@@ -1447,7 +1459,11 @@ export function renderHeaderMarkdown(header: ReportHeader): string {
       // exclusion reason, an unmatched-bucket name -- and interlock
       // interpolates it raw. A key carrying a pipe shifts every value after it
       // one column left; one carrying a newline ends the row.
-      lines.push(`| \`${cell(fieldName)}\` | ${rendered} |`);
+      //
+      // Escaped WITHOUT cell()'s trim: a query name is only required to be
+      // non-empty, so " q" and "q" are two names the catalogue and the digest
+      // keep apart, and trimming would render them as one field.
+      lines.push(`| \`${reportValue(fieldName).replaceAll("|", "\\|")}\` | ${rendered} |`);
     }
   }
   return `${lines.join("\n")}\n`;

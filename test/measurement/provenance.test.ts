@@ -61,7 +61,7 @@ import {
 } from "../../src/control_plane/migrator.js";
 import { effectiveRevisionId } from "../../src/control_plane/policy.js";
 import { loadCorpus } from "../../src/measurement/fixtures.js";
-import { isAscii } from "../../src/measurement/format.js";
+import { isAscii, reportValue } from "../../src/measurement/format.js";
 import {
   AGGREGATE_STATEMENT,
   BOUNDED_IMPUTATION_RULE,
@@ -1406,6 +1406,24 @@ describe("deliberate divergences from interlock (target-only)", () => {
     expect(fingerprintOf(onlyInteger, { tables: ["probe"] }).digest).not.toBe(
       fingerprintOf(first, { tables: ["probe"] }).digest,
     );
+
+    // The third ordering term, on the case that needs it: a column declared
+    // COLLATE NOCASE compares 'a' and 'A' as EQUAL and both are typeof 'text',
+    // so values and types alone leave them in insertion order while feedValue
+    // hashes their distinct bytes apart.
+    const nocaseA = productionDb("nocase-a.sqlite3");
+    withWritable(nocaseA, (cp) => {
+      cp.prepare("CREATE TABLE probe (value TEXT COLLATE NOCASE)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES ('a'), ('A')").run();
+    });
+    const nocaseB = productionDb("nocase-b.sqlite3");
+    withWritable(nocaseB, (cp) => {
+      cp.prepare("CREATE TABLE probe (value TEXT COLLATE NOCASE)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES ('A'), ('a')").run();
+    });
+    expect(fingerprintOf(nocaseA, { tables: ["probe"] }).digest).toBe(
+      fingerprintOf(nocaseB, { tables: ["probe"] }).digest,
+    );
   });
 
   test("the Markdown rendering escapes a value and a field name the console cannot take", () => {
@@ -1434,5 +1452,91 @@ describe("deliberate divergences from interlock (target-only)", () => {
     // The pipe is escaped and the newline is an escape sequence, so the key can
     // neither open a column nor end the row.
     expect(rows[0]).toContain("a\\|pipe\\u000aand a newline");
+  });
+});
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("a header whose every caller value is hostile still renders one table", () => {
+    // Target-only, and the structural guard `D-0109` needed. Four review rounds
+    // each found one more field that had been left raw -- the banner, the field
+    // name, the grace source, a REAL tie -- because each case fed a hostile
+    // value into ONE field and asserted on the whole rendering. A case that
+    // populates every caller-supplied field at once is what makes "this
+    // renderer escapes what it prints" a property rather than a list.
+    const path = productionDb();
+    withWritable(path, (cp) => {
+      addRun(cp, "run-1");
+      // detector_version reaches the banner, which is emitted before the table.
+      addIncident(cp, "inc-1", { runId: "run-1", detectorVersion: "d\u20141\n!! forged banner" });
+    });
+
+    const header = headerOver(path, {
+      revisionId: seedRevisionId(path),
+      queryDefinitions: new Map([
+        ["q\u2014name\n| forged | row |", "SELECT 1 -- \u65e5\u672c"],
+        // Two names that differ only by whitespace. The catalogue and the
+        // digest keep them apart, so the table must too -- trimming the field
+        // name would render them as one row. The space is TRAILING on purpose:
+        // the field name is the dotted composite `query_definitions.<key>`, so
+        // a leading space ends up interior and a trim never reaches it.
+        ["q", "SELECT 2"],
+        ["q ", "SELECT 3"],
+      ]),
+      fixtureSuite: FixtureSuiteRef.absent("no corpus\u2014none at all"),
+      unmatched: new Map([["bucket\u2014one\nforged", 1]]),
+    });
+
+    const markdown = renderHeaderMarkdown(header);
+    const json = renderHeaderJson(header);
+
+    expect(isAscii(markdown)).toBe(true);
+    expect(isAscii(json)).toBe(true);
+    // Every line of the table is a row: nothing a value contained opened one.
+    const tableLines = markdown.split("\n").filter((line) => line.startsWith("|"));
+    const headings = tableLines.filter((line) => line.startsWith("| Field |"));
+    expect(headings).toHaveLength(1);
+    for (const line of tableLines) {
+      const pipes = (line.match(/\|/g) ?? []).length;
+      const escaped = (line.match(/\\\|/g) ?? []).length;
+      expect(pipes - escaped, line).toBe(3);
+    }
+    // And the banner, which is emitted before the table, carries no injected
+    // line either: the rendering opens with exactly as many lines as banner()
+    // produced, each the escaped form of one of them. A raw newline in a
+    // detector_version would make this count disagree.
+    const named = tableLines.filter((line) => line.includes("query_definitions."));
+    expect(named.filter((line) => line.includes("`query_definitions.q`"))).toHaveLength(1);
+    expect(named.filter((line) => line.includes("`query_definitions.q `"))).toHaveLength(1);
+
+    const bannerLines = markdown.split("\n").slice(0, header.banner().length);
+    expect(bannerLines).toEqual(header.banner().map((line) => reportValue(line)));
+    expect(markdown.split("\n")[header.banner().length]).toBe("");
+  });
+});
+
+describe("the premise the digest ordering rests on (target-only)", () => {
+  test("SQLite does not keep a negative zero, so the ordering needs no term for one", () => {
+    // Target-only. The review gate on `D-0110` asked for a fourth ordering term:
+    // REAL 0.0 and -0.0 are numerically equal, share `typeof() = 'real'`, and
+    // COLLATE BINARY does not apply to numbers, so the three terms would leave
+    // them in insertion order while feedValue hashes '0.0' and '-0.0' apart.
+    //
+    // The pair is unconstructible: this SQLite normalises -0.0 to 0.0 on the
+    // way in. That is measured here rather than argued, and pinned rather than
+    // written in a comment, because the omission is only safe while it holds --
+    // a build that stopped normalising would otherwise produce two digests for
+    // one content, silently.
+    const path = productionDb("signed-zero.sqlite3");
+    const rows = withWritable(path, (cp) => {
+      cp.prepare("CREATE TABLE probe (value REAL)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES (0.0), (-0.0), (-0.0e0)").run();
+      return cp.prepare("SELECT value, CAST(value AS TEXT) AS text FROM probe").all() as {
+        value: number;
+        text: string;
+      }[];
+    });
+
+    expect(rows.map((row) => row.text)).toEqual(["0.0", "0.0", "0.0"]);
+    expect(rows.some((row) => Object.is(row.value, -0))).toBe(false);
   });
 });

@@ -706,7 +706,8 @@ export function renderLatencyReport(report: LatencyReport): string {
   );
   lines.push(`  generated at    ${report.generatedAtMs}`);
   lines.push(`  policy revision ${report.revisionId}`);
-  lines.push(`  grace           ${report.graceMs} ms (${report.graceSource})`);
+  // D-0109: graceSource is a caller-set string on the exported report type.
+  lines.push(`  grace           ${report.graceMs} ms (${reportValue(report.graceSource)})`);
   lines.push("");
 
   if (report.classes.length === 0) {

@@ -2596,6 +2596,14 @@ here on that rule's withdrawal.
   question entirely and costs the streaming read -- the digest would have to hold every row of the
   table before hashing any of it, which `ac9`'s cursor change deliberately avoided.
 
+**A fourth term was asked for and is not there.** The review gate pointed out that REAL `0.0` and
+`-0.0` are numerically equal, share `typeof() = 'real'`, and are untouched by `COLLATE BINARY`, so the
+three terms would leave them in insertion order while `feedValue` hashes `'0.0'` and `'-0.0'` apart.
+The pair is **unconstructible**: this SQLite normalises `-0.0` to `0.0` on the way in, measured rather
+than assumed. A term that can never fire is a claim the code cannot keep, so the premise is pinned by
+a target-only case instead -- a build that stopped normalising fails there rather than quietly
+producing two digests for one content.
+
 **Consequences.** A digest over a table holding a **complete-row** cross-storage-class tie differs
 from interlock's. Every other digest is unchanged, which is what the appended form buys.
 
