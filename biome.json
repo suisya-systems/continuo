@@ -6,7 +6,13 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!package-lock.json", "!test/fixtures/labelled", "!parity/oracle"]
+    "includes": [
+      "**",
+      "!package-lock.json",
+      "!test/fixtures/labelled",
+      "!parity/oracle",
+      "!src/fencing/roles.json"
+    ]
   },
   "formatter": {
     "enabled": true,
