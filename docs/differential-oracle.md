@@ -36,7 +36,10 @@ stay green, and each of them changes the database on disk.
 ## 2. The implemented faces
 
 The pilot implemented two: **control-plane database state** (2a) and **statement completeness**
-(2b). The measurement belt added a third, **fixed-point number rendering** (2c).
+(2b). The measurement belt added a third, **fixed-point number rendering** (2c). The fencing lane
+added a fourth, **CPython library semantics** (2d), which is the widest of them: the fence is
+*defined* by standard-library behaviour that JavaScript has no equivalent for, so that behaviour had
+to be transcribed, and every transcription needs the same check.
 
 ### 2a. Control-plane database state
 
@@ -124,6 +127,69 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/oracle/dump_fixed_format.py \
 
 It earned its place twice over, and the second time is the more instructive: see section 6c.
 
+### 2d. CPython library semantics
+
+The fence is not merely *implemented* with `fnmatch`, `shlex`, `posixpath`, `re` and `json` -- it is
+**defined** by them. `fencing/rules.py` decides whether a tool call is denied with
+`fnmatch.fnmatchcase` over a path it normalised with `os.path.expanduser` + `posixpath.normpath`;
+`fencing/renderer.py` builds the hook command line with `shlex.quote`, parses it back with
+`shlex.split`, and compiles **author-supplied** `forbidden_allow_regex` patterns with `re`; every
+durable fencing artefact is written with `json.dumps` and compared across a restart **by bytes**.
+None of those has a Node equivalent that agrees with CPython everywhere, so `src/fencing/` carries a
+transcription of each (`D-0200`, `D-0203`).
+
+The failure mode is the reason the face exists: a matcher that matches *less* than CPython's makes a
+rule that denies less than interlock denies, with **no probe and no error**, because the breach
+battery synthesizes its probes from the same rule text and a rule that fails to match its own
+subject fails identically on both sides of the check. Green suite, open fence.
+
+- `scripts/oracle/dump_fnmatch_shlex.py` asks CPython for its answer on every input in
+  `parity/oracle/fnmatch-shlex-corpus.json` and writes `parity/oracle/fnmatch-shlex-vector.json`.
+- `test/fencing/fnmatch-shlex-oracle.test.ts` rebuilds the corpus in the same order and asserts the
+  transcriptions agree at every position -- collecting **all** mismatches before failing, and naming
+  the input that diverged, because the first divergence is rarely the informative one and a whole
+  class of them is what points at the branch that is wrong.
+
+The corpus is **committed, not rebuilt**, unlike 2b's and 2c's: its inputs are hand-authored
+adversarial cases rather than derivations from files already in the repository, and it carries
+`$comment_*` keys saying why each class of input is present -- a corpus is a claim about coverage as
+much as the vector is a claim about correctness (section 6c).
+
+Three kinds of answer are recorded, and the second and third are what keep the face honest:
+
+1. **The answer**: what matched, what the tokens were, what the bytes were.
+2. **The refusal**: an input CPython *rejects* is recorded as its exception message rather than
+   dropped. "Both sides refuse this" is as much a parity claim as "both sides agree on the tokens",
+   and the error paths are where a transcription drifts most easily.
+3. **The accepted deviation**: a place where the two genuinely differ -- `~someuser` (Node cannot
+   read the `pwd` database), an integral float (`JSON.parse` has already collapsed `1.0` into `1`),
+   `IGNORECASE` folding, the constructs the regex translator refuses rather than guess at. Each is
+   listed in the corpus with the reason, and asserted in **both directions**: continuo must produce
+   the deviating answer *and* CPython must still produce a different one, so an entry that goes
+   stale fails loudly instead of licensing a divergence that no longer exists. A deviation deleted
+   from the corpus is a deviation nobody can see.
+
+Regenerate with, from the repository root:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/oracle/dump_fnmatch_shlex.py \
+  parity/oracle/fnmatch-shlex-vector.json
+```
+
+Like 2b and 2c it needs **no interlock checkout** -- the oracle is CPython itself. What it does need
+is that the environment stays out of the answer: `HOME`, `USERPROFILE` and `USERNAME` are pinned to
+the corpus's values on both sides for the calls that read them, since an oracle that read the
+generating machine's home directory would be comparing two environments and calling it a comparison
+of two implementations.
+
+This face has now earned its place three times: the bracket-expression bug in `D-0200`, the missing
+astral coverage that the same entry records, and -- when the corpus was extended to the regex, JSON
+and value-semantics transcriptions -- a variable-width lookbehind that CPython **rejected** and this
+port compiled, which is the "interlock refuses, continuo renders" direction. That one is now fixed:
+`src/fencing/pyregex.ts` refuses a lookbehind body it cannot prove fixed-width, and the corpus entry
+moved from the deviation list into the ordinary refusal comparison. All three are recorded in
+`D-0200`.
+
 ## 3. What is normalised, and why each part is there
 
 The dump is not "whatever the database happens to return". Every element of the shape is a decision
@@ -202,6 +268,12 @@ Two properties keep that from happening:
 
 The consequence is the intended one: a change to the vector appears in review as a change to the
 oracle -- a line someone has to justify -- rather than as a test that kept passing.
+
+The same reasoning is why `parity/oracle/**` is excluded from Biome in `biome.json`. A vector is
+**generated output**, not source: its bytes are whatever the Python half emitted. Letting the
+formatter rewrite them would make the committed file differ from what the generator produces, so the
+next regeneration would show a diff that is pure formatting -- and a vector whose diff is noise is a
+vector nobody reads. The exclusion is scoped to that directory, and nothing under it is hand-edited.
 
 ## 6. What the oracle caught on its first run
 

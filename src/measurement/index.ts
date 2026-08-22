@@ -19,6 +19,34 @@
  */
 
 /**
+ * AC-9's denominator: the run cohort and the four reasons a run is not in it
+ * (section 2.1).
+ *
+ * `TERMINAL_RUN_STATUSES` is deliberately NOT re-exported here: it belongs to
+ * the control plane's gate module and continuo already exports it from there.
+ * A second export path would read as a second definition, which is the drift
+ * cohort.ts imports it to avoid.
+ */
+export {
+  COHORT_REASONS,
+  COHORT_RUNS_QUERY,
+  EXCLUDED_REASONS,
+  IN_FLIGHT_AT_PERIOD_END,
+  KNOWN_RUN_STATUSES,
+  OWNERSHIP_COLLISION_QUERY,
+  OwnershipAssertionRefused,
+  PeriodNotClosedRefused,
+  QUERY_DEFINITIONS as COHORT_QUERY_DEFINITIONS,
+  RunCohort,
+  STARTED_BEFORE_PERIOD,
+  selectCohort,
+  TERMINAL_STATUS_UNKNOWN,
+  terminalInstantMs,
+  touchesPeriod,
+  UnknownRunStatusRefused,
+  V1_OWNED,
+} from "./cohort.js";
+/**
  * Section 3.4's false-termination report.
  *
  * The `QUERY_DEFINITIONS`, the status/verdict/source literals and the query
@@ -26,6 +54,17 @@
  * provenance header carries the executed query text (interlock `D-0040`), and
  * `action.kind` is unconstrained in the DDL so the counted literal is a
  * declaration rather than something a reader can recover from the schema.
+ */
+/**
+ * The per-module query catalogues, module-qualified.
+ *
+ * Python namespaces these -- `false_termination.QUERY_DEFINITIONS` and
+ * `cohort.QUERY_DEFINITIONS` are two names -- and a flat barrel cannot carry
+ * two exports of one spelling. Aliasing both, rather than letting whichever
+ * module landed first keep the bare name, is the choice that stays honest as
+ * more modules of this harness arrive: every catalogue is qualified, and none
+ * is privileged by the order it was ported in. Each module still exports
+ * `QUERY_DEFINITIONS` under its own path, exactly as the source does.
  */
 export {
   type Adjudication,
@@ -35,7 +74,7 @@ export {
   GROUND_TRUTH_PREFERENCE,
   measureFalseTermination,
   PRODUCTIVE_EVENT_TYPES_REQUIRED,
-  QUERY_DEFINITIONS,
+  QUERY_DEFINITIONS as FALSE_TERMINATION_QUERY_DEFINITIONS,
   readTerminateActions,
   renderFalseTerminationReport,
   SOURCE_FIXTURE_LABEL,
