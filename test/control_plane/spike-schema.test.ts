@@ -1774,12 +1774,20 @@ describe("seam liveness (target-only)", () => {
     });
 
     closeAfterTest(openControlPlane(dbPath));
-    // Three: the read-only verification connection, the in-memory scratch
+    // Four: the read-only verification connection, the in-memory scratch
     // database `expectedSchemaFingerprint` builds the DDL in while verifying,
-    // and then the writable one. The count is the shape of the
-    // verify-then-reopen contract, not an implementation detail -- a
-    // verification that ran on the connection it returns would be verifying a
-    // file it had already opened for writing.
-    expect(calls).toBe(3);
+    // the writable one -- and a second scratch database, because the returned
+    // handle is verified AGAIN on itself.
+    //
+    // This count used to be three, with a comment arguing that verifying the
+    // returned handle would mean "verifying a file it had already opened for
+    // writing". That argument was wrong, and `migrator.ts` had already
+    // disproved it: `openProductionControlPlane` has re-verified its own
+    // handle since the pilot, because the read-only verification closes its
+    // connection and leaves the file unobserved until the writable one opens.
+    // Without the second pass this function can hand back a connection to a
+    // database it never checked. Repaired under D-0023, and this assertion is
+    // the pin inverted to match.
+    expect(calls).toBe(4);
   });
 });

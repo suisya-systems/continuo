@@ -1340,15 +1340,39 @@ export class Outbox {
   ): void {
     const { nowMs, epoch, message, handler, what, allowNoRow = false } = options;
     const bound = { ...params, ...this._fenceParams({ epoch, nowMs }) };
-    const info = this._connection
-      .prepare(String.prototype.valueOf.call(statement) as string)
-      .run(bound);
-    const changed = info.changes;
 
-    if (changed >= 1) {
-      return;
+    // The write and the classification of a no-op run in ONE transaction.
+    //
+    // Separately, they are two autocommitted statements with a window between
+    // them: when the statement changes no row and `allowNoRow` is set, the
+    // fence is re-read to tell "already done, benign" from "superseded". A
+    // lease taken over inside that window turns a legitimate deduplicated
+    // resend into a recorded StaleWriterRefused -- a refusal history that
+    // records something that did not happen, and a resend that fails for a
+    // reason that was not true when it ran. interlock has the same two-step;
+    // repaired here under D-0023.
+    //
+    // Joined rather than nested when the caller already holds a transaction:
+    // `withImmediate` refuses an open one, and several callers wrap this.
+    let refused = false;
+    const attempt = (): void => {
+      const info = this._connection
+        .prepare(String.prototype.valueOf.call(statement) as string)
+        .run(bound);
+      if (info.changes >= 1) {
+        return;
+      }
+      if (allowNoRow && this._fenceIsLive({ epoch, nowMs })) {
+        return;
+      }
+      refused = true;
+    };
+    if (this._connection.inTransaction) {
+      attempt();
+    } else {
+      withImmediate(this._connection, attempt);
     }
-    if (allowNoRow && this._fenceIsLive({ epoch, nowMs })) {
+    if (!refused) {
       return;
     }
 

@@ -199,9 +199,14 @@ export function transaction<T>(
     return invoke(connection, body);
   }
 
+  // The scope is installed AFTER the BEGIN succeeds. Installing it first
+  // leaves it behind when `BEGIN IMMEDIATE` throws on a busy database -- no
+  // transaction was opened, yet `currentScope()` would answer for one, which
+  // is the opposite of what its contract says. (interlock installs it first;
+  // repaired here under D-0023.)
+  connection.exec("BEGIN IMMEDIATE");
   const scope: Record<string, unknown> = {};
   _SCOPES.set(connection, scope);
-  connection.exec("BEGIN IMMEDIATE");
   try {
     let result: T;
     try {
@@ -210,14 +215,35 @@ export function transaction<T>(
       connection.exec("ROLLBACK");
       throw error;
     }
-    // COMMIT sits OUTSIDE the block ROLLBACK answers for, mirroring the
-    // source's `except: ROLLBACK / else: COMMIT`. Python's `else` clause runs
-    // only when the body did not raise, so a COMMIT that *itself* fails is not
-    // followed by a ROLLBACK there -- and it must not be here either. Issuing
-    // one would be a second statement against a transaction whose state the
-    // failed COMMIT already decided, and it would replace the COMMIT's error
-    // with the ROLLBACK's, hiding the diagnosis the caller needs.
-    connection.exec("COMMIT");
+    // COMMIT sits outside the block the ROLLBACK above answers for, mirroring
+    // the source's `except: ROLLBACK / else: COMMIT`.
+    //
+    // A COMMIT can nonetheless fail -- SQLITE_BUSY from a concurrent reader is
+    // reachable under the rollback journal (D-0012) -- and SQLite then leaves
+    // the transaction ACTIVE, so it can be retried or rolled back. interlock
+    // does neither: it lets the error out and drops the scope, and the next
+    // `transaction()` on that connection sees `inTransaction` and silently
+    // JOINS the orphan. Its writes never commit and the locks stay held.
+    //
+    // So a failed COMMIT is rolled back here, and the COMMIT's own error is
+    // what reaches the caller -- the earlier worry that a ROLLBACK would
+    // replace the diagnosis is answered by separating the two, not by leaving
+    // the transaction open.
+    try {
+      connection.exec("COMMIT");
+    } catch (error) {
+      if (connection.inTransaction) {
+        try {
+          connection.exec("ROLLBACK");
+        } catch (rollbackError) {
+          // The COMMIT's error is the diagnosis; the ROLLBACK's is context.
+          throw new Error(`COMMIT failed and the ROLLBACK after it also failed`, {
+            cause: { commit: error, rollback: rollbackError },
+          });
+        }
+      }
+      throw error;
+    }
     return result;
   } finally {
     // Dropped by the block that made it, on every exit path, so no scope
