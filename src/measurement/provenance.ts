@@ -513,6 +513,13 @@ function feedRows(
   const ordering = [
     ...columns.map((column) => `"${quoted(column)}"`),
     ...columns.map((column) => `typeof("${quoted(column)}")`),
+    // A third term, and the review that asked for it names the case: a column
+    // declared `TEXT COLLATE NOCASE` compares 'a' and 'A' as EQUAL and both are
+    // `typeof() = 'text'`, so the first two terms leave them in insertion order
+    // while feedValue hashes their distinct bytes apart. COLLATE BINARY is the
+    // byte comparison, and it is a no-op for every value that is not text, so
+    // the three terms together are total over exactly what gets hashed.
+    ...columns.map((column) => `"${quoted(column)}" COLLATE BINARY`),
   ].join(", ");
   const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${ordering}`;
   // Iterated, not materialised. The source's `connection.execute(...)` is a
@@ -1484,5 +1491,11 @@ function cell(value: HeaderValue): string {
   // rendering has been ASCII-safe from the start (ensure_ascii); this makes the
   // Markdown one match, so both renderings honour the same claim their
   // docstrings make.
-  return reportValue(rendered.replaceAll("|", "\\|").replaceAll("\n", " ").trim());
+  //
+  // The value is escaped FIRST and the table's own pipe escape added after.
+  // The other order doubles it: reportValue would escape the backslash the pipe
+  // escape just introduced, and the cell would read `\\|` where the table needs
+  // `\|`. A newline needs no separate fold either -- reportValue turns it into
+  // an escape, which says more than the source's space did.
+  return `${reportValue(rendered.trim())}`.replaceAll("|", "\\|");
 }

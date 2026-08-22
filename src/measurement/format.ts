@@ -416,9 +416,12 @@ function finiteRepr(magnitude: number): string {
  *   caller-controlled text with no `CHECK` on their shape.
  *
  * So a value is escaped the way `json.dumps(ensure_ascii=True)` escapes one:
- * anything from `U+007F` up, and every C0 control, becomes `\\uXXXX`. Printable
- * ASCII is left exactly as it is, so an ordinary report is unchanged character
- * for character.
+ * anything from `U+007F` up, and every C0 control, becomes `\\uXXXX` -- and a
+ * literal backslash becomes a doubled one, without which a value containing the
+ * six characters of an escape sequence would render identically to one holding
+ * the control character itself, and the escaping would hide the very thing it
+ * exists to show. Every other printable ASCII character is left exactly as it
+ * is, so an ordinary report is unchanged character for character.
  *
  * This is deliberately **not** `pythonRepr`: that quotes the value and is for
  * refusal messages, where the reader needs to see the value's boundaries. Here
@@ -429,7 +432,9 @@ export function reportValue(text: string): string {
   let escaped = "";
   for (const character of text) {
     const code = character.codePointAt(0) ?? 0;
-    if (code < 0x20 || code >= 0x7f) {
+    if (character === "\\") {
+      escaped += "\\\\";
+    } else if (code < 0x20 || code >= 0x7f) {
       // A character above the BMP is two UTF-16 code units and is escaped as
       // the surrogate pair, which is what json.dumps emits for one too.
       for (let index = 0; index < character.length; index += 1) {

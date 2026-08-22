@@ -1297,7 +1297,8 @@ function renderWriterAudit(audit: WriterAudit): string[] {
   const lines = [
     "Writer audit (ACCEPTANCE.md section 3 condition 2) " +
       `[${audit.windowFromMs}, ${audit.windowToMs})`,
-    `  record classes audited: ${audit.recordClasses.join(", ")}`,
+    // D-0109: a RecordClass name is a caller argument, not a closed set.
+    `  record classes audited: ${audit.recordClasses.map(reportValue).join(", ")}`,
   ];
   if (!audit.available) {
     lines.push("  v1 store: ABSENT");

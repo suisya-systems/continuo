@@ -1431,9 +1431,8 @@ describe("deliberate divergences from interlock (target-only)", () => {
     // table still has one row per field.
     const rows = markdown.split("\n").filter((line) => line.includes("a\\|pipe"));
     expect(rows).toHaveLength(1);
-    // The pipe is escaped and the newline is folded to a space -- the source's
-    // own two rules for a VALUE, now applied to the field name as well, so the
-    // key can neither open a column nor end the row.
-    expect(rows[0]).toContain("a\\|pipe and a newline");
+    // The pipe is escaped and the newline is an escape sequence, so the key can
+    // neither open a column nor end the row.
+    expect(rows[0]).toContain("a\\|pipe\\u000aand a newline");
   });
 });
