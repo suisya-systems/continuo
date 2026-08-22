@@ -59,6 +59,12 @@
         "to": "a per-test productionDb() plus withWritable / withMeasurement (rule 8)",
         "why": "The convention every measurement test file in this port uses.",
         "affects": "every entry that touches a database"
+      },
+      {
+        "from": "connection.execute(statement) iterated as a cursor",
+        "to": "prepare(statement).raw().safeIntegers(true).iterate()",
+        "why": "Raised by the codex review gate: `.all()` would hold every row of a cumulatively-growing table in the heap before the first byte is hashed, which is a resource behaviour the port would not share with the thing it ports. The digest is unchanged -- same statement, same order, same values.",
+        "affects": "the fingerprint entries"
       }
     ],
     "target_only_tests": {
@@ -116,6 +122,12 @@
       "matches_source": true,
       "note": "Raised by the codex review gate (P2) and NOT repaired, deliberately. interlock's implementation has the same ORDER BY and the same type tags, so the soft spot is upstream. A storage-class tie-breaker would fix it here and would also move every digest this port produces away from the digest interlock produces over the same rows -- and comparing those two digests is the whole reason the field is a parity surface. The direction of the failure is the safe one: it can report two reads of the same content as different (a false alarm a reader investigates), never two different contents as the same. Disclosed in the module at the ORDER BY itself.",
       "where_a_fix_belongs": "upstream, in interlock's ordering, and then here in the same shape."
+    },
+    {
+      "behaviour": "renderHeaderMarkdown does not escape non-ASCII in a cell, and does not escape anything at all in a dotted FIELD NAME -- so a query name, an exclusion reason or an unmatched key containing a pipe, a newline or a backtick produces a malformed table row.",
+      "matches_source": true,
+      "note": "Both raised by the codex review gate (P2) and reproduced rather than repaired. interlock's _cell escapes the same two characters in a VALUE and interpolates the field name raw, so the port matches it byte for byte; escaping more would make continuo's Markdown differ from interlock's for the same header. The ASCII half is also outside continuo's own policy by that policy's own words -- docs/cli-output-policy.md governs what continuo AUTHORS, not what it handles, and says a path that echoes external text 'has to deal with encoding on its own terms'. The JSON rendering IS ASCII-safe (ensure_ascii), which is the rendering section 6 puts on the console.",
+      "where_a_fix_belongs": "upstream in interlock's _cell, or in the CLI belt at the point where a report is actually written to a console."
     }
   ],
   "entries": [

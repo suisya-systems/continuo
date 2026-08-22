@@ -503,7 +503,13 @@ function feedRows(
   // one interlock produces over the same rows, which is the comparison the
   // field exists to support. Recorded in the ledger as an inherited limitation.
   const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${projection}`;
-  const rows = connection.prepare(statement).raw().safeIntegers(true).all() as unknown[][];
+  // Iterated, not materialised. The source's `connection.execute(...)` is a
+  // cursor and hashes row by row; `.all()` would hold every row of a
+  // cumulatively-growing table in the heap before the first byte is hashed,
+  // which is a resource behaviour the port would not share with what it ports.
+  const rows = connection.prepare(statement).raw().safeIntegers(true).iterate() as Iterable<
+    unknown[]
+  >;
   for (const row of rows) {
     feed(hasher, "R", Buffer.from(String(row.length), "ascii"));
     for (const value of row) {
