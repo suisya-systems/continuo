@@ -1,0 +1,420 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "fencing",
+      "collected": 124,
+      "inventory": "parity/source-inventory/fencing.all.txt"
+    },
+    "file": {
+      "path": "tests/fencing/test_renderer.py",
+      "collected": 40,
+      "inventory": "parity/source-inventory/fencing.test_renderer.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/fencing/renderer.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "note": "This file carries no target-only test. The lane's target-only tests are the CPython differential oracle, which is listed in parity/fencing.battery-coverage.ledger.json because it belongs to no single ported source file. Target-only tests are never counted as ported coverage."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 40,
+    "ported": 36,
+    "adapted": 3,
+    "not_ported": 1,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_every_shipped_role_renders",
+      "target_id": "test/fencing/renderer.test.ts::renders > every shipped role renders",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_all_three_layers_are_present_on_the_worker_role",
+      "target_id": "test/fencing/renderer.test.ts::renders > all three layers are present on the worker role",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_layers_are_labelled_so_the_battery_can_report_per_layer",
+      "target_id": "test/fencing/renderer.test.ts::renders > layers are labelled so the battery can report per layer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_placeholders_are_substituted_everywhere",
+      "target_id": "test/fencing/renderer.test.ts::renders > placeholders are substituted everywhere",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_the_deny_hook_is_wired_into_every_role",
+      "target_id": "test/fencing/renderer.test.ts::renders > the deny hook is wired into every role",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_paths_with_spaces_survive_into_the_hook_command",
+      "target_id": "test/fencing/renderer.test.ts::renders > paths with spaces survive into the hook command",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source builds its FenceContext around default_hook_script(), the shipped hook file. continuo has not ported fencing/hook.py yet (it lands in the next PR of this lane), so the fixture creates a real hook file inside the space-bearing directory instead. The property the case pins -- that shlex quoting of context paths survives the render, so --fence arrives as one token -- is unchanged, and the case is strictly STRONGER than its source here: the hook path now carries the space too, so it must survive the quoting as well.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_the_default_hook_launcher_resolves_on_this_platform",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "absent",
+      "reason": "Genuinely about the SHIPPED default: it asserts default_hook_script() exists and that ctx.python == sys.executable or 'python3'. continuo has no shipped hook script until src/fencing/hook.ts lands in the next PR of this lane, and the second assertion has no faithful analogue in any case -- FenceContext.python defaults to process.execPath, a recorded deviation documented at the field itself, because continuo's hook is a Node script and not a Python one. Unblocked by the hook PR, where it needs rewriting against the Node launcher rather than straight translation. Deliberately NOT made to pass by inventing a shipped hook: a hook file that exists is a hook a spawn will wire in, and an untested fail-closed hook fails open, which is the accident i04 section 5 measured.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_shlex_mangles_an_unquoted_backslash_path_and_quoting_prevents_it",
+      "target_id": "test/fencing/renderer.test.ts::renders > shlex mangles an unquoted backslash path and quoting prevents it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_the_renderers_own_output_roundtrips_through_shlex",
+      "target_id": "test/fencing/renderer.test.ts::renders > the renderers own output roundtrips through shlex",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same substitution as test_paths_with_spaces_survive_into_the_hook_command: the shipped hook script is not ported yet, so the fixture supplies a real file. The source's load-bearing detail is preserved -- the context tree is never created on disk, because rendering must not touch the filesystem for those paths -- by creating the hook file OUTSIDE that tree. Both assertions are kept: the --fence token equals ctx.fencePath, and tokens[0] equals ctx.python.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_rendering_is_deterministic",
+      "target_id": "test/fencing/renderer.test.ts::renders > rendering is deterministic",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRenders::test_rule_ids_are_stable_and_unique",
+      "target_id": "test/fencing/renderer.test.ts::renders > rule ids are stable and unique",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestDiscardedAxes::test_a_discarded_axis_refuses_the_render[sandbox_by_pattern]",
+      "target_id": "test/fencing/renderer.test.ts::discarded axes > a discarded axis refuses the render[sandbox_by_pattern]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestDiscardedAxes::test_a_discarded_axis_refuses_the_render[transport]",
+      "target_id": "test/fencing/renderer.test.ts::discarded axes > a discarded axis refuses the render[transport]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestDiscardedAxes::test_a_discarded_axis_refuses_the_render[transport_descriptor]",
+      "target_id": "test/fencing/renderer.test.ts::discarded axes > a discarded axis refuses the render[transport_descriptor]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestDiscardedAxes::test_the_fencing_package_does_not_import_the_discarded_transport_module",
+      "target_id": "test/fencing/renderer.test.ts::discarded axes > the fencing package does not import the discarded transport module",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source globs the Python package's *.py; the target globs src/fencing/*.ts. The two source exemptions are translated rather than dropped: the RST double-backtick spelling of the discarded axis becomes the TSDoc single-backtick form, and the '\\\"\\\"\\\"' docstring marker becomes '/**'. A non-empty-glob assertion is added so an empty match cannot read as a pass. See inherited_limitations for the half of this case that is near-vacuous in the source and is reproduced rather than quietly strengthened.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_absent_role_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > absent role refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_config_deleted_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > config deleted refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_malformed_document_refuses_rather_than_rendering_nothing",
+      "target_id": "test/fencing/renderer.test.ts::refusals > malformed document refuses rather than rendering nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_sandbox_profile_absent_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > sandbox profile absent refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_hook_path_unresolvable_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > hook path unresolvable refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_hooks_absent_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > hooks absent refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_forbidden_allow_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > forbidden allow refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_forbidden_allow_by_regex_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > forbidden allow by regex refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_empty_deny_list_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > empty deny list refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_unparseable_rule_refuses_rather_than_being_skipped",
+      "target_id": "test/fencing/renderer.test.ts::refusals > unparseable rule refuses rather than being skipped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_deny_list_authored_as_a_string_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a deny list authored as a string refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_sandbox_deny_list_authored_as_a_string_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a sandbox deny list authored as a string refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_an_unlaunchable_hook_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > an unlaunchable hook refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_narrow_hook_matcher_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a narrow hook matcher refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_every_shipped_role_scopes_the_deny_hook_to_all_tools",
+      "target_id": "test/fencing/renderer.test.ts::refusals > every shipped role scopes the deny hook to all tools",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_hook_entry_that_is_not_a_command_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a hook entry that is not a command refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_hook_pointed_at_another_fence_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a hook pointed at another fence refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_hook_invoked_for_another_role_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a hook invoked for another role refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_hook_with_no_fence_flag_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a hook with no fence flag refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_malformed_global_regex_refuses_rather_than_raising",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a malformed global regex refuses rather than raising",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_unsubstituted_placeholder_refuses",
+      "target_id": "test/fencing/renderer.test.ts::refusals > unsubstituted placeholder refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestRefusals::test_a_refusal_reports_every_reason_not_just_the_first",
+      "target_id": "test/fencing/renderer.test.ts::refusals > a refusal reports every reason not just the first",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestPermissionModeIsU15sAnswer::test_bypass_permissions_refuses_the_render",
+      "target_id": "test/fencing/renderer.test.ts::permission mode is U15's answer > bypass permissions refuses the render",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestPermissionModeIsU15sAnswer::test_an_unknown_permission_mode_refuses",
+      "target_id": "test/fencing/renderer.test.ts::permission mode is U15's answer > an unknown permission mode refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_renderer.py::TestPermissionModeIsU15sAnswer::test_no_shipped_role_asks_for_bypass_permissions",
+      "target_id": "test/fencing/renderer.test.ts::permission mode is U15's answer > no shipped role asks for bypass permissions",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "The second assertion of test_the_fencing_package_does_not_import_the_discarded_transport_module is nearly vacuous.",
+      "status": "inherited, not fixed",
+      "detail": "The source reads `assert \"sandbox_by_pattern\" not in text or \"DISCARDED\" in text or '\\\"\\\"\\\"' in text`. The third disjunct is true of any file containing a docstring, which in that package is every file, so the assertion cannot fail on the sandbox_by_pattern axis. The first assertion (about transport.descriptor) is real and does the work. The translation reproduces the disjunction rather than strengthening it, because a port that quietly improves on its source is no longer a parity port and the difference would be invisible to anyone comparing the two suites. A fix belongs upstream, or in a change that moves both sides together."
+    },
+    {
+      "topic": "JavaScript has one number type, so a role document's numeric values can lose both their int/float distinction AND, beyond 2^53, their exact value.",
+      "status": "inherited from the runtime, disclosed and not repaired (D-0022)",
+      "detail": "Two distinct losses, both at `JSON.parse`, both inherited from the runtime rather than introduced by the translation. (1) TYPE: Python's json preserves int vs float (`1` and `1.0` parse to different types), so a refusal naming a value's type reads `got int` here where interlock says `got float`. (2) VALUE: an integer beyond `Number.MAX_SAFE_INTEGER` is rounded -- `9007199254740993` parses as `9007199254740992` -- and `pyJsonDumps` then emits a number that is neither what was authored nor what Python would print. Because the settings payload is compared byte-for-byte across a restart, a document carrying such a value would render a fence that disagrees with interlock's bytes. No ported case exercises either: the shipped roles.json carries no number in any position that reaches a message or the payload, and the refusal CODE -- which is what the ledger and an operator act on -- is unaffected in every case. Recorded rather than papered over, and raised with the operator: closing (2) means either a lossless number parser or REFUSING an out-of-range number, and refusing is a deliberate divergence from interlock (which accepts it) rather than a bug fix, so it is not a translator's call. Surfaced by an independent review of this port (Codex). Tracked for post-parity repair in suisya-systems/continuo#18, which also carries the upstream decision to take before interlock is archived.",
+      "tracking": "suisya-systems/continuo#18"
+    },
+    {
+      "topic": "The renderer decides that a hook command invokes interlock's deny hook by a SUBSTRING test, so a command that merely mentions the hook path -- without executing it -- is admitted.",
+      "status": "inherited, disclosed and not repaired during the port (D-0022)",
+      "detail": "renderer.py:412 is `if str(ctx.hook_script) in hook[\"command\"]:`. A command such as `/bin/echo <hook_script> --role worker --fence <fence_path>` therefore satisfies every check the renderer makes: `_check_command_resolves` finds `/bin/echo` on PATH and finds the script token on disk, `_check_invocation` finds `--fence` and `--role` carrying the right values, and the matcher is universal. The CLI then runs `echo` and the deny hook never executes, so the render succeeds and the session is unfenced. Measured against interlock at 65f36c5 rather than reasoned about: driving `render_fence` with exactly that command returns a fence of 17 rules. continuo reproduces the behaviour exactly. Fixing it here would mean the port refuses a document interlock renders -- a silent improvement, which interlock#74 acceptance criteria 5 and 6 forbid and which would make the two suites disagree about what a valid role document is. `D-0022` settles what to do with a defect that is reproduced faithfully from interlock, pinned by no case on either side, and raised by review rather than by a failing test: disclose it here, do not repair it during the port, and repair it in a dedicated change after parity. This is that shape exactly, including the detail that the porting lane's own recommendation was to repair it now -- which the operator rejected for the event-spine belt. The repair, when it comes, has to check the argv POSITION of the script rather than its presence in the string, and belongs upstream or in a change that moves both sides together. Surfaced by an independent review of this port (Codex), which raised it in two consecutive rounds because it reviews the target as greenfield and cannot see interlock. Tracked for post-parity repair in suisya-systems/continuo#18, which also carries the upstream decision to take before interlock is archived.",
+      "tracking": "suisya-systems/continuo#18"
+    }
+  ]
+}
