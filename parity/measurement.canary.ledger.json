@@ -1,0 +1,336 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. canary is the eighth file of this lane and the last one reachable without ai_invocation: it needs repo_link, reader and shadow, and it calls shadow's reconcile rather than reimplementing any of section 3.3."
+    },
+    "file": {
+      "path": "tests/measurement/test_canary.py",
+      "collected": 21,
+      "inventory": "parity/source-inventory/measurement.test_canary.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/canary.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "frozen dataclass, tuple fields, MappingProxyType",
+        "to": "frozen class, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention every module of this lane uses. readOnlyMap preserves insertion order, which the ported case asserting both finding kinds appear (at zero as well) depends on.",
+        "affects": "every entry that reads a report field"
+      },
+      {
+        "from": "the (record_class, record_key) tuple used as a dict key",
+        "to": "a string joined by the ASCII unit separator",
+        "why": "A JavaScript Map keyed by a tuple compares by reference, so a tuple key would never match. The separator is the one shadow.ts uses for a correlation token and for the same reason: no component of either half can contain it, so two different records cannot spell one identity.",
+        "affects": "the dual-write entries"
+      },
+      {
+        "from": "path.resolve().as_uri()",
+        "to": "pathToFileURL(realpathSync(path)).href",
+        "why": "The same two operations -- resolve the path, then spell it as a file: URI -- in Node's vocabulary. The ?mode=ro suffix is kept verbatim: continuo opens read-only by flag rather than by URI (D-0100), but mode=ro is SQLite's own URI spelling of that capability, so the printed URI still names what a reader would use to reopen the file the same way.",
+        "affects": "the read-only evidence entries"
+      },
+      {
+        "from": "PRAGMA statements executed through connection.execute",
+        "to": "better-sqlite3's connection.pragma",
+        "why": "The library's own pragma surface returns the value directly and is what the rest of this port uses; the pragma text and the readings are unchanged.",
+        "affects": "the read-only evidence entries"
+      },
+      {
+        "from": "with measurement_snapshot(connection):",
+        "to": "measurementSnapshot(connection, {}, body)",
+        "why": "continuo's snapshot takes a body callback rather than being a context manager (D-0103), which preserves the source's own split into a function that holds the snapshot and a function that measures inside it.",
+        "affects": "the report entries"
+      },
+      {
+        "from": "pytest's `db` fixture and try/finally connection pairs",
+        "to": "a per-test productionDb() plus withWritable / withMeasurement (rule 8)",
+        "why": "The convention every measurement test file in this port uses.",
+        "affects": "every entry that touches a database"
+      }
+    ],
+    "target_only_tests": {
+      "count": 6,
+      "ids": [
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > a read-only file with the connection guard down is still refused",
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > a probe that leaves the guard lowered is refused",
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > two record classes spelling the same key do not pair",
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > the writer audit prints its own VIOLATED line",
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > an ownership input past SQLite's parameter ceiling is chunked, not refused",
+        "test/measurement/canary.test.ts::properties the ported cases leave unguarded (target-only) > the whole report is read inside one snapshot"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All six close gaps a 25-mutation sweep found, and all six are INHERITED: each mutation was applied to interlock's own canary.py at 65f36c5 and its 21 cases still passed (measured, not inferred). Each is recorded with its verdict under mutation_sweep below and each was confirmed to kill its mutation and only its mutation."
+    }
+  },
+  "totals": {
+    "source_cases": 21,
+    "ported": 20,
+    "adapted": 1,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "canary's names are exported from the package entry directly out of src/measurement/canary.js, not through the measurement barrel.",
+      "why": "DECISIONS.md D-0106. A ported case in test_reader.py asserts the measurement package exports no name containing migrate, create, write or lease; canary's vocabulary is full of the word because what it audits IS writing. interlock keeps the invariant by re-exporting only reader's names from measurement/__init__.py, and continuo's wider barrel exists only because D-0002 exports `.` alone -- so the barrel gives way, not the assertion."
+    },
+    {
+      "what": "QUERY_DEFINITIONS is exported as CANARY_QUERY_DEFINITIONS.",
+      "why": "The third module of this lane to carry one. Python namespaces them per module and a flat entry point cannot carry three exports of one spelling; each module still exports the bare name under its own path."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "Both v1 inputs -- the writer ledger and the ownership list -- are whatever the adapter hands over, and nothing here can tell a partial read from a complete one. A writer ledger missing half of v1's records reports fewer dual writes and says nothing about it.",
+      "matches_source": true,
+      "note": "Structural upstream and reproduced. The separable-adapter design is a requirement (this module must not open v1's files during the cutover that moves them), and the confusion it CAN prevent -- an empty read read as 'v1 wrote nothing' -- it prevents by degrading to the absent state and making the empty claim reachable only through attestsEmpty.",
+      "where_a_fix_belongs": "upstream, in the adapter's own provenance."
+    },
+    {
+      "behaviour": "The report states no verdict, so nothing in it says whether the canary may proceed.",
+      "matches_source": true,
+      "note": "Deliberate and the module's central claim, not a limitation to fix: Q-0005 (canary duration, sample size, numeric exit criteria) is open, and ACCEPTANCE.md section 3 refuses to convert AC-9's reduction targets into canary thresholds. The ported case greps the rendering -- the one WITH findings in it -- for the verdict vocabulary, so the absence is enforced rather than described.",
+      "where_a_fix_belongs": "nowhere in code; Q-0005 is a decision for people."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_record_written_by_both_stores_is_a_dual_write_finding",
+      "target_id": "test/measurement/canary.test.ts::condition 2 -- the writer audit > a record written by both stores is a dual write finding",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_the_pull_request_key_is_folded_in_sql_so_a_cased_slug_still_collides",
+      "target_id": "test/measurement/canary.test.ts::condition 2 -- the writer audit > the pull_request key is folded in SQL so a cased slug still collides",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_record_written_only_by_one_store_is_not_a_finding",
+      "target_id": "test/measurement/canary.test.ts::condition 2 -- the writer audit > a record written only by one store is not a finding",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_the_window_test_is_write_span_overlap_not_last_write_inside",
+      "target_id": "test/measurement/canary.test.ts::condition 2 -- the writer audit > the window test is write-span overlap, not last write inside",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_v1_record_in_an_unqueried_class_is_refused_not_skipped",
+      "target_id": "test/measurement/canary.test.ts::condition 2 -- the writer audit > a v1 record in an unqueried class is refused, not skipped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_an_empty_v1_read_is_absent_and_an_attestation_is_a_comparison",
+      "target_id": "test/measurement/canary.test.ts::condition 2 -- the writer audit > an empty v1 read is absent and an attestation is a comparison",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_an_input_without_provenance_is_refused",
+      "target_id": "test/measurement/canary.test.ts::condition 2 -- the writer audit > an input without provenance is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_run_claimed_by_both_is_a_finding_and_is_not_deduped",
+      "target_id": "test/measurement/canary.test.ts::conditions 3, 4, 6 -- the ownership ledger > a run claimed by both is a finding and is not deduped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_the_collision_check_is_not_bounded_by_the_listing_window",
+      "target_id": "test/measurement/canary.test.ts::conditions 3, 4, 6 -- the ownership ledger > the collision check is not bounded by the listing window",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_one_side_claiming_a_run_twice_is_refused_not_filed_as_divergence",
+      "target_id": "test/measurement/canary.test.ts::conditions 3, 4, 6 -- the ownership ledger > one side claiming a run twice is refused, not filed as divergence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_an_absent_v1_ownership_input_reports_no_collision_and_says_why",
+      "target_id": "test/measurement/canary.test.ts::conditions 3, 4, 6 -- the ownership ledger > an absent v1 ownership input reports no collision and says why",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_the_read_only_evidence_comes_off_the_live_connection",
+      "target_id": "test/measurement/canary.test.ts::condition 5 -- the read-only assertion > the read-only evidence comes off the live connection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_writable_connection_is_refused",
+      "target_id": "test/measurement/canary.test.ts::condition 5 -- the read-only assertion > a writable connection is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_claim_of_read_only_does_not_substitute_for_the_capability",
+      "target_id": "test/measurement/canary.test.ts::condition 5 -- the read-only assertion > a claim of read-only does not substitute for the capability",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source greps the refusal for `mode=ro`, which is how it shows the check reached the FILE probe rather than stopping at the pragma. continuo opens read-only by SQLITE_OPEN_READONLY rather than by a mode=ro URI (D-0100), and reader.ts's refusal says so in those words, so the assertion is on the open-flag wording instead. Two strings are asserted rather than one -- 'was not opened read-only' and 'did not carry the capability' -- so the case still fails if the refusal degrades to a generic one. The connection handed over, the reading under test and the refusal type are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_connection_with_no_file_cannot_evidence_the_capability",
+      "target_id": "test/measurement/canary.test.ts::condition 5 -- the read-only assertion > a connection with no file cannot evidence the capability",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_the_report_refuses_before_it_measures_anything",
+      "target_id": "test/measurement/canary.test.ts::condition 5 -- the read-only assertion > the report refuses before it measures anything",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_the_report_states_both_findings_and_still_emits_no_verdict",
+      "target_id": "test/measurement/canary.test.ts::the report: no verdict, and no missing comparison passed off as a clean one > the report states both findings and still emits no verdict",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_a_report_with_no_findings_also_emits_no_verdict",
+      "target_id": "test/measurement/canary.test.ts::the report: no verdict, and no missing comparison passed off as a clean one > a report with no findings also emits no verdict",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_an_empty_v1_input_renders_and_says_there_is_no_shadow_reference",
+      "target_id": "test/measurement/canary.test.ts::the report: no verdict, and no missing comparison passed off as a clean one > an empty v1 input renders and says there is no shadow reference",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_an_empty_period_is_refused",
+      "target_id": "test/measurement/canary.test.ts::the report: no verdict, and no missing comparison passed off as a clean one > an empty period is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_canary.py::test_the_query_definitions_are_the_queries_that_run",
+      "target_id": "test/measurement/canary.test.ts::the report: no verdict, and no missing comparison passed off as a clean one > the query definitions are the queries that run",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "25 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 19,
+    "survivors": [
+      {
+        "mutation": "the first reading (PRAGMA query_only as found) is dropped",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every connection the ported cases hand over that fails the pragma also fails the file probe, and the probe's own refusal happens to contain the word query_only -- so the assertion passes either way, on both sides. The two readings are not the same reading: a handle opened against a read-only FILE with the connection guard down passes the probe, and the report would then be measured through a connection whose guard nothing checked. The new case builds exactly that handle."
+      },
+      {
+        "mutation": "the post-probe re-read of query_only is dropped",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Unreachable while the real probe restores the guard, which is why neither suite reaches it. The guard is still what stops the harness disarming itself while checking that it was armed. Closed by substituting the probe through reader's seam record -- which also made canary.ts call readerSeams.proveReadOnly rather than the imported binding, and that is the MORE faithful spelling: Python resolves prove_read_only through the reader module's namespace at call time, and D-0014 is that late binding reproduced."
+      },
+      {
+        "mutation": "WrittenRecord.identity drops the record class",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "No case on either side gives two record classes the same key. A run may be named anything, including the very string the pull_request key shape produces, and pairing across classes reports a dual write of a record neither store wrote. The new case names a run 'github/aa-org/renga#302' and hands over a pull_request record with that key."
+      },
+      {
+        "mutation": "the writer audit's VIOLATED line is suppressed",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported case asserts VIOLATED appears in the rendering, and the ownership section prints its own VIOLATED line over the same fixture -- so condition 2's violation can go unstated in the section that found it while the assertion still passes. The new case asserts the writer audit's own sentence."
+      },
+      {
+        "mutation": "the ownership collision check drops its 500-id chunking",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Neither suite passes more than a handful of run ids. The ceiling is real and was measured on this build during the cohort belt: 32,766 bound parameters succeed and 32,767 fails with SQLITE_ERROR. The new case passes 33,001 ids and plants the collision at the very end, so a loop that stopped after its first chunk reports no finding rather than crashing."
+      },
+      {
+        "mutation": "the report is measured without holding the snapshot",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Nothing on either side observes the transaction, so removing the snapshot changes no assertion -- while the defect it prevents is a report whose writer audit and ownership ledger describe two different states of the database, reported as a divergence that never existed. The new case observes connection.inTransaction from inside a SQLite user function called by a record class's own statement, so the reading is taken from within the measurement rather than around it."
+      }
+    ],
+    "note": "All six survivors were re-run against the new target-only cases and each is now killed by its own case and no other. Each was also applied to interlock's canary.py at 65f36c5, where its 21 cases stayed green -- which is what makes 'inherited' a measurement here rather than an argument."
+  }
+}

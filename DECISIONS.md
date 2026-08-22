@@ -56,6 +56,7 @@ spaces distinct.
 | D-0103 | A report snapshot refuses a deferred body rather than awaiting or draining it | accepted |
 | D-0104 | Rendered figures match Python's formatter, pinned by an oracle | accepted |
 | D-0105 | Maps keyed by database-supplied ids are `Map`, never plain objects | accepted |
+| D-0106 | The measurement barrel stays as narrow as the invariant that guards it | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -2262,3 +2263,52 @@ ported suite does not reach, and removes nothing from it.
 `posixExpanduser` could then take CPython's *success* branch and the refusal would become an
 unnecessary divergence to remove. Also by interlock refusing or pre-substituting `~user` paths
 upstream, which would turn this decision into a plain translation.
+
+## D-0106 — The measurement barrel stays as narrow as the invariant that guards it
+
+**Context.** Interlock's `tests/measurement/test_reader.py` asserts that the measurement package
+exports no name containing `migrate`, `create`, `write` or `lease`. The property it protects is real
+and load-bearing: the harness is read-only by capability (`ACCEPTANCE.md` section 3 condition 5), and
+a writer re-exported from the harness's own front door would be a writer its callers could reach
+without ever naming the control plane.
+
+Interlock keeps that property structurally. Its `measurement/__init__.py` re-exports **only**
+`reader`'s names, so the module that has no writers is the only module in the barrel, and the other
+twelve modules are reached by their own paths.
+
+continuo cannot copy that shape. `D-0002` exports `.` alone, so a name absent from the package entry
+is a name an installed consumer cannot reach at all -- which is why this port's measurement barrel
+grew to carry every module. That worked for six modules and stopped working at the seventh: `canary`
+is the AC-7 writer audit, and its vocabulary is full of the forbidden word because what it audits
+**is** writing. `WriterAudit`, `WrittenRecord`, `auditWriters`, `DualWriteFinding`,
+`FILE_REFUSED_THE_WRITE` -- not one of them writes anything, and every one of them trips a substring
+rule that exists to catch writers.
+
+**Decision.** The measurement barrel (`src/measurement/index.ts`) carries only names that satisfy the
+invariant. Anything the invariant excludes is re-exported to consumers from the package entry
+(`src/index.ts`) directly out of its module, with a comment saying why it takes the long way round.
+
+The assertion is not relaxed, not narrowed to "names that are verbs", and not given an allow-list.
+It is a ported case and its substring rule is exactly what makes it hard to defeat by accident: a
+rule that reasoned about which write-shaped names are "really" writers is a rule that would one day
+be argued into admitting one.
+
+**Alternatives.**
+
+- **Weaken the assertion to exclude known-safe names (rejected).** This is the fidelity trade the
+  port exists to refuse. It also removes the property's whole value: the next name added would be
+  argued against the same list, and the argument would be made by whoever wanted the export.
+- **Rename canary's exports so they do not contain `write` (rejected).** It would make continuo's
+  public vocabulary differ from interlock's for the whole AC-7 surface, so a reader following
+  `measurement-harness.md` section 5 would find no name it mentions.
+- **Do not export canary at all (rejected).** `Q-0005` is open and the canary report is the artefact
+  a human reads to close it; a report nobody can reach is not a deliverable.
+
+**Consequences.** The measurement barrel is no longer "every measurement name", so a later module
+must check the invariant before adding itself to it -- the reader test fails loudly if it does not,
+which is the intended enforcement. Package consumers see no difference: every canary name is exported
+from `.` exactly as the others are.
+
+**Falsified by.** interlock widening `measurement/__init__.py` to re-export its whole harness, which
+would mean it had either dropped the assertion or reconciled it with canary's vocabulary upstream --
+and this port would then follow whichever it chose.
