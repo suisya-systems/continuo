@@ -366,15 +366,25 @@ export function measurementSnapshot<T>(
     // Checked inside the try, so the `finally` below still releases the
     // snapshot: refusing must not also leak the lock it is refusing to hold.
     if (isThenable(result)) {
-      // The caller never receives this Promise, so nothing will ever attach a
-      // rejection handler to it. Left alone, a rejection after this point is an
-      // unhandled rejection, which by Node's default terminates the process --
-      // turning a refusal into a crash. Swallowed here for that reason and no
-      // other: the value is discarded either way.
-      void (result as PromiseLike<unknown>).then?.(
-        () => undefined,
-        () => undefined,
-      );
+      // A NATIVE promise gets a no-op rejection handler, and only a native one.
+      // The caller never receives this value, so nothing will ever attach a
+      // handler to it; left alone, a rejection after this point is an unhandled
+      // rejection, which by Node's default terminates the process -- turning a
+      // refusal into a crash. `.catch` on a native promise is the platform's
+      // own, so attaching it runs no user code.
+      //
+      // A merely structural thenable is deliberately NOT touched. Its `then` is
+      // arbitrary user code, and calling it here would run that code
+      // synchronously, inside the still-held snapshot -- it could read the
+      // database through the lock this branch exists to release, block, or
+      // throw and replace the refusal with its own error. Refusing without
+      // invoking it is strictly safer than tidying up after it. The residual
+      // exposure is a non-native promise-like that rejects unobserved; that is
+      // the smaller hazard of the two, and it is stated rather than papered
+      // over.
+      if (result instanceof Promise) {
+        void result.catch(() => undefined);
+      }
       throw new AsynchronousReportRefused(deferredBodyMessage(target));
     }
     if (isIterator(result)) {

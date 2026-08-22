@@ -1424,9 +1424,14 @@ This is a hazard the **translation** created. It is not in interlock and could n
   un-start it, so this branch is **containment and a report, not prevention**, and it is written
   down that way rather than claimed as a guarantee. It does two things: the check runs **inside** the
   `try`, so the existing `finally` still releases the snapshot -- refusing must not leak the lock it
-  is refusing to hold -- and the abandoned Promise gets a no-op rejection handler, because the caller
-  never receives it and an unhandled rejection terminates Node by default, which would turn a refusal
-  into a crash. An iterator result is discriminated by a callable `next` **and** a self-iteration
+  is refusing to hold -- and an abandoned **native** Promise gets a no-op rejection handler, because
+  the caller never receives it and an unhandled rejection terminates Node by default, which would
+  turn a refusal into a crash. Only a native one: a merely structural thenable's `then` is arbitrary
+  user code, and calling it there would run that code synchronously inside the still-held snapshot,
+  where it could read through the lock this branch exists to release, block, or throw and replace the
+  refusal with its own error. The residual exposure -- a non-native promise-like rejecting unobserved
+  -- is the smaller of the two hazards and is accepted knowingly rather than traded for the larger
+  one. An iterator result is discriminated by a callable `next` **and** a self-iteration
   protocol, not by `Symbol.iterator` alone: an array of rows is iterable and already fully evaluated,
   and it is the most obvious thing a report body returns, so refusing it would be a worse bug than
   the one being fixed.
