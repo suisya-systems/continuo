@@ -322,6 +322,29 @@ describe("pythonRepr (target-only)", () => {
     expect(pythonRepr("\u000b\u000c")).toBe("'\\x0b\\x0c'");
   });
 
+  test("it escapes every character str.isprintable() rejects, not only C0", () => {
+    // Raised by the review after the first cut handled only C0 and DEL.
+    // Python's rule is a general-category test -- Cc, Cf, Cs, Co, Cn, Zl, Zp,
+    // Zs, with U+0020 carved back out -- and the miss was not cosmetic: U+2028
+    // is a LINE SEPARATOR, so an id carrying one could break an operator-facing
+    // refusal across lines exactly as a raw newline could.
+    expect(pythonRepr("\u0085")).toBe("'\\x85'"); // NEL, a Cc above DEL
+    expect(pythonRepr("\u00a0")).toBe("'\\xa0'"); // no-break space, a Zs
+    expect(pythonRepr("\u00ad")).toBe("'\\xad'"); // soft hyphen, a Cf
+    expect(pythonRepr("\u2028")).toBe("'\\u2028'"); // line separator, a Zl
+    expect(pythonRepr("\u2029")).toBe("'\\u2029'"); // paragraph separator, Zp
+    expect(pythonRepr("\u200b")).toBe("'\\u200b'"); // zero-width space, a Cf
+    expect(pythonRepr("\u3000")).toBe("'\\u3000'"); // ideographic space, a Zs
+    expect(pythonRepr("\uffff")).toBe("'\\uffff'"); // unassigned, a Cn
+    // A lone surrogate reaches here as its own character and must be escaped
+    // rather than emitted, where it would produce invalid UTF-8.
+    expect(pythonRepr("\ud800")).toBe("'\\ud800'");
+    // Above the BMP, Python widens the escape to eight digits.
+    expect(pythonRepr("\u{e0001}")).toBe("'\\U000e0001'");
+    // ...and an ordinary space is printable, which is the one Zs exception.
+    expect(pythonRepr("a b")).toBe("'a b'");
+  });
+
   test("printable non-ASCII passes through, as Python 3's repr does", () => {
     // Deliberate, not an oversight: Python 3's `repr` is not `ascii()`. It
     // interacts with D-0006 -- a refusal naming such an id carries it into the
@@ -330,6 +353,7 @@ describe("pythonRepr (target-only)", () => {
     // operator as reproduce-and-disclose. Escaping here would make continuo's
     // refusal text differ from interlock's for the same input.
     expect(pythonRepr("\u00e9")).toBe("'\u00e9'");
+    expect(pythonRepr("\u{1f600}")).toBe("'\u{1f600}'");
     expect(isAscii(pythonRepr("\u00e9"))).toBe(false);
   });
 });

@@ -174,10 +174,19 @@ export function isAscii(text: string): boolean {
  *   `"` instead, and the `'` is then **not** escaped. A string with both is
  *   quoted with `'` and its `'` escaped.
  * - A backslash doubles; the active quote escapes; newline, carriage return and
- *   tab take their short forms; every other C0 control and `\x7f` becomes
- *   `\xNN`.
+ *   tab take their short forms.
+ * - Every character `str.isprintable()` rejects is escaped, not merely the C0
+ *   controls: that is the Unicode general categories `Cc`, `Cf`, `Cs`, `Co`,
+ *   `Cn`, `Zl`, `Zp` and `Zs` -- with `U+0020` the one exception, since an
+ *   ordinary space is printable. So `U+0085` (NEL), `U+00A0` (no-break space),
+ *   `U+2028` (line separator) and a lone surrogate are all escaped. Missing this
+ *   was not cosmetic: `U+2028` is a line separator, so an id containing one
+ *   could break an operator-facing refusal across lines exactly as a raw newline
+ *   could.
+ * - The escape width is Python's: `\xNN` up to `U+00FF`, `\uNNNN` up to
+ *   `U+FFFF`, `\UNNNNNNNN` above it.
  * - Printable non-ASCII passes through unescaped (Python 3's `repr` is not
- *   `ascii()`).
+ *   `ascii()`), so `e` with an acute accent and an emoji both survive intact.
  *
  * That last rule is deliberate rather than an oversight, and it interacts with
  * `D-0006`: a refusal naming a non-ASCII id will carry it into the message. That
@@ -209,11 +218,51 @@ export function pythonRepr(value: string): string {
       body += "\\r";
     } else if (character === "\t") {
       body += "\\t";
-    } else if (code < 0x20 || code === 0x7f) {
-      body += `\\x${code.toString(16).padStart(2, "0")}`;
+    } else if (!isPrintable(character, code)) {
+      body += escapeCodePoint(code);
     } else {
       body += character;
     }
   }
   return `${quote}${body}${quote}`;
+}
+
+/**
+ * Python's `str.isprintable()` for one character.
+ *
+ * The rule is a Unicode general-category test, so it is written as one rather
+ * than as a list of ranges somebody would have to maintain: non-printable is
+ * `Cc`, `Cf`, `Cs`, `Co`, `Cn`, `Zl`, `Zp`, `Zs`, and `U+0020` is carved back
+ * out because an ordinary space is printable while every other space separator
+ * is not.
+ *
+ * `code` is passed in rather than re-derived so a lone surrogate -- which
+ * `for...of` yields as a single unpaired code unit -- is classified from its own
+ * value instead of being re-encoded.
+ */
+function isPrintable(character: string, code: number): boolean {
+  if (code === 0x20) {
+    return true;
+  }
+  return !NON_PRINTABLE.test(character);
+}
+
+/**
+ * The general categories Python treats as non-printable.
+ *
+ * `Cs` (surrogate) is listed explicitly because a lone surrogate reaches here as
+ * its own character and must be escaped rather than emitted, where it would
+ * produce invalid UTF-8 on the way to a console.
+ */
+const NON_PRINTABLE = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/u;
+
+/** `\xNN`, `\uNNNN` or `\UNNNNNNNN`, at Python's widths. */
+function escapeCodePoint(code: number): string {
+  if (code <= 0xff) {
+    return `\\x${code.toString(16).padStart(2, "0")}`;
+  }
+  if (code <= 0xffff) {
+    return `\\u${code.toString(16).padStart(4, "0")}`;
+  }
+  return `\\U${code.toString(16).padStart(8, "0")}`;
 }
