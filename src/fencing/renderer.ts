@@ -216,8 +216,8 @@ export class FenceContext {
     //
     // The failure modes this prevents run in both directions, so neither is
     // safe to leave: `hook_script: "dir/./hook.py"` substitutes a
-    // `{hook_script}` the `command.includes(hookScript)` test then fails to
-    // find, so the render refuses with `hook-absent` for a hook that is
+    // `{hook_script}` the `commandRunsHook` token comparison then fails to
+    // match, so the render refuses with `hook-absent` for a hook that is
     // actually wired (fails closed, but wrongly); and `fence_path:
     // "/a//b.json"` makes the `--fence` comparison in `checkInvocation`
     // reject a command the source accepts, producing a different reason set
@@ -832,7 +832,7 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
       }
       commands += 1;
       problems.push(...checkCommandResolves(command));
-      if (command.includes(String(ctx.hookScript))) {
+      if (commandRunsHook(command, ctx)) {
         interlockMatchers.push((group as Record<string, unknown>).matcher);
         problems.push(...checkInvocation(command, ctx, role));
       }
@@ -859,6 +859,72 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
     ]);
   }
   return problems;
+}
+
+/**
+ * The deny hook has to be the program that actually RUNS.
+ *
+ * -- INTENTIONAL DIVERGENCE (D-0208; continuo is authoritative) --
+ * The source decides this with a substring test (`renderer.py:412`:
+ * `if str(ctx.hook_script) in command`), and that fails OPEN. A command that
+ * merely MENTIONS the hook path satisfies every downstream check and is
+ * rendered, while the deny hook never executes. Measured against interlock
+ * itself, the command
+ *
+ *     /bin/echo {hook_script} --role worker --fence {fence_path}
+ *
+ * renders 17 rules: `checkCommandResolves` finds `/bin/echo` on PATH and the
+ * script token on disk, `checkInvocation` finds `--fence` and `--role`
+ * carrying the right values, and the matcher is universal. The CLI then runs
+ * `echo`, and the session believes it is fenced when it is not. Interlock is
+ * frozen, so the defect is repaired here rather than disclosed.
+ *
+ * So exactly ONE shape is accepted: argv[0] is `ctx.python` -- the interpreter
+ * this renderer itself recorded -- and argv[1] is the hook script, which is
+ * exactly what the shipped `{python} {hook_script} ...` renders to.
+ *
+ * POSITION ALONE IS NOT SUFFICIENT, and that is the crux. The command
+ *
+ *     true /path/hook.mjs --fence X --role worker
+ *
+ * puts the hook at argv[1] and would satisfy a naive position check, because
+ * `true` resolves on PATH exactly as `echo` does -- and it exits 0 without
+ * running the hook. It is the `argv[0] === ctx.python` half that rejects it.
+ *
+ * THE HOOK AT argv[0] IS NOT ACCEPTED, and that restriction is load-bearing
+ * on Windows. D-0208 originally also admitted a "directly executable hook" at
+ * argv[0], on the theory that the kernel would run it through its shebang.
+ * The shipped `src/fencing/hook.mjs` has no shebang and is mode 0644, so on
+ * POSIX `checkCommandResolves` refuses it with `hook-unresolvable`. But
+ * `accessSync(path, X_OK)` on Windows is only an existence check -- Windows
+ * has no executable bit -- so there the render SUCCEEDED, `cmd` cannot
+ * execute a `.mjs` directly, the deny hook never launched, and the child ran
+ * UNFENCED while the spawn was recorded as admitted. Windows is a required CI
+ * cell (D-0003), so a branch that is sound on POSIX and open on Windows is a
+ * hole, not a generalisation. Requiring the recorded interpreter closes it on
+ * every platform at once, and costs nothing: all four roles in
+ * `src/fencing/roles.json` -- like interlock's own non-executable `hook.py`
+ * -- render `{python} {hook_script} ...`, so nothing this project ships ever
+ * produced the argv[0] shape.
+ *
+ * A command that does not tokenise is not treated as invoking the hook; the
+ * render still refuses, because `checkCommandResolves` raises `rule-syntax`
+ * on the same string and, with no invoking hook left, `hook-absent` follows.
+ */
+function commandRunsHook(command: string, ctx: FenceContext): boolean {
+  let tokens: string[];
+  try {
+    tokens = shlexSplit(command);
+  } catch (exc) {
+    if (exc instanceof ShlexError) {
+      return false;
+    }
+    throw exc;
+  }
+  // Both halves, and no alternative: the recorded interpreter at argv[0] and
+  // the hook script at argv[1]. See the Windows failure mode above for why
+  // there is no argv[0]-only branch.
+  return tokens[0] === String(ctx.python) && tokens[1] === String(ctx.hookScript);
 }
 
 /**
@@ -1194,7 +1260,7 @@ function setOwn(out: Record<string, unknown>, key: string, value: unknown): void
  *
  * The source's FenceContext holds `Path` objects and stringifies them at
  * every use, so the substituted `{hook_script}` / `{fence_path}` text, the
- * `command.includes(hookScript)` test and the `--fence` comparison all see
+ * `commandRunsHook` token comparison and the `--fence` comparison all see
  * the CANONICAL spelling, never the caller's. `Path` is a lexical
  * normaliser, not a resolver -- it touches no filesystem and, importantly,
  * does NOT collapse `..` (`Path("a/../b")` stays `"a/../b"`, because with
