@@ -1,0 +1,493 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_gates.py",
+      "collected": 46,
+      "inventory": "parity/source-inventory/control_plane.test_gates.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/gates.test.ts",
+    "target_only_tests": {
+      "count": 2,
+      "ids": [
+        "test/control_plane/gates.test.ts::seam liveness (target-only) > closeGate appends to the spine through the seam record",
+        "test/control_plane/gates.test.ts::seam liveness (target-only) > the terminal-outcome cases cover exactly GATE_OUTCOMES"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The first is the seam-liveness test docs/test-translation-conventions.md rule 5 requires: two ported cases replace gatesSeams.appendEvent to drive a commit race deterministically, and without this a refactor that made closeGate call the imported appendEvent directly would leave both of them green, because their assertions are about refusals and would still hold for the wrong reason. Confirmed by mutation: bypassing the seam turns it and both ported cases red. The second buys back a coupling the translation gave up -- the source parametrizes over GATE_OUTCOMES itself, while conventions rule 2 requires the target ids to be written out, so an outcome added to the taxonomy and not reflected in the id list is a failure here rather than a case that silently stopped existing."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 46,
+    "ported": 42,
+    "adapted": 4,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_kill_at_any_relay_step_recovers_to_exactly_one_message_and_one_advance[killed_before_the_enqueue]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.5 -- the crash window the whole section exists for > a kill at any relay step recovers to exactly one message and one advance[killed_before_the_enqueue]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Every source assertion is kept verbatim; the case additionally re-reads the outbox, the advance transitions and the stage through a SECOND connection, so 'exactly one message and one advance' is a claim about what committed rather than about what this handle can see. Adds an assertion, weakens none.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_kill_at_any_relay_step_recovers_to_exactly_one_message_and_one_advance[killed_between_enqueue_and_delivery]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.5 -- the crash window the whole section exists for > a kill at any relay step recovers to exactly one message and one advance[killed_between_enqueue_and_delivery]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Every source assertion is kept verbatim; the case additionally re-reads the outbox, the advance transitions and the stage through a SECOND connection, so 'exactly one message and one advance' is a claim about what committed rather than about what this handle can see. Adds an assertion, weakens none.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_kill_at_any_relay_step_recovers_to_exactly_one_message_and_one_advance[killed_between_delivery_and_ack]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.5 -- the crash window the whole section exists for > a kill at any relay step recovers to exactly one message and one advance[killed_between_delivery_and_ack]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Every source assertion is kept verbatim; the case additionally re-reads the outbox, the advance transitions and the stage through a SECOND connection, so 'exactly one message and one advance' is a claim about what committed rather than about what this handle can see. Adds an assertion, weakens none.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_kill_at_any_relay_step_recovers_to_exactly_one_message_and_one_advance[killed_between_ack_and_advance]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.5 -- the crash window the whole section exists for > a kill at any relay step recovers to exactly one message and one advance[killed_between_ack_and_advance]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Every source assertion is kept verbatim; the case additionally re-reads the outbox, the advance transitions and the stage through a SECOND connection, so 'exactly one message and one advance' is a claim about what committed rather than about what this handle can see. Adds an assertion, weakens none.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_stage_does_not_move_until_the_relay_is_acked",
+      "target_id": "test/control_plane/gates.test.ts::section 9.5 -- the crash window the whole section exists for > the stage does not move until the relay is acked",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_re_enqueued_relay_takes_the_message_id_already_in_force",
+      "target_id": "test/control_plane/gates.test.ts::section 9.5 -- the crash window the whole section exists for > a re enqueued relay takes the message id already in force",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_admissible_advance_edges_are_exactly_the_three_of_section_9_3",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- the admissible edges, as data > the admissible advance edges are exactly the three of section 9 3",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "A Python set of (from, to) tuples has no JS counterpart: the edges are encoded as 'from->to' strings and compared as sorted arrays, which is still an exact set comparison over all three edges (never a subset check). The second half -- every non-advance, non-open edge stands still -- is translated verbatim.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_every_admissible_edge_carries_the_actor_column_of_section_9_3",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- the admissible edges, as data > every admissible edge carries the actor column of section 9 3",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "SECTION_9_3_ACTOR_COLUMN is a dict keyed by a 3-tuple whose values are frozensets; neither is a usable JS key or an equatable value. Transcribed as a Map keyed by `from|to|kind` (None renders as the empty string, and no stage name is empty, so the encoding is injective) with sorted actor arrays as values, compared as sorted entry lists -- an exact dict comparison, not a subset. The duplicate-key assertion and its message are kept.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_only_the_system_closes_a_forwarded_gate",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- the admissible edges, as data > only the system closes a forwarded gate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_rewind_is_refused_and_re_asking_is_a_new_gate_linked_by_superseded_by",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- the admissible edges, as data > a rewind is refused and re asking is a new gate linked by superseded by",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_an_advance_that_skips_a_stage_is_refused",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- the admissible edges, as data > an advance that skips a stage is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_an_unknown_gate_is_refused_rather_than_created",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- the admissible edges, as data > an unknown gate is refused rather than created",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_resend_does_not_move_the_stage",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- resends, corrections, and the verbatim answer > a resend does not move the stage",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_correction_carries_supersedes_seq_and_both_texts_survive",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- resends, corrections, and the verbatim answer > a correction carries supersedes seq and both texts survive",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_correction_may_not_name_another_gates_transition",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- resends, corrections, and the verbatim answer > a correction may not name another gates transition",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_verbatim_answer_is_neither_paraphrased_nor_overwritten",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- resends, corrections, and the verbatim answer > the verbatim answer is neither paraphrased nor overwritten",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_an_advance_to_answered_without_a_body_is_refused",
+      "target_id": "test/control_plane/gates.test.ts::section 9.3 -- resends, corrections, and the verbatim answer > an advance to answered without a body is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_every_terminal_outcome_is_reachable_and_a_closed_gate_keeps_it[answered_and_forwarded]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > every terminal outcome is reachable and a closed gate keeps it[answered_and_forwarded]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_every_terminal_outcome_is_reachable_and_a_closed_gate_keeps_it[withdrawn]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > every terminal outcome is reachable and a closed gate keeps it[withdrawn]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_every_terminal_outcome_is_reachable_and_a_closed_gate_keeps_it[subject_gone]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > every terminal outcome is reachable and a closed gate keeps it[subject_gone]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_every_terminal_outcome_is_reachable_and_a_closed_gate_keeps_it[expired]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > every terminal outcome is reachable and a closed gate keeps it[expired]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_every_terminal_outcome_is_reachable_and_a_closed_gate_keeps_it[unanswerable]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > every terminal outcome is reachable and a closed gate keeps it[unanswerable]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_every_terminal_outcome_is_reachable_and_a_closed_gate_keeps_it[superseded]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > every terminal outcome is reachable and a closed gate keeps it[superseded]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_an_outcome_is_refused_from_a_stage_it_is_not_reachable_from",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > an outcome is refused from a stage it is not reachable from",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_closing_a_gate_puts_the_closure_on_the_spine",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > closing a gate puts the closure on the spine",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_an_expiry_is_announced_as_its_own_event_type",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > an expiry is announced as its own event type",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_subject_gone_is_produced_by_the_sweep_against_a_terminal_run",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > subject gone is produced by the sweep against a terminal run",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_sweep_finds_the_subject_run_through_subject_id_at_every_terminal_status[completed]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > the sweep finds the subject run through subject id at every terminal status[completed]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_sweep_finds_the_subject_run_through_subject_id_at_every_terminal_status[failed]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > the sweep finds the subject run through subject id at every terminal status[failed]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_sweep_finds_the_subject_run_through_subject_id_at_every_terminal_status[cancelled]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.4 -- the terminal taxonomy > the sweep finds the subject run through subject id at every terminal status[cancelled]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_gate_left_at_received_is_a_relay_gap_past_its_stage_tolerance",
+      "target_id": "test/control_plane/gates.test.ts::section 9.6 -- the two detectors > a gate left at received is a relay gap past its stage tolerance",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_long_presented_gate_is_not_a_relay_gap_and_the_opt_out_is_data",
+      "target_id": "test/control_plane/gates.test.ts::section 9.6 -- the two detectors > a long presented gate is not a relay gap and the opt out is data",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_an_unpoliced_gate_type_is_silently_never_aged[plan_approval]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.6 -- the two detectors > an unpoliced gate type is silently never aged[plan_approval]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_an_unpoliced_gate_type_is_silently_never_aged[risk_approval]",
+      "target_id": "test/control_plane/gates.test.ts::section 9.6 -- the two detectors > an unpoliced gate type is silently never aged[risk_approval]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_detector_binds_one_revision_and_emits_one_row_per_gate",
+      "target_id": "test/control_plane/gates.test.ts::section 9.6 -- the two detectors > the detector binds one revision and emits one row per gate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_stalled_relay_is_detected_by_its_own_predicate",
+      "target_id": "test/control_plane/gates.test.ts::section 9.6 -- the two detectors > a stalled relay is detected by its own predicate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_closed_gate_is_neither_aged_nor_relayed_to",
+      "target_id": "test/control_plane/gates.test.ts::section 9.6 -- the two detectors > a closed gate is neither aged nor relayed to",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_gate_opens_at_received_pointing_at_its_own_open_transition",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > a gate opens at received pointing at its own open transition",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_the_projection_may_not_be_pointed_at_another_gates_transition",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > the projection may not be pointed at another gates transition",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "sqlite3.IntegrityError has no class analogue on better-sqlite3; asserted as expectSqliteError on the result code family SQLITE_CONSTRAINT* (D-0016), which keeps the durable half of pytest.raises' type assertion. No message half was asserted by the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_only_a_named_stage_is_relayed",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > only a named stage is relayed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "pytest.raises(ValueError). gates.py raises a bare ValueError; the port raises a bare TypeError, the house convention for an untyped Python ValueError (PolicyUsageError / EventSpineUsageError are reserved for Python's own UsageError(ValueError) subclasses, which gates.py does not declare). Asserted as expectRefusal(..., TypeError); the source asserted no message half. All three refused stages are still driven from GATE_STAGES.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_closing_a_gate_retires_its_undelivered_relay",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > closing a gate retires its undelivered relay",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_closing_a_gate_leaves_an_acked_relay_alone",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > closing a gate leaves an acked relay alone",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_second_close_sweep_over_a_closed_gate_stays_a_no_op",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > a second close sweep over a closed gate stays a no op",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_losing_concurrent_close_is_refused_instead_of_told_its_outcome_landed",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > a losing concurrent close is refused instead of told its outcome landed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "monkeypatch.setattr(gates, 'append_event', ...) cannot rebind an ESM import; the replacement goes through gatesSeams.appendEvent with patchSeam (D-0014). The source's own assertion winner_committed == [True] is kept and is the seam's liveness proof: production bypassing the seam leaves the list empty and fails the case.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_concurrent_close_with_the_same_outcome_stays_the_idempotent_no_op",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > a concurrent close with the same outcome stays the idempotent no op",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "monkeypatch.setattr(gates, 'append_event', ...) cannot rebind an ESM import; the replacement goes through gatesSeams.appendEvent with patchSeam (D-0014). The source's own assertion winner_committed == [True] is kept and is the seam's liveness proof: production bypassing the seam leaves the list empty and fails the case.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_gates.py::test_a_closure_identity_on_the_spine_without_a_closure_is_refused",
+      "target_id": "test/control_plane/gates.test.ts::section 9.2 -- the projection > a closure identity on the spine without a closure is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's cp.commit() after the hand-written event INSERT has no counterpart: Python's driver opens an implicit transaction before DML, better-sqlite3 has none -- every statement outside a transaction() block autocommits (txn.ts, D-0012), so the row is durable at the same point. One dropped line; every assertion kept.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "relayGaps never ages a gate type that has no policy_gate_stage_tolerance rows.",
+      "status": "inherited by design, disclosed",
+      "detail": "plan_approval and risk_approval are seeded with no tolerance rows today, so the section 9.6 detector is silent about them in every stage and raises no incident class for the gap. This is a hole in the design's own query rather than a translation defect, and interlock pins it with a case of its own (test_an_unpoliced_gate_type_is_silently_never_aged), which is ported here. When the tolerance decision lands, that case is the one that fails."
+    },
+    {
+      "topic": "The detectors and the subject-gone sweep have no caller anywhere in src/.",
+      "status": "inherited by design, disclosed",
+      "detail": "gatesNeedingAdvance, relayGaps, stalledRelays, gatesPastDeadline and sweepSubjectGone are the detection half only; there is no reconcile-pass driver, matching gates.py's own module docstring and interlock#74 acceptance criterion 6 (no scope creep -- no reconcile driver). relayGaps' rows also name no ball-holder owner: D-0032's remedy pass is absent upstream too."
+    },
+    {
+      "topic": "gates.py's bare ValueError sites become bare TypeError.",
+      "status": "adapted convention, disclosed",
+      "detail": "gates.py raises an untyped ValueError in three places rather than one of its own refusal classes. The port raises TypeError, which is the convention already established in events.ts and migrator.ts for an untyped Python ValueError; JavaScript has no ValueError, and the typed refusal families are reserved for Python's own named exception classes. The distinction Python draws between TypeError and ValueError is therefore collapsed onto one class. No ported case asserts a message for these -- test_gates.py contains no match= anywhere -- so only the class is pinned."
+    },
+    {
+      "topic": "Edge is exported as a TypeScript interface, where gates.py exports a runtime dataclass.",
+      "status": "divergence, disclosed",
+      "detail": "gates.py lists Edge in __all__ as a frozen @dataclass, so a Python consumer can construct one. The port's Edge is a compile-time type with no runtime existence; ADMISSIBLE is plain data typed by it. Nothing in either suite constructs an Edge, and the table is read, not built, by every caller."
+    },
+    {
+      "topic": "ADMISSIBLE's actorKinds and CLOSE_OUTCOME_STAGES' values are mutable Sets.",
+      "status": "divergence, disclosed",
+      "detail": "The source uses frozenset. Object.freeze on the containing object does not freeze a Set, and freezing a Set does not block .add() -- so immutability here is type-level only, the same position recorded for policy.ts's THRESHOLD_KINDS. Not reachable from any ported case."
+    },
+    {
+      "topic": "Numeric reads use Number(), where Python applies no coercion at these sites.",
+      "status": "divergence, accepted under continuo D-0021",
+      "detail": "The port wraps twelve reads in Number() where gates.py uses the driver's value directly. For an INTEGER column the two agree; they differ only for a hand-damaged row whose stored value is not an integer, which no ported case can produce through the public API. Recorded here because the direction is the opposite of D-0021's usual one: the port coerces where the source does not, rather than declining to narrow where the source does."
+    },
+    {
+      "topic": "enqueueRelay does not check that the relayed stage follows the gate's current stage.",
+      "status": "inherited, not fixed (continuo D-0022)",
+      "detail": "It validates only that toStage is one of RELAYED_STAGES. So a caller can enqueue and ack 'forwarded' while the gate is still at 'received'; after the ordinary presented and answered advances, advanceOnAck(toStage: 'forwarded') accepts that older ack and records the answer as forwarded although the acknowledged payload predates the answer. interlock's enqueue_relay has exactly the same single check (`if to_stage not in RELAYED_STAGES: raise ValueError`) and no predecessor-stage validation anywhere. Reproduced rather than repaired, per D-0022; the repair is reserved for the post-parity change. Raised by the Codex review gate (2026-08-22, P1)."
+    },
+    {
+      "topic": "The gate-closed event payload is built from a gate read outside the append transaction.",
+      "status": "inherited, not fixed (continuo D-0022)",
+      "detail": "closeGate pre-loads the gate, builds the event payload from that snapshot (including its stage), and only then appends -- while the closure itself re-loads the gate inside the transaction. If another writer advances the gate in between, and the outcome is admissible from both stages ('withdrawn', 'subject_gone'), the commit records an audit event whose stage disagrees with the gate row it closes. interlock's close_gate is identical: `gate = _load_gate(connection, gate_id)` outside, `payload=json.dumps({... 'stage': gate['stage'] ...})` from that snapshot, and `_close_in_transaction` re-loading inside. Interlock's own comment acknowledges the pre-check-outside-the-transaction shape for the differing-outcome case, and re-reads to refuse there -- but the payload's stage stays the stale one on both sides. Reproduced rather than repaired, per D-0022. Raised by the Codex review gate (2026-08-22, P1)."
+    }
+  ]
+}
