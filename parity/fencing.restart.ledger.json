@@ -1,0 +1,238 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "fencing",
+      "collected": 124,
+      "inventory": "parity/source-inventory/fencing.all.txt"
+    },
+    "file": {
+      "path": "tests/fencing/test_restart_preserves_fence.py",
+      "collected": 21,
+      "inventory": "parity/source-inventory/fencing.test_restart_preserves_fence.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/fencing/restart-preserves-fence.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "note": "This file carries no target-only test. Every case in it translates one interlock node id, including the six `parametrize` expansions of `test_a_corrupted_rule_field_is_rejected_rather_than_coerced`, which are counted at the expanded node id and carry pytest's own ids through `parametrize()` from test/testkit/parametrize.ts (rulebook rule 2). Target-only tests are never counted as ported coverage."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 21,
+    "ported": 21,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestTheBatteryHoldsAcrossRestart::test_every_rule_is_denied_before_and_after_an_interlock_respawn",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::the battery holds across restart > every rule is denied before and after an interlock respawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestTheBatteryHoldsAcrossRestart::test_every_role_holds_across_restart",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::the battery holds across restart > every role holds across restart",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestTheBatteryHoldsAcrossRestart::test_a_re_render_after_restart_matches_the_persisted_fence",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::the battery holds across restart > a re render after restart matches the persisted fence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestTheBatteryHoldsAcrossRestart::test_the_diff_reports_a_fence_that_did_change",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::the battery holds across restart > the diff reports a fence that did change",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestTheBatteryHoldsAcrossRestart::test_a_rule_dropped_across_restart_shows_up_as_an_unprobed_gap",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::the battery holds across restart > a rule dropped across restart shows up as an unprobed gap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_truncated_fence_file_is_an_error_not_a_smaller_fence",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a truncated fence file is an error not a smaller fence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_fence_with_no_rules_is_rejected_on_read",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a fence with no rules is rejected on read",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_corrupted_rule_field_is_rejected_rather_than_coerced[layer-typo-layer]",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a corrupted rule field is rejected rather than coerced[layer-typo-layer]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_corrupted_rule_field_is_rejected_rather_than_coerced[kind-typo-kind]",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a corrupted rule field is rejected rather than coerced[kind-typo-kind]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_corrupted_rule_field_is_rejected_rather_than_coerced[spec-None]",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a corrupted rule field is rejected rather than coerced[spec-None]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_corrupted_rule_field_is_rejected_rather_than_coerced[tool-None]",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a corrupted rule field is rejected rather than coerced[tool-None]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_corrupted_rule_field_is_rejected_rather_than_coerced[spec-]",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a corrupted rule field is rejected rather than coerced[spec-]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_corrupted_rule_field_is_rejected_rather_than_coerced[layer-7]",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a corrupted rule field is rejected rather than coerced[layer-7]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_rule_that_is_not_an_object_is_rejected",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a rule that is not an object is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_an_unknown_format_version_is_rejected",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > an unknown format version is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_the_published_files_carry_lf_endings_on_every_platform",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > the published files carry lf endings on every platform",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_a_crlf_rewrite_of_the_fence_does_not_survive_a_republish",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > a crlf rewrite of the fence does not survive a republish",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_publication_is_atomic",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > publication is atomic",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestPersistenceFailsClosed::test_republishing_replaces_cleanly",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::persistence fails closed > republishing replaces cleanly",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestRestartDoesNotWidenTheFence::test_probes_are_identical_objects_across_restart",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::restart does not widen the fence > probes are identical objects across restart",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_restart_preserves_fence.py::TestRestartDoesNotWidenTheFence::test_permission_mode_survives_and_is_never_upgraded_to_bypass",
+      "target_id": "test/fencing/restart-preserves-fence.test.ts::restart does not widen the fence > permission mode survives and is never upgraded to bypass",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "`fence_from_json` accepts `\"format\": true` as version 1, because `True == 1` in Python.",
+      "status": "reproduced faithfully; candidate for repair as an INTENTIONAL DIVERGENCE now that D-0023 has superseded D-0022",
+      "detail": "`state.py` checks `payload.get(\"format\") != FENCE_FORMAT_VERSION`, and `bool` is a subclass of `int` in Python, so a persisted fence whose `\"format\"` is the JSON literal `true` passes interlock's version check and is loaded. `true !== 1` in JavaScript, so reproducing it took an explicit boolean branch -- `equalsFormatVersion` in src/fencing/state.ts, which maps `true` to 1 and `false` to 0 and is commented as the inherited defect it is. (`1.0 == 1` needs no branch: JSON.parse collapses both spellings to one `number`.) The behaviour is pinned by `test_an_unknown_format_version_is_rejected` only in the negative direction -- that case feeds `2`, not `true` -- so no ported case would turn red if the branch were removed. Under the policy that replaced D-0022 (interlock is frozen; inherited defects are repaired in continuo and recorded here as intentional divergences with continuo authoritative) this is a repair candidate, and the repair is one line: delete the boolean branch so a `\"format\": true` fence is rejected as malformed, which is fail-closed and strictly the safer direction. It is NOT done in this PR because this PR's job is to establish the translated baseline, and a divergence introduced in the same commit that first records the behaviour leaves nothing to compare against. The repair belongs in the NEXT PR of this lane that touches src/fencing/state.ts (PR 3, readback), which must flip this entry to an intentional divergence, add a target-only case feeding `true` and expecting a refusal, and say so in its PR body.",
+      "tracking": "suisya-systems/continuo#18"
+    }
+  ]
+}

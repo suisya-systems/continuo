@@ -156,6 +156,22 @@ subprocess by path, and the TypeScript hook is invoked the same way, so the fail
 in section 4 -- deny on unreadable input, deny on malformed events, deny on unexpected exceptions --
 apply to the Node process exactly as they apply to the Python one.
 
+**The deny hook must be the program the command runs.** Interlock decides whether a `PreToolUse`
+command invokes the deny hook by testing whether the hook path appears *anywhere* in the command
+string, which admits a command that merely mentions it -- `/bin/echo <hook_script> --role worker
+--fence <fence_path>` renders a 17-rule fence there while the CLI runs `echo` and the hook never
+executes. continuo refuses that: the hook script has to be `argv[1]`, with `argv[0]` equal to the
+recorded interpreter. So a role document's hook command must read `{python} {hook_script} --role
+<role> --fence {fence_path}` -- the form every shipped role already uses, and the only accepted
+shape; anything else, a bare `{hook_script}` at `argv[0]` included, is refused with `hook-absent`.
+Position alone is not the rule -- `true {hook_script} --fence ... --role ...` also puts the hook at
+`argv[1]` -- so the launcher is compared, not just counted. A hook at `argv[0]` was accepted while
+`D-0208` was being written, on the theory that an executable file with a shebang is run by the
+kernel; it was dropped because it was a Windows hole. The shipped hook has no shebang and is not
+executable, and `access(X_OK)` on Windows is only an existence check, so the render succeeded there
+while `cmd` could not launch the hook at all -- an unfenced child with the spawn recorded as
+admitted. `D-0208` records the divergence, the amendment and the measurements.
+
 **Not yet landed.** Which runtime resolves the hook command is one of interlock#74's named open
 questions, and it is settled in the pull request that ports `hook.ts`, not here. The renderer already
 carries one consequence of the expected answer: its check that a hook command's script token names an
