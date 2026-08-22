@@ -2106,7 +2106,30 @@ export function withImmediate(connection: SqliteDatabase, body: () => void): voi
     connection.exec("ROLLBACK");
     throw error;
   }
-  connection.exec("COMMIT");
+  // A failed COMMIT is rolled back, and the COMMIT's own error is what reaches
+  // the caller -- the same handling `txn.ts`'s `transaction()` carries, and for
+  // the same reason (D-0024 item 1): SQLite leaves the transaction ACTIVE when
+  // COMMIT fails, so letting the error out unhandled leaves an orphan that the
+  // next caller silently joins.
+  //
+  // This helper needed it too, and did not have it. D-0024 hardened
+  // `transaction()` and then routed `outbox.ts`'s fenced write through THIS
+  // function, which reintroduced the very failure that repair was about -- a
+  // fix applied to one of two transaction helpers is half a fix.
+  try {
+    connection.exec("COMMIT");
+  } catch (error) {
+    if (connection.inTransaction) {
+      try {
+        connection.exec("ROLLBACK");
+      } catch (rollbackError) {
+        throw new Error("COMMIT failed and the ROLLBACK after it also failed", {
+          cause: { commit: error, rollback: rollbackError },
+        });
+      }
+    }
+    throw error;
+  }
 }
 
 function byEpoch(observations: readonly Lease[]): readonly Lease[] {

@@ -28,6 +28,21 @@ the runner is not a translator's call. Record it, escalate it, and let the revie
 This pilot needed that escape hatch zero times; two cases are deferred and four are adapted, and none
 of the six assert less than their source (see [Dispositions](#dispositions)).
 
+**"What the source asserted" is a ceiling as well as a floor.** A translated case that asserts
+*more* than its source is wrong in the same way one that asserts less is wrong: both make the suite
+say something interlock's suite does not say, and the ledger then describes coverage that is not
+the coverage under review. Two real instances, both caught late because a stricter test looks like a
+better test:
+
+- a `match=` pattern whose `.` was escaped, narrowing a regex the source leaves wide;
+- a signature check matched against the whole declaration text, where the source asserts only that
+  no *parameter* carries the forbidden name -- it would fail on a parameter merely named
+  `resourceScope`.
+
+If the stronger assertion is worth having, it is worth having as a **target-only** test that says so,
+next to the faithful translation. What it may not do is occupy the ported case's slot and be counted
+as that case.
+
 ---
 
 ## 1. Fixture teardown ordering

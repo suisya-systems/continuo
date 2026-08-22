@@ -51,6 +51,7 @@ spaces distinct.
 | D-0021 | Values read from SQLite are not re-narrowed to reproduce Python's `int()` | accepted |
 | D-0022 | Inherited defects are disclosed and repaired after parity, not during | superseded by D-0023 |
 | D-0023 | Inherited defects are repaired in continuo, at the first belt that touches them | accepted |
+| D-0024 | The control_plane inherited-defect repairs, and what a failed COMMIT costs | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -2436,6 +2437,85 @@ can reach it from the ledger rather than discovering it as an unexplained differ
 
 **Falsified by.** interlock resuming and reconciling the two predicates upstream, at which point this
 stops being a divergence and becomes a plain translation.
+---
+
+## D-0024 — The control_plane inherited-defect repairs, and what a failed COMMIT costs
+
+**Context.** `D-0023` made inherited defects continuo's to fix. Six of them were carried by
+`control_plane`, all raised by the review gate rather than by a failing test, and all disclosed in
+the parity ledgers while `D-0022` was in force. They are repaired together, after the translation
+belts, because four of them are about **where a transaction boundary falls** and reviewing that as
+one change is very different from reviewing it spread across six.
+
+**Decision.** All six are repaired, and each ledger entry moves from `inherited, disclosed` to a
+deliberate divergence naming this entry.
+
+1. **A failed `COMMIT` is rolled back.** SQLite leaves the transaction *active* when `COMMIT` fails
+   -- `SQLITE_BUSY` from a concurrent reader is reachable under the rollback journal (`D-0012`).
+   interlock lets the error out and drops its scope, so the next `transaction()` on that connection
+   sees `inTransaction` and silently **joins the orphan**: its writes never commit and the locks stay
+   held. Continuo rolls back and re-raises the **`COMMIT`'s own** error.
+2. **The transaction scope is installed after `BEGIN IMMEDIATE` succeeds**, not before, so a failed
+   `BEGIN` cannot leave `currentScope()` answering for a transaction that was never opened.
+3. **`markSkipped` detects a duplicate before it writes.** interlock relies on the append raising and
+   the transaction rolling back, which holds only while `markSkipped` *owns* the transaction. Joined
+   to a caller's, the settle survived and the outer commit published a consumption marked `skipped`
+   with no event explaining it.
+4. **`closeGate` refuses if the gate advanced** between the payload's read and the transaction's
+   reload, so the audit event and the gate row it describes cannot disagree.
+5. **The outbox's no-op/stale classification runs in one transaction** with the protected write it
+   classifies.
+6. **The spike opener re-verifies the handle it returns.**
+
+**What the first one costs, stated because it was chosen with the cost known.** `SQLITE_BUSY` is a
+*retryable* failure: a caller that waited and committed again might have succeeded. Rolling back
+throws that write away. The alternative considered was to leave the transaction open and **poison
+the scope** so a later join fails loudly -- which preserves the retry but adds a new failure mode to
+every caller of `transaction()`, including ones that have nothing to do with contention. Releasing
+the locks and taking the loss was judged the better trade, because an orphaned transaction is
+invisible at the point it is created and expensive everywhere afterwards. Recorded here so that
+"why does this not retry?" has an answer that is not archaeology.
+
+The earlier code carried a comment arguing *against* rolling back, on the grounds that it would
+replace the `COMMIT`'s error with the `ROLLBACK`'s. That worry is answered by separating the two --
+the rollback is attempted, and the commit's error is what propagates -- rather than by leaving the
+transaction open. The comment is corrected in the same change; a comment that argues for the wrong
+behaviour is worse than no comment, because the next reader takes it as the reason.
+
+**One finding in the same set is NOT repaired here.** `enqueueRelay` validates only that its target
+is a relayed stage, not that it follows the gate's current one, so a `forwarded` relay can be
+enqueued and acked while the gate is still `received` and accepted later against an answer it
+predates. Fixing it means deciding what `ADMISSIBLE`'s edges mean -- direct successor only, or
+anything reachable -- which is a question about the design's own semantics rather than about the
+port. It is escalated with an enumeration of the affected transitions rather than settled here.
+
+**Alternatives.**
+
+- **Repair them during the translation belts (rejected).** Four of the six are one subject, and
+  mixing them into translations would have made each PR carry both "is this translation faithful?"
+  and "is this concurrency design right?" -- two review questions with different reviewers and
+  different evidence.
+- **Repair only the two the gate called P1 (rejected).** The severity split is the reviewer's, not a
+  property of the code, and it would leave the same defect class half-fixed.
+
+**Consequences.**
+
+- Five parity ledgers now carry deliberate divergences rather than disclosures. Parity is still
+  established against interlock, so those entries are the trail `D-0023` requires: every place the
+  two now differ on purpose is reachable from the ledger.
+- Two pin tests are inverted, most visibly the spike opener's seam-liveness count, whose comment used
+  to argue that verifying the returned handle would mean "verifying a file it had already opened for
+  writing". `migrator.ts` had disproved that since the pilot.
+
+**Falsifier.** If a caller is found that genuinely needs to retry a `SQLITE_BUSY` commit on the same
+transaction, item 1's trade is wrong for that caller and the poisoned-scope alternative should be
+revisited.
+
+**Status.** accepted
+
+**Source.** Operator decision, 2026-08-22, on lane A's design note; the six repairs and the
+`enqueueRelay` escalation are that note's items.
+
 
 ## D-0108 -- An invariant a public constructor can walk around is repaired, not disclosed
 
