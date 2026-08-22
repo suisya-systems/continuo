@@ -68,7 +68,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 12,
+      "count": 13,
       "ids": [
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the p95 is nearest rank at a sample size where rounding disagrees",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort with no covered row has no p95 and no sensitivity figure",
@@ -81,9 +81,10 @@
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort past SQLite's parameter ceiling is chunked, not refused",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a percentage on an exact tie rounds Python's way",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the coincide line is absent when coverage is not complete",
-        "test/measurement/ac9.test.ts::exact integer arithmetic (target-only) > an output figure past 2^53 is summed exactly, not rounded"
+        "test/measurement/ac9.test.ts::exact integer arithmetic (target-only) > an output figure past 2^53 is summed exactly, not rounded",
+        "test/measurement/ac9.test.ts::an upstream contradiction, reproduced and pinned (target-only) > the header's acceptance predicate disagrees with the report's"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python. A thirteenth pins an INHERITED DEFECT rather than a gap or a divergence: the provenance header and the AC-9 report contradict each other about whether an acceptance claim is supported. See inherited_limitations."
     }
   },
   "totals": {
@@ -117,6 +118,12 @@
       "matches_source": false,
       "note": "A disclosed divergence in the refusing direction, introduced by the fix above. Python's unbounded int has no such boundary; JavaScript's number does, and this module's subject is a figure that quietly differs from the measurement -- printing a rounded token total would be that failure exactly. Nothing an actual ledger can hold reaches it: 2^53 output tokens is nine quadrillion. The new target-only case builds the state deliberately, one row at MAX_SAFE_INTEGER (carried) and two (refused).",
       "where_a_fix_belongs": "nowhere while the report field is a JavaScript number; carrying BigInt out to consumers would change the package's public shape for a value no ledger produces."
+    },
+    {
+      "behaviour": "Ac9Report.supportsAcceptanceClaim is false while the provenance header built from the same report says true, whenever an invocation never finished. Ac9Report disqualifies on two populations -- unboundedMissing and unconfirmedResponseCount -- but imputationFromAc9 carries only the first into the header, and ImputationRule's own predicate is `unbounded_missing == 0`.",
+      "matches_source": true,
+      "note": "An inherited DEFECT, not merely a limitation: two artefacts of one report disagree, and the header is the one a reader takes as the summary. Raised by the codex review gate as P1 and reproduced against interlock at 65f36c5 before being recorded -- the same fixture there prints report False / header True (script run 2026-08-22). NOT repaired in this belt: the header is a published artefact and a parity surface, so widening the predicate would make continuo's header say something interlock's does not for the same database, and interlock#74 AC3 compares those headers. Escalated to the operator for a ruling; the target-only case pins the current behaviour so the disagreement cannot be fixed silently or forgotten, and it inverts if the ruling is to diverge.",
+      "where_a_fix_belongs": "upstream, in interlock's imputation_from_ac9 and ImputationRule.supports_acceptance_claim, and then here in the same shape."
     }
   ],
   "entries": [

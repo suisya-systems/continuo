@@ -1252,3 +1252,51 @@ describe("exact integer arithmetic (target-only)", () => {
     expect(refusal.message).toContain("rounded figure");
   });
 });
+
+describe("an upstream contradiction, reproduced and pinned (target-only)", () => {
+  test("the header's acceptance predicate disagrees with the report's", () => {
+    // Target-only, and an INHERITED DEFECT rather than a limitation: the two
+    // artefacts of one report contradict each other. Found by the codex review
+    // gate (P1) and reproduced against interlock at 65f36c5 before being
+    // recorded -- the same fixture there prints
+    // `Ac9Report.supports_acceptance_claim = False` and
+    // `ImputationRule.supports_acceptance_claim = True`.
+    //
+    // Why: Ac9Report disqualifies on TWO populations (nothing to bound at, and
+    // a response count that is the writer's placeholder), while
+    // imputationFromAc9 carries only the first into the header, and the
+    // header's own predicate is `unbounded_missing == 0`.
+    //
+    // It is pinned rather than fixed because the header is a published artefact
+    // and a parity surface: widening the predicate here would make continuo's
+    // header say something interlock's does not for the same database. The
+    // decision is the operator's, and this case is what makes the disagreement
+    // impossible to fix silently or to forget. If the ruling is to diverge,
+    // this case inverts.
+    const path = productionDb();
+    withWriter(path, (cp) => {
+      addCohortRun(cp, "run-1");
+      addIncident(cp, "inc-1", "run-1");
+      invoke(cp, "inv-1", { runId: "run-1", incidentId: "inc-1", outputTokens: 100 });
+      invoke(cp, "inv-inflight", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        maxOutputTokens: 4_096,
+        finish: false,
+      });
+    });
+
+    const report = measure(path);
+    const imputation = imputationFromAc9(report);
+
+    expect(report.unconfirmedResponseCount).toEqual(["inv-inflight"]);
+    expect(report.unboundedMissing).toEqual([]);
+    // The report is right, and says so.
+    expect(report.supportsAcceptanceClaim).toBe(false);
+    expect(renderAc9Report(report)).toContain("CANNOT support an AC-9 acceptance claim");
+    // The header, built from the same report, says the opposite. Reproduced
+    // from interlock, not introduced here.
+    expect(imputation.unboundedMissing).toBe(0);
+    expect(imputation.supportsAcceptanceClaim).toBe(true);
+  });
+});
