@@ -271,6 +271,57 @@ export {
   witnessSubject,
 } from "./fencing/rules.js";
 /**
+ * Section 5's AC-7 canary divergence report.
+ *
+ * Re-exported straight from the module rather than through the measurement
+ * barrel, and the reason is a ported invariant: interlock's
+ * `tests/measurement/test_reader.py` asserts that the measurement PACKAGE
+ * exports no name containing `migrate`, `create`, `write` or `lease`, so that a
+ * writer cannot be reached through the harness's own front door. canary's
+ * vocabulary is full of the word -- `WriterAudit`, `WrittenRecord`,
+ * `auditWriters`, `DUAL_WRITE` -- because what it audits IS writing, and none
+ * of those names is a writer. interlock keeps the invariant by re-exporting
+ * only reader's names from `measurement/__init__.py`; continuo's wider barrel
+ * exists only because D-0002 exports `.` alone, so the fix belongs to the
+ * barrel and not to the assertion. See DECISIONS.md D-0106.
+ */
+export {
+  auditWriters,
+  buildOwnershipLedger,
+  CanaryDivergenceReport,
+  CanaryRefusal,
+  DUAL_WRITE,
+  DualWriteFinding,
+  evidenceOfReadOnly,
+  FILE_REFUSED_THE_WRITE,
+  FINDING_KINDS,
+  INTERLOCK_STORE,
+  MODE_RO,
+  measureCanaryDivergence,
+  NO_VERDICT_NOTE,
+  OWNERSHIP_COLLISION,
+  OWNERSHIP_LEDGER_QUERY,
+  OwnedRun,
+  OwnershipCollisionFinding,
+  OwnershipInputRefused,
+  OwnershipLedger,
+  QUERY_DEFINITIONS as CANARY_QUERY_DEFINITIONS,
+  READ_ONLY_URI_QUERY,
+  RECORD_CLASS_PULL_REQUEST,
+  RECORD_CLASS_RUN,
+  RECORD_CLASSES,
+  ReadOnlyEvidence,
+  RecordClass,
+  readInterlockRecords,
+  renderCanaryDivergenceReport,
+  UndeclaredRecordClass,
+  V1InputRefused,
+  V1OwnershipInput,
+  V1WriterLedger,
+  WriterAudit,
+  WrittenRecord,
+} from "./measurement/canary.js";
+/**
  * The G6 measurement harness.
  *
  * Only the measurement-specific names are listed: the refusal family it shares
