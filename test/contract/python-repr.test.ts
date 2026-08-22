@@ -25,6 +25,27 @@ describe("python_repr (contract)", () => {
     expect(pythonRepr(7)).toBe("7");
   });
 
+  test("a string is quoted and escaped as Python quotes and escapes it", () => {
+    // Measured on CPython. The rule is not "wrap in apostrophes": Python
+    // prefers single quotes, switches to double when the value contains a
+    // single quote and no double quote, and otherwise escapes the quote.
+    expect(pythonRepr("a'b")).toBe('"a\'b"');
+    expect(pythonRepr('a"b')).toBe("'a\"b'");
+    expect(pythonRepr("a'\"b")).toBe("'a\\'\"b'");
+    expect(pythonRepr("a\\b")).toBe("'a\\\\b'");
+    expect(pythonRepr("a\nb")).toBe("'a\\nb'");
+    expect(pythonRepr("a\tb")).toBe("'a\\tb'");
+    expect(pythonRepr("plain")).toBe("'plain'");
+    // Python escapes by `str.isprintable()`, not only the C0 controls:
+    //   repr("a\u0085b") -> 'a\\x85b'      (a C1 control)
+    //   repr("a\u2028b") -> 'a\\u2028b'    (a line separator)
+    expect(pythonRepr("a\u0085b")).toBe("'a\\x85b'");
+    expect(pythonRepr("a\u2028b")).toBe("'a\\u2028b'");
+    // Printable non-ASCII stays literal: ensure_ascii is a json.dumps default,
+    // not a repr one.
+    expect(pythonRepr("caf\u00e9")).toBe("'caf\u00e9'");
+  });
+
   test("a mapping renders its contents, not [object Object]", () => {
     // Three of the five copies fell through to `String(value)` here, dropping
     // the one thing the message exists to show: WHICH value was rejected.

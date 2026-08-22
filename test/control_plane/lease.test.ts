@@ -77,6 +77,7 @@ import {
   DestinationFencing,
   DestinationRejectedStaleToken,
   EpochGuardedDestination,
+  EXACTLY_ONCE_MECHANISMS,
   effectKind,
   epochRegressions,
   eq,
@@ -1936,25 +1937,57 @@ describe(
       }
     });
 
-    // `the package does not silently shadow a clashing name` is NOT ported here.
-    //
-    // The source case asserts across BOTH modules that define the colliding
-    // names: it reads `control_plane.__all__` (the port's `src/index.ts`, per
-    // D-0002) and interlock's S7 `outbox` module, and four of its seven
-    // assertions are about `outbox` -- that it re-exports `StaleWriterRefused`,
-    // that the re-export is the same class object, and that its
-    // `EXACTLY_ONCE_MECHANISMS` has not drifted from this module's copy.
-    //
-    // `src/control_plane/outbox.ts` is not ported yet, so those four cannot run
-    // at all. Translating the remaining three and calling the case covered
-    // would be strictly weaker than the source -- and worse, the surviving
-    // `expect(pkg.Destination).not.toBe(DestinationFencing)` would pass
-    // VACUOUSLY against an undefined left-hand side. It is recorded as
-    // `not-ported` in the parity ledger, naming outbox.ts as what unblocks it,
-    // and is translated in full in the belt that ports outbox.
-    //
-    // Note for that belt: import the entry point BEFORE the outbox module, or a
-    // missing outbox masks whether the entry-point half passes at all.
+    test("the package does not silently shadow a clashing name", async () => {
+      // The collision may not be resolved by whichever import happens to run
+      // second. `StaleWriterRefused` used to be a second collision; it was
+      // consolidated into the lease-owned class (#45), so the package now
+      // exports exactly one and
+      // `catch (e) { e instanceof controlPlane.StaleWriterRefused }` catches
+      // every refusal from both modules.
+      //
+      // Python's `__all__` is the package's public surface; the port's is
+      // `src/index.ts`'s export list (D-0002: the package exports only `.`), so
+      // "in `control_plane.__all__`" becomes "re-exported from the entry
+      // point".
+      //
+      // The entry point is imported FIRST, deliberately. This case was deferred
+      // one belt while `outbox.ts` did not exist, and the note left in the
+      // ledger then was that a missing outbox must not be allowed to mask
+      // whether the entry-point half passes: importing outbox first threw, and
+      // the four assertions below it never ran at all.
+      const pkg = (await import("../../src/index.js")) as Record<string, unknown>;
+      expect(Object.keys(pkg)).toContain("StaleWriterRefused");
+      expect(pkg["StaleWriterRefused"]).toBe(StaleWriterRefused);
+      // ADAPTED. Python's `Destination` is a `runtime_checkable` Protocol and
+      // therefore a real object in `__all__`, so the source can assert that the
+      // package's `Destination` is not lease's `DestinationFencing` -- two
+      // names that could have collided, kept distinct. The port's `Destination`
+      // is a TypeScript `interface`: a compile-time type with no runtime
+      // existence, so `pkg.Destination` is `undefined` and the identity
+      // comparison has nothing to compare.
+      //
+      // The runtime stand-in is `isDestination`, the structural predicate that
+      // replaces `isinstance(x, Destination)`. Asserting on it preserves the
+      // property the source pins -- the destination contract and the lease-side
+      // fencing type are separate exported things -- against the port's actual
+      // runtime surface. That the TYPE is exported is proved at compile time by
+      // this file importing it.
+      expect(pkg["isDestination"]).toBeDefined();
+      expect(pkg["isDestination"]).not.toBe(DestinationFencing);
+      expect(pkg["DestinationFencing"]).toBe(DestinationFencing);
+
+      const outbox = (await import("../../src/control_plane/outbox.js")) as Record<string, unknown>;
+      // S7 keeps re-exporting the name its callers already import from it, and
+      // it is the SAME class object -- identity across the module boundary is
+      // what makes one `catch` clause enough.
+      expect(Object.keys(outbox)).toContain("StaleWriterRefused");
+      expect(outbox["StaleWriterRefused"]).toBe(StaleWriterRefused);
+
+      // The one name both modules define that is genuinely the same value: it
+      // is ACCEPTANCE.md section 2's clause and the DDL's enumeration, not
+      // either module's policy, so the copies may not drift.
+      expect(outbox["EXACTLY_ONCE_MECHANISMS"]).toEqual(EXACTLY_ONCE_MECHANISMS);
+    });
 
     test("no dataclass default is one a supported python would reject", () => {
       // The rule Python 3.11 applies, checked on whatever version is running.

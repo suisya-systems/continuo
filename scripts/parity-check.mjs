@@ -58,6 +58,7 @@ const LEDGERS = [
   "parity/control-plane.ai-invocation.ledger.json",
   "parity/control-plane.production-schema.ledger.json",
   "parity/control-plane.lease.ledger.json",
+  "parity/control-plane.outbox.ledger.json",
   // lane B -- measurement
   "parity/measurement.ledger.json",
   "parity/measurement.false-termination.ledger.json",
