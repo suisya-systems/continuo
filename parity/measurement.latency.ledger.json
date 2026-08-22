@@ -50,13 +50,14 @@
       }
     ],
     "target_only_tests": {
-      "count": 3,
+      "count": 4,
       "ids": [
         "test/measurement/latency.test.ts::the report itself > percentiles are ceil-rank, on a sample where floor would differ (target-only)",
         "test/measurement/latency.test.ts::the report itself > a class present in the shadow source with an EMPTY sample is absent for it (target-only)",
-        "test/measurement/latency.test.ts::the report itself > classes are reported in first-seen order, not sorted (target-only)"
+        "test/measurement/latency.test.ts::the report itself > classes are reported in first-seen order, not sorted (target-only)",
+        "test/measurement/latency.test.ts::a deliberate divergence from interlock (target-only) > a present shadow reference must state the population it is over"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 22-mutation sweep and then confirmed against interlock 65f36c5 -- in each case the source's own suite cannot tell the mutated module from the real one either. Production behaviour is unchanged; these add coverage, not behaviour. This module has no seam (nothing in it is monkeypatched by the source) and renders no figure through D-0104's formatter, so neither of those liveness obligations applies."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 22-mutation sweep and then confirmed against interlock 65f36c5 -- in each case the source's own suite cannot tell the mutated module from the real one either. Production behaviour is unchanged; these add coverage, not behaviour. This module has no seam (nothing in it is monkeypatched by the source) and renders no figure through D-0104's formatter, so neither of those liveness obligations applies. One more was added after this belt shipped: the evidence for D-0108, which repairs a defect this ledger previously disclosed under the withdrawn D-0022. See divergences."
     },
     "approved_non_running": []
   },
@@ -85,12 +86,6 @@
       "matches_source": true,
       "note": "Three blind spots found by a mutation sweep on the port and then verified against interlock 65f36c5. The port reproduces the production behaviour exactly and does not change it; it adds three target-only tests so the properties stop being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
       "where_a_fix_belongs": "upstream, as the same three cases added to interlock's tests/measurement/test_latency.py."
-    },
-    {
-      "behaviour": "The ShadowReference constructor validates only the distribution for a SHADOW_PRESENT reference, not bothBucketCount. A caller constructing one directly with a distribution and a null count is accepted, and the renderer then prints 'over null both-bucket episode(s)'.",
-      "matches_source": true,
-      "note": "Raised by the codex review gate on this PR as a P2. Verified empirically against interlock 65f36c5: ShadowReference(status='present', distribution=..., both_bucket_count=None, reason=None) is accepted by __post_init__ -- which checks only `distribution is None` for the present state -- and render_latency_report emits 'over None both-bucket episode(s)'. NOT fixed here: adding the check would make continuo refuse an input interlock accepts, which is a silent behavioural divergence in a parity port. Handled under the precedent the operator set for action_id escaping on 2026-08-22: reproduce and disclose, do not repair one side alone. Unreachable through the module's own API -- ShadowReference.present always supplies the count, and forClass is the only internal caller -- so this is a hand-constructed state, which is exactly why the source's own invariant stops where it does. One knock-on worth naming for the future CLI oracle face: in that unreachable state the two runtimes render different TEXT ('None' against 'null'), because each prints its own spelling of the absent value. That is a faithful consequence rather than a second defect, but a CLI comparison driven into this state would report it as a mismatch.",
-      "where_a_fix_belongs": "upstream, as a __post_init__ that also requires both_bucket_count for the present state -- and then in continuo in the same change, so the two keep accepting the same inputs."
     }
   ],
   "entries": [
@@ -268,5 +263,17 @@
         "note": "The two-class ported case counts headings rather than reading the order, and interlock never asserts class order anywhere. First-seen order is a D-0040 byte-reproducibility claim, so the new case uses a fixture where sorted and first-seen differ ('relay_gap' sorts before 'session_no_evidence' while the episodes present the latter first)."
       }
     ]
-  }
+  },
+  "divergences": [
+    {
+      "decision": "D-0108",
+      "behaviour": "ShadowReference refuses a present reference that carries no bothBucketCount. interlock accepts it and renders 'over None both-bucket episode(s)'.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Raised by the codex review gate on the latency belt and disclosed there under D-0022 (inherited defects are disclosed, not repaired). D-0022 was WITHDRAWN by the operator on 2026-08-22 -- interlock is frozen, so there is no upstream repair to follow -- and this is repaired accordingly. Verified against interlock at 65f36c5 before and after: its __post_init__ checks only `distribution is None` for the present state. Same shape as D-0107: the type is exported, so the construction path is public, and an invariant only the tidy path upholds is not an invariant. A caller with nothing to count writes 0, which is accepted.",
+      "parity_cost": "continuo refuses an input interlock accepts. Unreachable through the module's own API -- ShadowReference.present always supplies the count -- so no ported case changes and no rendered report differs except in the hand-built state itself.",
+      "evidence": "test/measurement/latency.test.ts::a deliberate divergence from interlock (target-only) > a present shadow reference must state the population it is over",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this constructor."
+    }
+  ]
 }

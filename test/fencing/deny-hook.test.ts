@@ -73,7 +73,7 @@ import {
  * default". Asserting the rule id closes it.
  *
  * That hazard is not local to this file: see docs/test-translation-conventions.md
- * section 9, "Make it fail on purpose, and confirm it fails for the reason you expect", which collects the three cases in this
+ * section 10, "Make it fail on purpose, and confirm it fails for the reason you expect", which collects the three cases in this
  * port where a green case had stopped proving anything.
  */
 

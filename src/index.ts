@@ -300,6 +300,23 @@ export {
   TransactionUsageError,
   transaction,
 } from "./control_plane/txn.js";
+export {
+  EFFECTIVE_REVISION_SQL,
+  errorStreakScopes,
+  HEARTBEAT_RESULTS,
+  HeartbeatRefused,
+  heartbeat,
+  registerScope,
+  retireScope,
+  SCOPE_KINDS,
+  SCOPE_LEASE_PREFIX,
+  ScopeNotRegistered,
+  scopeLeaseResource,
+  silentScopes,
+  uncoveredScopes,
+  WatcherRefusal,
+  WatcherUsageError,
+} from "./control_plane/watcher.js";
 /**
  * Per-role fencing: the rule model, the renderer, the breach battery, the
  * persisted fence and the fail-closed spawn precondition.

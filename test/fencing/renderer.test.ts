@@ -396,7 +396,7 @@ describe("discarded axes", () => {
     // narrow a check that names no file at all.
     //
     // Written up with the other two instances of the shape in
-    // docs/test-translation-conventions.md section 9, "Make it fail on purpose, and confirm it fails for the reason you expect".
+    // docs/test-translation-conventions.md section 10, "Make it fail on purpose, and confirm it fails for the reason you expect".
     const sources = readdirSync(packageDir).filter(
       (entry) => entry.endsWith(".ts") || entry.endsWith(".mjs"),
     );
