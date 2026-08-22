@@ -321,3 +321,74 @@ export function pythonTupleRepr(parts: readonly string[]): string {
   }
   return `(${parts.map((part) => pythonRepr(part)).join(", ")})`;
 }
+
+/**
+ * Python's `repr()` of a float, which `String(value)` is not.
+ *
+ * Three differences reach a report, and `provenance.ts` meets all three -- it
+ * hashes a REAL column as `repr(value)` inside the database fingerprint and
+ * renders `coverage.ratio` through Python's JSON:
+ *
+ * * **An integral float keeps its `.0`.** `repr(1.0)` is `1.0`; `String(1)` is
+ *   `1`. A coverage ratio of exactly 1.0 renders differently in the two ports.
+ * * **The switch to exponential notation happens at different magnitudes.**
+ *   Python leaves fixed notation above `1e16` and below `1e-4`; JavaScript at
+ *   `1e21` and `1e-7`. Between those bounds one double prints two strings.
+ * * **The exponent is spelled differently.** Python pads it to two digits with
+ *   a sign (`1e-05`); JavaScript does not (`1e-7`).
+ *
+ * The digits themselves are the same on both sides: both languages print the
+ * shortest decimal that round-trips, and `toExponential()` with no argument is
+ * specified to produce exactly that. So this function decides the *shape* and
+ * takes the digits from the runtime rather than reimplementing Dragon4.
+ *
+ * Pinned against CPython by `parity/oracle/float-repr-vector.json`
+ * (`D-0104`, `docs/differential-oracle.md`).
+ */
+export function pythonFloatRepr(value: number): string {
+  if (Number.isNaN(value)) {
+    return "nan";
+  }
+  if (value === Number.POSITIVE_INFINITY) {
+    return "inf";
+  }
+  if (value === Number.NEGATIVE_INFINITY) {
+    return "-inf";
+  }
+
+  // `Object.is` rather than `value < 0`, so negative zero keeps its sign: for
+  // the fingerprint `-0.0` and `0.0` are different values that must not hash
+  // alike, and Python prints them apart.
+  const negative = value < 0 || Object.is(value, -0);
+  const magnitude = Math.abs(value);
+  const body = magnitude === 0 ? "0.0" : finiteRepr(magnitude);
+  return negative ? `-${body}` : body;
+}
+
+/** The digits and decimal exponent of a positive finite double, shortest form. */
+function shortestDigits(magnitude: number): { digits: string; exponent: number } {
+  const [mantissa, exponentText] = magnitude.toExponential().split("e") as [string, string];
+  return { digits: mantissa.replace(".", ""), exponent: Number(exponentText) };
+}
+
+function finiteRepr(magnitude: number): string {
+  const { digits, exponent } = shortestDigits(magnitude);
+  // CPython's `float_repr_style` is shortest-repr with `Py_DTSF_ADD_DOT_0`, and
+  // its format_float_short chooses fixed notation when the decimal point falls
+  // in `(-4, 17]` -- that is, `decpt` from -3 to 16 inclusive. Outside it, the
+  // exponential form.
+  const decpt = exponent + 1;
+  if (decpt > -4 && decpt <= 16) {
+    if (decpt <= 0) {
+      return `0.${"0".repeat(-decpt)}${digits}`;
+    }
+    if (decpt >= digits.length) {
+      return `${digits}${"0".repeat(decpt - digits.length)}.0`;
+    }
+    return `${digits.slice(0, decpt)}.${digits.slice(decpt)}`;
+  }
+  const mantissa = digits.length === 1 ? digits : `${digits[0]}.${digits.slice(1)}`;
+  const sign = exponent < 0 ? "-" : "+";
+  const magnitudeDigits = String(Math.abs(exponent)).padStart(2, "0");
+  return `${mantissa}e${sign}${magnitudeDigits}`;
+}
