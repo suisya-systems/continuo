@@ -1,6 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import type { AppendedEvent } from "./events.js";
 import { appendEvent } from "./events.js";
+import { pythonList, pythonRepr } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 
 /**
@@ -255,30 +256,6 @@ export class EmptyIdentityFieldRefused extends CiObservationRefused {
   }
 }
 
-/** `null` as Python would render it in an f-string; a string is itself. */
-function reprOf(value: unknown): string {
-  if (typeof value === "string") {
-    return `'${value}'`;
-  }
-  // `String(null)` is "null" and `String(undefined)` is "undefined"; Python's
-  // repr of the absence these stand for is `None`. These messages are how an
-  // operator reads back what was rejected, and the whole point of the guards
-  // above is that they fire on absence -- so absence has to render as the
-  // source renders it. Booleans likewise: Python prints True/False.
-  if (value === null || value === undefined) {
-    return "None";
-  }
-  if (typeof value === "boolean") {
-    return value ? "True" : "False";
-  }
-  return String(value);
-}
-
-/** `repr(sorted(...))`-shaped text: a Python list of single-quoted strings. */
-function pyList(values: readonly string[]): string {
-  return `[${values.map((v) => `'${v}'`).join(", ")}]`;
-}
-
 function isFullLowercaseSha(value: unknown): value is string {
   return typeof value === "string" && value.length === SHA_LENGTH && FULL_LOWERCASE_SHA.test(value);
 }
@@ -315,7 +292,7 @@ export class ObservationIdentity {
 
     if (!CI_PROVIDERS.has(provider)) {
       throw new UnsupportedProviderRefused(
-        `provider ${reprOf(provider)} is not one of ${pyList(Array.from(CI_PROVIDERS).sort())}; ` +
+        `provider ${pythonRepr(provider)} is not one of ${pythonList(Array.from(CI_PROVIDERS).sort())}; ` +
           "a case variant is a different string in the identity and would admit the same fact twice",
       );
     }
@@ -337,34 +314,34 @@ export class ObservationIdentity {
       );
     }
     if (typeof prNumber !== "number" || !Number.isInteger(prNumber)) {
-      throw new MalformedPrNumberRefused(`pr_number ${reprOf(prNumber)} is not an integer`);
+      throw new MalformedPrNumberRefused(`pr_number ${pythonRepr(prNumber)} is not an integer`);
     }
     if (prNumber < 1) {
-      throw new MalformedPrNumberRefused(`pr_number ${reprOf(prNumber)} is below 1`);
+      throw new MalformedPrNumberRefused(`pr_number ${pythonRepr(prNumber)} is below 1`);
     }
     if (!isFullLowercaseSha(headSha)) {
       throw new MalformedHeadShaRefused(
-        `head_sha ${reprOf(headSha)} is not a full ${SHA_LENGTH}-character lowercase hex ` +
+        `head_sha ${pythonRepr(headSha)} is not a full ${SHA_LENGTH}-character lowercase hex ` +
           "commit id; an abbreviation is not an identity because two heads can share a prefix",
       );
     }
     if (!CHECK_SCOPES.has(checkScope)) {
       throw new UnknownCheckScopeRefused(
-        `check_scope ${reprOf(checkScope)} is not one of ${pyList(Array.from(CHECK_SCOPES).sort())}`,
+        `check_scope ${pythonRepr(checkScope)} is not one of ${pythonList(Array.from(CHECK_SCOPES).sort())}`,
       );
     }
     if (typeof attempt !== "number" || !Number.isInteger(attempt)) {
-      throw new MalformedAttemptRefused(`attempt ${reprOf(attempt)} is not an integer`);
+      throw new MalformedAttemptRefused(`attempt ${pythonRepr(attempt)} is not an integer`);
     }
     if (attempt < 1) {
       throw new MalformedAttemptRefused(
-        `attempt ${reprOf(attempt)} is below 1; attempt leads the projection's ordering, so a ` +
+        `attempt ${pythonRepr(attempt)} is below 1; attempt leads the projection's ordering, so a ` +
           "rerun must never sort below the run it replaced",
       );
     }
     if (!CI_VERDICTS.has(verdict)) {
       throw new UnknownVerdictRefused(
-        `verdict ${reprOf(verdict)} is not one of ${pyList(Array.from(CI_VERDICTS).sort())}`,
+        `verdict ${pythonRepr(verdict)} is not one of ${pythonList(Array.from(CI_VERDICTS).sort())}`,
       );
     }
 

@@ -3,6 +3,7 @@ import { isConstraintError } from "../sqlite/errors.js";
 import type { AppendedEvent } from "./events.js";
 import { appendEvent } from "./events.js";
 import { pythonJsonDocumentSorted } from "./python_json.js";
+import { pythonRepr, pythonTuple } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import { transaction } from "./txn.js";
 
@@ -267,7 +268,7 @@ export function upsertRepository(
       );
       if (claimed !== undefined) {
         throw new RepoResolutionError(
-          `repo_id ${reprOf(repoId)} already names ${claimed.owner}/${claimed.name}; a ` +
+          `repo_id ${pythonRepr(repoId)} already names ${claimed.owner}/${claimed.name}; a ` +
             "repository identity is never reassigned, because every observation ever " +
             "attached to it would move too",
         );
@@ -289,7 +290,7 @@ export function upsertRepository(
     ) {
       throw new RepoResolutionError(
         `${owner}/${name} is already recorded as ${resolvedId} with provider id ` +
-          `${reprOf(existing.provider_repo_id)}; a slug that moves to a different immutable ` +
+          `${pythonRepr(existing.provider_repo_id)}; a slug that moves to a different immutable ` +
           "id is a different repository reusing the name, not a rename",
       );
     }
@@ -375,7 +376,7 @@ export function resolveRepository(
   }
   const wanted = providerRepoId !== null ? providerRepoId : `${owner}/${name}`;
   throw new RepoResolutionError(
-    `no repository matches ${reprOf(wanted)}; refusing to default, because the caller ` +
+    `no repository matches ${pythonRepr(wanted)}; refusing to default, because the caller ` +
       "exiting non-zero is the only alternative to writing a foreign repository's PR onto the run",
   );
 }
@@ -482,12 +483,12 @@ export function observePullRequest(
   requireText({ repo_id: repoId, event_id: eventId, producer });
   if (typeof prNumber !== "number" || !Number.isInteger(prNumber) || prNumber <= 0) {
     throw new PullRequestObservationRefused(
-      `pr_number must be a positive integer, got ${reprOf(prNumber)}`,
+      `pr_number must be a positive integer, got ${pythonRepr(prNumber)}`,
     );
   }
   if (!isFullLowercaseSha(headSha)) {
     throw new PullRequestObservationRefused(
-      `head_sha must be 40 lowercase hex characters, got ${reprOf(headSha)}`,
+      `head_sha must be 40 lowercase hex characters, got ${pythonRepr(headSha)}`,
     );
   }
   requireStateFacts({ state, mergeCommitSha, mergedAtMs, closedAtMs });
@@ -624,11 +625,13 @@ export function linkRunPr(
   requireEpochMs({ linked_at_ms: linkedAtMs });
   requireText({ run_id: runId, pr_id: prId });
   if (!ROLES.includes(role)) {
-    throw new RunPrLinkRefused(`role must be one of ${pyTuple(ROLES)}, got ${reprOf(role)}`);
+    throw new RunPrLinkRefused(
+      `role must be one of ${pythonTuple(ROLES)}, got ${pythonRepr(role)}`,
+    );
   }
   if (!RESOLUTIONS.includes(resolution)) {
     throw new RunPrLinkRefused(
-      `resolution must be one of ${pyTuple(RESOLUTIONS)}, got ${reprOf(resolution)}; there is ` +
+      `resolution must be one of ${pythonTuple(RESOLUTIONS)}, got ${pythonRepr(resolution)}; there is ` +
         "no member meaning 'we guessed from the working directory' (2026-08-06)",
     );
   }
@@ -643,7 +646,7 @@ export function linkRunPr(
       );
       if (live !== undefined) {
         throw new RunPrLinkRefused(
-          `run ${reprOf(runId)} already has a live primary link to ${reprOf(live.pr_id)}; ` +
+          `run ${pythonRepr(runId)} already has a live primary link to ${pythonRepr(live.pr_id)}; ` +
             "re-point it by unlinking that link with a reason, so the history of the re-point survives",
         );
       }
@@ -659,7 +662,7 @@ export function linkRunPr(
         // error`) exactly as it does in upsertRepository, and the driver's own
         // message is the only thing that says WHICH constraint refused.
         throw new RunPrLinkRefused(
-          `(${reprOf(runId)}, ${reprOf(prId)}) could not be linked: ` +
+          `(${pythonRepr(runId)}, ${pythonRepr(prId)}) could not be linked: ` +
             `${error instanceof Error ? error.message : String(error)}`,
           { cause: error },
         );
@@ -704,7 +707,7 @@ export function unlinkRunPr(
       .run(unlinkedAtMs, unlinkReason, runId, prId, unlinkedAtMs);
     if (cursor.changes === 0) {
       throw new RunPrLinkRefused(
-        `no live link (${reprOf(runId)}, ${reprOf(prId)}) at or after its linked_at_ms to ` +
+        `no live link (${pythonRepr(runId)}, ${pythonRepr(prId)}) at or after its linked_at_ms to ` +
           "unlink; an already-unlinked link is history and is never rewritten",
       );
     }
@@ -778,7 +781,7 @@ function planTransition(options: {
   if (wasState === "merged" && state !== "merged") {
     throw new PullRequestObservationRefused(
       `${before.pr_id} is recorded merged and a merge is a fact; an observation reporting ` +
-        `${reprOf(state)} is either a different pull request or a bad read`,
+        `${pythonRepr(state)} is either a different pull request or a bad read`,
     );
   }
   // The staleness of a head is a property of the head, not of the
@@ -795,7 +798,7 @@ function planTransition(options: {
   if (headMoved && observedAtMs <= watermark) {
     throw new PullRequestObservationRefused(
       `${before.pr_id} head ${wasHead} was observed at ${watermark}; a head move to ${headSha} ` +
-        `claimed at ${observedAtMs} with state ${reprOf(state)} is a late arrival, which is ` +
+        `claimed at ${observedAtMs} with state ${pythonRepr(state)} is a late arrival, which is ` +
         "evidence and not a projection (section 7.2)",
     );
   }
@@ -807,8 +810,8 @@ function planTransition(options: {
   // open period in flight that is accepted as a SECOND reopen.
   if (state !== wasState && observedAtMs <= watermark) {
     throw new PullRequestObservationRefused(
-      `${before.pr_id} is recorded ${reprOf(wasState)} from an observation at ${watermark}; a ` +
-        `transition to ${reprOf(state)} claimed at ${observedAtMs} on the unchanged head ` +
+      `${before.pr_id} is recorded ${pythonRepr(wasState)} from an observation at ${watermark}; a ` +
+        `transition to ${pythonRepr(state)} claimed at ${observedAtMs} on the unchanged head ` +
         `${headSha} is a late arrival, which is evidence and not a projection (section 7.2)`,
     );
   }
@@ -1050,28 +1053,28 @@ function requireStateFacts(options: {
 
   if (!PR_STATES.includes(state)) {
     throw new PullRequestObservationRefused(
-      `state must be one of ${pyTuple(PR_STATES)}, got ${reprOf(state)}`,
+      `state must be one of ${pythonTuple(PR_STATES)}, got ${pythonRepr(state)}`,
     );
   }
   if ((state === "merged") !== (mergedAtMs !== null)) {
     throw new PullRequestObservationRefused(
-      `state ${reprOf(state)} and merged_at_ms ${reprOf(mergedAtMs)} disagree; a merge carries ` +
+      `state ${pythonRepr(state)} and merged_at_ms ${pythonRepr(mergedAtMs)} disagree; a merge carries ` +
         "its own time and nothing else does",
     );
   }
   if ((state === "merged") !== (mergeCommitSha !== null)) {
     throw new PullRequestObservationRefused(
-      `state ${reprOf(state)} and merge_commit_sha ${reprOf(mergeCommitSha)} disagree`,
+      `state ${pythonRepr(state)} and merge_commit_sha ${pythonRepr(mergeCommitSha)} disagree`,
     );
   }
   if (mergeCommitSha !== null && !isFullLowercaseSha(mergeCommitSha)) {
     throw new PullRequestObservationRefused(
-      `merge_commit_sha must be 40 lowercase hex characters, got ${reprOf(mergeCommitSha)}`,
+      `merge_commit_sha must be 40 lowercase hex characters, got ${pythonRepr(mergeCommitSha)}`,
     );
   }
   if ((state === "merged" || state === "closed") !== (closedAtMs !== null)) {
     throw new PullRequestObservationRefused(
-      `state ${reprOf(state)} and closed_at_ms ${reprOf(closedAtMs)} disagree; a merged or ` +
+      `state ${pythonRepr(state)} and closed_at_ms ${pythonRepr(closedAtMs)} disagree; a merged or ` +
         "closed pull request is closed and an open one is not",
     );
   }
@@ -1104,27 +1107,11 @@ function requireEpochMs(values: Readonly<Record<string, unknown>>): void {
 function requireText(values: Readonly<Record<string, unknown>>): void {
   for (const [label, value] of Object.entries(values)) {
     if (typeof value !== "string" || value === "") {
-      throw new TypeError(`${label} must be a non-empty string, got ${reprOf(value)}`);
+      throw new TypeError(`${label} must be a non-empty string, got ${pythonRepr(value)}`);
     }
   }
 }
 
 function isFullLowercaseSha(value: unknown): value is string {
   return typeof value === "string" && value.length === 40 && SHA_PATTERN.test(value);
-}
-
-/** `null` as Python would render it in an f-string; a string is itself. */
-function reprOf(value: unknown): string {
-  if (typeof value === "string") {
-    return `'${value}'`;
-  }
-  if (value === null || value === undefined) {
-    return "None";
-  }
-  return String(value);
-}
-
-/** A Python tuple of single-quoted strings, for a tuple constant's repr. */
-function pyTuple(values: readonly string[]): string {
-  return `(${values.map((v) => `'${v}'`).join(", ")})`;
 }

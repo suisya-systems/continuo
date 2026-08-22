@@ -1,0 +1,613 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_lease.py",
+      "collected": 60,
+      "inventory": "parity/source-inventory/control_plane.test_lease.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/lease.test.ts",
+    "target_only_tests": {
+      "count": 1,
+      "ids": [
+        "test/control_plane/lease.test.ts::seam liveness (target-only) > the generated refusal id comes from the seam"
+      ],
+      "note": "Target-only. lease.ts routes its one nondeterministic call -- the generated fallback action_id in recordRefusal -- through leaseSeams.uuid4Hex (D-0014), so a case needing a pinned id has a way to get one. interlock's own suite never needs it (every case that reaches the refusal path passes its own attempt_id), so this liveness test has no source counterpart and is not counted as ported coverage. It exists because a seam nothing routes through is worse than no seam: it would look like a control point while production went around it."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 60,
+    "ported": 49,
+    "adapted": 10,
+    "not_ported": 1,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_live_token_writes",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 1 -- a protected write carrying a stale token is refused, and the refusal is recorded rather than silently dropped. > a live token writes",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_superseded_token_is_refused_and_the_refusal_is_recorded",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 1 -- a protected write carrying a stale token is refused, and the refusal is recorded rather than silently dropped. > a superseded token is refused and the refusal is recorded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_an_expired_token_is_refused_even_with_nobody_else_holding_it",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 1 -- a protected write carrying a stale token is refused, and the refusal is recorded rather than silently dropped. > an expired token is refused even with nobody else holding it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_returning_paused_holder_is_refused_repeatedly_and_recorded_each_time",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 1 -- a protected write carrying a stale token is refused, and the refusal is recorded rather than silently dropped. > the returning paused holder is refused repeatedly and recorded each time",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_recorded_refusal_survives_the_process_that_recorded_it",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 1 -- a protected write carrying a stale token is refused, and the refusal is recorded rather than silently dropped. > the recorded refusal survives the process that recorded it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`pytest.raises(sqlite3.IntegrityError)` becomes expectSqliteError on the result CODE family `SQLITE_CONSTRAINT*` (D-0016); better-sqlite3 raises one error type and the code is what carries Python's exception-class distinction.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_refusal_is_recorded_even_when_the_lease_row_is_gone_entirely",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 1 -- a protected write carrying a stale token is refused, and the refusal is recorded rather than silently dropped. > a refusal is recorded even when the lease row is gone entirely",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_check_then_write_admits_the_writer_the_atomic_shape_refuses",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > check then write admits the writer the atomic shape refuses",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_fence_lives_in_the_database_not_in_the_lease_object",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > the fence lives in the database not in the lease object",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_an_unfenced_statement_cannot_be_run_through_this_module",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > an unfenced statement cannot be run through this module",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_statement_that_mentions_the_fence_without_obeying_it_is_refused",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a statement that mentions the fence without obeying it is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_fenced_statement_that_forgets_the_epoch_is_refused",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a fenced statement that forgets the epoch is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_no_sql_text_crosses_the_builder_boundary",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > no sql text crosses the builder boundary",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_subclass_is_not_a_str_however_equal_it_compares",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a subclass is not a str however equal it compares",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Three sub-assertions have no literal JS form and are replaced by the strongest faithful version, none weaker. (1) `Sneaky('run')` as the table name: Python's `PROTECTED_TABLES.index(table)` accepts a str subclass by `==` and canonicalises it, so the source asserts the built statement equals the plain-string one; JS `indexOf` is strict so the port REFUSES it (UnfencedStatement) -- asserted as the refusal. The source's property (the caller's object never reaches the template) is still pinned by the plain-string half `statement.startsWith('UPDATE run\\n')`. (2) `Sneaky('status')` as a mapping KEY cannot exist: a JS property key is coerced to a primitive string before the object does, so the case asserts that coercion (`Object.keys(...) === ['status']`, typeof 'string') and that the built statement carries `SET status = 'done'`. (3) `type(fence_epoch)()` becomes `new (fenceEpoch.constructor)()`. All other sub-assertions are verbatim.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_node_mutated_after_construction_is_refused_at_rendering",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a node mutated after construction is refused at rendering",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`object.__setattr__` has no TypeScript equivalent: `Object.freeze` in each builder constructor makes the assignment throw. The case asserts that (the freeze is itself the source's guarantee made stronger, lesson 13) and then reaches the SAME production path -- the rendering-time revalidation in renderOperand/renderPredicate -- through a clone built with `Object.create(<ctor>.prototype)` + `Object.assign`, which the module's `isExact()` gate accepts exactly as it accepts the real node. All four sub-cases (predicate column, param name, value constant, nested value constant -> NULL) run and refuse with LeaseUsageError as the source requires.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_builder_reads_the_callers_mapping_exactly_once",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > the builder reads the callers mapping exactly once",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's `collections.abc.Mapping` subclass with a two-faced `__getitem__` becomes a `Proxy` whose `get` trap returns `fence_epoch` on the first read of `writer_epoch` and `value(0)` afterwards. Same property, same assertions (`writer_epoch = :fence_epoch` present, `writer_epoch = 0` absent); the read-once snapshot in requireAssignments is what makes it pass.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_null_comparison_is_refused_in_favour_of_is_null",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a null comparison is refused in favour of is null",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_hostile_constant_is_rendered_as_an_inert_literal",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a hostile constant is rendered as an inert literal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_constant_is_rendered_as_its_value_and_nothing_else",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a constant is rendered as its value and nothing else",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The IntEnum half is driven with a TypeScript numeric enum (`enum Status { DONE = 7 }`), and both source assertions hold verbatim (`status = 7` present, `DONE` absent) -- but for a structural reason rather than because the module canonicalises: a JS number cannot carry an alternate string form, so Python's `str(IntEnum)`-prints-the-name hazard does not exist here and lease.ts has no counterpart to `object.__setattr__(self, 'constant', int(self.constant))`. The NUL half is verbatim.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_name_is_a_name_and_never_a_fragment",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a name is a name and never a fragment",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_table_is_chosen_from_a_closed_set_not_composed",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > the table is chosen from a closed set not composed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_protected_write_cannot_rewrite_an_applied_rows_attribution",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a protected write cannot rewrite an applied rows attribution",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_caller_cannot_rebind_the_fences_own_parameters",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a caller cannot rebind the fences own parameters",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_handler_that_names_no_exactly_once_mechanism_is_refused",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a handler that names no exactly once mechanism is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_write_that_misses_its_own_where_is_not_recorded_as_a_stale_writer",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a write that misses its own where is not recorded as a stale writer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_lease_operation_refuses_to_run_inside_somebody_elses_transaction",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > a lease operation refuses to run inside somebody elses transaction",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_refusal_and_the_refused_attempt_commit_together",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > the refusal and the refused attempt commit together",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_second_claimant_is_refused_while_the_lease_is_live",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a second claimant is refused while the lease is live",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_re_acquiring_after_expiry_raises_the_epoch_even_for_the_same_holder",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > re acquiring after expiry raises the epoch even for the same holder",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_timeline_of_lease_rows_has_one_authority_per_instant",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > the timeline of lease rows has one authority per instant",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_write_history_shows_no_interleaving_from_the_rejected_writer",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > the write history shows no interleaving from the rejected writer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_two_resources_epochs_are_not_compared_with_each_other",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > two resources epochs are not compared with each other",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_every_effect_under_one_lease_stays_in_one_history",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > every effect under one lease stays in one history",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_history_is_ordered_by_the_database_not_by_the_callers_clock",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > the history is ordered by the database not by the callers clock",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_protected_write_to_another_table_is_stamped_on_its_own_row",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a protected write to another table is stamped on its own row",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_write_history_is_answerable_by_query_after_the_process_is_gone",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > write history is answerable by query after the process is gone",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_released_lease_is_expired_and_never_deleted",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a released lease is expired and never deleted",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Two mechanical changes, neither touching an assertion: `pytest.raises(sqlite3.IntegrityError)` on the refused DELETE becomes expectSqliteError on `SQLITE_CONSTRAINT*` (D-0016), and the source's following `cp.rollback()` has no counterpart -- better-sqlite3 opens no implicit transaction -- so it is replaced by an assertion that none is open (`cp.inTransaction === false`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_superseded_holder_can_neither_renew_nor_release",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a superseded holder can neither renew nor release",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_an_expired_lease_cannot_be_renewed_back_to_life",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > an expired lease cannot be renewed back to life",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_renewal_keeps_the_epoch_and_the_token_keeps_working",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a renewal keeps the epoch and the token keeps working",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_fast_clock_takes_the_lease_over_and_the_fence_still_excludes",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > a fast clock takes the lease over and the fence still excludes",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_clock_that_jumps_back_does_not_resurrect_a_superseded_token",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > a clock that jumps back does not resurrect a superseded token",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_slow_clock_declines_to_take_a_lease_it_sees_as_live",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > a slow clock declines to take a lease it sees as live",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_backward_skewed_renewal_shortens_rather_than_extends",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > a backward skewed renewal shortens rather than extends",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_renewal_skewed_behind_its_own_acquisition_is_refused_not_crashed",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > a renewal skewed behind its own acquisition is refused not crashed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_releasing_with_a_clock_behind_the_acquisition_stays_legal",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > releasing with a clock behind the acquisition stays legal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_releasing_late_never_pushes_an_expiry_forward",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > releasing late never pushes an expiry forward",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_database_never_supplies_a_clock_of_its_own",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 4 -- clock skew forward and backward across the expiry boundary is handled and tested. > the database never supplies a clock of its own",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The PRAGMA half is verbatim. The source-scan half swaps Python's wall-clock spellings for this runtime's: `Date.now`, `new Date`, `CURRENT_TIMESTAMP`, `strftime('now'`. Scanning for `time.time`/`datetime.now` in a TypeScript file is an assertion that cannot fail, which is the vacuity failure mode the conventions name; an explicit anti-vacuity assertion (the scanned text contains `export function acquire(`) is added so a mis-resolved path fails instead of passing.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_an_enforcing_destination_rejects_the_stale_token_from_its_own_record",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 5 -- where an external destination can enforce a stale token, it does; where it cannot, that is written down rather than assumed away. > an enforcing destination rejects the stale token from its own record",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_an_enforcing_destination_absorbs_a_duplicate_under_a_live_token",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 5 -- where an external destination can enforce a stale token, it does; where it cannot, that is written down rather than assumed away. > an enforcing destination absorbs a duplicate under a live token",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_destination_that_cannot_enforce_must_record_its_residual",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 5 -- where an external destination can enforce a stale token, it does; where it cannot, that is written down rather than assumed away. > a destination that cannot enforce must record its residual",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_every_registered_destination_is_written_down_in_the_doc",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 5 -- where an external destination can enforce a stale token, it does; where it cannot, that is written down rather than assumed away. > every registered destination is written down in the doc",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated verbatim (same table regex, same set equality, same residual checks, same anti-vacuity `rows` non-empty assertion). CURRENTLY FAILING and escalated: `docs/lease-fencing.md` has not been ported into continuo and `docs/` is orchestrator-owned, so this agent may not create it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_provider_is_registered_as_unable_to_enforce",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 5 -- where an external destination can enforce a stale token, it does; where it cannot, that is written down rather than assumed away. > the provider is registered as unable to enforce",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_no_dependency_edge_on_the_session_provider",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 6 -- no test may lean on the provider refusing a duplicate. Every case above must pass with the provider's refusal assumed absent. > no dependency edge on the session provider",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`ast.parse` has no runtime analogue (translated the way migrator.test.ts translates `dir(m)`): the import graph is read by scanning both files' source text for ESM import/export specifiers, split on `/` with the extension dropped instead of Python's split on `.`, and each segment compared exactly as the source compares. Anti-vacuity: each file's collected specifier set must be non-empty.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_package_does_not_silently_shadow_a_clashing_name",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "Requires interlock's S7 outbox module, which is not ported yet. The source case asserts across BOTH modules that define the colliding names: four of its seven assertions are about outbox -- that it re-exports StaleWriterRefused, that the re-export is the same class object, and that its EXACTLY_ONCE_MECHANISMS has not drifted from lease's copy. Translating only the three that can run and calling the case covered would be strictly weaker than the source, and worse, the surviving `expect(pkg.Destination).not.toBe(DestinationFencing)` would pass VACUOUSLY against an undefined left-hand side. Recorded not-ported rather than satisfied by the passing half. What unblocks it: src/control_plane/outbox.ts, in the belt that ports it -- where the entry point must also be imported BEFORE the outbox module, since a missing outbox otherwise masks whether the entry-point half passes at all.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_no_dataclass_default_is_one_a_supported_python_would_reject",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 6 -- no test may lean on the provider refusing a duplicate. Every case above must pass with the provider's refusal assumed absent. > no dataclass default is one a supported python would reject",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`dataclasses.fields(...).default` has no runtime analogue and the hazard it guards (a default whose value is a shared mutable object) cannot arise from a TypeScript `??`/`= {}` fallback, which is evaluated per call. The RUNTIME half is kept and pointed at where a shared mutable default CAN live here: every exported array / plain-object constant of the module must be frozen (so a mutation through one holder throws rather than reaching every other), plus the one field whose source counterpart is the `MappingProxyType({})` default the source docstring names -- `ProtectedWrite.params` -- asserted not shared between two default-built instances and frozen. `leaseSeams` is excluded by name (a seam that could not be replaced would not be a seam). Anti-vacuity: the scanned set must be non-empty.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_only_exclusion_is_the_lease_and_the_module_says_so",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 6 -- no test may lean on the provider refusing a duplicate. Every case above must pass with the provider's refusal assumed absent. > the only exclusion is the lease and the module says so",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_fenced_statements_carry_the_fence_verbatim",
+      "target_id": "test/control_plane/lease.test.ts::The fence itself, as a shape > fenced statements carry the fence verbatim",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_the_fence_matches_the_whole_token_not_just_the_resource",
+      "target_id": "test/control_plane/lease.test.ts::The fence itself, as a shape > the fence matches the whole token not just the resource",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_a_kind_may_not_name_a_resource_the_token_is_not_for",
+      "target_id": "test/control_plane/lease.test.ts::The fence itself, as a shape > a kind may not name a resource the token is not for",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_lease.py::test_acquire_refuses_a_lease_that_expires_when_it_starts",
+      "target_id": "test/control_plane/lease.test.ts::The fence itself, as a shape > acquire refuses a lease that expires when it starts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "A str-subclass MAPPING KEY cannot reach the builder, so the source's refusal for one has no reachable trigger.",
+      "status": "unconstructible in the target runtime, disclosed",
+      "detail": "The source refuses a str-subclass key in the `set=` mapping with an exact-type gate. JavaScript coerces a property key to a primitive string before the object exists, so the caller's object never reaches the builder at all -- the hole is closed one step earlier than the source closes it. The ported case asserts the coercion rather than assuming it, so the claim is checked rather than argued."
+    },
+    {
+      "topic": "requireTable takes the primitive with the built-in valueOf, not with String().",
+      "status": "adapted, and the adaptation is load-bearing",
+      "detail": "Python's `table not in PROTECTED_TABLES` compares by `==`, so a str subclass is accepted and then canonicalised by `.index()` to the closed set's own string. A strict `indexOf` would refuse instead -- the opposite answer, and it would leave that canonicalisation as dead code. The primitive is therefore extracted, but with `String.prototype.valueOf.call`, NOT `String()`: `String()` dispatches through the object's own `toString`, and a hostile subclass overriding `toString` is exactly what this function exists to stop -- the source's own test subclass does that. Python's `str.__eq__` compares the underlying buffer and cannot be reached through `__str__` either, so the built-in call is the faithful analogue as well as the safe one."
+    },
+    {
+      "topic": "FencedStatement is a String subclass without the source's __slots__ immutability.",
+      "status": "divergence, disclosed",
+      "detail": "interlock's `class FencedStatement(str)` with `__slots__ = ()` cannot be mutated and cannot gain attributes. A JavaScript String subclass can gain properties. Nothing in either suite depends on it."
+    },
+    {
+      "topic": "The import-graph scan is weaker than the source's ast walk.",
+      "status": "adapted, disclosed",
+      "detail": "`test_no_dependency_edge_on_the_session_provider` uses `ast.parse`, which sees every static import including function-level ones. TypeScript's parse tree is not available at runtime, so the port scans the module source text for ESM specifiers and is blind to a dynamic `import()`. Translated the way migrator.test.ts translates `dir(m)`, with an anti-vacuity assertion so a scan that matched nothing fails rather than passes."
+    },
+    {
+      "topic": "resource_of_kind / effect_kind recover a lease's epoch history by decoding a composed kind string.",
+      "status": "inherited, not fixed",
+      "detail": "The spike `action` table has no resource column (Q-0001, only partly answered by interlock D-0029), so the composition is the only route. Reproduced verbatim."
+    },
+    {
+      "topic": "EpochGuardedDestination is an in-process reference destination, not a durable one.",
+      "status": "inherited by design, disclosed",
+      "detail": "The source documents it as a reference/demo destination; its state is in memory and this module claims nothing else for it."
+    },
+    {
+      "topic": "WRITE_HISTORY_QUERY's resource filter is a suffix match, so an '@' inside a resource name makes it ambiguous.",
+      "status": "inherited, not fixed (continuo D-0022)",
+      "detail": "The filter is `substr(kind, -(length(:resource) + 1)) = '@' || :resource`, so asking for resource 'r' also returns rows whose kind is 'effect@x@r' -- which belong to resource 'x@r'. Two independently allocated epoch sequences can therefore be mixed in one history read. The SQL is carried byte-identically from interlock, where the query has exactly the same shape, so the port is at parity; the ambiguity is the design's, arising from encoding the resource into the composed `kind` string because the spike `action` table has no resource column (Q-0001). Reproduced rather than repaired, per D-0022. Raised by the Codex review gate (2026-08-22, P2)."
+    }
+  ]
+}
