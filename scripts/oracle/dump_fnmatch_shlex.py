@@ -162,6 +162,31 @@ def _record_key_order(value: Any, path: str, out: list[list]) -> None:
             _record_key_order(child, f"{path}[{index}]", out)
 
 
+def _record_number_types(value: Any, path: str, out: list[list]) -> None:
+    """Every number in one document, with the path that reaches it and its type.
+
+    ``type(x).__name__`` is the answer ``pyTypeName`` has to reproduce, and it
+    is the half of the number contract that no amount of serialiser care
+    supplies: a refusal that says ``got int`` where interlock says ``got float``
+    is a persisted ledger detail that differs.
+
+    ``bool`` is checked FIRST because it is a subclass of ``int`` in Python, so
+    ``isinstance(True, int)`` is true and a naive walk would record ``True`` as
+    an integer and demand the port agree.
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        out.append([path, type(value).__name__])
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _record_number_types(child, f"{path}.{key}", out)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _record_number_types(child, f"{path}[{index}]", out)
+
+
 def main() -> None:
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
 
@@ -290,6 +315,22 @@ def main() -> None:
         _record_key_order(value, "$", order)
         loads_expected.append({"key_order": order, "roundtrip": json.dumps(value)})
 
+    # The number round trip. JavaScript has ONE number type, so a document's
+    # `1` and `1.0` arrive as the same double and an integer past 2**53 arrives
+    # ROUNDED -- the authored value destroyed before anything can serialise it.
+    # The port recovers both from the source text on its second scan, and this
+    # is where that recovery is measured: the round trip for the bytes, and
+    # `type(x).__name__` at every number for the classification a refusal
+    # message prints.
+    number_documents_expected = []
+    for text in corpus["pyjson"]["number_documents"]:
+        value = json.loads(text)
+        types: list[list] = []
+        _record_number_types(value, "$", types)
+        number_documents_expected.append(
+            {"roundtrip": json.dumps(value), "types": types}
+        )
+
     # The Python value semantics `renderer.py` is written in. Results go through
     # `repr` so that WHICH value came back is compared rather than "something
     # truthy came back", and so that the int/float distinction survives.
@@ -416,6 +457,10 @@ def main() -> None:
                 "count": len(loads_expected),
                 "expected": loads_expected,
             },
+            "number_documents": {
+                "count": len(number_documents_expected),
+                "expected": number_documents_expected,
+            },
         },
         "pysemantics": {
             "or": {"count": len(or_expected), "expected": or_expected},
@@ -444,7 +489,9 @@ def main() -> None:
             f"{len(regex_expected)} regex patterns x "
             f"{len(corpus['pyregex']['subjects'])} subjects, "
             f"{len(dumps_expected)} dumps, {len(dumps_numbers_expected)} numbers, "
-            f"{len(loads_expected)} loads, {len(normalize_inputs)} normalize_path)\n"
+            f"{len(loads_expected)} loads, "
+            f"{len(number_documents_expected)} number documents, "
+            f"{len(normalize_inputs)} normalize_path)\n"
         )
     else:
         sys.stdout.write(text)

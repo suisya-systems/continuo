@@ -37,6 +37,50 @@
  * silently dropped key, because a dropped key in a settings payload is a fence
  * rendered without a section its author wrote.
  *
+ * ## Numbers: what the second scan recovers, and what it does not
+ *
+ * JavaScript has ONE number type, so two things CPython knows about a JSON
+ * number are gone by the time `JSON.parse` returns: whether the document wrote
+ * an `int` or a `float` (`1` and `1.0` become the same double, and `json.dumps`
+ * spells them differently and `type(x).__name__` answers differently), and the
+ * exact digits of an integer past 2**53 (`9007199254740993` comes back as
+ * `...992`, so the authored value is destroyed before anything can serialise
+ * it). Both reach disk through artefacts this port compares BY BYTES.
+ *
+ * {@link pyJsonLoads} already rescans the source text once, to recover the key
+ * order `JSON.parse` destroys. That scan now also records, for every number it
+ * passes, the spelling the source used -- `int` or `float` by Python's own rule
+ * (a `.`, an `e` or an `E` makes it a float), plus the literal text. The record
+ * hangs on the CONTAINER, keyed by property name or by array index, because a
+ * number is a primitive with no identity to hang anything on; see
+ * {@link ../fencing/pysemantics.ts | rememberNumberSpellings} for why boxing it
+ * instead would have been the worse defect (`===` on ordinary numbers is what
+ * the fence's own comparisons are built on, and it is untouched here).
+ * {@link formatNumber} then re-emits the spelling CPython would have written,
+ * and {@link ../fencing/pysemantics.ts | pyTypeNameOf} answers `int`/`float`
+ * per the DOCUMENT rather than per the JavaScript value. A number that never
+ * came from a document -- a literal in TypeScript, a computed value -- carries
+ * no spelling and is classified by value, which is exact for the shapes code
+ * produces (see `pyNumberKind`).
+ *
+ * What is still lost, stated narrowly so the claim above stays true:
+ *
+ * - the VALUE of an integer past 2**53 is still the rounded double. The exact
+ *   digits are recovered for RE-EMISSION only, so a big integer round-trips
+ *   through this module unchanged and arithmetic on it is arithmetic on the
+ *   rounded value.
+ * - a number at the ROOT of a document has no container slot, so
+ *   `pyJsonLoads("1.0")` still dumps as `1`. Every fencing artefact -- the
+ *   persisted fence, a settings document, a ledger line, a role document -- has
+ *   an object at its root.
+ * - a container REBUILT without carrying its spellings across loses them. The
+ *   rebuild sites in this port (`stripMeta`, `substitute`, `pyDict`) carry them
+ *   with `carryNumberSpellings`, next to the `rememberKeyOrder` call they
+ *   already made for the same reason.
+ * - `pyStr` still renders an integral float as an int, which is visible only
+ *   for a role document that spells `role_kind` or `permission_mode` as a
+ *   number. Recorded there rather than fixed in passing.
+ *
  * It lives beside `./pyrepr.js` rather than inside it because the two
  * primitives escape DIFFERENTLY and share nothing but a superficial
  * resemblance: `repr()` picks its quote character and emits backslash-x and
@@ -50,7 +94,17 @@
  * Python-semantics helpers in this port -- see `docs/differential-oracle.md`.
  */
 
-import { isPlainObject, PyTypeError, pyKeys, pyTypeName, rememberKeyOrder } from "./pysemantics.js";
+import {
+  isPlainObject,
+  type PyNumberSpelling,
+  PyTypeError,
+  pyKeys,
+  pyNumberKind,
+  pyNumberSpelling,
+  pyTypeName,
+  rememberKeyOrder,
+  rememberNumberSpellings,
+} from "./pysemantics.js";
 
 /** Options mirroring the `json.dumps` keyword arguments this port uses. */
 export interface PyJsonDumpsOptions {
@@ -205,31 +259,29 @@ function encodeString(value: string, ensureAscii: boolean): string {
  * necessary to uniquely specify the number", and only the FORMATTING is
  * redone.
  *
- * KNOWN LIMIT, stated precisely because the whole point of this module is
- * byte agreement: CPython distinguishes `int` from `float` and this port
- * cannot, because `JSON.parse` collapses `1` and `1.0` to the same `number`.
- * Every number therefore has to be CLASSIFIED, and the rule below is "a safe
- * integer is an `int`, everything else is a `float`":
+ * WHICH repr is used is decided by {@link ../fencing/pysemantics.ts | pyNumberKind}
+ * from the SOURCE SPELLING where there is one and from the value where there is
+ * not -- the whole int/float question this module used to have no answer to.
+ * The two arms:
  *
- * - it is exact for the literals a fencing document actually carries -- `0`,
- *   `2`, a port number, a timeout -- which CPython also reads as `int`;
- * - it is exact for every non-integral float, at every magnitude (measured:
- *   `1e-05`, `0.0001`, `1e-07`, `5e-324`, `1.23e-05`, `-0.0`, `1e-300`,
- *   `6.02e+23`, `1.7976931348623157e+308` all agree byte for byte);
- * - it disagrees for a float literal whose value is integral -- `1e15` is
- *   `1000000000000000.0` to CPython and `1000000000000000` here;
- * - it disagrees for an integer literal above 2**53, which `JSON.parse` has
- *   already rounded to a different value before this function sees it. That
- *   one is unreachable through any parsed document and unfixable here.
+ * - `int`: plain digits, no decimal point, no exponent. Below 2**53 that is
+ *   `String(value)`; above it the double has already been rounded and the only
+ *   faithful answer is the literal the DOCUMENT wrote, which is what
+ *   `spelling.text` carries (`9007199254740993`, not `...992`). With neither --
+ *   an `int` spelling asserted in code over a value past 2**53 -- the exact
+ *   expansion of the double is the honest reading of what is actually held.
+ * - `float`: `float.__repr__`, including `Py_DTSF_ADD_DOT_0`, so an integral
+ *   float prints `0.0`, `1.0`, `1000000000000000.0` and `1e+16` rather than
+ *   `0`, `1`, `1000000000000000` and `1e+16`.
  *
- * The cutoff is `Number.isSafeInteger` rather than `Number.isInteger` for the
- * second and third points together: above 2**53 the "it was an int" reading
- * is already wrong (the value has been rounded), and printing the double's
- * exact expansion produced `1.7976931348623157e308` as a 309-DIGIT INTEGER
- * where CPython writes eleven characters. Classifying those as floats makes
- * the large-magnitude cases agree exactly.
+ * Measured against CPython across the magnitude range by the differential
+ * vector: `1e-05`, `0.0001`, `1e-07`, `5e-324`, `1.23e-05`, `-0.0`, `1e-300`,
+ * `6.02e+23` and `1.7976931348623157e+308` all agree byte for byte, and so do
+ * the round trips of `0`, `0.0`, `1.0`, `-0.0`, `-0`, `1e16`, `1E16`, `1e+16`,
+ * `1e-7`, `9007199254740992`, `9007199254740993`, `-9007199254740993` and a
+ * thirty-digit integer.
  */
-export function formatNumber(value: number): string {
+export function formatNumber(value: number, spelling?: PyNumberSpelling | undefined): string {
   if (Number.isNaN(value)) {
     // `allow_nan=True` is CPython's default, and these three spellings are not
     // legal JSON. Reproduced rather than rejected: interlock never passes
@@ -244,17 +296,38 @@ export function formatNumber(value: number): string {
   if (value === Number.NEGATIVE_INFINITY) {
     return "-Infinity";
   }
-  if (Object.is(value, -0)) {
-    // `JSON.parse("-0.0")` yields -0, and CPython's repr keeps the sign.
-    // `(-0).toExponential()` drops it, so the exponential path below would
-    // silently write `0.0` for a value the source document spelled `-0.0`.
-    return "-0.0";
+  if (pyNumberKind(value, spelling) === "int") {
+    // `int.__repr__`: plain digits, no decimal point, no exponent.
+    if (Number.isSafeInteger(value)) {
+      // Below 2**53 `String` never reaches for exponential notation, so it is
+      // already that -- and `String(-0)` is `"0"`, which is right: a document
+      // that spells `-0` is spelling Python's `int` 0, whose repr has no sign.
+      return String(value);
+    }
+    if (spelling?.text != null) {
+      // The document's own digits. `JSON.parse` rounded `9007199254740993` to
+      // `...992` before anything here could see it, so the VALUE is no longer
+      // evidence of what was written and re-deriving the text from it would
+      // write a different integer into a file that is compared by bytes.
+      return spelling.text;
+    }
+    if (Number.isInteger(value)) {
+      // An `int` asserted in code over a magnitude past 2**53. There is no
+      // source text to fall back on, so the double's exact integer value --
+      // what is actually held -- is printed, which is also what CPython's
+      // `int()` of the same float would repr.
+      return BigInt(value).toString();
+    }
+    // An `int` spelling over a value that is not integral describes a Python
+    // value that cannot exist. Rather than throw inside a serialiser whose
+    // failure mode is an unwritten fence, the value is printed as what it
+    // demonstrably is, and the float arm below does that.
   }
-  if (Number.isSafeInteger(value)) {
-    // `int.__repr__`: plain digits, no decimal point, no exponent. Below
-    // 2**53 `String` never reaches for exponential notation, so it is already
-    // that.
-    return String(value);
+  if (Object.is(value, -0)) {
+    // CPython's float repr keeps the sign. `(-0).toExponential()` drops it, so
+    // the exponential path below would silently write `0.0` for a value the
+    // source document spelled `-0.0`.
+    return "-0.0";
   }
   const [mantissa, exponentText] = value.toExponential().split("e");
   const exponent = Number(exponentText);
@@ -302,7 +375,11 @@ export function pyJsonDumps(value: unknown, options: PyJsonDumpsOptions = {}): s
     return indented ? `\n${indentUnit.repeat(level)}` : "";
   }
 
-  function encode(item: unknown, level: number): string {
+  // `spelling` is how the SOURCE DOCUMENT wrote this particular number, looked
+  // up from the container on the way in rather than carried by the value --
+  // which a JavaScript number cannot do. It is `undefined` for the root and for
+  // anything built in code, and `formatNumber` then classifies by value.
+  function encode(item: unknown, level: number, spelling?: PyNumberSpelling | undefined): string {
     if (item === null || item === undefined) {
       return "null";
     }
@@ -316,7 +393,7 @@ export function pyJsonDumps(value: unknown, options: PyJsonDumpsOptions = {}): s
       return encodeString(item, ensureAscii);
     }
     if (typeof item === "number") {
-      return formatNumber(item);
+      return formatNumber(item, spelling);
     }
     if (typeof item === "bigint") {
       return item.toString();
@@ -327,7 +404,9 @@ export function pyJsonDumps(value: unknown, options: PyJsonDumpsOptions = {}): s
         return "[]";
       }
       const inner = newlineIndent(level + 1);
-      const parts = item.map((child) => encode(child, level + 1));
+      const parts = item.map((child, childIndex) =>
+        encode(child, level + 1, pyNumberSpelling(item, childIndex)),
+      );
       return `[${inner}${parts.join(itemSeparator + inner)}${newlineIndent(level)}]`;
     }
     if (item instanceof Map || item instanceof Set || item instanceof Date) {
@@ -356,7 +435,11 @@ export function pyJsonDumps(value: unknown, options: PyJsonDumpsOptions = {}): s
       const inner = newlineIndent(level + 1);
       const parts = keys.map((key) => {
         const child = (item as Record<string, unknown>)[key];
-        return `${encodeString(key, ensureAscii)}${keySeparator}${encode(child, level + 1)}`;
+        return `${encodeString(key, ensureAscii)}${keySeparator}${encode(
+          child,
+          level + 1,
+          pyNumberSpelling(item, key),
+        )}`;
       });
       return `{${inner}${parts.join(itemSeparator + inner)}${newlineIndent(level)}}`;
     }
@@ -371,13 +454,31 @@ export function pyJsonDumps(value: unknown, options: PyJsonDumpsOptions = {}): s
 }
 
 /**
- * The order of the keys in one JSON value, as the SOURCE TEXT wrote them.
+ * What one JSON container held that the parsed value cannot hold: the order the
+ * SOURCE TEXT wrote its keys in, and how the source text spelled each of its
+ * numbers.
  *
- * `null` for a scalar, which carries no order and needs no node.
+ * `null` for a scalar, which is not a container and needs no node. The
+ * `numbers` map is keyed by property name for an object and by decimal index
+ * for an array, which is the key {@link ../fencing/pysemantics.ts | pyNumberSpelling}
+ * looks a slot up by.
  */
 type OrderNode =
-  | { readonly keys: readonly string[]; readonly children: readonly (OrderNode | null)[] }
-  | { readonly items: readonly (OrderNode | null)[] };
+  | {
+      readonly keys: readonly string[];
+      readonly children: readonly (OrderNode | null)[];
+      readonly numbers: ReadonlyMap<string, PyNumberSpelling>;
+    }
+  | {
+      readonly items: readonly (OrderNode | null)[];
+      readonly numbers: ReadonlyMap<string, PyNumberSpelling>;
+    };
+
+/** One scanned value: its container node, and -- if it was a number -- its spelling. */
+interface Scanned {
+  readonly node: OrderNode | null;
+  readonly spelling: PyNumberSpelling | null;
+}
 
 /**
  * `json.loads`, preserving the source key order that `JSON.parse` destroys.
@@ -391,10 +492,14 @@ type OrderNode =
  * hoists integer-like keys to the front and no amount of care while building
  * one avoids it.
  *
- * So the text is scanned a second time, for key order alone, and the order is
- * recorded on each parsed object with
- * {@link ../fencing/pysemantics.ts | rememberKeyOrder}. The scan cannot fail:
- * it only ever runs on text `JSON.parse` has already accepted.
+ * So the text is scanned a second time, and what that scan recovers is recorded
+ * on each parsed container: the key order, with
+ * {@link ../fencing/pysemantics.ts | rememberKeyOrder}, and the spelling of
+ * every number, with
+ * {@link ../fencing/pysemantics.ts | rememberNumberSpellings} -- the second
+ * property `JSON.parse` destroys, and for the same reason (see the module
+ * header). The scan cannot fail: it only ever runs on text `JSON.parse` has
+ * already accepted.
  *
  * The cost of NOT doing this is not cosmetic. `repr()` of a dict is part of
  * several refusal messages, `_check_placeholders` walks a mapping in key order
@@ -404,11 +509,11 @@ type OrderNode =
  */
 export function pyJsonLoads(text: string): unknown {
   const value: unknown = JSON.parse(text);
-  applyKeyOrder(value, new KeyOrderScan(text).scan());
+  applyDocumentOrder(value, new DocumentScan(text).scan());
   return value;
 }
 
-function applyKeyOrder(value: unknown, node: OrderNode | null): void {
+function applyDocumentOrder(value: unknown, node: OrderNode | null): void {
   if (node === null) {
     return;
   }
@@ -416,8 +521,9 @@ function applyKeyOrder(value: unknown, node: OrderNode | null): void {
     if (!Array.isArray(value)) {
       return;
     }
+    rememberNumberSpellings(value, node.numbers);
     node.items.forEach((child, index) => {
-      applyKeyOrder(value[index], child ?? null);
+      applyDocumentOrder(value[index], child ?? null);
     });
     return;
   }
@@ -425,65 +531,83 @@ function applyKeyOrder(value: unknown, node: OrderNode | null): void {
     return;
   }
   rememberKeyOrder(value, node.keys);
+  rememberNumberSpellings(value, node.numbers);
   node.keys.forEach((key, index) => {
-    applyKeyOrder(value[key], node.children[index] ?? null);
+    applyDocumentOrder(value[key], node.children[index] ?? null);
   });
 }
 
 /**
- * A structure-only scan of JSON text that is already known to be valid.
+ * A scan of JSON text that is already known to be valid, for the two properties
+ * the parsed value cannot hold.
  *
- * It reads no values: strings are handed back to `JSON.parse` for unescaping
- * so a key spelled `"2"` matches the parsed key `"2"`, and every other
- * scalar is skipped by finding where it ends. Validity is the caller's
+ * It interprets almost nothing: strings are handed back to `JSON.parse` for
+ * unescaping so a key spelled `"2"` matches the parsed key `"2"`, and the only
+ * other scalar it looks INSIDE is a number, whose literal text is the sole
+ * surviving evidence of how the document spelled it. Validity is the caller's
  * precondition, which is why nothing here reports an error -- an error would
  * mean `JSON.parse` and this scan disagree about the same bytes, and the
- * defensive `return` in {@link applyKeyOrder} is what keeps that from
+ * defensive `return` in {@link applyDocumentOrder} is what keeps that from
  * corrupting an order.
  */
-class KeyOrderScan {
+class DocumentScan {
   private index = 0;
 
   constructor(private readonly src: string) {}
 
   scan(): OrderNode | null {
     this.skipWhitespace();
-    return this.value();
+    // The root's own spelling is discarded, and this is the one thing the
+    // mechanism cannot carry: a spelling hangs on a CONTAINER SLOT, and the root
+    // of a document sits in no container. `pyJsonLoads("1.0")` therefore still
+    // dumps as `1`. Every artefact this subsystem reads -- the persisted fence,
+    // a settings document, a ledger line, a role document -- has an object at
+    // its root, so no caller in the port reaches the case.
+    return this.value().node;
   }
 
-  private value(): OrderNode | null {
+  private value(): Scanned {
     const ch = this.src[this.index];
     if (ch === "{") {
-      return this.object();
+      return { node: this.object(), spelling: null };
     }
     if (ch === "[") {
-      return this.array();
+      return { node: this.array(), spelling: null };
     }
     if (ch === '"') {
       this.string();
-      return null;
+      return { node: null, spelling: null };
     }
-    this.skipScalar();
-    return null;
+    return { node: null, spelling: this.scalar() };
   }
 
   private object(): OrderNode {
     this.index += 1;
     const keys: string[] = [];
     const children: (OrderNode | null)[] = [];
+    const numbers = new Map<string, PyNumberSpelling>();
     this.skipWhitespace();
     if (this.src[this.index] === "}") {
       this.index += 1;
-      return { keys, children };
+      return { keys, children, numbers };
     }
     for (;;) {
       this.skipWhitespace();
-      keys.push(this.string());
+      const key = this.string();
+      keys.push(key);
       this.skipWhitespace();
       // The ':' separator.
       this.index += 1;
       this.skipWhitespace();
-      children.push(this.value());
+      const scanned = this.value();
+      children.push(scanned.node);
+      if (scanned.spelling !== null) {
+        // `set`, so a DUPLICATED key keeps the LAST spelling -- which is the
+        // value `JSON.parse` kept, while `pyKeys` keeps the FIRST position. The
+        // two halves of `{"a": 1, "a": 2.0}` have to agree with each other or
+        // the spelling would describe a value that is no longer there.
+        numbers.set(key, scanned.spelling);
+      }
       this.skipWhitespace();
       if (this.src[this.index] === ",") {
         this.index += 1;
@@ -491,28 +615,33 @@ class KeyOrderScan {
       }
       // The closing '}'.
       this.index += 1;
-      return { keys, children };
+      return { keys, children, numbers };
     }
   }
 
   private array(): OrderNode {
     this.index += 1;
     const items: (OrderNode | null)[] = [];
+    const numbers = new Map<string, PyNumberSpelling>();
     this.skipWhitespace();
     if (this.src[this.index] === "]") {
       this.index += 1;
-      return { items };
+      return { items, numbers };
     }
     for (;;) {
       this.skipWhitespace();
-      items.push(this.value());
+      const scanned = this.value();
+      if (scanned.spelling !== null) {
+        numbers.set(String(items.length), scanned.spelling);
+      }
+      items.push(scanned.node);
       this.skipWhitespace();
       if (this.src[this.index] === ",") {
         this.index += 1;
         continue;
       }
       this.index += 1;
-      return { items };
+      return { items, numbers };
     }
   }
 
@@ -536,11 +665,32 @@ class KeyOrderScan {
     return JSON.parse(this.src.slice(start, this.index)) as string;
   }
 
-  /** A number, `true`, `false` or `null`: skipped up to its delimiter. */
-  private skipScalar(): void {
+  /**
+   * A number, `true`, `false` or `null`, consumed up to its delimiter -- and,
+   * for a number, CLASSIFIED the way Python's JSON grammar classifies it.
+   *
+   * This is the second thing the rescan exists for. `JSON.parse` has already
+   * turned `1` and `1.0` into the same double and `9007199254740993` into
+   * `...992`; the source text is the only surviving evidence of either, and
+   * this is the last point at which it is in hand.
+   *
+   * The rule is CPython's own, from `json/scanner.py`: a literal containing a
+   * `.`, an `e` or an `E` goes to `parse_float`, and everything else goes to
+   * `parse_int`. It is applied to text `JSON.parse` has already accepted, so a
+   * leading digit or `-` is enough to tell a number from `true`/`false`/`null`.
+   */
+  private scalar(): PyNumberSpelling | null {
+    const start = this.index;
     while (this.index < this.src.length && !SCALAR_END.has(this.src[this.index] as string)) {
       this.index += 1;
     }
+    const text = this.src.slice(start, this.index);
+    const first = text[0];
+    if (first === undefined || (first !== "-" && (first < "0" || first > "9"))) {
+      return null;
+    }
+    const isFloat = text.includes(".") || text.includes("e") || text.includes("E");
+    return { kind: isFloat ? "float" : "int", text };
   }
 
   private skipWhitespace(): void {

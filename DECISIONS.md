@@ -3110,6 +3110,38 @@ a sandbox launcher, a wrapper that sets an environment, `sudo` -- at which point
 must be widened deliberately, by naming the wrapper in the context, rather than by relaxing this back
 to a substring.
 
+**Generalisations this port adds are outside parity's reach.** The amendment above is one of two
+instances from this pull request of a single shape: **a generalisation the port adds can open a hole
+the source never had** -- and both were in code written to close a *different* hole. Instance A is
+the argv[0] branch itself: repairing a genuine fail-open (the substring test) required knowing which
+token is the program, and while implementing it a second shape, "a directly executable hook at
+argv[0]", was accepted. Nothing produces that shape -- interlock has no notion of argv positions,
+its `hook.py` is 0644 with no shebang, every shipped role renders `{python} {hook_script} ...` --
+and on Windows it admitted an unfenced child. Instance B is the deny hook's chunked stdin read: the
+fix for a real bug (a >64KB pipe read returning empty, because fd 0 is non-blocking by then and
+`readFileSync` threw `EAGAIN`) had to accumulate chunks and decode once, and the decode reached for
+was `Buffer.concat(chunks).toString("utf8")` -- **lossy**, substituting U+FFFD where Python's
+`sys.stdin.read()` raises `UnicodeDecodeError` that the hook's bare `except` turns into a deny. The
+repair thus introduced a fail-open on invalid UTF-8: an event carrying raw bytes (a filename on a
+Linux filesystem is the realistic source) parsed, arrived with a **mangled** `tool_input`, and was
+admitted where interlock denies. The correct idiom, `new TextDecoder("utf-8", { fatal: true })`,
+already existed 300 lines away in `src/fencing/state.ts`, with a comment naming this exact hazard.
+
+Such an addition -- an extra accepted shape, a new code path, a "more general" version of a check --
+**cannot be judged by parity**: the source's suite cannot exercise it, the differential oracle has no
+counterpart to compare it against, and the ledger has no node id for it. It is the only genuinely new
+code in a parity port, and it needs the scrutiny new code gets, not the confidence the surrounding
+translation has earned. Two questions catch both instances:
+
+- **Who produces this shape?** If nothing in either codebase does, delete it rather than validate it.
+  A branch with no producer cannot be exercised by any test that means anything.
+- **Does an equivalent already exist in this repository?** Instance B's correct form was already
+  written down. Reaching for the platform default instead of the local idiom is how a codebase grows
+  two answers to one question, one of them wrong.
+
+The corollary for review: **a fix is not finished when the original finding stops reproducing -- ask
+what the fix itself now admits.**
+
 ---
 
 ## D-0209 — `npm test` builds first, because the deny hook's dependencies come from `dist/`
@@ -3385,3 +3417,86 @@ exists for. Recorded in `parity/measurement.provenance.ledger.json` under `diver
 **Falsified by.** interlock adopting the same tie-breaker, or the schema gaining a constraint that
 makes a mixed-storage-class column impossible.
 
+---
+
+## D-0210 — A JSON number's Python spelling is recorded on its container slot, never inside the value
+
+**Status.** accepted (2026-08-22)
+
+**Context.** JavaScript has one number type, and two things CPython knows about a JSON number were
+gone by the time `JSON.parse` returned.
+
+1. **int/float provenance.** `json.loads` gives `1` and `1.0` different types, so `json.dumps`
+   re-emits them differently and `type(x).__name__` answers differently. The visible cost was one
+   field: the fence ledger's `at`, which interlock fills from `time.time()` (always a `float`) and
+   which this port wrote as `"at": 0` where interlock writes `"at": 0.0`. It was the ONLY field in
+   which a continuo ledger line differed from interlock's for the same inputs. The same collapse
+   made a refusal say `permissions.deny must be a list, got int` where interlock says `got float`,
+   and that sentence is persisted in a ledger refusal detail.
+2. **Exact integers past `2**53`.** `JSON.parse("9007199254740993")` is `9007199254740992`. The
+   authored value is destroyed before any serialiser can see it.
+
+Both reach artefacts that `D-0201` compares BY BYTES across a restart, so a role document carrying
+either renders a fence that disagrees with interlock's bytes forever -- a permanent "the fence
+changed" that no operator can clear.
+
+**Decision.** `pyJsonLoads` already rescans the source text once, to recover the key order
+`JSON.parse` destroys. That scan now also records, for every number it passes, how the source spelled
+it: `int` or `float` by CPython's own rule from `json/scanner.py` (a `.`, an `e` or an `E` sends the
+literal to `parse_float`), plus the literal text. The record hangs on the **container**, keyed by
+property name or by array index, next to the key order and by the same mechanism -- a non-enumerable
+`Symbol.for` property. `formatNumber` consults it to pick `int.__repr__` or `float.__repr__` and to
+re-emit a big integer's own digits; `pyTypeNameOf(container, key)` consults it to answer `int` /
+`float` per the DOCUMENT rather than per the JavaScript value; `FenceLedger.append` asserts
+`PY_FLOAT` for the clock's value, which is built in code and has no document behind it.
+
+**Why the container and not the value.** A number is a primitive. It has no identity to key a side
+table by, so carrying the spelling *in the value* means a boxed `Number` or a `bigint` -- and that
+breaks `===`, `typeof` and arithmetic for every ordinary number in the parsed tree. The tree is not
+inert: `state.ts` decides whether a persisted fence is loadable with `payload.format == 1`, and
+interlock accepts a fence whose `format` is `1.0` precisely because `1.0 == 1` in Python. A boxed
+`1.0` would have made that fence unloadable, which is a behaviour change interlock does not have,
+introduced by a repair for a spelling. The measured result stands: a `"format": 1.0` fence still
+loads, and `parity/fencing.restart.ledger.json` says why that is deliberate rather than accidental.
+
+**What it does not fix, stated narrowly so the claim stays true.**
+
+- The **value** of an integer past `2**53` is still the rounded double. The exact digits are recovered
+  for RE-EMISSION only, so such an integer round-trips unchanged and arithmetic on it is arithmetic
+  on the rounded value. Out of scope rather than faked.
+- A number at the **root** of a document has no container slot, so `pyJsonLoads("1.0")` still dumps
+  as `1`. Every fencing artefact has an object at its root; the one reachable case is a corrupt
+  ledger line, whose `'float' object is not subscriptable` reads `'int'` here.
+- `pyStr` still renders an integral float as an int, visible only for a role document that spells
+  `role_kind` or `permission_mode` as a number.
+- A container rebuilt without carrying its spellings loses them, exactly as it would lose its key
+  order. Every rebuild site in the port (`stripMeta`, `substitute`, `pyDict`) now carries both.
+
+**Measured, not argued.** interlock's `FencedSpawner.spawn` and continuo's were driven to an
+admission over the shipped role document with the same context paths, the same `python`, the same
+hook file and the clock pinned to the same value. All three artefacts -- `fence-worker.json`,
+`settings.local.json` and `fence-ledger.jsonl` -- compare EQUAL under `cmp`, at clocks `0.0`,
+`1700000000.0`, `1700000000.5` and `1700000000.125`. With the `PY_FLOAT` assertion removed, the
+ledger diverges again in exactly one place and the other two artefacts stay equal, which is the
+control that says the repair is what closed it. The differential corpus gained
+`pyjson.number_documents`: 32 documents covering both sides of `2**53`, a thirty-digit integer,
+integral floats, every exponent spelling, `0` against `0.0`, `-0` against `-0.0`, duplicate keys and
+nesting -- each asserted on its `loads -> dumps` bytes AND on `type(x).__name__` at every number.
+With the spelling ignored, 16 of them fail.
+
+**Alternatives.**
+
+- **Box the divergent numbers only (rejected).** Narrower than boxing everything and still fatal:
+  the values that need a spelling are exactly the ones a document supplies, which are exactly the
+  ones the fence compares.
+- **A `bigint` for integers past `2**53` (rejected).** It is exact and it is a primitive, but it puts
+  a second numeric type into a tree that `pyRepr`, `pySet`, `pyIn` and every rule comparison walk,
+  in exchange for arithmetic this subsystem never performs on such a value.
+- **Hand-roll the whole loader so numbers never pass through `JSON.parse` (rejected).** `D-0200`'s
+  reasoning applies unchanged: `JSON.parse` supplies every value, every string unescape and every
+  parse error this port is pinned against, and trading that surface for one property is the wrong
+  direction.
+
+**Falsified by.** A fencing artefact that needs a scalar at its root, or a role document that spells
+`role_kind` as a number -- either would move an item out of the "not fixed" list above and into the
+work.

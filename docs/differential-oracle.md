@@ -162,8 +162,11 @@ Three kinds of answer are recorded, and the second and third are what keep the f
    dropped. "Both sides refuse this" is as much a parity claim as "both sides agree on the tokens",
    and the error paths are where a transcription drifts most easily.
 3. **The accepted deviation**: a place where the two genuinely differ -- `~someuser` (Node cannot
-   read the `pwd` database), an integral float (`JSON.parse` has already collapsed `1.0` into `1`),
-   `IGNORECASE` folding, the constructs the regex translator refuses rather than guess at. Each is
+   read the `pwd` database), an integral float *written as a literal in code* (a Python `1.0` and a
+   JavaScript `1` are one double with no document behind them to say which was meant; an integral
+   float that came from a DOCUMENT round-trips exactly, and `pyjson.number_documents` is where that
+   is measured), `IGNORECASE` folding, the constructs the regex translator refuses rather than
+   guess at. Each is
    listed in the corpus with the reason, and asserted in **both directions**: continuo must produce
    the deviating answer *and* CPython must still produce a different one, so an entry that goes
    stale fails loudly instead of licensing a divergence that no longer exists. A deviation deleted
@@ -182,8 +185,10 @@ the corpus's values on both sides for the calls that read them, since an oracle 
 generating machine's home directory would be comparing two environments and calling it a comparison
 of two implementations.
 
-This face has now earned its place three times: the bracket-expression bug in `D-0200`, the missing
-astral coverage that the same entry records, and -- when the corpus was extended to the regex, JSON
+This face has now earned its place four times: the bracket-expression bug in `D-0200`, the missing
+astral coverage that the same entry records, the JSON number round trip of `D-0210` (the corpus
+section that measures it went in with the repair, and the two things it pins -- an integral float's
+spelling and an integer past 2**53 -- were both invisible to every other case in the suite), and -- when the corpus was extended to the regex, JSON
 and value-semantics transcriptions -- a variable-width lookbehind that CPython **rejected** and this
 port compiled, which is the "interlock refuses, continuo renders" direction. That one is now fixed:
 `src/fencing/pyregex.ts` refuses a lookbehind body it cannot prove fixed-width, and the corpus entry

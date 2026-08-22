@@ -31,6 +31,7 @@ import { pyJsonLoads } from "./pyjson.js";
 import { compilePythonRegex } from "./pyregex.js";
 import { pyRepr } from "./pyrepr.js";
 import {
+  carryNumberSpellings,
   isPlainObject,
   pyEntries,
   pyHashable,
@@ -42,6 +43,7 @@ import {
   pyStr,
   pyStrip,
   pyTypeName,
+  pyTypeNameOf,
   rememberKeyOrder,
 } from "./pysemantics.js";
 import {
@@ -485,7 +487,10 @@ export function renderFence(
   } else if (!Array.isArray(deny)) {
     reasons.push([
       RefusalReason.RULE_SYNTAX,
-      `permissions.deny must be a list, got ${pyTypeName(deny)}`,
+      // `pyTypeNameOf`, not `pyTypeName(deny)`: `"deny": 1.0` is `got float` in
+      // interlock and would be `got int` from the value alone, and this
+      // sentence is persisted in a ledger refusal detail.
+      `permissions.deny must be a list, got ${pyTypeNameOf(permissions, "deny")}`,
     ]);
     deny = [];
   }
@@ -531,7 +536,9 @@ export function renderFence(
       if (!Array.isArray(entries)) {
         reasons.push([
           RefusalReason.RULE_SYNTAX,
-          `sandbox.filesystem.${key} must be a list, got ${pyTypeName(entries)}`,
+          // @see the `permissions.deny` refusal above for why the container
+          // and the key are passed rather than the value.
+          `sandbox.filesystem.${key} must be a list, got ${pyTypeNameOf(filesystem, key)}`,
         ]);
         continue;
       }
@@ -1088,8 +1095,10 @@ function stripMeta(body: Readonly<Record<string, unknown>>): Record<string, unkn
   // from -- `{k: v for k, v in body.items() if ...}` keeps it in Python -- so
   // it is carried across explicitly. Without this, `_check_placeholders` runs
   // over `rendered`, which is always a rebuild, and the order recorded at load
-  // time never reaches it.
-  return rememberKeyOrder(out, kept);
+  // time never reaches it. The number SPELLINGS travel the same way and for the
+  // same reason: `rendered` is what reaches `settings.local.json`, and a `1.0`
+  // whose spelling stayed behind on `body` is written there as `1`.
+  return carryNumberSpellings(body, rememberKeyOrder(out, kept));
 }
 
 function substitute(value: unknown, mapping: Readonly<Record<string, string>>): unknown {
@@ -1102,7 +1111,13 @@ function substitute(value: unknown, mapping: Readonly<Record<string, string>>): 
     });
   }
   if (Array.isArray(value)) {
-    return value.map((v) => substitute(v, mapping));
+    // The mapped array is a NEW container, so the spellings of the numbers it
+    // holds -- which substitution leaves untouched -- have to come across with
+    // it. @see stripMeta.
+    return carryNumberSpellings(
+      value,
+      value.map((v) => substitute(v, mapping)),
+    );
   }
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
@@ -1111,8 +1126,8 @@ function substitute(value: unknown, mapping: Readonly<Record<string, string>>): 
       setOwn(out, k, substitute(value[k], mapping));
     }
     // @see stripMeta -- the same rebuild, and the same reason for carrying the
-    // order across it.
-    return rememberKeyOrder(out, keys);
+    // order and the number spellings across it.
+    return carryNumberSpellings(value, rememberKeyOrder(out, keys));
   }
   return value;
 }

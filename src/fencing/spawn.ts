@@ -68,7 +68,14 @@ import { fileURLToPath } from "node:url";
 
 import { type BatteryReport, ProbeSynthesisError, runBattery } from "./battery.js";
 import { pyJsonDumps, pyJsonLoads } from "./pyjson.js";
-import { isPlainObject, PyTypeError, pyStrip, pyTypeName } from "./pysemantics.js";
+import {
+  isPlainObject,
+  PY_FLOAT,
+  PyTypeError,
+  pyStrip,
+  pyTypeName,
+  rememberNumberSpellings,
+} from "./pysemantics.js";
 import {
   type FenceContext,
   FenceRefusal,
@@ -268,6 +275,19 @@ export class FenceLedger {
 
   append(event: string, payload: Readonly<Record<string, unknown>>): Record<string, unknown> {
     const entry: Record<string, unknown> = { event, at: this.#clock(), ...payload };
+    // `time.time()` is a `float` on every platform, so interlock writes an
+    // integral timestamp as `0.0` and this wrote `0` -- the ONE field in which a
+    // continuo ledger line differed from interlock's for the same inputs. The
+    // clock's value is a number built in CODE, so no document spelling exists to
+    // recover; the spelling is asserted here instead, at the site that knows
+    // which Python function the value stands for.
+    //
+    // Not asserted when the caller supplied its own `at`: the spread above puts
+    // the payload's value in the slot, and claiming `float` over it would spell
+    // somebody else's integer as a float.
+    if (!Object.hasOwn(payload, "at")) {
+      rememberNumberSpellings(entry, new Map([["at", PY_FLOAT]]));
+    }
     mkdirSync(dirname(this.path), { recursive: true });
     // `fsync` on a *newly created* file does not promise its directory entry
     // survives a power loss -- the bytes would be on disk under a pathname that
