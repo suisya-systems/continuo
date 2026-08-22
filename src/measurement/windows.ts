@@ -703,6 +703,15 @@ export function classifyEpisodes(
     graceMs = options.graceMs;
     graceSource = GRACE_DECLARED;
   }
+  // D-0108. The check also runs inside episodeWindow, which is where interlock
+  // leaves it -- and require_grace_ms's own docstring names the consequence:
+  // "on a report that classified no episodes, nothing would ever raise, so it
+  // would render clean". A report over zero episodes then carries grace_ms = -1
+  // and states it, which is a report declaring a grace nobody could have
+  // applied. Called here once, after the grace is resolved, so the declaration
+  // is validated whether or not the period held anything; episodeWindow keeps
+  // its own call for its own direct callers.
+  requireGraceMs(graceMs);
 
   const windows: EpisodeWindow[] = [];
   const seen = new Set<string>();

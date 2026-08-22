@@ -1409,3 +1409,50 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     expect(buckets.get("liveness:inc-at-epoch")).toBe("0");
   });
 });
+
+describe("a deliberate divergence from interlock (target-only)", () => {
+  test("the positional caveat prints for an unpaired escalation in any bucket", () => {
+    // Target-only, and `D-0108`, decided by the operator on 2026-08-22 with the
+    // withdrawal of `D-0022`.
+    //
+    // interlock guards the caveat on the unmatched_key bucket alone, and that
+    // is the bucket where a positional episode is LEAST likely to be the story.
+    // An escalation whose key composed and found no counterpart is filed
+    // interlock_only or v1_only -- and a run of exactly those is what an
+    // ordering divergence looks like, which is the situation the caveat exists
+    // to warn about. So the warning went missing precisely when the key was the
+    // first thing to doubt. Raised by the codex review gate on the shadow belt
+    // and disclosed there under D-0022; repaired here now that D-0022 is
+    // withdrawn.
+    const ours = new ShadowEpisode({
+      episodeId: "ours-1",
+      subjectClass: SUBJECT_WORKER_ESCALATION,
+      shape: "received",
+      onsetMs: T0,
+      key: new CorrelationKey({
+        subjectClass: SUBJECT_WORKER_ESCALATION,
+        parts: ["run-1", "1"],
+      }),
+    });
+    const theirs = new ShadowEpisode({
+      episodeId: "v1-1",
+      subjectClass: SUBJECT_WORKER_ESCALATION,
+      shape: "received",
+      onsetMs: T0,
+      key: new CorrelationKey({
+        // The same run, one ordinal further along: exactly what a divergence in
+        // escalation order produces.
+        subjectClass: SUBJECT_WORKER_ESCALATION,
+        parts: ["run-1", "2"],
+      }),
+    });
+
+    const report = reconciled([ours], [theirs]);
+    // Neither episode is in unmatched_key -- both computed a key and neither
+    // found a counterpart.
+    expect(report.counts().get(UNMATCHED_KEY)).toBe(0);
+    expect(report.counts().get(INTERLOCK_ONLY)).toBe(1);
+    expect(report.counts().get(V1_ONLY)).toBe(1);
+    expect(renderShadowReconciliation(report)).toContain(POSITIONAL_KEY_CAVEAT);
+  });
+});

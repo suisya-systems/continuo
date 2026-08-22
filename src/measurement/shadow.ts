@@ -1668,7 +1668,19 @@ export function renderShadowReconciliation(report: ShadowReconciliation): string
     lines.push(`  confirmed misses: ${report.confirmedMissCount()}`);
   }
 
-  if (report.unmatchedKey.some((episode) => episode.positionalKey)) {
+  // D-0108. interlock guards this on the unmatched_key bucket alone, and that
+  // is the bucket where a positional episode is LEAST likely to be the story:
+  // an escalation whose key composed and found no counterpart is filed
+  // interlock_only or v1_only, and a run of exactly those is what an ordering
+  // divergence looks like. So the caveat went missing precisely when the key
+  // was the thing to doubt. Every bucket an episode can reach unpaired is
+  // considered here.
+  const unpaired = [
+    ...report.unmatchedKey,
+    ...report.interlockOnly,
+    ...report.v1Only.map((candidate) => candidate.episode),
+  ];
+  if (unpaired.some((episode) => episode.positionalKey)) {
     lines.push(`  NOTE: ${report.positionalCaveat}`);
   }
   if (report.unmatchedKey.some((episode) => episode.onsetBasis !== ONSET_OBSERVED)) {
