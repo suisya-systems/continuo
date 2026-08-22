@@ -499,6 +499,7 @@ export {
   FINGERPRINT_CONTENT,
   FINGERPRINT_MODES,
   Figure,
+  FigureExceedsExactRangeRefused,
   FingerprintModeRefused,
   FixtureCase,
   FixtureCorpus,

@@ -33,6 +33,7 @@ export {
   BaselineRefused,
   COHORT_INVOCATIONS_QUERY,
   Figure,
+  FigureExceedsExactRangeRefused,
   KIND_ASSUMPTION,
   KIND_FACT,
   KIND_LOWER_BOUND,
