@@ -78,7 +78,7 @@ export function pythonJsonObject(entries: readonly (readonly [string, string | n
  */
 export function pythonJsonDumpsSorted(value: Record<string, string | number>): string {
   const entries = Object.keys(value)
-    .sort()
+    .sort(byCodePoint)
     .map((key) => {
       const item = value[key];
       if (typeof item !== "string" && typeof item !== "number") {
@@ -89,4 +89,93 @@ export function pythonJsonDumpsSorted(value: Record<string, string | number>): s
       return [key, item] as const;
     });
   return pythonJsonObject(entries);
+}
+
+/**
+ * `json.dumps(value, sort_keys=True)` for an arbitrary JSON document.
+ *
+ * The flat form above covers the two columns whose payloads are fixed shapes.
+ * This one covers a payload assembled from a caller's own map, which can carry
+ * `null`, arrays and nested objects. It is here rather than in the module that
+ * needed it because the fourth hand-written copy of this logic had already
+ * drifted from the other three -- it sorted by UTF-16 code unit while this
+ * module had moved to code point -- which is exactly the failure `D-0017`
+ * rule 4's "one renderer" exists to stop.
+ *
+ * `undefined` renders as `null`, matching how the callers build a body from
+ * optional fields; Python's `None` is the only spelling of absence there.
+ *
+ * **One difference cannot be reproduced and is disclosed instead.** Python
+ * distinguishes `1` from `1.0` and renders them as `1` and `1.0`; JavaScript
+ * has a single number type and cannot tell them apart, so a whole-number float
+ * renders here as an integer. Every number this package persists is an integer
+ * (timestamps, sequences, counts), so nothing currently reaches it.
+ */
+export function pythonJsonDocumentSorted(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "null";
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      // Python emits NaN / Infinity here, which is not valid JSON and which the
+      // `json_valid` CHECK on these columns would reject. Refuse rather than
+      // write something the database will not accept.
+      throw new TypeError(`pythonJsonDocumentSorted cannot render ${String(value)} as JSON`);
+    }
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return pythonJsonString(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(pythonJsonDocumentSorted).join(", ")}]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort(byCodePoint)
+      .map(
+        (key) =>
+          `${pythonJsonString(key)}: ${pythonJsonDocumentSorted((value as Record<string, unknown>)[key])}`,
+      );
+    return `{${entries.join(", ")}}`;
+  }
+  throw new TypeError(`pythonJsonDocumentSorted cannot render a ${typeof value} as JSON`);
+}
+
+/**
+ * Python's ordering for `sort_keys=True`, which is by **code point**.
+ *
+ * JavaScript's default `Array#sort` compares UTF-16 **code units**, and the two
+ * disagree above the BMP: an astral character's leading surrogate is `0xD800`
+ * to `0xDBFF`, so it sorts *below* `U+E000`..`U+FFFF` under code units and
+ * *above* them under code points. Measured, not reasoned about:
+ *
+ * ```
+ * python:  ['a', '\uffff', '\U0001f600']      # 0x61, 0xffff, 0x1f600
+ * js sort: ['a', '\u{1f600}', '\uffff']       # 0x61, 0x1f600, 0xffff
+ * ```
+ *
+ * Iterating a string yields code points rather than code units, which is what
+ * makes this the right comparison rather than a longer one.
+ *
+ * The keys this package writes today are all ASCII literals, so nothing
+ * currently reaches the disagreement. It is fixed here anyway because this
+ * module's whole claim is that its output is `json.dumps` byte for byte, and a
+ * claim with a carve-out nobody has written down is the kind that stops being
+ * true quietly. Raised by the measurement lane, 2026-08-22.
+ */
+function byCodePoint(left: string, right: string): number {
+  const a = [...left];
+  const b = [...right];
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    const x = (a[index] as string).codePointAt(0) ?? 0;
+    const y = (b[index] as string).codePointAt(0) ?? 0;
+    if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return a.length - b.length;
 }

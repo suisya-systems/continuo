@@ -1,0 +1,276 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_ci_ingest.py",
+      "collected": 25,
+      "inventory": "parity/source-inventory/control_plane.test_ci_ingest.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/ci-ingest.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "note": "No target-only tests. ci_ingest.py is not monkeypatched by its suite, so the module needed no seam and carries no seam-liveness obligation."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 25,
+    "ported": 24,
+    "adapted": 1,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_the_dedup_key_is_the_identity_tuple_rendered_in_the_documented_order",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the identity, rendered once > the dedup key is the identity tuple rendered in the documented order",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_the_appended_event_carries_the_rendered_identity_as_its_dedup_key",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the identity, rendered once > the appended event carries the rendered identity as its dedup key",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_the_evidence_row_is_linked_to_the_seq_the_append_assigned",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the identity, rendered once > the evidence row is linked to the seq the append assigned",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_repoll_of_the_identical_fact_is_a_noop_at_the_first_statement_of_the_append",
+      "target_id": "test/control_plane/ci-ingest.test.ts::idempotency and the recovered verdict > a repoll of the identical fact is a noop at the first statement of the append",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_recovered_verdict_for_the_same_attempt_appends_and_moves_the_projection",
+      "target_id": "test/control_plane/ci-ingest.test.ts::idempotency and the recovered verdict > a recovered verdict for the same attempt appends and moves the projection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_repeat_of_the_recovered_verdict_is_still_refused",
+      "target_id": "test/control_plane/ci-ingest.test.ts::idempotency and the recovered verdict > a repeat of the recovered verdict is still refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_head_update_invalidates_prior_verdicts_instead_of_letting_them_be_overwritten",
+      "target_id": "test/control_plane/ci-ingest.test.ts::ordering: the head, and the late arrival > a head update invalidates prior verdicts instead of letting them be overwritten",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_superseded_head_observation_is_never_eligible_again",
+      "target_id": "test/control_plane/ci-ingest.test.ts::ordering: the head, and the late arrival > a superseded head observation is never eligible again",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_late_arrival_that_orders_lower_is_stored_and_does_not_move_the_projection",
+      "target_id": "test/control_plane/ci-ingest.test.ts::ordering: the head, and the late arrival > a late arrival that orders lower is stored and does not move the projection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_higher_attempt_wins_over_an_earlier_one_even_when_it_arrives_first",
+      "target_id": "test/control_plane/ci-ingest.test.ts::ordering: the head, and the late arrival > a higher attempt wins over an earlier one even when it arrives first",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_rollup_drops_out_of_the_projection_once_a_finegrained_scope_exists",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the rollup's subordinate eligibility, and the severity fold > a rollup drops out of the projection once a finegrained scope exists",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_indeterminate_outranks_passed_because_an_unobservable_check_is_not_a_green_one",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the rollup's subordinate eligibility, and the severity fold > indeterminate outranks passed because an unobservable check is not a green one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_failed_outranks_every_other_verdict_in_the_fold",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the rollup's subordinate eligibility, and the severity fold > failed outranks every other verdict in the fold",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_no_run_is_absent_evidence_rather_than_a_pass",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the rollup's subordinate eligibility, and the severity fold > no run is absent evidence rather than a pass",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_no_run_scope_never_outvotes_a_real_verdict",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the rollup's subordinate eligibility, and the severity fold > a no run scope never outvotes a real verdict",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_pull_request_with_no_observation_at_all_is_absent_evidence",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the rollup's subordinate eligibility, and the severity fold > a pull request with no observation at all is absent evidence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_the_severity_order_ranks_every_member_of_the_closed_verdict_set",
+      "target_id": "test/control_plane/ci-ingest.test.ts::the rollup's subordinate eligibility, and the severity fold > the severity order ranks every member of the closed verdict set",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Source asserts `set(VERDICT_SEVERITY) == CI_VERDICTS` then a chained `>` comparison. The set half is translated exactly (`new Set(Object.keys(VERDICT_SEVERITY))` vs `CI_VERDICTS`); the chain becomes four pairwise `toBeGreaterThan` calls because JS has no chained comparison. The reads go through a local `severity()` that THROWS on a missing key rather than yielding `undefined`->NaN (tsconfig `noUncheckedIndexedAccess`), so the translation is strictly at least as strong as the source's KeyError.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_case_variant_provider_is_refused_at_the_edge",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > a case variant provider is refused at the edge",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_an_abbreviated_head_sha_is_refused_because_two_heads_can_share_a_prefix",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > an abbreviated head sha is refused because two heads can share a prefix",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_an_upper_case_head_sha_is_refused",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > an upper case head sha is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_an_attempt_below_one_is_refused",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > an attempt below one is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_verdict_outside_the_closed_set_is_refused",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > a verdict outside the closed set is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_check_scope_outside_the_closed_set_is_refused",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > a check scope outside the closed set is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_an_empty_scope_id_is_refused_so_the_rendered_key_stays_unambiguous",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > an empty scope id is refused so the rendered key stays unambiguous",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_ci_ingest.py::test_a_refused_observation_appends_no_event",
+      "target_id": "test/control_plane/ci-ingest.test.ts::refusals at the edge > a refused observation appends no event",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "scopeVerdicts returns typed camelCase rows where the source returns the database's own column names.",
+      "status": "house convention, disclosed",
+      "detail": "interlock's scope_verdicts returns MappingProxyType rows straight from SELECT, keyed by repo_id / check_scope / occurred_at_ms. The port returns a frozen ScopeVerdict with camelCase fields, which is the convention already established by policy.ts and events.ts and merged in earlier belts. Note repo_link.ts's primaryLink is the exception that kept raw column names, so the two are inconsistent with each other; both are faithful in VALUE and differ only in the shape a TypeScript caller sees. Settling it one way belongs in a convention change applied everywhere at once, not inside a translation."
+    },
+    {
+      "topic": "Numeric columns are wrapped in Number() at the read.",
+      "status": "divergence, accepted under continuo D-0021",
+      "detail": "The source applies no coercion at these sites. For an INTEGER column the two agree; they differ only for a hand-damaged row, which no ported case can produce through the public API. Recorded because the direction is the opposite of D-0021's usual one -- the port coerces where the source does not."
+    },
+    {
+      "topic": "A no-change observation does not advance the head_observed_at_ms watermark.",
+      "status": "inherited, not fixed",
+      "detail": "So two late observations that both post-date the last projected one are ordered only by their own timestamps. interlock's own comment documents this and says closing it needs a provider cursor the design does not define. Reproduced unchanged."
+    }
+  ]
+}

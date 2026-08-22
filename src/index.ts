@@ -9,6 +9,28 @@
  * (DECISIONS.md D-0001..D-0042, docs/parity-audit.md).
  */
 
+export {
+  CHECK_SCOPES,
+  CI_OBSERVED_EVENT_TYPE,
+  CI_PROVIDERS,
+  CI_VERDICTS,
+  CiObservationRefused,
+  EmptyIdentityFieldRefused,
+  MalformedAttemptRefused,
+  MalformedHeadShaRefused,
+  MalformedPrNumberRefused,
+  NO_ELIGIBLE_EVIDENCE,
+  ObservationIdentity,
+  observationDedupKey,
+  prVerdict,
+  recordCiObservation,
+  type ScopeVerdict,
+  scopeVerdicts,
+  UnknownCheckScopeRefused,
+  UnknownVerdictRefused,
+  UnsupportedProviderRefused,
+  VERDICT_SEVERITY,
+} from "./control_plane/ci_ingest.js";
 /**
  * The production control plane.
  *
@@ -130,6 +152,22 @@ export {
   MissingStateRefused,
 } from "./control_plane/refusals.js";
 export {
+  linkRunPr,
+  type ObservedPullRequest,
+  observePullRequest,
+  PR_STATES,
+  PullRequestObservationRefused,
+  primaryLink,
+  RESOLUTIONS,
+  RepoResolutionError,
+  ROLES,
+  RunPrLinkRefused,
+  resolveRepository,
+  StalePullRequestObservation,
+  unlinkRunPr,
+  upsertRepository,
+} from "./control_plane/repo_link.js";
+export {
   type ControlPlaneState,
   createControlPlane,
   expectedSchemaFingerprint,
@@ -149,7 +187,6 @@ export {
   TransactionUsageError,
   transaction,
 } from "./control_plane/txn.js";
-
 /**
  * The G6 measurement harness.
  *
@@ -187,15 +224,46 @@ export {
  * only `.` (D-0002), so a name absent from here is one an installed consumer
  * cannot reach.
  */
+/**
+ * The G6 harness's labelled fixture corpus (AC-10 source A, section 3.2).
+ *
+ * Re-exported by name for the reason the entries above are: the package exports
+ * only `.` (D-0002), so a name absent from here is one an installed consumer
+ * cannot reach.
+ */
+/**
+ * The G6 harness's AC-9 cohort (section 2.1).
+ *
+ * Re-exported by name for the reason the entries above are: the package exports
+ * only `.` (D-0002), so a name absent from here is one an installed consumer
+ * cannot reach.
+ */
+/**
+ * The G6 harness's per-module query catalogues, module-qualified.
+ *
+ * See the note in `src/measurement/index.ts`: Python namespaces these and a flat
+ * export surface cannot, so both are qualified rather than one keeping the bare
+ * name by having been ported first.
+ */
 export {
   type Adjudication,
   AsynchronousReportRefused,
   adjudicate,
+  CASE_FILES,
+  CaseIncomplete,
+  CaseOutcome,
   CENSORED,
   CENSORED_LEFT,
+  ClassDirectoryMismatch,
   ClassLatency,
+  ClockNotSynthetic,
+  COHORT_QUERY_DEFINITIONS,
+  COHORT_REASONS,
+  COHORT_RUNS_QUERY,
+  CorpusCompositionRefused,
   classify,
   classifyEpisodes,
+  DETECTED,
   DetectionBeforeOnset,
   Distribution,
   DuplicateEpisodeRefused,
@@ -203,34 +271,65 @@ export {
   Episode,
   EpisodeOutsidePeriod,
   EpisodeWindow,
+  EvaluationRefusal,
+  EXCLUDED_REASONS,
+  EXPECTED_FILENAME,
+  ExpectedLabel,
   episodeWindow,
+  evaluate,
+  FACT_STATES,
+  FALSE_POSITIVE,
+  FALSE_TERMINATION_QUERY_DEFINITIONS,
   FalseTerminationRefusal,
   FalseTerminationReport,
+  FixtureCase,
+  FixtureCorpus,
+  FixtureEvaluation,
+  FixtureRefusal,
   formatFixed,
   GRACE_DECLARED,
   GRACE_REVISION_RECONCILE_PERIOD,
   GROUND_TRUTH_PREFERENCE,
   GraceNotDeclared,
+  IN_FLIGHT_AT_PERIOD_END,
   IN_PERIOD,
   INGESTION_LAG_QUERY,
+  IncidentBeforeOnset,
   IngestionLag,
   isAscii,
+  KNOWN_RUN_STATUSES,
+  LABEL_FIELDS,
+  LabelMalformed,
   LatencyRefusal,
   LatencyReport,
+  loadCase,
+  loadCorpus,
+  MISS,
   measureFalseTermination,
   measureIngestionLag,
   measureLatency,
   measurementSnapshot,
+  NegativeCasesRequired,
   NestedSnapshotRefused,
+  NONE_CLASS,
   noShadowReference,
+  Observation,
+  OutcomeMissing,
+  OWNERSHIP_COLLISION_QUERY,
+  OwnershipAssertionRefused,
   openForMeasurement,
+  PeriodNotClosedRefused,
   PeriodRefused,
+  PositiveCasesRequired,
   PRODUCTIVE_EVENT_TYPES_REQUIRED,
+  PROVENANCE_KINDS,
+  ProducedIncident,
   proveReadOnly,
-  QUERY_DEFINITIONS,
   ReadOnlyCapabilityRefused,
+  RunCohort,
   readTerminateActions,
   renderFalseTerminationReport,
+  renderFixtureReport,
   renderLatencyReport,
   requireGraceMs,
   resolveBudgetMs,
@@ -243,24 +342,39 @@ export {
   SOURCE_HUMAN_ADJUDICATION,
   SOURCE_NONE,
   SOURCE_SUBSEQUENT_EVIDENCE,
+  STARTED_BEFORE_PERIOD,
   STATUS_APPLIED,
   STATUS_PENDING,
   STATUS_REFUSED,
+  StrayEntryRefused,
   SUBSEQUENT_ACTIVITY_QUERY,
   SubjectRequired,
+  SyntheticClock,
+  selectCohort,
   shadowFromBothBucket,
   subsequentActivityVerdicts,
+  TERMINAL_STATUS_UNKNOWN,
   TERMINATE_ACTIONS_QUERY,
   TERMINATE_SESSION_KIND,
   TerminateAction,
+  TRACE_FILENAME,
+  TRUE_NEGATIVE,
+  TraceMalformed,
+  terminalInstantMs,
+  touchesPeriod,
+  UnknownCaseInOutcomes,
   UnknownEpisodeDetection,
   UnknownGroundTruthVerdict,
+  UnknownRunStatusRefused,
+  V1_OWNED,
   VERDICT_NOT_STUCK,
   VERDICT_STUCK,
   VERDICT_UNDETERMINED,
+  VERDICTS,
   WINDOW_CLASSIFICATIONS,
   WindowRefusal,
   WindowReport,
 } from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
+export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";

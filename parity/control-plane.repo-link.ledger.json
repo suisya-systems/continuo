@@ -1,0 +1,270 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_repo_link.py",
+      "collected": 23,
+      "inventory": "parity/source-inventory/control_plane.test_repo_link.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/repo-link.test.ts",
+    "target_only_tests": {
+      "count": 1,
+      "ids": [
+        "test/control_plane/repo-link.test.ts::the signature scan (target-only) > the parameter scan finds the ported signatures"
+      ],
+      "note": "Target-only. The source asserts, via inspect.signature, that no ported function takes a parameter meaning 'we guessed from the working directory' -- the 2026-08-06 regression. TypeScript erases parameter names at runtime, so the runtime half of that assertion has no equivalent and the scan reads the module source instead. It is listed here rather than counted as ported coverage because it asserts a property of the FILE, not a behaviour, and the source case it accompanies is recorded separately as adapted."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 23,
+    "ported": 21,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_one_run_may_hold_several_pull_requests_across_repositories",
+      "target_id": "test/control_plane/repo-link.test.ts::the cardinality decision (section 7.3) > one run may hold several pull requests across repositories",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_one_pull_request_may_be_touched_by_several_runs",
+      "target_id": "test/control_plane/repo-link.test.ts::the cardinality decision (section 7.3) > one pull request may be touched by several runs",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_exactly_one_link_per_run_is_primary_at_a_time",
+      "target_id": "test/control_plane/repo-link.test.ts::the cardinality decision (section 7.3) > exactly one link per run is primary at a time",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_repointed_run_keeps_both_links_as_history",
+      "target_id": "test/control_plane/repo-link.test.ts::the cardinality decision (section 7.3) > a repointed run keeps both links as history",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_an_unlink_records_a_reason_or_does_not_happen",
+      "target_id": "test/control_plane/repo-link.test.ts::the cardinality decision (section 7.3) > an unlink records a reason or does not happen",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "pytest.raises(ValueError) on the empty unlink_reason. repo_link.py raises a bare ValueError from _require_text and declares no UsageError(ValueError) subclass of its own, so the port raises a bare TypeError -- the house convention already recorded for test_gates.py::test_only_a_named_stage_is_relayed. Asserted as expectRefusal(..., TypeError); the source asserted no message half, so no half is lost. The RunPrLinkRefused half and the primary_link-is-not-None half are translated verbatim.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_resolution_has_no_value_meaning_we_guessed_from_the_working_directory",
+      "target_id": "test/control_plane/repo-link.test.ts::the 2026-08-06 regression (sections 7.1 and 7.4) > resolution has no value meaning we guessed from the working directory",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Two changes, neither weakening. (1) inspect.signature(f).parameters has no runtime equivalent -- TypeScript erases parameter names, and each ported function takes (connection, options) with the source's keyword arguments as options properties. The equivalent surface is read out of src/control_plane/repo_link.ts's own source text (both positional parameters plus every options property, including the nested ones), and the same six-word forbidden search runs over it, case-folded so a camelCase `cwdDefault` is still caught by the source's lowercase 'default'. A target-only case pins that the scan is not vacuous by asserting the exact parameter list of all four functions. (2) pytest.raises(sqlite3.IntegrityError) on the direct INSERT of resolution='cwd_default' becomes expectSqliteError on the SQLITE_CONSTRAINT* result code (D-0016). The RESOLUTIONS tuple equality and the RunPrLinkRefused half are verbatim.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_an_unresolvable_repository_fails_to_link_rather_than_defaulting",
+      "target_id": "test/control_plane/repo-link.test.ts::the 2026-08-06 regression (sections 7.1 and 7.4) > an unresolvable repository fails to link rather than defaulting",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_rename_is_absorbed_on_the_existing_row_and_observations_stay_attached",
+      "target_id": "test/control_plane/repo-link.test.ts::the 2026-08-06 regression (sections 7.1 and 7.4) > a rename is absorbed on the existing row and observations stay attached",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_slug_matches_case_insensitively_while_the_columns_keep_their_case",
+      "target_id": "test/control_plane/repo-link.test.ts::the 2026-08-06 regression (sections 7.1 and 7.4) > a slug matches case insensitively while the columns keep their case",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_repo_id_is_never_reassigned_to_another_repository",
+      "target_id": "test/control_plane/repo-link.test.ts::the 2026-08-06 regression (sections 7.1 and 7.4) > a repo id is never reassigned to another repository",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_recreated_pull_request_is_a_new_row_and_the_old_row_survives",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a recreated pull request is a new row and the old row survives",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_head_move_records_the_event_that_moved_it",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a head move records the event that moved it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_late_older_head_observation_is_refused_as_evidence_not_a_projection",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a late older head observation is refused as evidence not a projection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_late_older_head_is_refused_by_name_on_every_transition[merged-extra0]",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a late older head is refused by name on every transition[merged-extra0]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_late_older_head_is_refused_by_name_on_every_transition[closed-extra1]",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a late older head is refused by name on every transition[closed-extra1]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_late_older_head_is_refused_by_name_on_every_transition[open-extra2]",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a late older head is refused by name on every transition[open-extra2]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_no_change_observation_appends_nothing",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a no change observation appends nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_reopen_clears_closed_at_ms_and_unretires_the_watcher_scope",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a reopen clears closed at ms and unretires the watcher scope",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_late_state_observation_with_an_unchanged_head_is_refused_too",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a late state observation with an unchanged head is refused too",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_state_transition_at_the_watermark_instant_is_refused_like_a_head_move",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a state transition at the watermark instant is refused like a head move",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_merged_pull_request_does_not_reopen",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a merged pull request does not reopen",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_an_observation_whose_projection_fails_leaves_no_event_behind",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > an observation whose projection fails leaves no event behind",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_repo_link.py::test_a_merge_observed_without_its_merge_commit_is_refused_by_name",
+      "target_id": "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a merge observed without its merge commit is refused by name",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "Python's bare TypeError and bare ValueError both become TypeScript TypeError.",
+      "status": "adapted convention, disclosed",
+      "detail": "repo_link.py's requireEpochMs raises TypeError and requireText raises ValueError, and the port raises TypeError for both -- JavaScript has no ValueError, and the typed refusal families are reserved for Python's own named exception classes (the convention events.ts and gates.ts already follow). A distinction the source draws is therefore collapsed. No ported case asserts a message for these, so only the class is pinned."
+    },
+    {
+      "topic": "Refusal text interpolates typeof rather than Python's type name.",
+      "status": "divergence, disclosed",
+      "detail": "requireEpochMs prints 'number' / 'string' / 'object' where Python prints 'float' / 'bool' / 'str'. D-0017 rule 3 asks for mechanical formats to be reproduced, and this one cannot be: JavaScript has no runtime type name matching Python's for these values. Unpinned by any assertion on either side."
+    },
+    {
+      "topic": "primaryLink returns the raw row with the database's own column names.",
+      "status": "faithful, but inconsistent with the sibling module",
+      "detail": "This matches interlock, which returns the SELECT row unconverted. ci_ingest.ts's scopeVerdicts instead returns camelCase typed rows, following the house convention. The two are inconsistent with each other; see the ci-ingest ledger's entry for the same topic."
+    },
+    {
+      "topic": "pythonJsonDocumentSorted cannot distinguish an integer from a whole-number float.",
+      "status": "divergence, disclosed",
+      "detail": "Python renders 1 as '1' and 1.0 as '1.0'; JavaScript has one number type and cannot tell them apart, so a whole-number float renders as an integer. Every number this module persists is an integer (timestamps, sequences, PR numbers), so nothing currently reaches it."
+    },
+    {
+      "topic": "observePullRequest does not validate the optional mergedAtMs / closedAtMs as integer epoch milliseconds.",
+      "status": "inherited, not fixed (continuo D-0022)",
+      "detail": "Only observedAtMs and ingestedAtMs go through the epoch-ms guard, so a merged or closed observation can supply a fractional value. The pull_request table declares those columns INTEGER but carries no typeof CHECK, and SQLite's INTEGER affinity stores a non-losslessly-convertible REAL as given -- so 1.5 persists as 1.5 and the module's integer-epoch contract is violated in the projection. interlock's observe_pull_request applies exactly the same two validators (`_require_epoch_ms(observed_at_ms=..., ingested_at_ms=...)`) and validates neither optional timestamp, so the port is at parity. Reproduced rather than repaired, per D-0022; the repair is reserved for the post-parity change. Raised by the Codex review gate (2026-08-22, P2)."
+    }
+  ]
+}

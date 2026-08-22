@@ -266,3 +266,35 @@ function escapeCodePoint(code: number): string {
   }
   return `\\U${code.toString(16).padStart(8, "0")}`;
 }
+
+/**
+ * Python's string ordering: by Unicode **code point**, not UTF-16 code unit.
+ *
+ * JavaScript's `<` on strings, and the default `Array.prototype.sort`, compare
+ * UTF-16 code units. Python compares code points. The two disagree for every
+ * comparison involving a supplementary character: `U+10000` encodes as the
+ * surrogate pair `D800 DC00`, so JavaScript sorts it BEFORE `U+E000`, while
+ * Python sorts it after.
+ *
+ * That is not a cosmetic difference where a sort feeds a digest. The fixture
+ * corpus's content digest is taken over cases **in sorted order**, and the
+ * digest is documented as the corpus's identity across both runtimes -- so a
+ * corpus with a supplementary character in a case name would hash differently
+ * here than in interlock while both implementations believed they agreed.
+ *
+ * Used for every place the source sorts strings: the corpus walk, the digest's
+ * case order, and the sorted lists that appear in refusal messages.
+ */
+export function comparePythonStrings(left: string, right: string): number {
+  const leftPoints = [...left];
+  const rightPoints = [...right];
+  const shared = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < shared; index += 1) {
+    const a = (leftPoints[index] as string).codePointAt(0) ?? 0;
+    const b = (rightPoints[index] as string).codePointAt(0) ?? 0;
+    if (a !== b) {
+      return a < b ? -1 : 1;
+    }
+  }
+  return leftPoints.length - rightPoints.length;
+}

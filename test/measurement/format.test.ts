@@ -35,7 +35,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { formatFixed, isAscii, pythonRepr } from "../../src/measurement/format.js";
+import {
+  comparePythonStrings,
+  formatFixed,
+  isAscii,
+  pythonRepr,
+} from "../../src/measurement/format.js";
 
 /**
  * The corpus, rebuilt from the same rules as `dump_fixed_format.py:corpus()`.
@@ -355,5 +360,52 @@ describe("pythonRepr (target-only)", () => {
     expect(pythonRepr("\u00e9")).toBe("'\u00e9'");
     expect(pythonRepr("\u{1f600}")).toBe("'\u{1f600}'");
     expect(isAscii(pythonRepr("\u00e9"))).toBe(false);
+  });
+});
+
+describe("comparePythonStrings (target-only)", () => {
+  // Target-only: translates no source case. Python's string ordering is the
+  // standard library's, so there is nothing there to assert -- but continuo had
+  // to REIMPLEMENT it, because JavaScript's `<` and the default
+  // Array.prototype.sort compare UTF-16 code units where Python compares code
+  // points, and the fixture corpus's content digest is taken over cases in
+  // sorted order. Every expectation below is CPython 3.12's actual answer.
+
+  test("it orders a supplementary character AFTER the BMP, as Python does", () => {
+    // The whole reason this exists. U+10000 encodes as the surrogate pair
+    // D800 DC00, so JavaScript sorts it BEFORE U+E000; Python sorts it after.
+    const astral = `${String.fromCodePoint(0x10000)}_gap`;
+    const bmp = `${String.fromCodePoint(0xe000)}_gap`;
+
+    // What JavaScript does natively, named so the divergence is visible here
+    // rather than inferred.
+    expect(astral < bmp, "JavaScript's own comparison").toBe(true);
+    // What Python does, and therefore what this must do.
+    expect(comparePythonStrings(astral, bmp)).toBeGreaterThan(0);
+    expect([astral, bmp].sort(comparePythonStrings)).toEqual([bmp, astral]);
+  });
+
+  test("it agrees with JavaScript everywhere the two cannot disagree", () => {
+    // Only comparisons involving a supplementary character differ, so ordinary
+    // names must come out exactly as they always did.
+    expect(comparePythonStrings("a", "b")).toBeLessThan(0);
+    expect(comparePythonStrings("b", "a")).toBeGreaterThan(0);
+    expect(comparePythonStrings("a", "a")).toBe(0);
+    expect(comparePythonStrings("", "a")).toBeLessThan(0);
+    expect(comparePythonStrings("abc", "abd")).toBeLessThan(0);
+    // A prefix sorts before the longer string that extends it.
+    expect(comparePythonStrings("relay", "relay_gap")).toBeLessThan(0);
+    expect(
+      ["relay_gap", "observation_unavailable", "session_no_evidence"].sort(comparePythonStrings),
+    ).toEqual(["observation_unavailable", "relay_gap", "session_no_evidence"]);
+  });
+
+  test("it compares code point by code point, not character by character", () => {
+    // Both strings start with the same astral character, so the decision falls
+    // to the second code point -- which a naive index-based loop over UTF-16
+    // units would take from the middle of a surrogate pair.
+    const prefix = String.fromCodePoint(0x1f600);
+    expect(comparePythonStrings(`${prefix}a`, `${prefix}b`)).toBeLessThan(0);
+    expect(comparePythonStrings(`${prefix}b`, `${prefix}a`)).toBeGreaterThan(0);
   });
 });
