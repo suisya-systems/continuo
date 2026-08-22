@@ -43,6 +43,26 @@ export {
   verifyProductionDatabase,
 } from "./control_plane/migrator.js";
 export {
+  BUDGET_KINDS,
+  type BudgetViolation,
+  budgetViolations,
+  type DetectionLatencyPolicy,
+  detectionLatency,
+  effectiveRevisionId,
+  type GateStageOwner,
+  gateStageOwner,
+  gateStageTolerance,
+  NoEffectiveRevision,
+  NotADuration,
+  PolicyRefusal,
+  PolicyRowMissing,
+  PolicyUsageError,
+  resolveToleranceMs,
+  revisionOverPeriod,
+  subjectUnitMs,
+  THRESHOLD_KINDS,
+} from "./control_plane/policy.js";
+export {
   ControlPlaneRefusal,
   CorruptStateRefused,
   DatabaseAheadOfCodeRefused,
