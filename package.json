@@ -32,7 +32,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-migrations.mjs",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
@@ -44,9 +44,10 @@
     "publint": "publint --strict",
     "attw": "attw --pack .",
     "check:package": "npm run build && npm run publint && npm run attw",
+    "parity": "node scripts/parity-check.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run lint && npm run knip && npm run typecheck && npm run smoke:native && npm run test"
+    "verify": "npm run lint && npm run knip && npm run typecheck && npm run smoke:native && npm run test && npm run parity"
   },
   "dependencies": {
     "@types/better-sqlite3": "7.6.13",

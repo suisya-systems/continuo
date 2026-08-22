@@ -70,6 +70,21 @@ Both register their own cleanup through `onTestFinished`, so it runs whether the
 fails. Uniqueness comes from `mkdtemp`; the worker id in the directory name is a readability aid
 only, and nothing depends on its numbering (Vitest 4 starts `VITEST_WORKER_ID` at 0, Vitest 5 at 1).
 
+## Timeouts are a hang backstop, not a speed assertion
+
+`testTimeout` and `hookTimeout` are set well above anything the suite needs (`vitest.config.ts`).
+That is deliberate. The suite is I/O-bound -- the control plane commits with `synchronous = FULL`
+(D-0012), so every commit fsyncs -- and CI runner speed varies enormously. One measured run had the
+same test take 321ms on one `windows-latest` runner and 13.6s on another, same commit, same
+workflow.
+
+A timeout tuned close to observed timings turns that variance into a red merge gate, and the person
+who investigates learns only that a machine was busy. What protects correctness here is `retry: 0`
+and the double-green rule (D-0005): a test that only passes sometimes stays failed, and it fails for
+the reason it actually failed.
+
+If a test genuinely hangs it still fails. It just fails later, which is the cheaper mistake.
+
 ## Contract tests
 
 `test/contract/` holds tests that pin decisions rather than behaviour of continuo's own code:
