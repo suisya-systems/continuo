@@ -1030,3 +1030,47 @@ describe("a deliberate divergence from interlock (target-only)", () => {
     expect(itemised).toHaveLength(2);
   });
 });
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("a false-termination report whose every caller value is hostile still renders one report", () => {
+    // Target-only, and the structural form of the D-0109 check: every
+    // caller-supplied value at once rather than one at a time.
+    const path = productionDb();
+    const hostile = [
+      "a1\u2014one",
+      "a2\n      a-forged  settled by: fixture_label",
+      "a3\nGround truth, in the order of preference of section 3.4",
+    ];
+    for (const [index, actionId] of hostile.entries()) {
+      makeAction(path, {
+        actionId,
+        status: STATUS_APPLIED,
+        createdAtMs: PERIOD_START + 10 * (index + 1),
+        appliedAtMs: PERIOD_START + 10 * (index + 1) + 5,
+        kind: TERMINATE_SESSION_KIND,
+      });
+    }
+
+    const rendered = renderFalseTerminationReport(
+      measure(path, {
+        // The label map is keyed by an id the caller chose, and its verdicts
+        // reach the report through the adjudication.
+        fixtureLabels: new Map([[hostile[0] as string, VERDICT_NOT_STUCK]]),
+      }),
+    );
+
+    expect(isAscii(rendered)).toBe(true);
+    for (const heading of [
+      "Headline",
+      "Supporting series (the headline alone hides where precision lives)",
+      "Ground truth, in the order of preference of section 3.4",
+    ]) {
+      expect(
+        rendered.split("\n").filter((line) => line === heading),
+        heading,
+      ).toHaveLength(1);
+    }
+    // Three actions were applied, so the buckets hold three settled lines.
+    expect(rendered.split("\n").filter((line) => line.includes("settled by:"))).toHaveLength(3);
+  });
+});

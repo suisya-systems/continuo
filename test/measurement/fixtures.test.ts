@@ -1537,3 +1537,55 @@ describe("hostile values in the rendering (target-only)", () => {
     );
   });
 });
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("a fixture report whose every caller value is hostile still renders one report", () => {
+    // Target-only, and the structural form of the D-0109 check. Everything the
+    // corpus contributes is chosen by whoever laid it out: the root path, the
+    // class directory names, the case ids, and the fact_state and
+    // recommendation strings inside each label.
+    const root = join(caseRoot("fixtures"), "corpus\u2014root\u00a0dir");
+    mkdirSync(root, { recursive: true });
+    writeCase(root, "relay_gap", "missed\u2014case", { label: positiveLabel() });
+    writeCase(root, "relay_gap", "noisy\nCases needing a reader", {
+      label: negativeLabel(),
+    });
+    writeCase(root, "observation_unavailable", "quiet", { label: negativeLabel() });
+
+    const corpus = loadCorpus(root);
+    const clock = new SyntheticClock(T0);
+    const evaluation = evaluate(corpus, {
+      clock,
+      outcomes: new Map(
+        corpus.cases.map((one): [string, readonly ProducedIncident[]] => [
+          one.caseId,
+          one.caseId.includes("noisy")
+            ? [
+                new ProducedIncident({
+                  // A produced incident carries a class and a fact state the
+                  // detector chose, both of which reach the notes.
+                  incidentClass: "relay_gap\u2014other",
+                  factState: "EXPLICIT_BLOCK\nforged note",
+                  createdAtMs: clock.at(60_000),
+                }),
+              ]
+            : [],
+        ]),
+      ),
+    });
+
+    const rendered = renderFixtureReport(evaluation);
+
+    expect(isAscii(rendered)).toBe(true);
+    for (const heading of [
+      "Composition and rates (one table on purpose)",
+      "Verdicts",
+      "Cases needing a reader",
+    ]) {
+      expect(
+        rendered.split("\n").filter((line) => line === heading),
+        heading,
+      ).toHaveLength(1);
+    }
+  });
+});

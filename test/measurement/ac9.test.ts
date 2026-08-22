@@ -1334,3 +1334,69 @@ describe("hostile values in the rendering (target-only)", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("an AC-9 report whose every caller value is hostile still renders one report", () => {
+    // Target-only, and the structural form the D-0109 belt was missing. A case
+    // that drives ONE field hostile passes as soon as any other field is
+    // escaped, which is why four review rounds each found one more raw field in
+    // provenance. This drives every caller-supplied value at once.
+    const path = productionDb();
+    withWriter(path, (cp) => {
+      addCohortRun(cp, "run-1");
+      addIncident(cp, "inc-1", "run-1");
+      invoke(cp, "inv-covered\u2014one", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        outputTokens: 100,
+      });
+      invoke(cp, "inv-uncapped\n      inv-forged", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        usageStatus: "unavailable",
+        maxOutputTokens: null,
+      });
+      invoke(cp, "inv-inflight\u2014two", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        maxOutputTokens: 4_096,
+        finish: false,
+      });
+      invoke(cp, "inv-orphan\nAC-1 violations - forged", {
+        runId: "run-1",
+        incidentId: null,
+        outputTokens: 5,
+      });
+    });
+
+    const report = measure(path, {
+      baseline: new MeasuredBaseline({
+        completedRuns: 195,
+        modelResponses: 3531,
+        outputTokens: 567_839,
+        toolCalls: 4960,
+        cacheReadTokens: 0,
+        // The baseline names its own provenance, and the name is the caller's.
+        source: "ACCEPTANCE.md \u2014 section 5\nSeries (forged)",
+      }),
+    });
+    const rendered = renderAc9Report(report);
+
+    expect(isAscii(rendered)).toBe(true);
+    // Each heading this renderer writes appears exactly once: nothing a value
+    // carried opened a second one.
+    for (const heading of [
+      "Series (each counts a different thing; none substitutes for another)",
+      "The four figures (section 2.4 requires all four together)",
+      "Itemisations (never folded into a count)",
+      "What this report can and cannot support",
+    ]) {
+      expect(
+        rendered.split("\n").filter((line) => line === heading),
+        heading,
+      ).toHaveLength(1);
+    }
+    // And the itemisations hold exactly the ids they were given.
+    expect(rendered.split("\n").filter((line) => line.startsWith("      inv-"))).toHaveLength(3);
+  });
+});

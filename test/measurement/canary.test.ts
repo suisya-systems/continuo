@@ -45,7 +45,6 @@ import { observePullRequest, upsertRepository } from "../../src/control_plane/re
 import {
   auditWriters,
   buildOwnershipLedger,
-  type CanaryDivergenceReport,
   CanaryRefusal,
   DUAL_WRITE,
   evidenceOfReadOnly,
@@ -74,7 +73,9 @@ import {
 } from "../../src/measurement/reader.js";
 import {
   CorrelationKey,
+  reconcile,
   ShadowEpisode,
+  type ShadowReconciliation,
   SUBJECT_PR_MERGE,
   V1Reference,
 } from "../../src/measurement/shadow.js";
@@ -973,5 +974,167 @@ describe("hostile values in the rendering (target-only)", () => {
     expect(
       rendered.split("\n").filter((line) => line.trimStart().startsWith("- run ")),
     ).toHaveLength(1);
+  });
+});
+
+describe("every externally-supplied field at once (target-only)", () => {
+  /**
+   * A value that is hostile in BOTH ways at once.
+   *
+   * Carrying only a newline hides from an ASCII assertion, and carrying only a
+   * non-ASCII character hides from a line-count one. A first version of the
+   * case below mixed the two and left eight of this renderer's fifteen escaping
+   * sites unexercised -- measured by reverting each site in turn.
+   */
+  function hostile(label: string): string {
+    return `${label}\u2014x\n    - forged: ${label}`;
+  }
+
+  /** An empty reconciliation, for a case that is about the other sections. */
+  function reconcileEmpty(): ShadowReconciliation {
+    return reconcile({
+      periodStartMs: PERIOD_START,
+      periodEndMs: PERIOD_END,
+      interlockEpisodes: [],
+      v1Reference: V1Reference.attestsEmpty({ source: V1_SOURCE }),
+      censoredIds: [],
+      fixtureLabels: new Map(),
+    });
+  }
+
+  test("a canary report whose every caller value is hostile still renders one report", () => {
+    // Target-only, and the structural form of the D-0109 check. This report
+    // embeds the shadow reconciliation as well as its own three sections, so it
+    // is the widest surface in the harness.
+    // The URI is built from the path the connection reports, so the hostile
+    // value for it is the directory the database sits in.
+    const path = join(caseRoot("canary\u2014dir"), "production.sqlite3");
+    createProductionControlPlane(path, { nowMs: T0 }).close();
+    const hostileRun = hostile("shared");
+    withWritable(path, (cp) => {
+      addRun(cp, hostileRun, { created: PERIOD_START + 100 });
+    });
+
+    const report = reportOver(path, {
+      interlockEpisodes: [mergeEpisode(hostile("ours-1"), "aa-org/renga", "7", PERIOD_START)],
+      v1Reference: V1Reference.observed({
+        source: hostile("v1-shadow"),
+        episodes: [mergeEpisode(hostile("theirs-1"), "aa-org/renga", "9", PERIOD_START)],
+      }),
+      v1WriterLedger: V1WriterLedger.observed({
+        source: hostile("v1-writer"),
+        records: [
+          new WrittenRecord({
+            recordClass: "run",
+            recordKey: hostileRun,
+            firstWrittenAtMs: PERIOD_START + 90,
+            lastWrittenAtMs: PERIOD_START + 90,
+            store: hostile("v1-store"),
+          }),
+        ],
+      }),
+      v1Ownership: V1OwnershipInput.observed({
+        source: hostile("v1-owner"),
+        runs: [
+          new OwnedRun({
+            runId: hostileRun,
+            owningSystem: hostile("v1-system"),
+            decidedAtMs: PERIOD_START + 90,
+            store: hostile("v1-store"),
+          }),
+        ],
+      }),
+    });
+    const rendered = renderCanaryDivergenceReport(report);
+
+    expect(isAscii(rendered)).toBe(true);
+    // One dual-write finding line and one collision line, whatever the values
+    // tried to open.
+    expect(
+      rendered.split("\n").filter((line) => line.trimStart().startsWith("- run ")),
+    ).toHaveLength(1);
+    expect(rendered.split("\n").filter((line) => line.includes("claimed by"))).toHaveLength(1);
+    expect(rendered.split("\n").filter((line) => line.trimStart().startsWith("- forged"))).toEqual(
+      [],
+    );
+  });
+
+  test("a caller-named record class is escaped where the finding prints it", () => {
+    // recordClasses is an argument, so the class NAME is the caller's too -- and
+    // it prints twice: in the audited-classes summary and in every finding line.
+    const path = productionDb();
+    const className = hostile("run");
+    withWritable(path, (cp) => {
+      addRun(cp, "r1", { created: PERIOD_START + 10 });
+    });
+
+    const audit = withMeasurement(path, (connection) =>
+      auditWriters(connection, {
+        windowFromMs: PERIOD_START,
+        windowToMs: PERIOD_END,
+        recordClasses: [
+          new RecordClass({ name: className, keyShape: "run_id", sql: RECORD_CLASS_RUN.sql }),
+        ],
+        v1Ledger: V1WriterLedger.observed({
+          source: hostile("v1"),
+          records: [
+            new WrittenRecord({
+              recordClass: className,
+              recordKey: "r1",
+              firstWrittenAtMs: PERIOD_START,
+              lastWrittenAtMs: PERIOD_START,
+              store: hostile("v1-store"),
+            }),
+          ],
+        }),
+      }),
+    );
+
+    expect(audit.findingCount).toBe(1);
+    const rendered = renderCanaryDivergenceReport(
+      new CanaryDivergenceReport({
+        periodStartMs: PERIOD_START,
+        periodEndMs: PERIOD_END,
+        readOnly: withMeasurement(path, (connection) => evidenceOfReadOnly(connection)),
+        reconciliation: reconcileEmpty(),
+        writerAudit: audit,
+        ownership: withMeasurement(path, (connection) =>
+          buildOwnershipLedger(connection, {
+            windowFromMs: PERIOD_START,
+            windowToMs: PERIOD_END,
+            v1Ownership: V1OwnershipInput.attestsEmpty({ source: V1_SOURCE }),
+          }),
+        ),
+      }),
+    );
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(
+      rendered.split("\n").filter((line) => line.startsWith("  record classes audited:")),
+    ).toHaveLength(1);
+    expect(rendered.split("\n").filter((line) => line.trimStart().startsWith("- forged"))).toEqual(
+      [],
+    );
+  });
+
+  test("the same report with every v1 side absent is also fully escaped", () => {
+    // The absence branches print their own reasons and are reached by no case
+    // above: an absent writer ledger, an absent ownership input and an absent
+    // shadow reference each render a `reason:` line the caller supplied.
+    const path = productionDb();
+    const report = reportOver(path, {
+      v1Reference: V1Reference.absent({ reason: hostile("no shadow") }),
+      v1WriterLedger: V1WriterLedger.absent({ reason: hostile("no writer ledger") }),
+      v1Ownership: V1OwnershipInput.absent({ reason: hostile("no ownership") }),
+    });
+    const rendered = renderCanaryDivergenceReport(report);
+
+    expect(isAscii(rendered)).toBe(true);
+    // Three: the embedded reconciliation's, the writer audit's and the
+    // ownership ledger's, each printing the reason its own caller supplied.
+    expect(rendered.split("\n").filter((line) => line.startsWith("  reason: "))).toHaveLength(3);
+    expect(rendered.split("\n").filter((line) => line.trimStart().startsWith("- forged"))).toEqual(
+      [],
+    );
   });
 });
