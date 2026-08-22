@@ -56,7 +56,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 14,
+      "count": 15,
       "ids": [
         "test/measurement/fixtures.test.ts::the shipped corpus > the carried corpus digests to interlock's own value (target-only)",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the missing-field check is what refuses a missing field, not a downstream type check",
@@ -71,9 +71,10 @@
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a fixture file that is not valid UTF-8 is refused, not silently repaired",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > an integer beyond MAX_SAFE_INTEGER is refused rather than silently rounded",
         "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a float-valued label number is refused, as Python's isinstance(int) does",
-        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the clock refuses a sum beyond MAX_SAFE_INTEGER, not only its operands"
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the clock refuses a sum beyond MAX_SAFE_INTEGER, not only its operands",
+        "test/measurement/fixtures.test.ts::hostile values in the rendering (target-only) > a case id cannot forge a line and cannot reach a cp932 console"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. This one is the parity evidence for the carried DATA rather than for code: it pins the corpus content digest to the value interlock's own loader produces over interlock's own tree, which proves both that the files arrived unaltered and that this port's digest construction (id, NUL, filename, NUL, bytes, NUL, over cases sorted by id) agrees with the source's. Interlock has no such test because it has only one copy of the corpus and nothing to compare against. Six more close properties a 36-mutation sweep found unguarded; each is recorded with its verdict under mutation_sweep below. Five are inherited (interlock's suite cannot tell the mutated module from the real one either, verified against 65f36c5 in each case) and one is a port artifact. Production behaviour is unchanged throughout. Three more were added after the codex review gate found three PORT DIVERGENCES (not inherited gaps) in the same pass: the corpus walk sorted by UTF-16 code unit where Python sorts by code point, the composition map was borrowed rather than copied, and the earliest-alarm minimum spread an unbounded array into Math.min. All three are fixed in the module and pinned here."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. This one is the parity evidence for the carried DATA rather than for code: it pins the corpus content digest to the value interlock's own loader produces over interlock's own tree, which proves both that the files arrived unaltered and that this port's digest construction (id, NUL, filename, NUL, bytes, NUL, over cases sorted by id) agrees with the source's. Interlock has no such test because it has only one copy of the corpus and nothing to compare against. Six more close properties a 36-mutation sweep found unguarded; each is recorded with its verdict under mutation_sweep below. Five are inherited (interlock's suite cannot tell the mutated module from the real one either, verified against 65f36c5 in each case) and one is a port artifact. Production behaviour is unchanged throughout. Three more were added after the codex review gate found three PORT DIVERGENCES (not inherited gaps) in the same pass: the corpus walk sorted by UTF-16 code unit where Python sorts by code point, the composition map was borrowed rather than copied, and the earliest-alarm minimum spread an unbounded array into Math.min. All three are fixed in the module and pinned here. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
     },
     "approved_non_running": []
   },
@@ -102,12 +103,6 @@
       "matches_source": true,
       "note": "Found by a 36-mutation sweep on the port and verified against interlock 65f36c5 case by case. The port reproduces the production behaviour exactly and does not change it; it adds five target-only tests so the properties stop being unguarded on this side. The clock one is the notable entry: interlock HAS a case for it whose docstring states the hazard precisely, and the case cannot detect it because the corpus's sort order grades the stamped case first.",
       "where_a_fix_belongs": "upstream, as the same five cases added to interlock's tests/measurement/test_fixtures.py."
-    },
-    {
-      "behaviour": "renderFixtureReport interpolates the corpus root path, case ids, incident classes and recommendation names verbatim, so a corpus under a non-ASCII path -- or with a non-ASCII name anywhere -- produces a report that breaks the rendering's own ASCII guarantee.",
-      "matches_source": true,
-      "note": "Raised by the codex review gate as a P2. Identical upstream: interlock's render_fixture_report interpolates the same f-strings and validates none of them, and its own cp932 assertion only ever sees the shipped ASCII corpus. NOT fixed: escaping would make continuo's report differ from interlock's for the same corpus. Handled under the precedent the operator set for the action_id escaping question on 2026-08-22 -- reproduce and disclose, do not repair one side alone -- and it is the same defect in the same shape, now in a second module.",
-      "where_a_fix_belongs": "upstream, as an ASCII-safe rendering of externally supplied fields applied to both sides together."
     }
   ],
   "entries": [
@@ -693,5 +688,17 @@
         "note": "(1) Python's json.loads gives 1.0 and 1e3 as FLOAT and the source's _require_int does isinstance(value, int), so both are refused. JavaScript has one number type and JSON.parse collapses 300000.0, 3e5 and 300000 to the same value. Preserved at parse time from the reviver's SOURCE TEXT (Node 21+), which is the only place the original token survives: a non-integer numeric token becomes a marker object that is not a `number` and is therefore refused by exactly the checks that would have refused a Python float -- including the negative-case rule, where a float in a windowed field is still 'not null'. (2) The safe-integer check covered both operands but not their SUM: with t0 near 2^53, at(2) and at(3) mint the same instant, so two detections a millisecond apart become one."
       }
     ]
-  }
+  },
+  "divergences": [
+    {
+      "decision": "D-0109",
+      "behaviour": "renderFixtureReport escapes the corpus root, the case ids and the note text before printing them. interlock interpolates all of them raw.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Disclosed on this belt under D-0022, now superseded by D-0023 and repaired on that rule's withdrawal. A corpus root is a filesystem path and a case id is a directory name, both chosen by whoever laid the corpus out; a case id containing a newline forges a line of the 'Cases needing a reader' section, and a corpus under a path with a character cp932 cannot encode crashes the report on the console it is read from. The escaping was verified the way lane C's 'green guarantees nothing' note asks: the reportValue call was reverted at this site and the case above was confirmed to fail FOR THAT REASON. Three of the ten sites checked that way were initially passing for a different reason and were rewritten before this belt shipped.",
+      "parity_cost": "continuo's rendered report differs from interlock's for a corpus whose paths or case ids are not printable ASCII.",
+      "evidence": "test/measurement/fixtures.test.ts::hostile values in the rendering (target-only) > a case id cannot forge a line and cannot reach a cp932 console",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this renderer."
+    }
+  ]
 }

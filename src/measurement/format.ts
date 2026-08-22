@@ -392,3 +392,57 @@ function finiteRepr(magnitude: number): string {
   const magnitudeDigits = String(Math.abs(exponent)).padStart(2, "0");
   return `${mantissa}e${sign}${magnitudeDigits}`;
 }
+
+/**
+ * One externally-supplied value, as a report may print it.
+ *
+ * Every renderer in this harness says the same thing in its own docstring --
+ * *ASCII only; this reaches a cp932 console* -- and until `D-0109` that was
+ * true of the words the renderer authored and not of the values it printed. A
+ * run id, a repository path, an incident class, an adapter's own name for
+ * itself: all of them arrive from the database or from a caller, and all of
+ * them went into the line verbatim.
+ *
+ * Two failures follow, and the second is the serious one:
+ *
+ * * **The console.** A single character outside cp932 turns the report into a
+ *   `UnicodeEncodeError` on the terminal it is read from -- which is the exact
+ *   failure the ASCII rule exists to prevent, arriving through the door the
+ *   rule did not cover.
+ * * **The structure.** A value containing a newline injects a line into the
+ *   report. Every one of these renderers prints an itemisation as
+ *   `      <id>`, so an id spelling `x\n      forged: 0` produces a line a
+ *   reader cannot tell from one the harness wrote. Ids here are
+ *   caller-controlled text with no `CHECK` on their shape.
+ *
+ * So a value is escaped the way `json.dumps(ensure_ascii=True)` escapes one:
+ * anything from `U+007F` up, and every C0 control, becomes `\\uXXXX` -- and a
+ * literal backslash becomes a doubled one, without which a value containing the
+ * six characters of an escape sequence would render identically to one holding
+ * the control character itself, and the escaping would hide the very thing it
+ * exists to show. Every other printable ASCII character is left exactly as it
+ * is, so an ordinary report is unchanged character for character.
+ *
+ * This is deliberately **not** `pythonRepr`: that quotes the value and is for
+ * refusal messages, where the reader needs to see the value's boundaries. Here
+ * the value sits in a column of a table or after a label, and quotes would
+ * change every line of every report.
+ */
+export function reportValue(text: string): string {
+  let escaped = "";
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    if (character === "\\") {
+      escaped += "\\\\";
+    } else if (code < 0x20 || code >= 0x7f) {
+      // A character above the BMP is two UTF-16 code units and is escaped as
+      // the surrogate pair, which is what json.dumps emits for one too.
+      for (let index = 0; index < character.length; index += 1) {
+        escaped += `\\u${character.charCodeAt(index).toString(16).padStart(4, "0")}`;
+      }
+    } else {
+      escaped += character;
+    }
+  }
+  return escaped;
+}

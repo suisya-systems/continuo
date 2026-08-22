@@ -68,7 +68,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 13,
+      "count": 14,
       "ids": [
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the p95 is nearest rank at a sample size where rounding disagrees",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort with no covered row has no p95 and no sensitivity figure",
@@ -82,9 +82,10 @@
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a percentage on an exact tie rounds Python's way",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the coincide line is absent when coverage is not complete",
         "test/measurement/ac9.test.ts::exact integer arithmetic (target-only) > an output figure past 2^53 is summed exactly, not rounded",
-        "test/measurement/ac9.test.ts::a deliberate divergence from interlock (target-only) > the header's acceptance predicate agrees with the report's"
+        "test/measurement/ac9.test.ts::a deliberate divergence from interlock (target-only) > the header's acceptance predicate agrees with the report's",
+        "test/measurement/ac9.test.ts::hostile values in the rendering (target-only) > an invocation id cannot forge a line and cannot reach a cp932 console"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python. A thirteenth is the evidence for D-0107, the one place this port deliberately and permanently diverges from interlock: the header's acceptance predicate now agrees with the report's. See divergences."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python. A thirteenth is the evidence for D-0107, the one place this port deliberately and permanently diverges from interlock: the header's acceptance predicate now agrees with the report's. See divergences. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
     }
   },
   "totals": {
@@ -401,6 +402,16 @@
       "parity_cost": "continuo's rendered report differs from interlock's for any period containing an unfinished invocation: the header gains an imputation_rule.unconfirmed_response_count key and imputation_rule.supports_acceptance_claim flips to false. interlock#74 AC3 compares these documents, so this is the one place the two are intended to disagree, and it is reachable from this ledger.",
       "evidence": "test/measurement/ac9.test.ts::a deliberate divergence from interlock (target-only) > the header's acceptance predicate agrees with the report's",
       "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this field."
+    },
+    {
+      "decision": "D-0109",
+      "behaviour": "renderAc9Report escapes the itemised invocation ids before printing them. interlock interpolates them raw.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "This entry is NEW: nothing was disclosed here before. The inventory the operator asked for on 2026-08-22 was compiled from the LEDGERS, which recorded three instances of this class, and the sweep that followed found the same class in four more renderers by reading them. That the ledger showed fewer instances than the code held is itself worth recording: a disclosure list is only as complete as the pass that produced it. ai_invocation.invocation_id is unconstrained TEXT and the three itemisations -- AC-1 violations, unbounded_missing, unconfirmed response count -- each print `      <id>`. A forged line in the unbounded_missing list changes what a reader believes about whether the report can support an acceptance claim. Verified the way lane C's 'green guarantees nothing' note asks: the reportValue call was reverted at this site and the case was confirmed to fail FOR THAT REASON.",
+      "parity_cost": "continuo's rendered report differs from interlock's wherever an invocation id is not printable ASCII.",
+      "evidence": "test/measurement/ac9.test.ts::hostile values in the rendering (target-only) > an invocation id cannot forge a line and cannot reach a cp932 console",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this renderer."
     }
   ]
 }

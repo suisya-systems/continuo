@@ -61,7 +61,7 @@ import {
 } from "../../src/control_plane/migrator.js";
 import { effectiveRevisionId } from "../../src/control_plane/policy.js";
 import { loadCorpus } from "../../src/measurement/fixtures.js";
-import { isAscii } from "../../src/measurement/format.js";
+import { isAscii, reportValue } from "../../src/measurement/format.js";
 import {
   AGGREGATE_STATEMENT,
   BOUNDED_IMPUTATION_RULE,
@@ -160,8 +160,8 @@ const SECTION_6_FIELDS: readonly string[] = [
 // --------------------------------------------------------------------------
 
 /** The source's `db` fixture, as a per-test call (rule 8). */
-function productionDb(): string {
-  const path = join(caseRoot("provenance"), "production.sqlite3");
+function productionDb(name = "production.sqlite3"): string {
+  const path = join(caseRoot("provenance"), name);
   createProductionControlPlane(path, { nowMs: T0 }).close();
   return path;
 }
@@ -1338,5 +1338,213 @@ describe("the fingerprint's unexercised guarantees (target-only)", () => {
     expect((document.query_definitions as Record<string, string>).japanese).toBe(
       "SELECT 1 -- \u65e5\u672c\u8a9e",
     );
+  });
+});
+
+describe("deliberate divergences from interlock (target-only)", () => {
+  test("the digest does not move when two rows tie across storage classes", () => {
+    // Target-only, and `D-0110`: a DELIBERATE divergence decided by the
+    // operator on 2026-08-22 with the withdrawal of `D-0022`.
+    //
+    // The source orders rows by the columns alone, and that is not a total
+    // order over the values it hashes: SQLite's ORDER BY compares INTEGER 1 and
+    // REAL 1.0 as EQUAL while feedValue hashes them apart, so the two rows come
+    // back in insertion order and two databases holding identical content
+    // produce two digests. That is the one claim the field makes.
+    //
+    // Raised by the codex review gate on the provenance belt and disclosed
+    // there; repaired here by ordering on `typeof()` as well, which separates
+    // only rows the value comparison left equal.
+    // Two columns, not one: the tie-breaker is APPENDED after every value
+    // column rather than interleaved with them, so that it separates only rows
+    // the values cannot. Interleaving would reorder `(1, 2)` against
+    // `(1.0, 1)`, which the second column already separates -- moving a digest
+    // that had no ambiguity in it. That over-reach is not distinguishable from
+    // outside without recomputing the hash, so it is pinned by the ordering
+    // expression's own shape and by review; this case pins the property the
+    // divergence exists for.
+    const first = productionDb();
+    withWritable(first, (cp) => {
+      cp.prepare("CREATE TABLE probe (value, other)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1.0, 7)").run();
+    });
+
+    const second = productionDb("other.sqlite3");
+    withWritable(second, (cp) => {
+      cp.prepare("CREATE TABLE probe (value, other)").run();
+      // The same two rows, inserted the other way round.
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1.0, 7)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
+    });
+
+    // The premise: SQLite really does hold one as an integer and one as a real,
+    // and really does compare them equal.
+    expect(
+      withMeasurement(
+        first,
+        (connection) =>
+          (
+            connection.prepare("SELECT group_concat(typeof(value)) AS t FROM probe").get() as {
+              t: string;
+            }
+          ).t,
+      ),
+    ).toBe("integer,real");
+
+    expect(fingerprintOf(first, { tables: ["probe"] }).digest).toBe(
+      fingerprintOf(second, { tables: ["probe"] }).digest,
+    );
+    // And the two values still hash APART, which is what made the ordering
+    // matter in the first place.
+    const onlyInteger = productionDb("only-integer.sqlite3");
+    withWritable(onlyInteger, (cp) => {
+      cp.prepare("CREATE TABLE probe (value, other)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
+      cp.prepare("INSERT INTO probe (value, other) VALUES (1, 7)").run();
+    });
+    expect(fingerprintOf(onlyInteger, { tables: ["probe"] }).digest).not.toBe(
+      fingerprintOf(first, { tables: ["probe"] }).digest,
+    );
+
+    // The third ordering term, on the case that needs it: a column declared
+    // COLLATE NOCASE compares 'a' and 'A' as EQUAL and both are typeof 'text',
+    // so values and types alone leave them in insertion order while feedValue
+    // hashes their distinct bytes apart.
+    const nocaseA = productionDb("nocase-a.sqlite3");
+    withWritable(nocaseA, (cp) => {
+      cp.prepare("CREATE TABLE probe (value TEXT COLLATE NOCASE)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES ('a'), ('A')").run();
+    });
+    const nocaseB = productionDb("nocase-b.sqlite3");
+    withWritable(nocaseB, (cp) => {
+      cp.prepare("CREATE TABLE probe (value TEXT COLLATE NOCASE)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES ('A'), ('a')").run();
+    });
+    expect(fingerprintOf(nocaseA, { tables: ["probe"] }).digest).toBe(
+      fingerprintOf(nocaseB, { tables: ["probe"] }).digest,
+    );
+  });
+
+  test("the Markdown rendering escapes a value and a field name the console cannot take", () => {
+    // Target-only, and `D-0109`. Both renderings claim to be ASCII -- the JSON
+    // one was (ensure_ascii) and the Markdown one only was when its inputs
+    // happened to be. A query NAME is a map key interpolated raw by interlock,
+    // so one carrying a pipe shifts every value after it one column left and
+    // one carrying a newline ends the row.
+    const path = productionDb();
+    populate(path);
+    const header = headerOver(path, {
+      revisionId: seedRevisionId(path),
+      queryDefinitions: new Map([
+        ["a|pipe\nand a newline", "SELECT 1"],
+        ["\u65e5\u672c\u8a9e", "SELECT 2"],
+      ]),
+    });
+
+    const markdown = renderHeaderMarkdown(header);
+    expect(isAscii(markdown)).toBe(true);
+    expect(markdown).toContain("\\u65e5\\u672c\\u8a9e");
+    // The forged row separator and the line break are both neutralised, so the
+    // table still has one row per field.
+    const rows = markdown.split("\n").filter((line) => line.includes("a\\|pipe"));
+    expect(rows).toHaveLength(1);
+    // The pipe is escaped and the newline is an escape sequence, so the key can
+    // neither open a column nor end the row.
+    expect(rows[0]).toContain("a\\|pipe\\u000aand a newline");
+  });
+});
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("a header whose every caller value is hostile still renders one table", () => {
+    // Target-only, and the structural guard `D-0109` needed. Four review rounds
+    // each found one more field that had been left raw -- the banner, the field
+    // name, the grace source, a REAL tie -- because each case fed a hostile
+    // value into ONE field and asserted on the whole rendering. A case that
+    // populates every caller-supplied field at once is what makes "this
+    // renderer escapes what it prints" a property rather than a list.
+    const path = productionDb();
+    withWritable(path, (cp) => {
+      addRun(cp, "run-1");
+      // detector_version reaches the banner, which is emitted before the table.
+      addIncident(cp, "inc-1", { runId: "run-1", detectorVersion: "d\u20141\n!! forged banner" });
+    });
+
+    const header = headerOver(path, {
+      revisionId: seedRevisionId(path),
+      queryDefinitions: new Map([
+        ["q\u2014name\n| forged | row |", "SELECT 1 -- \u65e5\u672c"],
+        // Two names that differ only by whitespace. The catalogue and the
+        // digest keep them apart, so the table must too -- trimming the field
+        // name would render them as one row. The space is TRAILING on purpose:
+        // the field name is the dotted composite `query_definitions.<key>`, so
+        // a leading space ends up interior and a trim never reaches it.
+        ["q", "SELECT 2"],
+        ["q ", "SELECT 3"],
+      ]),
+      fixtureSuite: FixtureSuiteRef.absent("no corpus\u2014none at all"),
+      unmatched: new Map([["bucket\u2014one\nforged", 1]]),
+    });
+
+    const markdown = renderHeaderMarkdown(header);
+    const json = renderHeaderJson(header);
+
+    expect(isAscii(markdown)).toBe(true);
+    expect(isAscii(json)).toBe(true);
+    // Every line of the table is a row: nothing a value contained opened one.
+    const tableLines = markdown.split("\n").filter((line) => line.startsWith("|"));
+    const headings = tableLines.filter((line) => line.startsWith("| Field |"));
+    expect(headings).toHaveLength(1);
+    for (const line of tableLines) {
+      const pipes = (line.match(/\|/g) ?? []).length;
+      const escaped = (line.match(/\\\|/g) ?? []).length;
+      expect(pipes - escaped, line).toBe(3);
+    }
+    // And the banner, which is emitted before the table, carries no injected
+    // line either: the rendering opens with exactly as many lines as banner()
+    // produced, each the escaped form of one of them. A raw newline in a
+    // detector_version would make this count disagree.
+    const named = tableLines.filter((line) => line.includes("query_definitions."));
+    expect(named.filter((line) => line.includes("`query_definitions.q`"))).toHaveLength(1);
+    expect(named.filter((line) => line.includes("`query_definitions.q `"))).toHaveLength(1);
+
+    // detector_versions is an ARRAY field, and the hostile detector_version is
+    // inside it. One external value must have one representation across the
+    // document: escaping the elements and then the joined string again would
+    // print `\\u2014` here while the banner and the JSON say `\u2014`.
+    const detectorRow = tableLines.find((line) => line.includes("`detector_versions`"));
+    expect(detectorRow).toContain("d\\u20141");
+    expect(detectorRow).not.toContain("d\\\\u2014");
+
+    const bannerLines = markdown.split("\n").slice(0, header.banner().length);
+    expect(bannerLines).toEqual(header.banner().map((line) => reportValue(line)));
+    expect(markdown.split("\n")[header.banner().length]).toBe("");
+  });
+});
+
+describe("the premise the digest ordering rests on (target-only)", () => {
+  test("SQLite does not keep a negative zero, so the ordering needs no term for one", () => {
+    // Target-only. The review gate on `D-0110` asked for a fourth ordering term:
+    // REAL 0.0 and -0.0 are numerically equal, share `typeof() = 'real'`, and
+    // COLLATE BINARY does not apply to numbers, so the three terms would leave
+    // them in insertion order while feedValue hashes '0.0' and '-0.0' apart.
+    //
+    // The pair is unconstructible: this SQLite normalises -0.0 to 0.0 on the
+    // way in. That is measured here rather than argued, and pinned rather than
+    // written in a comment, because the omission is only safe while it holds --
+    // a build that stopped normalising would otherwise produce two digests for
+    // one content, silently.
+    const path = productionDb("signed-zero.sqlite3");
+    const rows = withWritable(path, (cp) => {
+      cp.prepare("CREATE TABLE probe (value REAL)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES (0.0), (-0.0), (-0.0e0)").run();
+      return cp.prepare("SELECT value, CAST(value AS TEXT) AS text FROM probe").all() as {
+        value: number;
+        text: string;
+      }[];
+    });
+
+    expect(rows.map((row) => row.text)).toEqual(["0.0", "0.0", "0.0"]);
+    expect(rows.some((row) => Object.is(row.value, -0))).toBe(false);
   });
 });

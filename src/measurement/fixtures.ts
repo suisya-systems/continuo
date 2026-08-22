@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { comparePythonStrings, formatFixed, pythonRepr } from "./format.js";
+import { comparePythonStrings, formatFixed, pythonRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 /**
@@ -1483,7 +1483,8 @@ export function renderFixtureReport(evaluation: FixtureEvaluation): string {
   const latencies = evaluation.latenciesMs();
   const lines: string[] = [];
   lines.push("AC-10 fixture corpus -- labelled ground truth (source A)");
-  lines.push(`  corpus root     ${evaluation.corpusRoot}`);
+  // D-0109: a filesystem path is whatever the operator named the directory.
+  lines.push(`  corpus root     ${reportValue(evaluation.corpusRoot)}`);
   lines.push(`  content digest  ${evaluation.contentDigest}`);
   lines.push(`  synthetic t0    ${evaluation.t0Ms} (epoch ms)`);
   lines.push("");
@@ -1549,9 +1550,11 @@ export function renderFixtureReport(evaluation: FixtureEvaluation): string {
     }
     if (notes.length > 0) {
       reported = true;
-      lines.push(`  ${outcome.caseId} [${outcome.verdict}]`);
+      // D-0109: a case id is a directory name, and the notes below carry
+      // fact_state values and recommendation names read out of the corpus.
+      lines.push(`  ${reportValue(outcome.caseId)} [${outcome.verdict}]`);
       for (const note of notes) {
-        lines.push(`      ${note}`);
+        lines.push(`      ${reportValue(note)}`);
       }
     }
   }

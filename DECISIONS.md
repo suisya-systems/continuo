@@ -63,6 +63,8 @@ spaces distinct.
 | D-0106 | The measurement barrel stays as narrow as the invariant that guards it | accepted |
 | D-0107 | The header's acceptance predicate counts both disqualifying populations | accepted |
 | D-0108 | An invariant a public constructor can walk around is repaired, not disclosed | accepted |
+| D-0109 | A renderer's ASCII claim covers the values it prints, not only the words it authors | accepted |
+| D-0110 | The content fingerprint orders by storage class as well as by value | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -2529,8 +2531,8 @@ revisited.
 
 **Context.** `D-0022` ruled that a defect reproduced faithfully from interlock, pinned by no case on
 either side, and raised by review rather than by a failing test, is **disclosed** in the parity
-ledger and repaired in a dedicated change after parity. The operator **withdrew that rule on
-2026-08-22**: interlock is frozen, so "after parity, follow upstream" has no upstream to follow, and
+ledger and repaired in a dedicated change after parity. The operator **withdrew that rule on 2026-08-22**, and lane A has since recorded the replacement as
+`D-0023` (inherited defects are repaired in continuo, at the first belt that touches them): interlock is frozen, so "after parity, follow upstream" has no upstream to follow, and
 every inherited defect will eventually have to be repaired here. The cheapest moment to repair one
 is the belt already editing that file.
 
@@ -2572,7 +2574,7 @@ not about a second call site.
 
 **Alternatives.**
 
-- **Keep disclosing (rejected -- this is the withdrawn `D-0022`).** It was the right rule while an
+- **Keep disclosing (rejected -- this is the withdrawn `D-0022`, now `D-0023`).** It was the right rule while an
   upstream repair was possible to follow. With interlock frozen it means shipping a defect nobody
   will ever fix, in a package that is now the authority for this behaviour.
 - **Repair the two constructors and leave the caveat (rejected).** The caveat's failure is the one a
@@ -3270,3 +3272,116 @@ its failure modes rather than against its saving.
 
 **Source.** Task `continuo-testkit-suite-tmpdir`, 2026-08-22. Scope and naming ratified by the
 window before implementation, on the measurement above.
+
+
+## D-0109 -- A renderer's ASCII claim covers the values it prints, not only the words it authors
+
+**Context.** Every renderer in the measurement harness carries the same sentence in its own
+docstring: *ASCII only -- this reaches a cp932 console.* It was true of the words the renderer
+authored. It was not true of the values it printed, and those are the ones that come from outside: a
+run id, an action id, a repository path, an incident class, a fact state, the name a v1 adapter gives
+itself, a query name used as a Markdown field.
+
+Two failures follow, and the second is the one that matters:
+
+- **The console.** One character outside cp932 turns the report into a `UnicodeEncodeError` on the
+  terminal it is read from -- the exact failure the ASCII rule exists to prevent, arriving through
+  the door the rule did not cover.
+- **The structure.** A value containing a newline injects a line. Every itemisation in this harness
+  prints `      <id>`, so an id spelling `a1\n      justified: 999` produces a line a reader cannot
+  tell from one the harness wrote. `action.action_id`, `incident.fact_state` and the rest are
+  unconstrained TEXT: nothing in the DDL says an id may not contain a newline.
+
+`docs/cli-output-policy.md` puts this outside its own scope in terms -- it "governs what continuo
+*authors*, not what it handles", and says a path that echoes external text "has to deal with encoding
+on its own terms -- that problem is real, and it is not this policy". This entry is that path dealing
+with it.
+
+**Decision.** One helper, `reportValue` in `src/measurement/format.ts`: any character below `U+0020`
+or from `U+007F` up becomes `\uXXXX`, exactly as `json.dumps(ensure_ascii=True)` escapes one.
+Printable ASCII is untouched, so an ordinary report is unchanged character for character. Every
+externally-supplied value a measurement renderer prints goes through it.
+
+Applied to all seven merged renderers rather than to the three the review gate happened to name:
+`false-termination`, `fixtures`, `shadow`, `canary`, `latency`, `ac9` and `provenance`'s Markdown.
+A rule held by some renderers is not a property of the harness, and `render` composes all of them
+into one document.
+
+Not `pythonRepr`: that quotes the value, which is right for a refusal message where the reader needs
+its boundaries, and wrong here, where the value sits after a label or in a table column and quotes
+would change every line of every report.
+
+**Alternatives.**
+
+- **Reproduce and disclose (rejected -- and previously chosen).** The operator ruled exactly this way
+  for the `action_id` case on 2026-08-22 under `D-0022`, and withdrew `D-0022` later the same day
+  once interlock was confirmed frozen. With no upstream to follow, disclosure means shipping a
+  line-forgery hole nobody will ever close.
+- **Escape only the structural characters, leave non-ASCII (rejected).** It fixes the forgery and
+  leaves the crash, and the crash is the one the docstrings already promise against.
+- **Refuse a value that is not printable (rejected).** A report that refuses to render because a
+  repository is named in Japanese is worse than one that renders it escaped; and the harness's job
+  here is to report what it found.
+
+**Consequences.** continuo's rendered reports differ from interlock's wherever a value is non-ASCII
+or carries a control character -- in a direction that is legible rather than broken. Each affected
+ledger records it under `divergences`.
+
+**Falsified by.** interlock resuming and escaping these itself, at which point the two agree again.
+
+## D-0110 -- The content fingerprint orders by storage class as well as by value
+
+**Context.** `fingerprintDatabase` hashes a table's rows `ORDER BY` every column, and `feedValue`
+tags each value with its storage class so that `1` and `'1'` cannot collide. Those two facts do not
+compose: SQLite's `ORDER BY` compares INTEGER `1` and REAL `1.0` as **equal**, so two rows differing
+only in storage class tie, and a tie is broken by whatever order the rows happen to come back in.
+
+Two databases holding identical content therefore produce two digests -- which is precisely the claim
+the field exists to make, and the one thing an aggregate fingerprint was rejected for failing to
+support.
+
+**Decision.** The ordering is every value column first, in the source's own order, and then every
+column's `typeof()` as a tie-breaker: `ORDER BY "a", "b", typeof("a"), typeof("b")`. `typeof()`
+then separates only rows the value comparison left completely equal, so no other digest moves.
+
+Appended rather than interleaved, and the difference is not cosmetic. `ORDER BY "a", typeof("a"),
+"b", ...` reorders rows that do not tie at all: `(INTEGER 1, 2)` and `(REAL 1.0, 1)` are separated
+by the second column under the source's ordering, and interleaving sorts them by the first column's
+storage class instead -- moving a digest that had no ambiguity in it. The first version of this
+change interleaved; the review gate caught it.
+
+Raised by the codex review gate on the provenance belt and disclosed there under `D-0022`; repaired
+here on that rule's withdrawal.
+
+**Alternatives.**
+
+- **Disclose it (rejected -- and previously chosen).** The disclosure argued that a tie-breaker would
+  move continuo's digests away from interlock's. It moves them only for tables containing such a
+  tie, and for those the interlock digest is not a function of content in the first place -- so what
+  parity would preserve is the agreement of two numbers that do not mean what the field says they
+  mean.
+- **Order by `rowid` instead (rejected).** Total, and wrong: a `VACUUM` renumbers rowids and changes
+  nothing a report can read, so the digest would move for a change no reader can see.
+- **Hash a canonical set of rows rather than a sequence (rejected).** It removes the ordering
+  question entirely and costs the streaming read -- the digest would have to hold every row of the
+  table before hashing any of it, which `ac9`'s cursor change deliberately avoided.
+
+**A fourth term was asked for and is not there.** The review gate pointed out that REAL `0.0` and
+`-0.0` are numerically equal, share `typeof() = 'real'`, and are untouched by `COLLATE BINARY`, so the
+three terms would leave them in insertion order while `feedValue` hashes `'0.0'` and `'-0.0'` apart.
+The pair is **unconstructible**: this SQLite normalises `-0.0` to `0.0` on the way in, measured rather
+than assumed. A term that can never fire is a claim the code cannot keep, so the premise is pinned by
+a target-only case instead -- a build that stopped normalising fails there rather than quietly
+producing two digests for one content.
+
+**Consequences.** A digest over a table holding a **complete-row** cross-storage-class tie differs
+from interlock's. Every other digest is unchanged, which is what the appended form buys.
+
+The over-reach the review caught is not distinguishable from outside without recomputing the hash --
+the test file's own rule forbids that -- so the appended form is held by the ordering expression's
+shape, by this entry, and by review, while the target-only case pins the property the divergence
+exists for. Recorded in `parity/measurement.provenance.ledger.json` under `divergences`.
+
+**Falsified by.** interlock adopting the same tie-breaker, or the schema gaining a constraint that
+makes a mixed-storage-class column impossible.
+

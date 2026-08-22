@@ -7,7 +7,7 @@ import { appliedMigrations, PRODUCTION_APPLICATION_ID } from "../control_plane/m
 import { revisionOverPeriod } from "../control_plane/policy.js";
 import { pythonJsonString } from "../control_plane/python_json.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { comparePythonStrings, pythonFloatRepr, pythonRepr } from "./format.js";
+import { comparePythonStrings, pythonFloatRepr, pythonRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 export { TOOL_VERSION };
@@ -494,15 +494,42 @@ function feedRows(
   columns: readonly string[],
 ): void {
   const projection = columns.map((column) => `"${quoted(column)}"`).join(", ");
-  // Ordered by every column, verbatim from the source -- including its one soft
-  // spot, which is disclosed rather than repaired. SQLite's ORDER BY compares
-  // INTEGER 1 and REAL 1.0 as EQUAL, while feedValue deliberately hashes them
-  // apart, so two databases holding that pair of rows in opposite insertion
-  // orders can produce two digests for the same content. A tie-breaker would
-  // fix it and would also move every digest this port produces away from the
-  // one interlock produces over the same rows, which is the comparison the
-  // field exists to support. Recorded in the ledger as an inherited limitation.
-  const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${projection}`;
+  // Ordered by every column AND by each column's storage class (`D-0110`).
+  //
+  // The source orders by the columns alone, and that is not a total order over
+  // the values this function hashes. SQLite's ORDER BY compares INTEGER 1 and
+  // REAL 1.0 as EQUAL, while feedValue deliberately hashes them apart -- so two
+  // databases holding that pair of rows in opposite insertion orders produce
+  // two digests over identical content, which is the one claim the field makes.
+  // `typeof()` breaks the tie deterministically and changes nothing else: it
+  // only ever separates rows the value comparison left equal.
+  // Every value column first, in the source's own order, and only then the
+  // storage classes. Interleaving them -- `col1, typeof(col1), col2, ...` --
+  // reorders rows that do not tie at all: `(INTEGER 1, 2)` and `(REAL 1.0, 1)`
+  // are separated by the second column under the source's ordering, and
+  // interleaving would sort them by the first column's TYPE instead, moving a
+  // digest that had no ambiguity in it. Appending keeps the divergence to
+  // exactly the rows the value comparison cannot separate.
+  const ordering = [
+    ...columns.map((column) => `"${quoted(column)}"`),
+    ...columns.map((column) => `typeof("${quoted(column)}")`),
+    // A third term, and the review that asked for it names the case: a column
+    // declared `TEXT COLLATE NOCASE` compares 'a' and 'A' as EQUAL and both are
+    // `typeof() = 'text'`, so the first two terms leave them in insertion order
+    // while feedValue hashes their distinct bytes apart. COLLATE BINARY is the
+    // byte comparison, and it is a no-op for every value that is not text, so
+    // the three terms together are total over exactly what gets hashed.
+    ...columns.map((column) => `"${quoted(column)}" COLLATE BINARY`),
+  ].join(", ");
+  // Three terms, not four. The review gate asked for a fourth for REAL 0.0
+  // against -0.0: numerically equal, both `typeof() = 'real'`, and COLLATE
+  // BINARY does not apply to numbers, so the three terms leave them in
+  // insertion order while feedValue would hash '0.0' and '-0.0' apart. The pair
+  // turns out to be unconstructible -- this SQLite normalises -0.0 to 0.0 on
+  // the way in, measured rather than assumed, and pinned by a target-only case
+  // so that a build which stopped normalising would fail here rather than
+  // silently produce two digests for one content.
+  const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${ordering}`;
   // Iterated, not materialised. The source's `connection.execute(...)` is a
   // cursor and hashes row by row; `.all()` would hold every row of a
   // cumulatively-growing table in the heap before the first byte is hashed,
@@ -1415,7 +1442,11 @@ function renderPythonJson(value: HeaderValue, depth: number): string {
  */
 export function renderHeaderMarkdown(header: ReportHeader): string {
   const mapping = header.asMapping();
-  const lines: string[] = [...header.banner()];
+  // D-0109: the banner carries detector_version values read out of the database
+  // and a reason string built from them, so it needs the same escaping the
+  // table cells get -- it is the FIRST thing this rendering emits, and an
+  // unescaped newline there injects a line above everything.
+  const lines: string[] = header.banner().map((line) => reportValue(line));
   lines.push("");
   lines.push("| Field | Value |");
   lines.push("| --- | --- |");
@@ -1424,7 +1455,15 @@ export function renderHeaderMarkdown(header: ReportHeader): string {
       continue;
     }
     for (const [fieldName, rendered] of flatten(key, value)) {
-      lines.push(`| \`${fieldName}\` | ${rendered} |`);
+      // D-0109: a dotted field name is built from map KEYS -- a query name, an
+      // exclusion reason, an unmatched-bucket name -- and interlock
+      // interpolates it raw. A key carrying a pipe shifts every value after it
+      // one column left; one carrying a newline ends the row.
+      //
+      // Escaped WITHOUT cell()'s trim: a query name is only required to be
+      // non-empty, so " q" and "q" are two names the catalogue and the digest
+      // keep apart, and trimming would render them as one field.
+      lines.push(`| \`${reportValue(fieldName).replaceAll("|", "\\|")}\` | ${rendered} |`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -1452,17 +1491,42 @@ function flatten(prefix: string, value: HeaderValue): [string, string][] {
  * one column left, which is a rendering that silently mislabels values -- so it
  * is escaped rather than trusted not to appear.
  */
+/**
+ * One table cell: rendered once, then escaped once.
+ *
+ * The two steps are separate functions because folding them together escapes an
+ * array twice -- `cell` recursing into its elements would run `reportValue` on
+ * each and then again on the joined result, and an em dash inside a
+ * `detector_versions` entry would render as `\\u2014` here while the banner and
+ * the JSON both say `\u2014`. One external value must have one representation
+ * across the whole document.
+ */
 function cell(value: HeaderValue): string {
-  let rendered: string;
+  // D-0109: escaped for the console as well as for the table. The JSON
+  // rendering has been ASCII-safe from the start (ensure_ascii); this makes the
+  // Markdown one match, so both renderings honour the same claim their
+  // docstrings make.
+  //
+  // The value is escaped FIRST and the table's own pipe escape added after. The
+  // other order doubles it: reportValue would escape the backslash the pipe
+  // escape just introduced, and the cell would read `\\|` where the table needs
+  // `\|`. A newline needs no separate fold either -- reportValue turns it into
+  // an escape, which says more than the source's space did.
+  return reportValue(renderCell(value).trim()).replaceAll("|", "\\|");
+}
+
+/** A cell's text, before any escaping. Recurses; never escapes. */
+function renderCell(value: HeaderValue): string {
   if (value === null) {
-    rendered = "(none)";
-  } else if (typeof value === "boolean") {
-    rendered = value ? "true" : "false";
-  } else if (Array.isArray(value)) {
-    rendered =
-      value.length > 0 ? value.map((item) => cell(item as HeaderValue)).join(", ") : "(none)";
-  } else {
-    rendered = String(value);
+    return "(none)";
   }
-  return rendered.replaceAll("|", "\\|").replaceAll("\n", " ").trim();
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0
+      ? value.map((item) => renderCell(item as HeaderValue)).join(", ")
+      : "(none)";
+  }
+  return String(value);
 }

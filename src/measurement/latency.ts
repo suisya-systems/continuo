@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { comparePythonStrings, pythonRepr } from "./format.js";
+import { comparePythonStrings, pythonRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 // The bucket names are imported, never re-spelled: a second copy of a closed
 // set agrees with the original right up until the day one of them is renamed,
@@ -706,7 +706,8 @@ export function renderLatencyReport(report: LatencyReport): string {
   );
   lines.push(`  generated at    ${report.generatedAtMs}`);
   lines.push(`  policy revision ${report.revisionId}`);
-  lines.push(`  grace           ${report.graceMs} ms (${report.graceSource})`);
+  // D-0109: graceSource is a caller-set string on the exported report type.
+  lines.push(`  grace           ${report.graceMs} ms (${reportValue(report.graceSource)})`);
   lines.push("");
 
   if (report.classes.length === 0) {
@@ -715,7 +716,8 @@ export function renderLatencyReport(report: LatencyReport): string {
   }
 
   for (const measured of report.classes) {
-    lines.push(`Class ${measured.incidentClass}`);
+    // D-0109: incident_class is policy-table text, not a closed set here.
+    lines.push(`Class ${reportValue(measured.incidentClass)}`);
     lines.push(`  distribution    ${distributionLine(measured.distribution)}`);
     lines.push(
       `  excluded        censored ${measured.censoredIds.length}, ` +
@@ -747,7 +749,7 @@ export function renderLatencyReport(report: LatencyReport): string {
       lines.push(`      over ${measured.shadow.bothBucketCount} both-bucket episode(s)`);
     } else {
       lines.push("      NO SHADOW REFERENCE FOR THIS PERIOD");
-      lines.push(`      reason: ${measured.shadow.reason}`);
+      lines.push(`      reason: ${reportValue(String(measured.shadow.reason))}`);
       lines.push(
         "      the budget comparison above is an acceptance bound only; it " +
           "says nothing about regression against v1",
@@ -806,5 +808,7 @@ function itemise(ids: readonly string[], empty: string): string[] {
   if (ids.length === 0) {
     return [`      ${empty}`];
   }
-  return ids.map((identifier) => `      ${identifier}`);
+  // D-0109: an id here is unconstrained text from the database, and one
+  // carrying a newline would forge a line of this itemisation.
+  return ids.map((identifier) => `      ${reportValue(identifier)}`);
 }

@@ -2,7 +2,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { prVerdict } from "../control_plane/ci_ingest.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { comparePythonStrings, pythonRepr, pythonTupleRepr } from "./format.js";
+import { comparePythonStrings, pythonRepr, pythonTupleRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 import {
   CENSORED as WINDOW_CENSORED,
@@ -1628,7 +1628,8 @@ export function renderShadowReconciliation(report: ShadowReconciliation): string
   const lines = [`Shadow reconciliation [${report.periodStartMs}, ${report.periodEndMs})`];
   if (!report.available) {
     lines.push("  shadow reference: ABSENT");
-    lines.push(`  reason: ${report.shadowAbsentReason}`);
+    // D-0109: every value below arrives from the v1 adapter or the database.
+    lines.push(`  reason: ${reportValue(String(report.shadowAbsentReason))}`);
     lines.push(`  Interlock episodes read: ${report.interlockEpisodeCount}`);
     lines.push(
       "  No comparison is reported. Without a second observer none of " +
@@ -1637,7 +1638,7 @@ export function renderShadowReconciliation(report: ShadowReconciliation): string
     return lines.join("\n");
   }
 
-  lines.push(`  shadow reference: ${report.shadowSource}`);
+  lines.push(`  shadow reference: ${reportValue(String(report.shadowSource))}`);
   for (const [bucket, count] of report.counts()) {
     lines.push(`  ${bucket}: ${count}`);
   }
@@ -1656,11 +1657,11 @@ export function renderShadowReconciliation(report: ShadowReconciliation): string
       const episode = candidate.episode;
       const evidence = [...episode.evidence.entries()]
         .sort(([left], [right]) => comparePythonStrings(left, right))
-        .map(([name, value]) => `${name}=${value}`)
+        .map(([name, value]) => `${reportValue(name)}=${reportValue(value)}`)
         .join(", ");
       lines.push(
-        `    - ${episode.episodeId} (${episode.subjectClass}/${episode.shape}, ` +
-          `onset ${episode.onsetMs}) ${evidence}`,
+        `    - ${reportValue(episode.episodeId)} (${episode.subjectClass}/` +
+          `${reportValue(episode.shape)}, onset ${episode.onsetMs}) ${evidence}`,
       );
     }
     lines.push("  No miss count is available until each of the above is settled.");

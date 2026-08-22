@@ -986,3 +986,47 @@ describe("the report itself", () => {
     ).toBe(true);
   });
 });
+
+describe("a deliberate divergence from interlock (target-only)", () => {
+  test("an action id cannot forge a line of the itemisation", () => {
+    // Target-only, and `D-0109`. `action.action_id` is unconstrained TEXT in
+    // the DDL, and interlock interpolates it into the itemisation raw -- so an
+    // id spelling a newline plus six spaces produces a line a reader cannot
+    // tell from one the harness wrote. Raised on the false-termination belt,
+    // ruled "reproduce and disclose" on 2026-08-22 under `D-0022`, and repaired
+    // here when that rule was withdrawn: interlock is frozen, so the defect
+    // would otherwise be permanent.
+    //
+    // Asserted against the RENDERED REPORT, not against reportValue itself. A
+    // first version of this case tested the helper, which passes whether or not
+    // the renderer calls it -- and reverting the renderer's call left it green.
+    const path = productionDb();
+    const forged = "a1\n      a2  settled by: fixture_label";
+    makeAction(path, {
+      actionId: forged,
+      status: STATUS_APPLIED,
+      createdAtMs: PERIOD_START + 10,
+      appliedAtMs: PERIOD_START + 20,
+      kind: TERMINATE_SESSION_KIND,
+    });
+    makeAction(path, {
+      actionId: "b\u20141",
+      status: STATUS_APPLIED,
+      createdAtMs: PERIOD_START + 30,
+      appliedAtMs: PERIOD_START + 40,
+      kind: TERMINATE_SESSION_KIND,
+    });
+
+    const rendered = renderFalseTerminationReport(measure(path));
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(rendered).toContain("\\u000a");
+    expect(rendered).toContain("\\u2014");
+    // Two actions were applied, so the undetermined itemisation holds exactly
+    // two lines. Unescaped, the forged id would make it three.
+    const itemised = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("      ") && line.includes("settled by:"));
+    expect(itemised).toHaveLength(2);
+  });
+});

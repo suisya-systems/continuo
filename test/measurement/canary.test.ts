@@ -922,3 +922,56 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     expect(report.writerAudit.interlockRecordCount).toBe(1);
   });
 });
+
+describe("hostile values in the rendering (target-only)", () => {
+  test("a v1 record key cannot forge a line and cannot reach a cp932 console", () => {
+    // Target-only, and `D-0109`. Found by reading the renderer, not from a
+    // ledger disclosure -- this module was not among the three the inventory
+    // listed. A v1 adapter supplies the record class, the record key and its
+    // own store name, and all three went into the finding line verbatim.
+    const hostileKey = "shared\n    - forged: 0";
+    const path = productionDb();
+    withWritable(path, (cp) => {
+      // run_id is unconstrained TEXT, so the dual write is real: the key the v1
+      // adapter hands over is a run this database genuinely holds, and the
+      // finding line prints it.
+      addRun(cp, hostileKey, { created: PERIOD_START + 100 });
+    });
+
+    const report = reportOver(path, {
+      v1Reference: V1Reference.attestsEmpty({ source: V1_SOURCE }),
+      v1WriterLedger: V1WriterLedger.observed({
+        source: "v1\u2014adapter",
+        records: [
+          new WrittenRecord({
+            recordClass: "run",
+            recordKey: hostileKey,
+            firstWrittenAtMs: PERIOD_START + 90,
+            lastWrittenAtMs: PERIOD_START + 90,
+            store: V1_STORE,
+          }),
+        ],
+      }),
+      v1Ownership: V1OwnershipInput.attestsEmpty({ source: V1_SOURCE }),
+    });
+    const rendered = renderCanaryDivergenceReport(report);
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(rendered).toContain("\\u2014");
+    expect(report.writerAudit.findingCount).toBe(1);
+    // Asserted on the FINDING line specifically. A first version of this case
+    // asserted only that the rendering contained an escaped newline somewhere,
+    // and passed with the record key unescaped -- the escape it was seeing came
+    // from the run id in the ownership ledger, which is a different value
+    // escaped by a different call.
+    const findingLines = rendered
+      .split("\n")
+      .filter((line) => line.trimStart().startsWith("- run "));
+    expect(findingLines).toHaveLength(1);
+    expect(findingLines[0]).toContain("shared\\u000a    - forged: 0");
+    // The forged line did not become a line: the finding is one row.
+    expect(
+      rendered.split("\n").filter((line) => line.trimStart().startsWith("- run ")),
+    ).toHaveLength(1);
+  });
+});
