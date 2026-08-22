@@ -2345,6 +2345,12 @@ Adding the *count* rather than folding it into `unbounded_missing` is the point.
 input the reader cannot see is worse than the contradiction it replaces, and `unbounded_missing: 1`
 for a row that has a ceiling would be a false statement about which thing went wrong.
 
+The new field is **required, with no default**. An optional count falling back to zero would leave a
+public construction path -- `new ImputationRule({...})` without it -- emitting
+`supports_acceptance_claim: true` over a report whose AC-9 section says otherwise, which is the
+contradiction this decision exists to remove, reintroduced through the door the decision left open.
+A caller with no unfinished invocations writes `0` and thereby says so.
+
 **This is a deliberate, permanent divergence from the source, and the only one in this belt.** The
 operator ruled on 2026-08-22, with the render evidence in hand and the parity cost stated: continuo's
 rendered report will differ from interlock's for any period containing an unfinished invocation, and

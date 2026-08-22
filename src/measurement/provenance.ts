@@ -800,12 +800,17 @@ export class ImputationRule {
     readonly bounded: string;
     readonly sensitivity: string;
     readonly unboundedMissing: number;
-    readonly unconfirmedResponseCount?: number;
+    // Required, with no default. An optional count that fell back to zero would
+    // leave a public construction path producing exactly the contradiction
+    // D-0107 removes: a header saying `supports_acceptance_claim: true` over a
+    // report whose AC-9 section says false. A caller with no unfinished
+    // invocations writes `0` and says so.
+    readonly unconfirmedResponseCount: number;
   }) {
     this.bounded = fields.bounded;
     this.sensitivity = fields.sensitivity;
     this.unboundedMissing = fields.unboundedMissing;
-    this.unconfirmedResponseCount = fields.unconfirmedResponseCount ?? 0;
+    this.unconfirmedResponseCount = fields.unconfirmedResponseCount;
     Object.freeze(this);
   }
 
