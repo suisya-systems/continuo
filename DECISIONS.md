@@ -57,6 +57,7 @@ spaces distinct.
 | D-0104 | Rendered figures match Python's formatter, pinned by an oracle | accepted |
 | D-0105 | Maps keyed by database-supplied ids are `Map`, never plain objects | accepted |
 | D-0106 | The measurement barrel stays as narrow as the invariant that guards it | accepted |
+| D-0107 | The header's acceptance predicate counts both disqualifying populations | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -2312,3 +2313,58 @@ from `.` exactly as the others are.
 **Falsified by.** interlock widening `measurement/__init__.py` to re-export its whole harness, which
 would mean it had either dropped the assertion or reconciled it with canary's vocabulary upstream --
 and this port would then follow whichever it chose.
+
+## D-0107 -- The header's acceptance predicate counts both disqualifying populations
+
+**Context.** `Ac9Report.supportsAcceptanceClaim` is false while two populations are non-empty:
+`unboundedMissing` (an invocation with no ceiling, so nothing to impute it at) and
+`unconfirmedResponseCount` (an invocation that never finished, whose `model_response_count` is still
+`startInvocation`'s request-time placeholder of 1). Both disqualify on the same grounds -- the
+bounded figure stops being a bound over the cohort and becomes a bound over the imputable subset,
+with the rest contributing zero, which is the treat-missing-as-zero bias wearing the bound's name.
+
+interlock's provenance header carries only the first. `imputation_from_ac9` reads
+`len(report.unbounded_missing)`, and `ImputationRule.supports_acceptance_claim` is
+`unbounded_missing == 0`. So over a report containing one unfinished invocation, the AC-9 section
+says the claim is unsupported and the header says it is supported.
+
+**This is not two artefacts disagreeing; it is one document contradicting itself.**
+`render.py` builds the header at line 699 and the AC-9 section at line 480 by separate paths, and
+both land in the same rendered report. Measured against interlock at `65f36c5` rather than inferred:
+
+```
+.header.imputation_rule.supports_acceptance_claim          true
+.sections.ac9.facts.imputation.supports_acceptance_claim   false
+```
+
+**Decision.** `ImputationRule` carries `unconfirmedResponseCount` as well, its predicate requires
+both counts to be zero, `imputationFromAc9` supplies both, and the header's mapping prints the new
+count. The two predicates now give one answer, and a reader can see which population produced it.
+
+Adding the *count* rather than folding it into `unbounded_missing` is the point. A predicate whose
+input the reader cannot see is worse than the contradiction it replaces, and `unbounded_missing: 1`
+for a row that has a ceiling would be a false statement about which thing went wrong.
+
+**This is a deliberate, permanent divergence from the source, and the only one in this belt.** The
+operator ruled on 2026-08-22, with the render evidence in hand and the parity cost stated: continuo's
+rendered report will differ from interlock's for any period containing an unfinished invocation, and
+interlock#74 AC3 compares those documents. interlock is frozen, so no upstream fix is coming and
+continuo is authoritative here. `parity/measurement.ac9.ledger.json` and
+`parity/measurement.provenance.ledger.json` both record it as a divergence, so the AC3 reconciliation
+can reach it from the ledger rather than discovering it as an unexplained difference.
+
+**Alternatives.**
+
+- **Reproduce the contradiction and disclose it (rejected on the operator's ruling).** It was this
+  lane's recommendation and the precedent set for the shadow caveat and the provenance `ORDER BY`
+  tie. It was rejected because those are omissions a reader can work around, while this is a
+  published document asserting both `true` and `false` about the same claim -- the reader cannot
+  work out which half to believe without reading the source of the tool.
+- **Fold the count into `unbounded_missing` (rejected).** It fixes the predicate and breaks the
+  field: a row with a recorded ceiling would be reported as having none.
+- **Drop `supports_acceptance_claim` from the header (rejected).** It removes the contradiction by
+  removing the answer, and section 2.4 requires the disqualification to be visible where the figures
+  are.
+
+**Falsified by.** interlock resuming and reconciling the two predicates upstream, at which point this
+stops being a divergence and becomes a plain translation.

@@ -783,37 +783,68 @@ export class ImputationRule {
   readonly bounded: string;
   readonly sensitivity: string;
   readonly unboundedMissing: number;
+  /**
+   * The second disqualifying population, which interlock's header cannot state.
+   *
+   * A **deliberate, permanent divergence** (`D-0107`). `Ac9Report` disqualifies
+   * an acceptance claim on two populations -- an invocation with no ceiling to
+   * impute at, and one whose response count is still the writer's request-time
+   * placeholder -- and interlock's header carries only the first, so one
+   * rendered report states both `true` and `false` for the same claim. Adding
+   * the count here is what lets the header's predicate agree with the report's
+   * *and* say which population made it false.
+   */
+  readonly unconfirmedResponseCount: number;
 
   constructor(fields: {
     readonly bounded: string;
     readonly sensitivity: string;
     readonly unboundedMissing: number;
+    readonly unconfirmedResponseCount?: number;
   }) {
     this.bounded = fields.bounded;
     this.sensitivity = fields.sensitivity;
     this.unboundedMissing = fields.unboundedMissing;
+    this.unconfirmedResponseCount = fields.unconfirmedResponseCount ?? 0;
     Object.freeze(this);
   }
 
+  /**
+   * Can the bounded figure carry an AC-9 acceptance claim at all?
+   *
+   * Both populations, matching {@link Ac9Report.supportsAcceptanceClaim}
+   * exactly. Section 2.4 names only the first explicitly, but the second
+   * disqualifies on the same grounds: `cap * 1` against a placeholder response
+   * count understates a crashed multi-turn invocation, so the bounded figure is
+   * again a bound over a subset with the rest contributing zero.
+   */
   get supportsAcceptanceClaim(): boolean {
-    return this.unboundedMissing === 0;
+    return this.unboundedMissing === 0 && this.unconfirmedResponseCount === 0;
   }
 }
 
 /**
  * The imputation rule block for an AC-9 report.
  *
- * The count is read off the report rather than recounted here: two counts of
+ * The counts are read off the report rather than recounted here: two counts of
  * the same thing eventually disagree, and the one in the header is the one a
  * reader would trust.
+ *
+ * **Both** disqualifying populations are carried, which is `D-0107`'s divergence
+ * from interlock. Carrying only `unboundedMissing` -- as the source does --
+ * makes the header's `supports_acceptance_claim` say `true` over a report whose
+ * own AC-9 section says `false`, and `render` puts those two answers in one
+ * document.
  */
 export function imputationFromAc9(report: {
   readonly unboundedMissing: readonly unknown[];
+  readonly unconfirmedResponseCount: readonly unknown[];
 }): ImputationRule {
   return new ImputationRule({
     bounded: BOUNDED_IMPUTATION_RULE,
     sensitivity: SENSITIVITY_IMPUTATION_RULE,
     unboundedMissing: report.unboundedMissing.length,
+    unconfirmedResponseCount: report.unconfirmedResponseCount.length,
   });
 }
 
@@ -1120,6 +1151,10 @@ export class ReportHeader {
           ["bounded", this.imputation.bounded],
           ["sensitivity", this.imputation.sensitivity],
           ["unbounded_missing", this.imputation.unboundedMissing],
+          // D-0107: the second disqualifying population, which interlock's
+          // header has no field for. A predicate whose input the reader cannot
+          // see is worse than the contradiction it replaces.
+          ["unconfirmed_response_count", this.imputation.unconfirmedResponseCount],
           ["supports_acceptance_claim", this.imputation.supportsAcceptanceClaim],
         ]),
       ],

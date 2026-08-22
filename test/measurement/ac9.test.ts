@@ -1253,26 +1253,25 @@ describe("exact integer arithmetic (target-only)", () => {
   });
 });
 
-describe("an upstream contradiction, reproduced and pinned (target-only)", () => {
-  test("the header's acceptance predicate disagrees with the report's", () => {
-    // Target-only, and an INHERITED DEFECT rather than a limitation: the two
-    // artefacts of one report contradict each other. Found by the codex review
-    // gate (P1) and reproduced against interlock at 65f36c5 before being
-    // recorded -- the same fixture there prints
-    // `Ac9Report.supports_acceptance_claim = False` and
-    // `ImputationRule.supports_acceptance_claim = True`.
+describe("a deliberate divergence from interlock (target-only)", () => {
+  test("the header's acceptance predicate agrees with the report's", () => {
+    // Target-only, and `D-0107`: a DELIBERATE, PERMANENT divergence from
+    // interlock, decided by the operator on 2026-08-22 after the codex review
+    // gate raised it as a P1.
     //
-    // Why: Ac9Report disqualifies on TWO populations (nothing to bound at, and
-    // a response count that is the writer's placeholder), while
-    // imputationFromAc9 carries only the first into the header, and the
-    // header's own predicate is `unbounded_missing == 0`.
+    // interlock disqualifies an acceptance claim on TWO populations in
+    // Ac9Report -- nothing to bound at, and a response count that is still the
+    // writer's request-time placeholder -- but carries only the first into the
+    // provenance header, whose own predicate is `unbounded_missing == 0`. The
+    // result is not two artefacts that disagree: `render.py` puts both answers
+    // in ONE document, at `.header.imputation_rule.supports_acceptance_claim`
+    // (true) and `.sections.ac9.facts.imputation.supports_acceptance_claim`
+    // (false). Measured against interlock at 65f36c5, not inferred.
     //
-    // It is pinned rather than fixed because the header is a published artefact
-    // and a parity surface: widening the predicate here would make continuo's
-    // header say something interlock's does not for the same database. The
-    // decision is the operator's, and this case is what makes the disagreement
-    // impossible to fix silently or to forget. If the ruling is to diverge,
-    // this case inverts.
+    // continuo carries both counts and the predicate takes both, so a reader
+    // gets one answer and can see which population made it false. The
+    // divergence is permanent -- interlock is frozen -- and this case is the
+    // evidence that it is intended rather than a translation slip.
     const path = productionDb();
     withWriter(path, (cp) => {
       addCohortRun(cp, "run-1");
@@ -1291,12 +1290,13 @@ describe("an upstream contradiction, reproduced and pinned (target-only)", () =>
 
     expect(report.unconfirmedResponseCount).toEqual(["inv-inflight"]);
     expect(report.unboundedMissing).toEqual([]);
-    // The report is right, and says so.
     expect(report.supportsAcceptanceClaim).toBe(false);
     expect(renderAc9Report(report)).toContain("CANNOT support an AC-9 acceptance claim");
-    // The header, built from the same report, says the opposite. Reproduced
-    // from interlock, not introduced here.
+
+    // The header now says the same thing, and says why: the count interlock's
+    // header has no field for is carried here.
     expect(imputation.unboundedMissing).toBe(0);
-    expect(imputation.supportsAcceptanceClaim).toBe(true);
+    expect(imputation.unconfirmedResponseCount).toBe(1);
+    expect(imputation.supportsAcceptanceClaim).toBe(false);
   });
 });
