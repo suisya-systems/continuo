@@ -298,6 +298,9 @@ function headerOver(
         bounded: BOUNDED_IMPUTATION_RULE,
         sensitivity: SENSITIVITY_IMPUTATION_RULE,
         unboundedMissing: 0,
+        // D-0107: required here, so a header cannot be built that says the
+        // claim is supported without stating both populations.
+        unconfirmedResponseCount: 0,
       }),
       coverage: new CoverageSummary({
         covered: 3,
@@ -865,6 +868,7 @@ describe("the header's own fields", () => {
               bounded: BOUNDED_IMPUTATION_RULE,
               sensitivity: SENSITIVITY_IMPUTATION_RULE,
               unboundedMissing: 0,
+              unconfirmedResponseCount: 0,
             }),
             coverage: new CoverageSummary({ covered: 0, total: 0, excluded: new Map() }),
             censored: 0,
@@ -1053,6 +1057,7 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
           bounded: BOUNDED_IMPUTATION_RULE,
           sensitivity: SENSITIVITY_IMPUTATION_RULE,
           unboundedMissing: 0,
+          unconfirmedResponseCount: 0,
         }),
         coverage: new CoverageSummary({ covered: 4, total: 4, excluded: new Map() }),
         censored: 0,
@@ -1274,6 +1279,7 @@ describe("the fingerprint's unexercised guarantees (target-only)", () => {
               bounded: BOUNDED_IMPUTATION_RULE,
               sensitivity: SENSITIVITY_IMPUTATION_RULE,
               unboundedMissing: 0,
+              unconfirmedResponseCount: 0,
             }),
             coverage: new CoverageSummary({ covered: 0, total: 0, excluded: new Map() }),
             censored: 0,

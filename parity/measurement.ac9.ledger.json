@@ -1,0 +1,406 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. ac9 is the tenth file of this lane. It also receives the one case the provenance belt deferred -- an integration case that needed measureAc9 to exist -- which stays accounted for in parity/measurement.provenance.ledger.json, where its source file is, with its target now in test/measurement/ac9.test.ts."
+    },
+    "file": {
+      "path": "tests/measurement/test_ac9.py",
+      "collected": 23,
+      "inventory": "parity/source-inventory/measurement.test_ac9.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/ac9.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "frozen dataclass, tuple fields, MappingProxyType",
+        "to": "frozen class, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention every module of this lane uses.",
+        "affects": "every entry that reads a report field"
+      },
+      {
+        "from": "f-string ':.2f' formatting of a percentage and a rate",
+        "to": "formatFixed (src/measurement/format.ts), pinned by parity/oracle/fixed-format-vector.json",
+        "why": "D-0104. Python's formatter rounds half to even and toFixed rounds half away from zero, and `total * 100 / cohort_size` produces exact ties -- one model response over 800 cohort runs is 0.125 per 100 runs. A rendered figure is a parity surface (interlock#74 AC3).",
+        "affects": "every rendering entry"
+      },
+      {
+        "from": "row mappings built from cursor.description",
+        "to": "better-sqlite3's own row objects",
+        "why": "The source reads the column names off the cursor so a second hand-written list cannot drift from the statement. better-sqlite3 returns objects keyed by the statement's own output names, which is the same property with nothing to keep in step.",
+        "affects": "the entries that read invocations"
+      },
+      {
+        "from": "sorted(rows, key=lambda row: row['invocation_id'])",
+        "to": "[...].sort(comparePythonStrings)",
+        "why": "Python sorts by code point and JavaScript's default sort by UTF-16 code unit; an invocation id is caller-supplied, so the divergence is reachable, and the itemisation order is part of what D-0040 asks to be byte-reproducible.",
+        "affects": "the itemisation entries"
+      },
+      {
+        "from": "PRAGMA ignore_check_constraints = ON via connection.execute",
+        "to": "connection.pragma('ignore_check_constraints = ON')",
+        "why": "The library's own pragma surface. The forged state -- a usage_status outside the CHECK, as written by a build with a wider vocabulary -- is unchanged.",
+        "affects": "the unknown-usage-status entry"
+      },
+      {
+        "from": "pytest's `db` fixture and try/finally connection pairs",
+        "to": "a per-test productionDb() plus withWriter (rule 8)",
+        "why": "The convention every measurement test file in this port uses.",
+        "affects": "every entry that touches a database"
+      },
+      {
+        "from": "Python int arithmetic over the projected columns",
+        "to": "safeIntegers(true) on the cohort statement and BigInt accumulation",
+        "why": "Raised by the codex review gate. Python's int is unbounded and sums these exactly; better-sqlite3's default returns a JavaScript number and rounds 9007199254740993 to ...992 on the way in, so every AC-9 figure would be computed over values the database does not hold (D-0007, docs/sqlite-value-contract.md). The sums are BigInt and each total is converted at the boundary where it becomes a report field.",
+        "affects": "every entry that reads a token or response figure"
+      }
+    ],
+    "target_only_tests": {
+      "count": 13,
+      "ids": [
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the p95 is nearest rank at a sample size where rounding disagrees",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort with no covered row has no p95 and no sensitivity figure",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the sensitivity imputation covers every missing row",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort that used more than the baseline prints a negative reduction",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the baseline is normalised per 100 runs, and the reduction is that arithmetic",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a baseline with no responses or no tokens is refused",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > an unattributed invocation exactly at the period end is outside it",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the itemisations are ordered by invocation id, whatever the insert order",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort past SQLite's parameter ceiling is chunked, not refused",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a percentage on an exact tie rounds Python's way",
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the coincide line is absent when coverage is not complete",
+        "test/measurement/ac9.test.ts::exact integer arithmetic (target-only) > an output figure past 2^53 is summed exactly, not rounded",
+        "test/measurement/ac9.test.ts::a deliberate divergence from interlock (target-only) > the header's acceptance predicate agrees with the report's"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python. A thirteenth is the evidence for D-0107, the one place this port deliberately and permanently diverges from interlock: the header's acceptance predicate now agrees with the report's. See divergences."
+    }
+  },
+  "totals": {
+    "source_cases": 23,
+    "ported": 23,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "QUERY_DEFINITIONS is exported as AC9_QUERY_DEFINITIONS.",
+      "why": "The fourth module of this lane to carry one (false-termination, cohort, shadow, canary are the others). Python namespaces them per module and a flat barrel cannot; each module still exports the bare name under its own path."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "The bounded and sensitivity figures are computed over different populations: the bound can only reach missing rows that carry a ceiling AND finished, while the p95 imputation covers every missing row.",
+      "matches_source": true,
+      "note": "Deliberate and reproduced. The source states it in a comment at the point of computation: it is the difference between 'what can be bounded' and 'what can be guessed at', and the report prints both itemisations beside both figures. A reader who wants one population for both has to decide what to do about a row with no ceiling, which is the decision section 2.4 refuses to make silently.",
+      "where_a_fix_belongs": "nowhere; the asymmetry is the finding."
+    },
+    {
+      "behaviour": "A percentage rendered through the report's percent() helper cannot be driven onto an exact two-decimal tie by any input this schema admits, so the half-to-even rule is unexercised on that path.",
+      "matches_source": true,
+      "note": "Measured rather than assumed. A tie needs the value to be a dyadic rational of the form k/8, and percent()'s inputs are coverage ratios (k/n) and reductions (1 - a/b), neither of which lands exactly there -- a scan of every k/n with n up to 4000 found no input on which formatFixed and toFixed disagree. rate()'s input is total * 100 / cohortSize, which IS dyadic at 100/800 = 0.125, so the rule is pinned there by a target-only case. Substituting toFixed in percent() alone is therefore an EQUIVALENT MUTANT for constructible data; substituting it in rate() is not, and is caught.",
+      "where_a_fix_belongs": "nowhere; the helper is correct and the class is simply unreachable through it."
+    },
+    {
+      "behaviour": "A total that does not fit a JavaScript number exactly is REFUSED (FigureExceedsExactRangeRefused) where interlock would carry and print it.",
+      "matches_source": false,
+      "note": "A disclosed divergence in the refusing direction, introduced by the fix above. Python's unbounded int has no such boundary; JavaScript's number does, and this module's subject is a figure that quietly differs from the measurement -- printing a rounded token total would be that failure exactly. Nothing an actual ledger can hold reaches it: 2^53 output tokens is nine quadrillion. The new target-only case builds the state deliberately, one row at MAX_SAFE_INTEGER (carried) and two (refused).",
+      "where_a_fix_belongs": "nowhere while the report field is a JavaScript number; carrying BigInt out to consumers would change the package's public shape for a value no ledger produces."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_numerator_sums_model_responses_not_invocations_and_not_attempts",
+      "target_id": "test/measurement/ac9.test.ts::section 2.2 -- the unit, wrong in both directions > the numerator sums model responses, not invocations and not attempts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_a_retry_adds_an_attempt_and_no_assistant_turn",
+      "target_id": "test/measurement/ac9.test.ts::section 2.2 -- the unit, wrong in both directions > a retry adds an attempt and no assistant turn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_an_invocation_with_no_incident_is_itemised_as_an_ac1_violation",
+      "target_id": "test/measurement/ac9.test.ts::section 2.2 -- the unit, wrong in both directions > an invocation with no incident is itemised as an AC-1 violation",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_invocations_of_runs_outside_the_cohort_are_not_measured",
+      "target_id": "test/measurement/ac9.test.ts::section 2.2 -- the unit, wrong in both directions > invocations of runs outside the cohort are not measured",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_an_invocation_naming_no_run_is_counted_apart_and_enters_no_rate",
+      "target_id": "test/measurement/ac9.test.ts::section 2.2 -- the unit, wrong in both directions > an invocation naming no run is counted apart and enters no rate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_coverage_is_both_counts_and_a_percentage",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > coverage is both counts and a percentage",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_a_missing_usage_record_is_never_counted_as_zero_tokens",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > a missing usage record is never counted as zero tokens",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_ceiling_is_per_request_so_a_multi_turn_missing_row_is_imputed_at_the_product",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > the ceiling is per request, so a multi-turn missing row is imputed at the product",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_bounded_figure_bounds_the_truth_where_the_p95_does_not",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > the bounded figure bounds the truth where the p95 does not",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_p95_is_the_nearest_rank_observed_value",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > the p95 is the nearest-rank observed value",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_an_unbounded_missing_row_disqualifies_the_acceptance_claim",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > an unbounded missing row disqualifies the acceptance claim",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_an_unfinished_row_is_itemised_rather_than_imputed_at_the_placeholder",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > an unfinished row is itemised rather than imputed at the placeholder",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_full_coverage_makes_the_four_figures_coincide_and_the_report_says_so",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > full coverage makes the four figures coincide, and the report says so",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_cache_read_tokens_move_none_of_the_ac9_numbers",
+      "target_id": "test/measurement/ac9.test.ts::section 2.4 -- coverage, and why a missing figure is never zero > cache-read tokens move none of the AC-9 numbers",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_rendered_report_carries_no_verdict_word",
+      "target_id": "test/measurement/ac9.test.ts::what the harness refuses to decide > the rendered report carries no verdict word",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_rendered_report_is_ascii_only",
+      "target_id": "test/measurement/ac9.test.ts::what the harness refuses to decide > the rendered report is ASCII only",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_targets_print_as_targets_beside_the_cohort_size",
+      "target_id": "test/measurement/ac9.test.ts::what the harness refuses to decide > the targets print as targets beside the cohort size",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_four_figures_print_together_each_labelled_with_its_kind",
+      "target_id": "test/measurement/ac9.test.ts::what the harness refuses to decide > the four figures print together, each labelled with its kind",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_an_empty_cohort_computes_no_rate_rather_than_a_zero",
+      "target_id": "test/measurement/ac9.test.ts::what the harness refuses to decide > an empty cohort computes no rate rather than a zero",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_an_unreadable_usage_status_is_refused_rather_than_placed",
+      "target_id": "test/measurement/ac9.test.ts::refusals > an unreadable usage status is refused rather than placed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_a_baseline_with_no_runs_is_refused",
+      "target_id": "test/measurement/ac9.test.ts::refusals > a baseline with no runs is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_the_shipped_baseline_is_the_measured_one_from_acceptance",
+      "target_id": "test/measurement/ac9.test.ts::refusals > the shipped baseline is the measured one from ACCEPTANCE",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_ac9.py::test_measuring_writes_nothing",
+      "target_id": "test/measurement/ac9.test.ts::refusals > measuring writes nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "32 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 21,
+    "survivors": [
+      {
+        "mutation": "the p95 rank rounds instead of taking the ceiling",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported case uses 20 covered values, where ceil(0.95*20) and round(0.95*20) are both 19. At 11 values they part company (11 against 10). The new case uses 11."
+      },
+      {
+        "mutation": "an empty covered sample yields a p95 of 0 instead of None",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported empty-cohort case reaches the same null through a different door -- with no runs every per-100 figure is null anyway. The new case has a real cohort and an entirely uncovered ledger, where 0 would turn 'no covered sample, so no p95' into a measurement."
+      },
+      {
+        "mutation": "the sensitivity total drops the p95 term",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "No case on either side pins the sensitivity TOTAL; the bound case asserts only inequalities, which survive the term's removal. Without it the figure is observed alone, which is the treat-missing-as-zero number section 2.4 forbids."
+      },
+      {
+        "mutation": "the reduction is clamped at zero",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The source says in terms that it is not clamped: a negative reduction means Interlock used MORE than the baseline and the report is obliged to print it. No case on either side produces one, and a clamp is the flattering direction -- it would report parity where the measurement says regression."
+      },
+      {
+        "mutation": "the baseline normalises per run instead of per 100 runs",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every ported assertion about a reduction is relative -- an ordering or an equality between two figures -- so dropping the factor of 100 changes every number and fails nothing. The new case pins one figure against arithmetic done in the test."
+      },
+      {
+        "mutation": "a baseline with zero responses or zero tokens is accepted",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported case covers only the zero-RUN branch, on both sides. The other branch is the one that would print as a 100 percent reduction no matter what Interlock did."
+      },
+      {
+        "mutation": "the unattributed window becomes inclusive at the period end",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "No case on either side puts a run-less invocation on the boundary, so a <= would move one invocation per report and show up nowhere else."
+      },
+      {
+        "mutation": "the invocation rows are not ordered by id",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every ported case itemises at most one id. D-0040 asks a report to be byte-reproducible and the itemisation order is part of the bytes."
+      },
+      {
+        "mutation": "the cohort query drops its 500-id chunking",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "No case on either side has a cohort of more than a handful of runs. The ceiling was measured on this build during the cohort belt (32,766 parameters succeed, 32,767 fails); the new case builds a 33,000-run cohort and attaches the invocation to the LAST run, so a loop that stopped after one chunk reports an empty ledger rather than crashing."
+      },
+      {
+        "mutation": "the report's rate() helper uses toFixed instead of formatFixed",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every percentage in the ported cases is a round number, so toFixed passes all of them. One model response over 800 cohort runs is exactly 0.125 per 100 runs, where Python rounds to 0.12 and toFixed to 0.13 (D-0104). The same substitution in percent() survives and is recorded above as an equivalent mutant: its inputs cannot reach a tie."
+      },
+      {
+        "mutation": "the 'figures coincide' line prints unconditionally",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported case asserts the sentence is PRESENT at full coverage; nothing asserted it is absent otherwise. Printed unconditionally it tells a reader the three figures agree at exactly the moment they do not."
+      }
+    ],
+    "note": "All eleven survivors were re-run against the new target-only cases and each is now killed by its own case and no other, with one recorded refinement: the toFixed substitution kills only on the rate() path, and the percent() path is an equivalent mutant for the reasons under inherited_limitations."
+  },
+  "divergences": [
+    {
+      "decision": "D-0107",
+      "behaviour": "ImputationRule carries unconfirmedResponseCount as well as unboundedMissing, its supportsAcceptanceClaim requires both to be zero, and the header prints the new count. interlock's header carries only unboundedMissing.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "An INHERITED DEFECT in interlock, fixed here on the operator's ruling of 2026-08-22 rather than reproduced. interlock's Ac9Report disqualifies on two populations and its header on one, so over a report containing an unfinished invocation the AC-9 section says the claim is unsupported and the header says it is supported -- and render.py puts both answers in ONE document (.header.imputation_rule.supports_acceptance_claim true, .sections.ac9.facts.imputation.supports_acceptance_claim false), measured against interlock at 65f36c5, not inferred. The lane's own recommendation was reproduce-and-disclose, consistent with the shadow caveat and the provenance ORDER BY tie; the operator overrode it because those are omissions a reader can work around and this is a document asserting both true and false about one claim. interlock is frozen, so no upstream fix is coming: this is PERMANENT and continuo is authoritative.",
+      "parity_cost": "continuo's rendered report differs from interlock's for any period containing an unfinished invocation: the header gains an imputation_rule.unconfirmed_response_count key and imputation_rule.supports_acceptance_claim flips to false. interlock#74 AC3 compares these documents, so this is the one place the two are intended to disagree, and it is reachable from this ledger.",
+      "evidence": "test/measurement/ac9.test.ts::a deliberate divergence from interlock (target-only) > the header's acceptance predicate agrees with the report's",
+      "where_a_fix_belongs": "nowhere; interlock is frozen and continuo is the authority for this field."
+    }
+  ]
+}
