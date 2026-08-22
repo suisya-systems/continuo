@@ -49,6 +49,7 @@ spaces distinct.
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
+| D-0103 | A report snapshot refuses an asynchronous body rather than awaiting it | accepted |
 
 ---
 
@@ -1388,3 +1389,66 @@ interlock `65f36c5` (`measurement/reader.py`, which records the 3.10 constraint 
 docstring). Falsified by: better-sqlite3 raising a SQLite-originated error with no `code`, which
 would reopen the question of what to do with an unclassifiable refusal -- the answer would still be
 "refuse as inconclusive", but the classifier would then need the absent-code case written down.
+
+---
+
+## D-0103 — A report snapshot refuses an asynchronous body rather than awaiting it
+
+**Context.** Interlock's `measurement_snapshot` is a Python `@contextmanager`, used with `with`. A
+`with` body cannot return early and carry on later: the scope ends when the body ends, and the read
+transaction is released exactly then.
+
+TypeScript has no `with`, so the port expresses the scope as a callback -- and a callback **can**
+return early and carry on later. An `async` body returns a pending Promise at its first `await`, at
+which point `measurementSnapshot`'s `finally` runs and rolls the snapshot back. Every read after
+that `await` then executes on its own separate state of the database, which is silently the exact
+defect the snapshot exists to remove, arriving through the mechanism meant to remove it, with no
+error anywhere and a `db_fingerprint` still attesting a single state.
+
+This is a hazard the **translation** created. It is not in interlock and could not be.
+
+**Decision.** A thenable result is **refused**, not awaited. The refusal is guarded twice:
+
+- **Compile time.** The callback's return type is `T & (T extends PromiseLike<unknown> ? never :
+  unknown)`, which collapses to `never` for a Promise-returning body, so the call site does not
+  compile. Verified: `Argument of type '() => Promise<number>' is not assignable to parameter of
+  type '(connection: Database) => never'`.
+- **Runtime.** `AsynchronousReportRefused`, for callers that are not type-checked -- untyped
+  JavaScript, or a cast. The check runs **inside** the `try`, so the existing `finally` still
+  releases the snapshot: refusing must not also leak the lock it is refusing to hold.
+
+Thenables are detected structurally (a callable `.then`) rather than by `instanceof Promise`, because
+a Promise from another realm and a userland thenable suspend in exactly the same way.
+
+**Alternatives.**
+
+- **Await the body and make the function async (rejected).** It would hold a SHARED lock -- which
+  blocks *every* writer on the control plane, including the watcher, the dispatcher and the CI
+  ingest (see the cost note on `measurementSnapshot`) -- across an arbitrary suspension the harness
+  does not control. That is a worse thing to do than refuse. Nothing in the harness is asynchronous:
+  better-sqlite3 is a synchronous driver and every read in a report is a synchronous call, so the
+  shape being refused is one the harness has no reason to produce.
+- **Compile-time guard only (rejected).** The port publishes a package; an untyped consumer reaches
+  this function with no type check between them, and this failure is silent by construction.
+- **Runtime guard only (rejected).** A mistake a type can catch should not wait for a test run.
+- **Return the connection and let callers begin/end by hand (rejected).** It reintroduces the
+  un-exited scope the callback form exists to make impossible, which is a larger hole than the one
+  being closed.
+
+**Consequences.**
+
+- One target-only test, `an asynchronous report body is refused, not awaited (target-only)`. It is
+  declared in `parity/measurement.ledger.json` and is **not** counted as ported coverage -- it
+  translates no source case, because there is no source case to translate.
+- `AsynchronousReportRefused` is port-only surface, exported from `src/measurement/index.ts`. It
+  descends from `ControlPlaneRefusal`, so a caller catching the family catches this too.
+- Every later belt that translates a Python `@contextmanager` to a callback inherits this question.
+  The answer is this entry: refuse, guard at both levels, and do not quietly make the scope async.
+
+**Status.** accepted
+
+**Source.** Raised as a P1 by the `codex exec review` gate on this PR, 2026-08-22, against
+`src/measurement/reader.ts`. Compile-time behaviour verified with `tsc -p tsconfig.json --noEmit` on
+TypeScript 5.8.3 the same day. Falsified by: the harness acquiring a genuinely asynchronous read path
+(it has none while better-sqlite3 is the driver), which would make "refuse" the wrong answer and
+require deciding what may hold the control plane's SHARED lock across a suspension.

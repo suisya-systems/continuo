@@ -19,6 +19,7 @@
  */
 
 export {
+  AsynchronousReportRefused,
   ControlPlaneRefusal,
   CorruptStateRefused,
   DatabaseAheadOfCodeRefused,

@@ -141,6 +141,39 @@ export class NestedSnapshotRefused extends ControlPlaneRefusal {
 }
 
 /**
+ * A report snapshot was handed a callback that had not finished when it
+ * returned.
+ *
+ * This refusal has no counterpart in interlock, and it exists because of the
+ * one shape the translation changed. Interlock's `measurement_snapshot` is a
+ * `@contextmanager` used with `with`, and a `with` block cannot "return early
+ * and carry on later" -- the scope ends when the body ends, full stop. The
+ * TypeScript form is a callback, and a callback CAN: an `async` body returns a
+ * pending Promise the moment it first awaits, at which point this function's
+ * `finally` would roll the snapshot back and every read after the await would
+ * run on its own separate state of the database. That is silently the exact
+ * defect the snapshot exists to remove, arriving through the mechanism meant to
+ * remove it, with no error anywhere.
+ *
+ * So a thenable result is refused rather than awaited. Awaiting it would make
+ * the whole function async and hold a SHARED lock -- which blocks every writer
+ * on the control plane -- across an arbitrary suspension, which is a worse
+ * thing to do than refuse. Nothing in the harness is asynchronous: better-
+ * sqlite3 is a synchronous driver and every read in a report is a synchronous
+ * call, so this refuses a shape the harness has no reason to produce.
+ *
+ * The callback type also rejects a Promise-returning body at compile time; this
+ * class is the runtime half, for callers who are not type-checked.
+ */
+export class AsynchronousReportRefused extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "AsynchronousReportRefused";
+    Object.setPrototypeOf(this, AsynchronousReportRefused.prototype);
+  }
+}
+
+/**
  * The savepoint the read-only probe uses when it runs inside an open snapshot.
  *
  * A fixed, unmistakable name: it appears only in {@link proveReadOnly}, and a
@@ -289,7 +322,11 @@ export function requireQueryOnly(
 export function measurementSnapshot<T>(
   connection: SqliteDatabase,
   options: { readonly target?: string },
-  body: (connection: SqliteDatabase) => T,
+  // `T extends PromiseLike<unknown> ? never : unknown` collapses the required
+  // return type to `never` for an async body, so the call site is a compile
+  // error rather than a report that silently spans two database states. See
+  // {@link AsynchronousReportRefused} for why, and for the runtime half.
+  body: (connection: SqliteDatabase) => T & (T extends PromiseLike<unknown> ? never : unknown),
 ): T {
   const target = options.target;
 
@@ -309,7 +346,21 @@ export function measurementSnapshot<T>(
     // under everything up to the report's first query.
     connection.prepare("SELECT count(*) FROM sqlite_master").get();
     requireQueryOnly(target, connection, "inside the report snapshot");
-    return body(connection);
+    const result = body(connection);
+    // Checked inside the try, so the `finally` below still releases the
+    // snapshot: refusing must not also leak the lock it is refusing to hold.
+    if (isThenable(result)) {
+      throw new AsynchronousReportRefused(
+        `${names(target)} was given an asynchronous report body. A report ` +
+          `snapshot is one synchronous scope: an async body returns at its ` +
+          `first await, the snapshot would be released there, and every read ` +
+          `after it would run on a different state of the database -- which is ` +
+          `the defect the snapshot exists to remove. Nothing in the harness is ` +
+          `asynchronous (better-sqlite3 is a synchronous driver); build the ` +
+          `report synchronously inside the scope`,
+      );
+    }
+    return result;
   } finally {
     // In a finally because a snapshot left open by a failed report would go on
     // blocking every writer on the control plane for the life of the process.
@@ -655,4 +706,16 @@ function describeError(error: unknown): string {
     return `${error.name}(${JSON.stringify(`${code}${error.message}`)})`;
   }
   return JSON.stringify(String(error));
+}
+
+/**
+ * Is `value` a thenable?
+ *
+ * Structural rather than `instanceof Promise`: a body may return a Promise from
+ * another realm or a userland thenable, and both suspend exactly the same way.
+ */
+function isThenable(value: unknown): boolean {
+  return (typeof value === "object" && value !== null) || typeof value === "function"
+    ? typeof (value as { then?: unknown }).then === "function"
+    : false;
 }

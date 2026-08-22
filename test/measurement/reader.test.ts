@@ -50,6 +50,7 @@ import {
 } from "../../src/control_plane/refusals.js";
 import * as measurementPackage from "../../src/measurement/index.js";
 import {
+  AsynchronousReportRefused,
   measurementSnapshot,
   NestedSnapshotRefused,
   openForMeasurement,
@@ -703,6 +704,46 @@ describe("the report snapshot", () => {
       expect(runCount(connection)).toBe(before + 1);
     } finally {
       writer.close();
+      connection.close();
+    }
+  });
+
+  test("an asynchronous report body is refused, not awaited (target-only)", () => {
+    // Target-only: this translates no source case and is not counted as ported
+    // coverage. It guards a hazard the TRANSLATION introduced and interlock
+    // cannot have (D-0103).
+    //
+    // Interlock's `measurement_snapshot` is a `@contextmanager` used with
+    // `with`, and a `with` body cannot return early and carry on later. The
+    // TypeScript form is a callback, and an `async` one returns a pending
+    // Promise at its first await -- at which point the `finally` would release
+    // the snapshot and every read after the await would run on its own state of
+    // the database. That is silently the exact defect the snapshot exists to
+    // remove.
+    //
+    // The callback type rejects this at compile time; the cast here is what an
+    // untyped JavaScript caller does, and it is the runtime half being pinned.
+    const path = productionDb(caseRoot("reader"));
+    const connection = openForMeasurement(path);
+    try {
+      const asyncBody = async () => {
+        await Promise.resolve();
+        return 1;
+      };
+      expectRefusal(
+        () =>
+          measurementSnapshot(
+            connection,
+            { target: path },
+            asyncBody as unknown as (connection: SqliteDatabase) => number,
+          ),
+        AsynchronousReportRefused,
+        /asynchronous report body/,
+      );
+      // Refusing must not also leak the lock it refused to hold: the check runs
+      // inside the try, so the snapshot is released on the way out.
+      expect(connection.inTransaction).toBe(false);
+    } finally {
       connection.close();
     }
   });
