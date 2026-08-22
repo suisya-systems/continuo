@@ -83,6 +83,12 @@
       "matches_source": true,
       "note": "Found by a mutation sweep on the port, then confirmed against interlock 65f36c5 (four ids_for call sites in tests/measurement/test_windows.py, all with valid classifications). The port reproduces the guard exactly as upstream has it and does NOT change behaviour; it adds a target-only test so the property stops being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
       "where_a_fix_belongs": "upstream, as the same case added to interlock's tests/measurement/test_windows.py."
+    },
+    {
+      "behaviour": "classifyEpisodes does not validate a caller-declared graceMs when the episode list is EMPTY. requireGraceMs runs inside episodeWindow, so a report over zero episodes with graceMs = -1 is returned with grace_ms = -1 and no refusal.",
+      "matches_source": true,
+      "note": "Raised by the codex review gate on this PR as a P2. Verified empirically against interlock 65f36c5: classify_episodes(..., episodes=[], grace_ms=-1) returns a report with grace_ms = -1 and raises nothing, identically. The source is aware of the shape -- require_grace_ms's own docstring ends '...and on a report that classified no episodes, nothing would ever raise, so it would render clean.' NOT fixed here, for two reasons that point the same way: (1) validating in classifyEpisodes as well would be the SECOND COPY of the check that same docstring argues against, and (2) it would make continuo refuse an input interlock accepts, which is a silent behavioural divergence in a parity port. Handled under the precedent the operator set for the action_id escaping question on 2026-08-22: reproduce and disclose, do not repair one side alone.",
+      "where_a_fix_belongs": "upstream, and as a move of the check rather than a duplication of it -- require_grace_ms called once in classify_episodes after grace is resolved, with episode_window's call kept only for its own direct callers. That is a change to both sides together."
     }
   ],
   "entries": [
