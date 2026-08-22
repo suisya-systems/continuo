@@ -1667,7 +1667,7 @@ describe("section 9.2 -- the projection", () => {
 
 describe("the relay targets the stage the gate is about to enter (target-only)", () => {
   test("a relay enqueued ahead of the gate's stage is refused", () => {
-    // TARGET-ONLY, pinning a DELIBERATE DIVERGENCE from interlock (D-0025).
+    // TARGET-ONLY, pinning a DELIBERATE DIVERGENCE from interlock (D-0026).
     //
     // interlock's `enqueue_relay` checks only that the target is a relayed
     // stage. So a `forwarded` relay can be put in front of a worker while the
@@ -1685,7 +1685,7 @@ describe("the relay targets the stage the gate is about to enter (target-only)",
     // sites in interlock enqueue at the direct predecessor, and there is no
     // production caller at all, so nothing legitimate is blocked. If a later
     // reconcile driver genuinely needs to enqueue ahead, this is the test that
-    // will fail, and D-0025 says to relax the rule deliberately at that point
+    // will fail, and D-0026 says to relax the rule deliberately at that point
     // rather than treat the refusal as inviolable.
     const cp = cpFixture();
     const gateId = aGate(cp, "gate-ahead");
@@ -1724,7 +1724,7 @@ describe("the relay targets the stage the gate is about to enter (target-only)",
 
 describe("the predecessor check does not break recovery (target-only)", () => {
   test("a re-enqueue after the stage advanced still returns the message in force", () => {
-    // TARGET-ONLY, and the other half of D-0025.
+    // TARGET-ONLY, and the other half of D-0026.
     //
     // `enqueueRelay` is idempotent so that a Secretary killed after its commit
     // can replay on recovery and get back the id already in force rather than

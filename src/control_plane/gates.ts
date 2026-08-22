@@ -587,7 +587,7 @@ export function enqueueRelay(
     // `received`; after the ordinary presented and answered advances,
     // `advanceOnAck(toStage: 'forwarded')` accepted that ack and recorded the
     // answer as forwarded although the acknowledged payload predates the
-    // answer. interlock has the same gap (D-0025).
+    // answer. interlock has the same gap (D-0026).
     //
     // The rule is "the direct predecessor", not "anything reachable", because
     // reachable leaves the same hole open: `received` reaches `forwarded`.

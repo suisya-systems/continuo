@@ -52,7 +52,7 @@ spaces distinct.
 | D-0022 | Inherited defects are disclosed and repaired after parity, not during | superseded by D-0023 |
 | D-0023 | Inherited defects are repaired in continuo, at the first belt that touches them | accepted |
 | D-0024 | The control_plane inherited-defect repairs, and what a failed COMMIT costs | accepted |
-| D-0025 | A gate relay targets the stage the gate is about to enter | accepted |
+| D-0026 | A gate relay targets the stage the gate is about to enter | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -2584,7 +2584,7 @@ it belongs to another lane.
 continuo would follow whatever interlock decided rather than keeping its own answer.
 ---
 
-## D-0025 — A gate relay targets the stage the gate is about to enter
+## D-0026 — A gate relay targets the stage the gate is about to enter
 
 **Context.** `D-0024` repaired six inherited `control_plane` defects and deliberately left a seventh
 open, because fixing it meant deciding what `ADMISSIBLE`'s edges mean rather than how to translate

@@ -298,6 +298,69 @@ that breaks it is one the source's suite had no way to construct. The check has 
 
 Anything on either list is suspect until it has been checked.
 
+## 11. A repair carries no warrant from the source
+
+Rules 9 and 10 are about translated things going wrong quietly. This one is about the code that is
+**not** a translation: repairs, generalisations, and anything else written because the port needed
+it rather than because the source had it.
+
+> A translated case or a ported function is backed by interlock: it was reviewed there, exercised
+> there, and its shape is evidence. **A repair has none of that.** It is new code, written by
+> someone who has just convinced themselves they understand the defect -- which is the least
+> reliable moment there is -- and it sits in a file where everything around it *is* warranted. It
+> inherits the neighbourhood's credibility without having earned any.
+
+**The shape it takes here is specific and has recurred: a repair reintroduces the defect it repairs,
+by a route the repair did not consider.** Four instances, all found by the review gate rather than
+by a failing test:
+
+1. **The orphaned transaction, reintroduced one module away** (`D-0024`). The repair hardened
+   `transaction()` in `txn.ts` so a failed `COMMIT` could not leave an orphan for the next caller to
+   join. The *same change* then routed the outbox's fenced write through `withImmediate` in
+   `lease.ts` -- the other transaction helper, which had no such handling. The defect was back before
+   the commit that fixed it had landed. There were two helpers and one was fixed: half a fix.
+2. **The idempotent recovery path, broken by the guard protecting it** (`D-0026`). A predecessor
+   check was added to `enqueueRelay` so a relay could not be enqueued ahead of the gate's stage --
+   and placed *before* the existing-relay lookup. `enqueueRelay` is idempotent so a Secretary killed
+   after its commit can replay without sending a human a second copy, and the crash window it is
+   idempotent for is **exactly the one that moves the stage**. The guard refused precisely the
+   replay the function exists to serve.
+3. **A shared renderer emitting text that is not JSON.** `pythonJsonDocumentSorted` was written to
+   end four drifting copies of `json.dumps`. It built arrays with `.map`, which skips the holes in a
+   sparse array, so `[1, , 2]` rendered as `[1, , 2]` -- rejected by the `json_valid` CHECK, so a
+   fact that should have been recorded would have been refused instead. Python has no sparse array;
+   the generalisation invented the input class and then mishandled it.
+4. **A shared renderer replacing a typed refusal with a stack overflow.** The same consolidation gave
+   `pythonRepr` recursion without cycle detection, so a cyclic value handed to a validation guard
+   raised `RangeError` instead of the refusal the guard documents -- the error about the bad input
+   replaced by an error about rendering it.
+
+**Why it keeps happening.** A repair is reviewed against *the defect it names*, and it usually fixes
+that. What is not reviewed is the set of paths the repair newly touches -- a second helper, an
+earlier position in a function, an input class the source could not produce. Instances 1 and 2 both
+passed every existing test: the suites were translated from a source that has the original defect,
+so **nothing in them was ever going to notice.**
+
+**Applying it.**
+
+- **Ask what else reaches this.** If the defect is a missing guard, find every entry point that
+  should have it -- `grep` for the sibling helper, the other constructor, the second call site --
+  before deciding the repair is complete.
+- **Ask what the code you are editing already guarantees**, and whether the repair can break it. A
+  guard inserted into a function is inserted *somewhere*, and "before or after the idempotency
+  check" is a behavioural decision wearing the clothes of a formatting one.
+- **Pin the repair AND the thing it must not break.** Both instances above now carry a target-only
+  test for each half, and rule 10's probe applies to both: revert the repair, confirm its test goes
+  red; then revert only the *ordering*, and confirm the other test goes red.
+- **Treat a generalisation as a repair.** A shared helper replacing N copies is new code with no
+  source counterpart, and it acquires input classes none of the copies had.
+
+**The sibling hazards.** Rule 9 is the source relying on something narrow the target does not
+enforce; rule 10 is a translated check whose reach silently shrank. This rule is the third face:
+**code the source never had, trusted because of the code around it.** All three share the property
+that makes them expensive -- no red test, nothing odd in the diff -- and all three want the same
+answer, which is rule 10's: break it deliberately and read the failure.
+
 ## Patterns with no source case
 
 Three of the eight -- **strict/non-strict xfail**, **skip semantics**, and a **`caplog`-equivalent
