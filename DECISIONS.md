@@ -2374,3 +2374,94 @@ can reach it from the ledger rather than discovering it as an unexplained differ
 
 **Falsified by.** interlock resuming and reconciling the two predicates upstream, at which point this
 stops being a divergence and becomes a plain translation.
+
+## D-0109 -- A renderer's ASCII claim covers the values it prints, not only the words it authors
+
+**Context.** Every renderer in the measurement harness carries the same sentence in its own
+docstring: *ASCII only -- this reaches a cp932 console.* It was true of the words the renderer
+authored. It was not true of the values it printed, and those are the ones that come from outside: a
+run id, an action id, a repository path, an incident class, a fact state, the name a v1 adapter gives
+itself, a query name used as a Markdown field.
+
+Two failures follow, and the second is the one that matters:
+
+- **The console.** One character outside cp932 turns the report into a `UnicodeEncodeError` on the
+  terminal it is read from -- the exact failure the ASCII rule exists to prevent, arriving through
+  the door the rule did not cover.
+- **The structure.** A value containing a newline injects a line. Every itemisation in this harness
+  prints `      <id>`, so an id spelling `a1\n      justified: 999` produces a line a reader cannot
+  tell from one the harness wrote. `action.action_id`, `incident.fact_state` and the rest are
+  unconstrained TEXT: nothing in the DDL says an id may not contain a newline.
+
+`docs/cli-output-policy.md` puts this outside its own scope in terms -- it "governs what continuo
+*authors*, not what it handles", and says a path that echoes external text "has to deal with encoding
+on its own terms -- that problem is real, and it is not this policy". This entry is that path dealing
+with it.
+
+**Decision.** One helper, `reportValue` in `src/measurement/format.ts`: any character below `U+0020`
+or from `U+007F` up becomes `\uXXXX`, exactly as `json.dumps(ensure_ascii=True)` escapes one.
+Printable ASCII is untouched, so an ordinary report is unchanged character for character. Every
+externally-supplied value a measurement renderer prints goes through it.
+
+Applied to all seven merged renderers rather than to the three the review gate happened to name:
+`false-termination`, `fixtures`, `shadow`, `canary`, `latency`, `ac9` and `provenance`'s Markdown.
+A rule held by some renderers is not a property of the harness, and `render` composes all of them
+into one document.
+
+Not `pythonRepr`: that quotes the value, which is right for a refusal message where the reader needs
+its boundaries, and wrong here, where the value sits after a label or in a table column and quotes
+would change every line of every report.
+
+**Alternatives.**
+
+- **Reproduce and disclose (rejected -- and previously chosen).** The operator ruled exactly this way
+  for the `action_id` case on 2026-08-22 under `D-0022`, and withdrew `D-0022` later the same day
+  once interlock was confirmed frozen. With no upstream to follow, disclosure means shipping a
+  line-forgery hole nobody will ever close.
+- **Escape only the structural characters, leave non-ASCII (rejected).** It fixes the forgery and
+  leaves the crash, and the crash is the one the docstrings already promise against.
+- **Refuse a value that is not printable (rejected).** A report that refuses to render because a
+  repository is named in Japanese is worse than one that renders it escaped; and the harness's job
+  here is to report what it found.
+
+**Consequences.** continuo's rendered reports differ from interlock's wherever a value is non-ASCII
+or carries a control character -- in a direction that is legible rather than broken. Each affected
+ledger records it under `divergences`.
+
+**Falsified by.** interlock resuming and escaping these itself, at which point the two agree again.
+
+## D-0110 -- The content fingerprint orders by storage class as well as by value
+
+**Context.** `fingerprintDatabase` hashes a table's rows `ORDER BY` every column, and `feedValue`
+tags each value with its storage class so that `1` and `'1'` cannot collide. Those two facts do not
+compose: SQLite's `ORDER BY` compares INTEGER `1` and REAL `1.0` as **equal**, so two rows differing
+only in storage class tie, and a tie is broken by whatever order the rows happen to come back in.
+
+Two databases holding identical content therefore produce two digests -- which is precisely the claim
+the field exists to make, and the one thing an aggregate fingerprint was rejected for failing to
+support.
+
+**Decision.** The ordering is `ORDER BY "col", typeof("col"), ...` for every column. `typeof()`
+separates only rows the value comparison left equal, so no other digest moves.
+
+Raised by the codex review gate on the provenance belt and disclosed there under `D-0022`; repaired
+here on that rule's withdrawal.
+
+**Alternatives.**
+
+- **Disclose it (rejected -- and previously chosen).** The disclosure argued that a tie-breaker would
+  move continuo's digests away from interlock's. It moves them only for tables containing such a
+  tie, and for those the interlock digest is not a function of content in the first place -- so what
+  parity would preserve is the agreement of two numbers that do not mean what the field says they
+  mean.
+- **Order by `rowid` instead (rejected).** Total, and wrong: a `VACUUM` renumbers rowids and changes
+  nothing a report can read, so the digest would move for a change no reader can see.
+- **Hash a canonical set of rows rather than a sequence (rejected).** It removes the ordering
+  question entirely and costs the streaming read -- the digest would have to hold every row of the
+  table before hashing any of it, which `ac9`'s cursor change deliberately avoided.
+
+**Consequences.** A digest over a table holding a cross-storage-class tie differs from interlock's.
+Recorded in `parity/measurement.provenance.ledger.json` under `divergences`.
+
+**Falsified by.** interlock adopting the same tie-breaker, or the schema gaining a constraint that
+makes a mixed-storage-class column impossible.

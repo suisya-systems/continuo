@@ -7,7 +7,7 @@ import { appliedMigrations, PRODUCTION_APPLICATION_ID } from "../control_plane/m
 import { revisionOverPeriod } from "../control_plane/policy.js";
 import { pythonJsonString } from "../control_plane/python_json.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { comparePythonStrings, pythonFloatRepr, pythonRepr } from "./format.js";
+import { comparePythonStrings, pythonFloatRepr, pythonRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 export { TOOL_VERSION };
@@ -494,15 +494,19 @@ function feedRows(
   columns: readonly string[],
 ): void {
   const projection = columns.map((column) => `"${quoted(column)}"`).join(", ");
-  // Ordered by every column, verbatim from the source -- including its one soft
-  // spot, which is disclosed rather than repaired. SQLite's ORDER BY compares
-  // INTEGER 1 and REAL 1.0 as EQUAL, while feedValue deliberately hashes them
-  // apart, so two databases holding that pair of rows in opposite insertion
-  // orders can produce two digests for the same content. A tie-breaker would
-  // fix it and would also move every digest this port produces away from the
-  // one interlock produces over the same rows, which is the comparison the
-  // field exists to support. Recorded in the ledger as an inherited limitation.
-  const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${projection}`;
+  // Ordered by every column AND by each column's storage class (`D-0110`).
+  //
+  // The source orders by the columns alone, and that is not a total order over
+  // the values this function hashes. SQLite's ORDER BY compares INTEGER 1 and
+  // REAL 1.0 as EQUAL, while feedValue deliberately hashes them apart -- so two
+  // databases holding that pair of rows in opposite insertion orders produce
+  // two digests over identical content, which is the one claim the field makes.
+  // `typeof()` breaks the tie deterministically and changes nothing else: it
+  // only ever separates rows the value comparison left equal.
+  const ordering = columns
+    .map((column) => `"${quoted(column)}", typeof("${quoted(column)}")`)
+    .join(", ");
+  const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${ordering}`;
   // Iterated, not materialised. The source's `connection.execute(...)` is a
   // cursor and hashes row by row; `.all()` would hold every row of a
   // cumulatively-growing table in the heap before the first byte is hashed,
@@ -1424,7 +1428,11 @@ export function renderHeaderMarkdown(header: ReportHeader): string {
       continue;
     }
     for (const [fieldName, rendered] of flatten(key, value)) {
-      lines.push(`| \`${fieldName}\` | ${rendered} |`);
+      // D-0109: a dotted field name is built from map KEYS -- a query name, an
+      // exclusion reason, an unmatched-bucket name -- and interlock
+      // interpolates it raw. A key carrying a pipe shifts every value after it
+      // one column left; one carrying a newline ends the row.
+      lines.push(`| \`${cell(fieldName)}\` | ${rendered} |`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -1464,5 +1472,9 @@ function cell(value: HeaderValue): string {
   } else {
     rendered = String(value);
   }
-  return rendered.replaceAll("|", "\\|").replaceAll("\n", " ").trim();
+  // D-0109: escaped for the console as well as for the table. The JSON
+  // rendering has been ASCII-safe from the start (ensure_ascii); this makes the
+  // Markdown one match, so both renderings honour the same claim their
+  // docstrings make.
+  return reportValue(rendered.replaceAll("|", "\\|").replaceAll("\n", " ").trim());
 }

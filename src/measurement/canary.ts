@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { comparePythonStrings, pythonRepr } from "./format.js";
+import { comparePythonStrings, pythonRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 // proveReadOnly is reader.ts's one implementation of the probe, called rather
 // than copied: ACCEPTANCE.md section 3 condition 5 wants the read-only
@@ -1316,10 +1316,10 @@ function renderWriterAudit(audit: WriterAudit): string[] {
   lines.push(`  ${DUAL_WRITE} findings: ${audit.findingCount}`);
   for (const finding of audit.findings) {
     lines.push(
-      `    - ${finding.recordClass} ${finding.recordKey}: ` +
-        `${finding.interlock.store} wrote ` +
+      `    - ${reportValue(finding.recordClass)} ${reportValue(finding.recordKey)}: ` +
+        `${reportValue(finding.interlock.store)} wrote ` +
         `[${finding.interlock.firstWrittenAtMs}, ${finding.interlock.lastWrittenAtMs}], ` +
-        `${finding.v1.store} wrote ` +
+        `${reportValue(finding.v1.store)} wrote ` +
         `[${finding.v1.firstWrittenAtMs}, ${finding.v1.lastWrittenAtMs}]`,
     );
   }
@@ -1349,15 +1349,20 @@ function renderOwnership(ledger: OwnershipLedger): string[] {
   lines.push(`  ledger entries: ${ledger.entries.length}`);
   for (const entry of ledger.entries) {
     lines.push(
-      `    - ${entry.runId} -> ${entry.owningSystem} ` + `at ${entry.decidedAtMs} (${entry.store})`,
+      `    - ${reportValue(entry.runId)} -> ${reportValue(entry.owningSystem)} ` +
+        `at ${entry.decidedAtMs} (${reportValue(entry.store)})`,
     );
   }
   lines.push(`  ${OWNERSHIP_COLLISION} findings: ${ledger.findingCount}`);
   for (const finding of ledger.findings) {
     const claims = finding.claims
-      .map((claim) => `${claim.owningSystem} at ${claim.decidedAtMs} (${claim.store})`)
+      .map(
+        (claim) =>
+          `${reportValue(claim.owningSystem)} at ${claim.decidedAtMs} ` +
+          `(${reportValue(claim.store)})`,
+      )
       .join("; ");
-    lines.push(`    - ${finding.runId} claimed by ${claims}`);
+    lines.push(`    - ${reportValue(finding.runId)} claimed by ${claims}`);
   }
   if (ledger.findings.length > 0) {
     lines.push(
@@ -1373,7 +1378,9 @@ function renderReadOnly(evidence: ReadOnlyEvidence): string[] {
   return [
     "Shadow path read-only assertion (condition 5), read off the live connection",
     `  PRAGMA query_only: ${evidence.queryOnly}`,
-    `  uri: ${evidence.uri}`,
+    // D-0109: the URI is built from the path the connection reports, which is
+    // whatever the file is actually called.
+    `  uri: ${reportValue(evidence.uri)}`,
     `  file mode probe: ${evidence.fileModeProbe}`,
     `  PRAGMA query_only after probe: ${evidence.queryOnlyAfterProbe}`,
   ];

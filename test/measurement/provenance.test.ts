@@ -1340,3 +1340,92 @@ describe("the fingerprint's unexercised guarantees (target-only)", () => {
     );
   });
 });
+
+describe("deliberate divergences from interlock (target-only)", () => {
+  test("the digest does not move when two rows tie across storage classes", () => {
+    // Target-only, and `D-0110`: a DELIBERATE divergence decided by the
+    // operator on 2026-08-22 with the withdrawal of `D-0022`.
+    //
+    // The source orders rows by the columns alone, and that is not a total
+    // order over the values it hashes: SQLite's ORDER BY compares INTEGER 1 and
+    // REAL 1.0 as EQUAL while feedValue hashes them apart, so the two rows come
+    // back in insertion order and two databases holding identical content
+    // produce two digests. That is the one claim the field makes.
+    //
+    // Raised by the codex review gate on the provenance belt and disclosed
+    // there; repaired here by ordering on `typeof()` as well, which separates
+    // only rows the value comparison left equal.
+    const first = productionDb();
+    withWritable(first, (cp) => {
+      cp.prepare("CREATE TABLE probe (value)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES (1.0)").run();
+    });
+
+    const second = productionDb("other.sqlite3");
+    withWritable(second, (cp) => {
+      cp.prepare("CREATE TABLE probe (value)").run();
+      // The same two rows, inserted the other way round.
+      cp.prepare("INSERT INTO probe (value) VALUES (1.0)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
+    });
+
+    // The premise: SQLite really does hold one as an integer and one as a real,
+    // and really does compare them equal.
+    expect(
+      withMeasurement(
+        first,
+        (connection) =>
+          (
+            connection.prepare("SELECT group_concat(typeof(value)) AS t FROM probe").get() as {
+              t: string;
+            }
+          ).t,
+      ),
+    ).toBe("integer,real");
+
+    expect(fingerprintOf(first, { tables: ["probe"] }).digest).toBe(
+      fingerprintOf(second, { tables: ["probe"] }).digest,
+    );
+    // And the two values still hash APART, which is what made the ordering
+    // matter in the first place.
+    const onlyInteger = productionDb("only-integer.sqlite3");
+    withWritable(onlyInteger, (cp) => {
+      cp.prepare("CREATE TABLE probe (value)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
+      cp.prepare("INSERT INTO probe (value) VALUES (1)").run();
+    });
+    expect(fingerprintOf(onlyInteger, { tables: ["probe"] }).digest).not.toBe(
+      fingerprintOf(first, { tables: ["probe"] }).digest,
+    );
+  });
+
+  test("the Markdown rendering escapes a value and a field name the console cannot take", () => {
+    // Target-only, and `D-0109`. Both renderings claim to be ASCII -- the JSON
+    // one was (ensure_ascii) and the Markdown one only was when its inputs
+    // happened to be. A query NAME is a map key interpolated raw by interlock,
+    // so one carrying a pipe shifts every value after it one column left and
+    // one carrying a newline ends the row.
+    const path = productionDb();
+    populate(path);
+    const header = headerOver(path, {
+      revisionId: seedRevisionId(path),
+      queryDefinitions: new Map([
+        ["a|pipe\nand a newline", "SELECT 1"],
+        ["\u65e5\u672c\u8a9e", "SELECT 2"],
+      ]),
+    });
+
+    const markdown = renderHeaderMarkdown(header);
+    expect(isAscii(markdown)).toBe(true);
+    expect(markdown).toContain("\\u65e5\\u672c\\u8a9e");
+    // The forged row separator and the line break are both neutralised, so the
+    // table still has one row per field.
+    const rows = markdown.split("\n").filter((line) => line.includes("a\\|pipe"));
+    expect(rows).toHaveLength(1);
+    // The pipe is escaped and the newline is folded to a space -- the source's
+    // own two rules for a VALUE, now applied to the field name as well, so the
+    // key can neither open a column nor end the row.
+    expect(rows[0]).toContain("a\\|pipe and a newline");
+  });
+});

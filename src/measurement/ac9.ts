@@ -8,7 +8,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import { USAGE_STATUSES } from "../control_plane/ai_invocation.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import type { RunCohort } from "./cohort.js";
-import { comparePythonStrings, formatFixed, pythonRepr } from "./format.js";
+import { comparePythonStrings, formatFixed, pythonRepr, reportValue } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 /**
@@ -1065,5 +1065,7 @@ function itemise(ids: readonly string[], empty: string): string[] {
   if (ids.length === 0) {
     return [`      ${empty}`];
   }
-  return ids.map((identifier) => `      ${identifier}`);
+  // D-0109: an id here is unconstrained text from the database, and one
+  // carrying a newline would forge a line of this itemisation.
+  return ids.map((identifier) => `      ${reportValue(identifier)}`);
 }
