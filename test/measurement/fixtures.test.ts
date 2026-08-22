@@ -1510,26 +1510,51 @@ describe("hostile values in the rendering (target-only)", () => {
     writeCase(root, "relay_gap", "stalled\u2014one", { label: positiveLabel() });
     // A POSITIVE case with no outcome is a miss, and a miss carries a note --
     // which is what puts the id on a line of its own in the section below.
-    writeCase(root, "relay_gap", "b\nCases needing a reader", { label: positiveLabel() });
+    //
+    // The id carries a non-ASCII character and NOT a newline: a case id is a
+    // DIRECTORY NAME, and a newline is a legal filename character on POSIX and
+    // an invalid one on Windows -- an earlier version of this case created
+    // `b\nCases needing a reader` and failed only on the Windows cells, with an
+    // ENOENT from mkdir. The newline is exercised below through a value that
+    // can genuinely carry one.
+    writeCase(root, "relay_gap", "b\u2014two", { label: positiveLabel() });
     writeCase(root, "observation_unavailable", "quiet", { label: negativeLabel() });
     const corpus = loadCorpus(root);
     const clock = new SyntheticClock(T0);
     // Every case needs an outcome, empty or not: the evaluator refuses to score
     // a case the detector never ran (OutcomeMissing).
+    // The negative case gets an incident whose fact state carries a newline:
+    // that string is not a path, so it can hold one, and it reaches the same
+    // notes section the case ids do.
     const evaluation = evaluate(corpus, {
       clock,
-      outcomes: new Map(corpus.cases.map((one) => [one.caseId, []])),
+      outcomes: new Map(
+        corpus.cases.map((one): [string, readonly ProducedIncident[]] => [
+          one.caseId,
+          one.caseId.includes("quiet")
+            ? [
+                new ProducedIncident({
+                  incidentClass: "observation_unavailable",
+                  factState: "EXPLICIT_BLOCK\nCases needing a reader",
+                  createdAtMs: clock.at(60_000),
+                }),
+              ]
+            : [],
+        ]),
+      ),
     });
 
     const rendered = renderFixtureReport(evaluation);
 
     expect(isAscii(rendered)).toBe(true);
     expect(rendered).toContain("\\u000a");
-    // The root and the case id are separate call sites, so each is asserted
-    // where it prints rather than through one "somewhere in the text" check.
+    // The root, the case id and the note are separate call sites, so each is
+    // asserted where it prints rather than through one "somewhere in the text"
+    // check.
     const rootLine = rendered.split("\n").find((line) => line.startsWith("  corpus root"));
     expect(rootLine).toContain("corpus\\u2014dir");
     expect(rendered).toContain("stalled\\u2014one");
+    expect(rendered).toContain("b\\u2014two");
     // "Cases needing a reader" is a heading this renderer writes. The forged id
     // must not produce a second one.
     expect(rendered.split("\n").filter((line) => line === "Cases needing a reader")).toHaveLength(
