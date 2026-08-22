@@ -1,0 +1,328 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_watcher.py",
+      "collected": 30,
+      "inventory": "parity/source-inventory/control_plane.test_watcher.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/watcher.test.ts",
+    "target_only_tests": {
+      "count": 1,
+      "ids": [
+        "test/control_plane/watcher.test.ts::seam liveness (target-only) > watcher uuid4Hex names the refused heartbeats action row"
+      ],
+      "note": "Target-only. watcher.ts routes its one nondeterministic call -- the generated action_id on the refusal path -- through watcherSeams.uuid4Hex (D-0014). interlock's suite never patches uuid (every refusal case compares the recorded action_id against the one the refusal carries, so it pins the id's consistency and never its value), so this liveness test has no source counterpart and is not counted as ported coverage. It exists because a seam nothing routes through is worse than no seam: it looks like a control point while production goes around it."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 30,
+    "ported": 28,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_the_scope_lease_resource_is_a_function_of_the_scope_id",
+      "target_id": "test/control_plane/watcher.test.ts::the roster > the scope lease resource is a function of the scope id",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_heartbeat_takes_no_resource_argument_so_a_misroute_cannot_be_expressed",
+      "target_id": "test/control_plane/watcher.test.ts::the roster > heartbeat takes no resource argument so a misroute cannot be expressed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`inspect.signature(heartbeat).parameters` has no runtime analogue: an options object's keys exist only in the type. Translated the way migrator.test.ts translates `dir(m)` -- two halves: the runtime arity (`heartbeat.length === 2`, which a positional `resource` argument would change) and a scan of the declaration's own source text in src/control_plane/watcher.ts, asserting no `readonly <name>:` option is `resource` and that the whole signature text does not match /resource/i. Anti-vacuity: the declaration regex must match (expect(declaration).not.toBeNull()) and the scanned parameter list must contain `scopeId`, so a scan that matched nothing fails instead of passing. Strictly stronger than the source's key-membership check (it also excludes a resource-typed or resource-named positional).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_pull_request_scope_must_name_its_pull_request",
+      "target_id": "test/control_plane/watcher.test.ts::the roster > a pull request scope must name its pull request",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_repository_scope_may_not_name_a_pull_request",
+      "target_id": "test/control_plane/watcher.test.ts::the roster > a repository scope may not name a pull request",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_retiring_a_scope_that_is_not_on_the_roster_is_refused",
+      "target_id": "test/control_plane/watcher.test.ts::the roster > retiring a scope that is not on the roster is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_retiring_a_scope_keeps_its_last_trace",
+      "target_id": "test/control_plane/watcher.test.ts::the roster > retiring a scope keeps its last trace",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_the_first_heartbeat_of_a_scope_inserts_its_row_through_the_same_fence",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > the first heartbeat of a scope inserts its row through the same fence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_heartbeat_for_an_unregistered_scope_is_not_a_stale_writer",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > a heartbeat for an unregistered scope is not a stale writer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_heartbeat_without_the_scope_lease_is_refused_and_recorded",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > a heartbeat without the scope lease is refused and recorded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_watcher_holding_another_scopes_lease_cannot_heartbeat_this_one",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > a watcher holding another scopes lease cannot heartbeat this one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_replaced_watcher_returning_with_its_old_epoch_is_refused",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > a replaced watcher returning with its old epoch is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_liveness_row_at_a_higher_epoch_refuses_a_live_lease_holder",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > a liveness row at a higher epoch refuses a live lease holder",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_different_holder_at_an_equal_epoch_is_refused_by_the_trigger_and_recorded",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > a different holder at an equal epoch is refused by the trigger and recorded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_every_refusal_of_a_returning_writer_is_recorded_again",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > every refusal of a returning writer is recorded again",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_result_and_its_error_message_must_agree",
+      "target_id": "test/control_plane/watcher.test.ts::the trace, and the fence inside it > a result and its error message must agree",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_success_then_error_then_success_keeps_both_histories",
+      "target_id": "test/control_plane/watcher.test.ts::the alternation the implications exist for > success then error then success keeps both histories",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_consecutive_errors_counts_up_and_resets_only_on_a_success",
+      "target_id": "test/control_plane/watcher.test.ts::the alternation the implications exist for > consecutive errors counts up and resets only on a success",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_registered_scope_that_never_heartbeats_is_uncovered",
+      "target_id": "test/control_plane/watcher.test.ts::the three incident conditions, kept distinct > a registered scope that never heartbeats is uncovered",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_partial_coverage_names_only_the_scope_nobody_is_watching",
+      "target_id": "test/control_plane/watcher.test.ts::the three incident conditions, kept distinct > partial coverage names only the scope nobody is watching",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_silence_begins_strictly_after_the_scopes_own_interval_multiple",
+      "target_id": "test/control_plane/watcher.test.ts::the three incident conditions, kept distinct > silence begins strictly after the scopes own interval multiple",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_silence_is_measured_against_each_scopes_own_interval",
+      "target_id": "test/control_plane/watcher.test.ts::the three incident conditions, kept distinct > silence is measured against each scopes own interval",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_an_erroring_watcher_that_is_punctual_is_a_streak_and_not_silent",
+      "target_id": "test/control_plane/watcher.test.ts::the three incident conditions, kept distinct > an erroring watcher that is punctual is a streak and not silent",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_silent_watcher_that_last_succeeded_is_not_an_error_streak",
+      "target_id": "test/control_plane/watcher.test.ts::the three incident conditions, kept distinct > a silent watcher that last succeeded is not an error streak",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_the_streak_opens_on_the_threshold_th_failure_and_not_the_one_after",
+      "target_id": "test/control_plane/watcher.test.ts::the three incident conditions, kept distinct > the streak opens on the threshold th failure and not the one after",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_silence_binds_the_effective_policy_revision",
+      "target_id": "test/control_plane/watcher.test.ts::both policy reads bind the effective revision (D-0031) > silence binds the effective policy revision",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_silence_reads_the_revision_that_was_effective_at_the_callers_instant",
+      "target_id": "test/control_plane/watcher.test.ts::both policy reads bind the effective revision (D-0031) > silence reads the revision that was effective at the callers instant",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_the_error_streak_binds_the_effective_policy_revision",
+      "target_id": "test/control_plane/watcher.test.ts::both policy reads bind the effective revision (D-0031) > the error streak binds the effective policy revision",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_two_revisions_at_one_instant_resolve_by_the_later_revision_id",
+      "target_id": "test/control_plane/watcher.test.ts::both policy reads bind the effective revision (D-0031) > two revisions at one instant resolve by the later revision id",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_a_retired_revision_is_not_joined_alongside_the_live_one",
+      "target_id": "test/control_plane/watcher.test.ts::both policy reads bind the effective revision (D-0031) > a retired revision is not joined alongside the live one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_watcher.py::test_the_watcher_module_never_reads_a_clock",
+      "target_id": "test/control_plane/watcher.test.ts::both policy reads bind the effective revision (D-0031) > the watcher module never reads a clock",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`Path(watcher.__file__).read_text()` with `\"time.time\" not in source` / `\"import time\" not in source` names Python clock readers that do not exist in TypeScript. Same scan, over src/control_plane/watcher.ts's own text, against the names a TypeScript clock read would have to use: `Date.now`, `new Date`, `performance.now`, `hrtime`, `node:timers`. Anti-vacuity: `source.length > 0` and `source` must contain `export function heartbeat`, so an unreadable/empty/wrong file fails instead of passing every `not.toContain`. Deliberately NOT extended to SQL clock functions (CURRENT_TIMESTAMP/unixepoch/...): the source's scan covers language-level clock reads only, and adding them would make the case stricter than its source.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "The incident-query projections return camelCase objects where the source returns mappings keyed by the database's own column names.",
+      "status": "house convention, disclosed",
+      "detail": "silentScopes / uncoveredScopes / errorStreakScopes return frozen camelCase records; interlock returns MappingProxyType rows keyed by scope_id, silent_for_ms and so on. Same position already recorded for ci_ingest.ts's scopeVerdicts -- faithful in VALUE, differing only in the shape a TypeScript caller sees. Settling it one way belongs in a convention change applied everywhere at once, not inside a translation."
+    },
+    {
+      "topic": "Numeric columns are read with Number() rather than re-narrowed to Python's int().",
+      "status": "divergence, accepted under continuo D-0021",
+      "detail": "The source applies int() at these reads and the port does not; for a well-formed INTEGER column the two agree, and they differ only for a row whose stored value violates the column's declared type, which no supported code path can write. Stated this way deliberately: an earlier draft of this entry described the source as applying no coercion, which would have made the disclosure unverifiable against the Python."
+    },
+    {
+      "topic": "requireIdentifier rejects on value.trim() where the source uses str.strip().",
+      "status": "divergence, disclosed",
+      "detail": "Python's str.strip() also removes U+001C-U+001F and U+0085, which JavaScript's trim() does not, so a string consisting only of those characters is refused by the source and accepted here. Unreachable from any ported case; recorded rather than left as an undisclosed asymmetry."
+    },
+    {
+      "topic": "A held-epoch tuple is read without the source's absent-value hazard.",
+      "status": "divergence, disclosed",
+      "detail": "interlock indexes held_epoch[0] / held_epoch[1] with no None guard, so a None there raises a TypeError rather than a typed refusal. The port's types make the absent case explicit. This is the port being stricter than its source (criterion 5), recorded rather than silently kept."
+    }
+  ]
+}
