@@ -114,14 +114,24 @@ export { SPIKE_APPLICATION_ID } from "./control_plane/spike.js";
  * only `.` (D-0002), so a name absent from here is one an installed consumer
  * cannot reach.
  */
+/**
+ * The G6 harness's detection-latency report (section 4).
+ *
+ * Re-exported by name for the reason the entries above are: the package exports
+ * only `.` (D-0002), so a name absent from here is one an installed consumer
+ * cannot reach.
+ */
 export {
   type Adjudication,
   AsynchronousReportRefused,
   adjudicate,
   CENSORED,
   CENSORED_LEFT,
+  ClassLatency,
   classify,
   classifyEpisodes,
+  DetectionBeforeOnset,
+  Distribution,
   DuplicateEpisodeRefused,
   defaultGraceMs,
   Episode,
@@ -136,10 +146,17 @@ export {
   GROUND_TRUTH_PREFERENCE,
   GraceNotDeclared,
   IN_PERIOD,
+  INGESTION_LAG_QUERY,
+  IngestionLag,
   isAscii,
+  LatencyRefusal,
+  LatencyReport,
   measureFalseTermination,
+  measureIngestionLag,
+  measureLatency,
   measurementSnapshot,
   NestedSnapshotRefused,
+  noShadowReference,
   openForMeasurement,
   PeriodRefused,
   PRODUCTIVE_EVENT_TYPES_REQUIRED,
@@ -148,8 +165,14 @@ export {
   ReadOnlyCapabilityRefused,
   readTerminateActions,
   renderFalseTerminationReport,
+  renderLatencyReport,
   requireGraceMs,
   resolveBudgetMs,
+  SHADOW_ABSENT,
+  SHADOW_PRESENT,
+  ShadowReference,
+  ShadowReferenceUnstated,
+  ShadowSource,
   SOURCE_FIXTURE_LABEL,
   SOURCE_HUMAN_ADJUDICATION,
   SOURCE_NONE,
@@ -159,10 +182,12 @@ export {
   STATUS_REFUSED,
   SUBSEQUENT_ACTIVITY_QUERY,
   SubjectRequired,
+  shadowFromBothBucket,
   subsequentActivityVerdicts,
   TERMINATE_ACTIONS_QUERY,
   TERMINATE_SESSION_KIND,
   TerminateAction,
+  UnknownEpisodeDetection,
   UnknownGroundTruthVerdict,
   VERDICT_NOT_STUCK,
   VERDICT_STUCK,

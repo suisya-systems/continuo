@@ -61,6 +61,34 @@ export {
  * harness renders figures and must use the same one.
  */
 export { formatFixed, isAscii } from "./format.js";
+/**
+ * Section 4's detection-latency report, its two references, and the ingestion
+ * lag beside it.
+ *
+ * `INGESTION_LAG_QUERY` is exported for the same reason the false-termination
+ * catalogue is: the provenance header carries the executed query text
+ * (interlock `D-0040`), and a copy would be right on the day it was pasted.
+ */
+export {
+  ClassLatency,
+  DetectionBeforeOnset,
+  Distribution,
+  INGESTION_LAG_QUERY,
+  IngestionLag,
+  LatencyRefusal,
+  LatencyReport,
+  measureIngestionLag,
+  measureLatency,
+  noShadowReference,
+  renderLatencyReport,
+  SHADOW_ABSENT,
+  SHADOW_PRESENT,
+  ShadowReference,
+  ShadowReferenceUnstated,
+  ShadowSource,
+  shadowFromBothBucket,
+  UnknownEpisodeDetection,
+} from "./latency.js";
 export {
   AsynchronousReportRefused,
   ControlPlaneRefusal,
@@ -74,7 +102,6 @@ export {
   proveReadOnly,
   ReadOnlyCapabilityRefused,
 } from "./reader.js";
-
 /**
  * Section 3.5's observation window and its two censored buckets.
  *

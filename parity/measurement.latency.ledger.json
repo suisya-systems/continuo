@@ -1,0 +1,266 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. latency is the fourth file of this lane and the first to consume another measurement module's output: censoring is windows.ts's decision and arrives here already made, which is why a censored episode is excluded from the distribution rather than re-judged."
+    },
+    "file": {
+      "path": "tests/measurement/test_latency.py",
+      "collected": 17,
+      "inventory": "parity/source-inventory/measurement.test_latency.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/latency.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "frozen dataclasses with tuple fields and Mapping returns",
+        "to": "frozen classes whose collections go through frozenList / readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention established in the false-termination belt (D-0105's sibling reasoning): TypeScript's readonly is erased at runtime and Object.freeze is shallow, so the source's runtime immutability has to be built. Distribution, ShadowReference, ShadowSource, IngestionLag, ClassLatency and LatencyReport are all frozen. Changes how a case spells a construction, never what it asserts.",
+        "affects": "every entry that constructs or reads a report object"
+      },
+      {
+        "from": "Mapping[str, int] detections, Mapping[str, tuple[int, ...]] samples",
+        "to": "ReadonlyMap",
+        "why": "D-0105: the keys are episode ids and incident classes that arrive from a caller's selection, so a plain object's prototype chain could answer a lookup. Applied uniformly.",
+        "affects": "every entry that supplies detections or shadow samples"
+      },
+      {
+        "from": "str.isascii() and str.count(needle)",
+        "to": "isAscii() from src/measurement/format.ts, and a split-based occurrence count",
+        "why": "Neither exists in JavaScript. isAscii iterates code points (D-0006); the occurrence count is non-overlapping, which is what Python's str.count is.",
+        "affects": "test_every_class_block_renders_both_reference_headings"
+      },
+      {
+        "from": "pytest tuple-unpacking, e.g. `(measured,) = report.classes`",
+        "to": "an explicit length assertion followed by an index",
+        "why": "Python's unpack asserts exactly-one as a side effect of binding. The target asserts the length first so that a report with two classes fails on the count rather than on a later field, which is the same claim made visible.",
+        "affects": "the entries that read a single class off a report"
+      }
+    ],
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/measurement/latency.test.ts::the report itself > percentiles are ceil-rank, on a sample where floor would differ (target-only)",
+        "test/measurement/latency.test.ts::the report itself > a class present in the shadow source with an EMPTY sample is absent for it (target-only)",
+        "test/measurement/latency.test.ts::the report itself > classes are reported in first-seen order, not sorted (target-only)"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 22-mutation sweep and then confirmed against interlock 65f36c5 -- in each case the source's own suite cannot tell the mutated module from the real one either. Production behaviour is unchanged; these add coverage, not behaviour. This module has no seam (nothing in it is monkeypatched by the source) and renders no figure through D-0104's formatter, so neither of those liveness obligations applies."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 17,
+    "ported": 16,
+    "adapted": 1,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The v1 shadow distribution is a caller-supplied input, never read from this database, so nothing in the harness verifies that the samples handed in are really v1's both-bucket episodes for that class.",
+      "matches_source": true,
+      "note": "Deliberate upstream and structural rather than an omission: interlock D-0013 makes a run row's existence the assertion that the run is Interlock-owned, so there is no ownership column a v1 episode could be read out of. The obligation the module CAN discharge -- that a class is never rendered against the budget alone, and that an empty per-class sample becomes a stated absence rather than a zero -- is discharged in the type.",
+      "where_a_fix_belongs": "upstream, and only alongside a v1 store the harness could read directly."
+    },
+    {
+      "behaviour": "A shadow comparison is never turned into a verdict: the report prints both references and says nothing about whether the class passed.",
+      "matches_source": true,
+      "note": "interlock Q-0005 is open and measurement-harness.md section 5 says a harness that emitted a verdict would be answering it by inertia. Reproduced exactly, and recorded here so the absence is not mistaken for an unfinished feature.",
+      "where_a_fix_belongs": "nowhere until Q-0005 is decided upstream."
+    },
+    {
+      "behaviour": "Interlock's latency suite cannot distinguish a ceil-rank percentile from a floor-rank one, cannot distinguish an empty per-class shadow sample from a missing one, and does not assert the order classes are reported in.",
+      "matches_source": true,
+      "note": "Three blind spots found by a mutation sweep on the port and then verified against interlock 65f36c5. The port reproduces the production behaviour exactly and does not change it; it adds three target-only tests so the properties stop being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
+      "where_a_fix_belongs": "upstream, as the same three cases added to interlock's tests/measurement/test_latency.py."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_percentiles_are_nearest_rank_on_a_hand_checked_sample",
+      "target_id": "test/measurement/latency.test.ts::the distribution > percentiles are nearest-rank on a hand-checked sample",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_an_undetected_in_period_episode_is_not_a_latency_sample",
+      "target_id": "test/measurement/latency.test.ts::the distribution > an undetected in-period episode is not a latency sample",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_a_censored_episode_is_excluded_from_the_distribution_and_counted",
+      "target_id": "test/measurement/latency.test.ts::the distribution > a censored episode is excluded from the distribution and counted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_over_budget_is_strictly_greater_than_L",
+      "target_id": "test/measurement/latency.test.ts::the distribution > over budget is strictly greater than L",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_a_detection_before_its_onset_is_refused",
+      "target_id": "test/measurement/latency.test.ts::the distribution > a detection before its onset is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_a_detection_for_an_unclassified_episode_is_refused",
+      "target_id": "test/measurement/latency.test.ts::the distribution > a detection for an unclassified episode is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_no_shadow_reference_renders_and_says_so",
+      "target_id": "test/measurement/latency.test.ts::the two references > no shadow reference renders and says so",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_a_present_shadow_source_with_nothing_for_this_class_is_absent_for_it",
+      "target_id": "test/measurement/latency.test.ts::the two references > a present shadow source with nothing for this class is absent for it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_a_present_shadow_reference_carries_v1_percentiles",
+      "target_id": "test/measurement/latency.test.ts::the two references > a present shadow reference carries v1 percentiles",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_every_class_block_renders_both_reference_headings",
+      "target_id": "test/measurement/latency.test.ts::the two references > every class block renders both reference headings",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_a_shadow_reference_without_a_distribution_or_a_reason_is_refused",
+      "target_id": "test/measurement/latency.test.ts::the two references > a shadow reference without a distribution or a reason is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Python enforces the exclusive-or in `__post_init__`, which runs for a dataclass built by hand as well as through the two classmethods. TypeScript has no equivalent hook, so the validation lives in the constructor and the constructor is public -- which is what the source case needs, since it builds four malformed values directly and asserts each refuses. Same four constructions, same refusal type, same coverage; only the place the invariant is written differs.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_ingestion_lag_is_a_separate_series_from_detection_latency",
+      "target_id": "test/measurement/latency.test.ts::the ingestion lag > ingestion lag is a separate series from detection latency",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_negative_ingestion_lag_is_counted_rather_than_clamped",
+      "target_id": "test/measurement/latency.test.ts::the ingestion lag > negative ingestion lag is counted rather than clamped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_the_lag_window_is_half_open_on_our_own_clock",
+      "target_id": "test/measurement/latency.test.ts::the ingestion lag > the lag window is half-open on our own clock",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_an_empty_or_inverted_period_is_refused",
+      "target_id": "test/measurement/latency.test.ts::the ingestion lag > an empty or inverted period is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_the_report_carries_the_revision_and_grace_it_was_computed_under",
+      "target_id": "test/measurement/latency.test.ts::the report itself > the report carries the revision and grace it was computed under",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_latency.py::test_an_empty_distribution_prints_as_no_sample_not_as_zero",
+      "target_id": "test/measurement/latency.test.ts::the report itself > an empty distribution prints as no sample, not as zero",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "22 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 19,
+    "survivors": [
+      {
+        "mutation": "nearestRank uses Math.floor instead of Math.ceil",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Every sample interlock's suite uses is one where the two rules coincide: n=10 (ceil and floor of both 0.5n and 0.9n are equal), n=1, and n=3 with three IDENTICAL values. The new case uses three DISTINCT values, where ceil(0.5*3)=2 and floor=1."
+      },
+      {
+        "mutation": "ShadowSource.forClass treats an empty sample list as present rather than absent",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported case supplies a source holding a DIFFERENT class, so the lookup misses and returns undefined; the branch where the class is present with an empty list is never taken. Interlock's `if not samples:` covers both and its one test exercises only the missing key. The distinction is the one the module comment names: an empty distribution renders as 'v1: count 0' and reads as no regression."
+      },
+      {
+        "mutation": "measureLatency sorts the class list instead of keeping first-seen order",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The two-class ported case counts headings rather than reading the order, and interlock never asserts class order anywhere. First-seen order is a D-0040 byte-reproducibility claim, so the new case uses a fixture where sorted and first-seen differ ('relay_gap' sorts before 'session_no_evidence' while the episodes present the latter first)."
+      }
+    ]
+  }
+}
