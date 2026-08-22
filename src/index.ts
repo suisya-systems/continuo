@@ -50,5 +50,28 @@ export {
   MissingStateRefused,
 } from "./control_plane/refusals.js";
 export { SPIKE_APPLICATION_ID } from "./control_plane/spike.js";
+/**
+ * The G6 measurement harness.
+ *
+ * Only the measurement-specific names are listed: the refusal family it shares
+ * with the control plane (`ControlPlaneRefusal` and friends) is already
+ * exported above, and re-exporting the same bindings twice would be a duplicate
+ * export rather than a second way to reach them.
+ *
+ * `readerSeams`, `requireQueryOnly` and `theErrorSaysTheDatabaseIsReadOnly` are
+ * deliberately absent. The first is a test seam (D-0014); the other two are
+ * module internals exported only because a source case reaches them and
+ * TypeScript has no other way to be reached (D-0101). None of the three is
+ * package API, and the measurement barrel's own test asserts the package
+ * exports no way to write.
+ */
+export {
+  AsynchronousReportRefused,
+  measurementSnapshot,
+  NestedSnapshotRefused,
+  openForMeasurement,
+  proveReadOnly,
+  ReadOnlyCapabilityRefused,
+} from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";

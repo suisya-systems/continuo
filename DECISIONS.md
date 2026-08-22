@@ -1413,9 +1413,18 @@ This is a hazard the **translation** created. It is not in interlock and could n
   unknown)`, which collapses to `never` for a Promise-returning body, so the call site does not
   compile. Verified: `Argument of type '() => Promise<number>' is not assignable to parameter of
   type '(connection: Database) => never'`.
-- **Runtime.** `AsynchronousReportRefused`, for callers that are not type-checked -- untyped
-  JavaScript, or a cast. The check runs **inside** the `try`, so the existing `finally` still
-  releases the snapshot: refusing must not also leak the lock it is refusing to hold.
+- **Runtime, before invocation.** An `async function` is knowable without calling it
+  (`Object.prototype.toString` reads an internal class `async` sets and no userland property can
+  forge). That check runs before the snapshot is opened, so this branch genuinely **prevents** the
+  work: the body never runs and no lock is ever taken.
+- **Runtime, after invocation.** An ordinary function that *returns* a Promise is not an
+  `AsyncFunction`, and by the time the Promise is in hand the body has already started. Nothing can
+  un-start it, so this branch is **containment and a report, not prevention**, and it is written
+  down that way rather than claimed as a guarantee. It does two things: the check runs **inside** the
+  `try`, so the existing `finally` still releases the snapshot -- refusing must not leak the lock it
+  is refusing to hold -- and the abandoned Promise gets a no-op rejection handler, because the caller
+  never receives it and an unhandled rejection terminates Node by default, which would turn a refusal
+  into a crash.
 
 Thenables are detected structurally (a callable `.then`) rather than by `instanceof Promise`, because
 a Promise from another realm and a userland thenable suspend in exactly the same way.
@@ -1431,6 +1440,13 @@ a Promise from another realm and a userland thenable suspend in exactly the same
 - **Compile-time guard only (rejected).** The port publishes a package; an untyped consumer reaches
   this function with no type check between them, and this failure is silent by construction.
 - **Runtime guard only (rejected).** A mistake a type can catch should not wait for a test run.
+- **Only the post-invocation thenable check (rejected).** It was the first implementation and it is
+  not enough: it reports the problem after the body has begun, so for the case that *can* be caught
+  early -- an `async function`, which is the overwhelmingly common way to write one -- it gave up
+  prevention for no reason.
+- **Letting the abandoned Promise reject unobserved (rejected).** Node's default for an unhandled
+  rejection is to terminate the process, so a refusal designed to keep a report honest would instead
+  take the process down some milliseconds later, at a point with no connection to the cause.
 - **Return the connection and let callers begin/end by hand (rejected).** It reintroduces the
   un-exited scope the callback form exists to make impossible, which is a larger hole than the one
   being closed.
@@ -1440,15 +1456,23 @@ a Promise from another realm and a userland thenable suspend in exactly the same
 - One target-only test, `an asynchronous report body is refused, not awaited (target-only)`. It is
   declared in `parity/measurement.ledger.json` and is **not** counted as ported coverage -- it
   translates no source case, because there is no source case to translate.
-- `AsynchronousReportRefused` is port-only surface, exported from `src/measurement/index.ts`. It
-  descends from `ControlPlaneRefusal`, so a caller catching the family catches this too.
+- `AsynchronousReportRefused` is port-only surface, exported from `src/measurement/index.ts` and
+  re-exported from `src/index.ts` -- the package exports only `.` (`D-0002`), so a name absent from
+  the root entry point is one an installed consumer cannot reach at all. It descends from
+  `ControlPlaneRefusal`, so a caller catching the family catches this too.
+- The two branches are pinned separately by the target-only test, because they promise different
+  things: branch 1 asserts the body never ran and no transaction was opened, branch 2 asserts the
+  snapshot was released and no unhandled rejection escaped. A single test over one of them would
+  read as a guarantee the other does not make.
 - Every later belt that translates a Python `@contextmanager` to a callback inherits this question.
   The answer is this entry: refuse, guard at both levels, and do not quietly make the scope async.
 
 **Status.** accepted
 
 **Source.** Raised as a P1 by the `codex exec review` gate on this PR, 2026-08-22, against
-`src/measurement/reader.ts`. Compile-time behaviour verified with `tsc -p tsconfig.json --noEmit` on
+`src/measurement/reader.ts`; the split into a preventing and a containing branch came from the same
+gate's second round, which observed that the first implementation detected the Promise only after the
+body had started. Compile-time behaviour verified with `tsc -p tsconfig.json --noEmit` on
 TypeScript 5.8.3 the same day. Falsified by: the harness acquiring a genuinely asynchronous read path
 (it has none while better-sqlite3 is the driver), which would make "refuse" the wrong answer and
 require deciding what may hold the control plane's SHARED lock across a suspension.

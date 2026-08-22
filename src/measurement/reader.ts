@@ -330,6 +330,14 @@ export function measurementSnapshot<T>(
 ): T {
   const target = options.target;
 
+  // Before anything is opened, so a refused report takes no lock at all. An
+  // `async function` is knowable without calling it, which is the only point at
+  // which the refusal can prevent the work rather than merely report it -- see
+  // the thenable check further down for the case that cannot be prevented.
+  if (isAsyncFunction(body)) {
+    throw new AsynchronousReportRefused(asynchronousBodyMessage(target));
+  }
+
   if (connection.inTransaction) {
     throw new NestedSnapshotRefused(
       `${names(target)} is already inside a transaction; a report snapshot ` +
@@ -347,18 +355,25 @@ export function measurementSnapshot<T>(
     connection.prepare("SELECT count(*) FROM sqlite_master").get();
     requireQueryOnly(target, connection, "inside the report snapshot");
     const result = body(connection);
+    // The residual case the check above cannot reach: an ordinary function that
+    // returns a Promise. By the time the Promise is in hand the body has
+    // already started, and nothing here can un-start it -- so this is
+    // containment and a report, not prevention, and it is written down that way
+    // rather than claimed as a guarantee (D-0103).
+    //
     // Checked inside the try, so the `finally` below still releases the
     // snapshot: refusing must not also leak the lock it is refusing to hold.
     if (isThenable(result)) {
-      throw new AsynchronousReportRefused(
-        `${names(target)} was given an asynchronous report body. A report ` +
-          `snapshot is one synchronous scope: an async body returns at its ` +
-          `first await, the snapshot would be released there, and every read ` +
-          `after it would run on a different state of the database -- which is ` +
-          `the defect the snapshot exists to remove. Nothing in the harness is ` +
-          `asynchronous (better-sqlite3 is a synchronous driver); build the ` +
-          `report synchronously inside the scope`,
+      // The caller never receives this Promise, so nothing will ever attach a
+      // rejection handler to it. Left alone, a rejection after this point is an
+      // unhandled rejection, which by Node's default terminates the process --
+      // turning a refusal into a crash. Swallowed here for that reason and no
+      // other: the value is discarded either way.
+      void (result as PromiseLike<unknown>).then?.(
+        () => undefined,
+        () => undefined,
       );
+      throw new AsynchronousReportRefused(asynchronousBodyMessage(target));
     }
     return result;
   } finally {
@@ -718,4 +733,32 @@ function isThenable(value: unknown): boolean {
   return (typeof value === "object" && value !== null) || typeof value === "function"
     ? typeof (value as { then?: unknown }).then === "function"
     : false;
+}
+
+/**
+ * Is `body` an `async function`, decidable without calling it?
+ *
+ * `Object.prototype.toString` reads the function's internal class, which
+ * `async` sets and which no userland property can forge. This is the only test
+ * available *before* invocation, and invocation is the moment after which the
+ * refusal can no longer prevent anything.
+ *
+ * It is deliberately not the whole answer: a plain function that returns a
+ * Promise is not an `AsyncFunction` and is caught by the thenable check
+ * instead, after it has already started.
+ */
+function isAsyncFunction(body: unknown): boolean {
+  return Object.prototype.toString.call(body) === "[object AsyncFunction]";
+}
+
+/** The one refusal text, so the two guards cannot drift into two diagnoses. */
+function asynchronousBodyMessage(target: string | undefined): string {
+  return (
+    `${names(target)} was given an asynchronous report body. A report snapshot ` +
+    `is one synchronous scope: an async body returns at its first await, the ` +
+    `snapshot would be released there, and every read after it would run on a ` +
+    `different state of the database -- which is the defect the snapshot exists ` +
+    `to remove. Nothing in the harness is asynchronous (better-sqlite3 is a ` +
+    `synchronous driver); build the report synchronously inside the scope`
+  );
 }

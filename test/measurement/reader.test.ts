@@ -721,27 +721,43 @@ describe("the report snapshot", () => {
     // the database. That is silently the exact defect the snapshot exists to
     // remove.
     //
-    // The callback type rejects this at compile time; the cast here is what an
-    // untyped JavaScript caller does, and it is the runtime half being pinned.
+    // The callback type rejects this at compile time; the casts here are what
+    // an untyped JavaScript caller does, and it is the runtime half being
+    // pinned. Both of its branches are covered, because they promise different
+    // things.
     const path = productionDb(caseRoot("reader"));
     const connection = openForMeasurement(path);
+    const cast = (body: () => unknown) => body as unknown as (connection: SqliteDatabase) => number;
     try {
+      // Branch 1 -- an `async function`, which is knowable before it is called.
+      // Here the refusal genuinely PREVENTS the work: the body never runs and
+      // no snapshot is ever opened, so there is no lock to release.
+      let ranAtAll = false;
       const asyncBody = async () => {
+        ranAtAll = true;
         await Promise.resolve();
         return 1;
       };
       expectRefusal(
-        () =>
-          measurementSnapshot(
-            connection,
-            { target: path },
-            asyncBody as unknown as (connection: SqliteDatabase) => number,
-          ),
+        () => measurementSnapshot(connection, { target: path }, cast(asyncBody)),
         AsynchronousReportRefused,
         /asynchronous report body/,
       );
-      // Refusing must not also leak the lock it refused to hold: the check runs
-      // inside the try, so the snapshot is released on the way out.
+      expect(ranAtAll).toBe(false);
+      expect(connection.inTransaction).toBe(false);
+
+      // Branch 2 -- an ordinary function that RETURNS a Promise. This one
+      // cannot be prevented: by the time the Promise is in hand the body has
+      // started, and the guard is containment plus a report, not prevention.
+      // What it must still do is release the snapshot and not leave an
+      // unhandled rejection behind -- an unhandled rejection terminates Node by
+      // default, which would turn a refusal into a crash.
+      const rejectingBody = () => Promise.reject(new Error("would have been unhandled"));
+      expectRefusal(
+        () => measurementSnapshot(connection, { target: path }, cast(rejectingBody)),
+        AsynchronousReportRefused,
+        /asynchronous report body/,
+      );
       expect(connection.inTransaction).toBe(false);
     } finally {
       connection.close();
