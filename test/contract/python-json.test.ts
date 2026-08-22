@@ -75,6 +75,16 @@ describe("python_json (contract)", () => {
     expect(pythonJsonDumpsSorted({ b: 2, a: "x" })).toBe('{"a": "x", "b": 2}');
   });
 
+  test("sort_keys orders by code point, not by UTF-16 code unit", () => {
+    // The two disagree above the BMP, and JavaScript's default sort is the
+    // wrong one of the pair. Measured against CPython:
+    //   python  -> a, U+FFFF, U+1F600
+    //   js sort -> a, U+1F600, U+FFFF   (the leading surrogate 0xD83D < 0xFFFF)
+    expect(pythonJsonDumpsSorted({ "\u{1F600}": 1, "\uffff": 2, a: 3 })).toBe(
+      '{"a": 3, "\\uffff": 2, "\\ud83d\\ude00": 1}',
+    );
+  });
+
   test("a payload shape this package does not write is refused", () => {
     // Rather than silently emitting text json.dumps would not have produced.
     expect(() => pythonJsonDumpsSorted({ a: null as unknown as string })).toThrow(

@@ -9,6 +9,28 @@
  * (DECISIONS.md D-0001..D-0042, docs/parity-audit.md).
  */
 
+export {
+  CHECK_SCOPES,
+  CI_OBSERVED_EVENT_TYPE,
+  CI_PROVIDERS,
+  CI_VERDICTS,
+  CiObservationRefused,
+  EmptyIdentityFieldRefused,
+  MalformedAttemptRefused,
+  MalformedHeadShaRefused,
+  MalformedPrNumberRefused,
+  NO_ELIGIBLE_EVIDENCE,
+  ObservationIdentity,
+  observationDedupKey,
+  prVerdict,
+  recordCiObservation,
+  type ScopeVerdict,
+  scopeVerdicts,
+  UnknownCheckScopeRefused,
+  UnknownVerdictRefused,
+  UnsupportedProviderRefused,
+  VERDICT_SEVERITY,
+} from "./control_plane/ci_ingest.js";
 /**
  * The production control plane.
  *
@@ -129,6 +151,22 @@ export {
   MigrationStepsRefused,
   MissingStateRefused,
 } from "./control_plane/refusals.js";
+export {
+  linkRunPr,
+  type ObservedPullRequest,
+  observePullRequest,
+  PR_STATES,
+  PullRequestObservationRefused,
+  primaryLink,
+  RESOLUTIONS,
+  RepoResolutionError,
+  ROLES,
+  RunPrLinkRefused,
+  resolveRepository,
+  StalePullRequestObservation,
+  unlinkRunPr,
+  upsertRepository,
+} from "./control_plane/repo_link.js";
 export {
   type ControlPlaneState,
   createControlPlane,
@@ -307,4 +345,5 @@ export {
   WindowReport,
 } from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
+export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";
