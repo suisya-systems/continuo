@@ -89,9 +89,9 @@
   },
   "totals": {
     "source_cases": 61,
-    "ported": 60,
+    "ported": 61,
     "adapted": 0,
-    "not_ported": 1,
+    "not_ported": 0,
     "waivers": 0
   },
   "notes_on_exports": [
@@ -673,11 +673,11 @@
     },
     {
       "source_nodeid": "tests/measurement/test_provenance.py::test_coverage_and_imputation_come_off_the_real_ac9_report",
-      "target_id": null,
-      "disposition": "not-ported",
+      "target_id": "test/measurement/ac9.test.ts::the adapters onto the provenance header > coverage and imputation come off the real AC-9 report",
+      "disposition": "ported",
       "source_status": "passed",
-      "target_status": "absent",
-      "reason": "Deferred to this lane's ac9 belt, which is the next file. The case is an INTEGRATION case: it builds a cohort with selectCohort, measures it with measureAc9, and asserts that coverageFromAc9 and imputationFromAc9 copy that report's own numbers rather than recounting them. measurement/ac9.py is not ported yet, so the case has nothing to integrate with -- and porting it against a hand-built stand-in would assert that the adapters copy numbers I made up, which is the opposite of what it checks. Both adapters ARE ported here and exported; what waits is the case that wires them to the real AC-9 report. It will be carried in parity/measurement.ac9.ledger.json with this ledger named as its origin.",
+      "target_status": "passed",
+      "reason": "Deferred from the provenance belt and landed with ac9, which is where the thing it integrates with lives. It is an INTEGRATION case -- it builds a cohort with selectCohort, measures it with measureAc9, and asserts that coverageFromAc9 and imputationFromAc9 copy that report's own numbers rather than recounting them -- so porting it before ac9 existed would have asserted that the adapters copy numbers the test made up. Accounted for here, where its source file is; its target lives in test/measurement/ac9.test.ts.",
       "source_revision": "65f36c5"
     }
   ],
