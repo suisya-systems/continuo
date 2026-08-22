@@ -55,7 +55,7 @@ import {
   defaultGraceMs,
   Episode,
   EpisodeOutsidePeriod,
-  type EpisodeWindow,
+  EpisodeWindow,
   episodeWindow,
   GRACE_DECLARED,
   GRACE_REVISION_RECONCILE_PERIOD,
@@ -66,7 +66,7 @@ import {
   SubjectRequired,
   WINDOW_CLASSIFICATIONS,
   WindowRefusal,
-  type WindowReport,
+  WindowReport,
 } from "../../src/measurement/windows.js";
 import { caseRoot } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
@@ -827,6 +827,49 @@ describe("the buckets", () => {
     // The valid names still work, so the guard is a filter on the argument and
     // not a refusal of the method.
     expect(report.idsFor(IN_PERIOD)).toEqual(["e"]);
+  });
+
+  test("counts refuses a window carrying an unknown classification (target-only)", () => {
+    // Target-only: translates no source case. It pins a PORT divergence that a
+    // review caught, not an inherited one.
+    //
+    // The source builds a pre-seeded dict and does `tally[classification] += 1`,
+    // so a window carrying a classification this module does not produce raises
+    // KeyError there. The port's first cut used `tally.get(k) ?? 0`, which
+    // instead grew a fourth bucket and printed it as legitimate report output --
+    // the one thing a fixed key set exists to prevent.
+    //
+    // A RangeError rather than a WindowRefusal, deliberately: KeyError is
+    // outside the source's refusal family, so `except WindowRefusal` does not
+    // catch it there and a caller catching the refusal family must not swallow
+    // it here. It means a window object was built with a classification no
+    // classifier produces -- a bug, not an input the report may decline.
+    const forged = new EpisodeWindow({
+      episodeId: "forged",
+      incidentClass: ABSOLUTE_CLASS,
+      subject: null,
+      onsetMs: PERIOD_START,
+      thresholdKind: "absolute_ms",
+      toleranceMs: null,
+      budgetMs: 1,
+      graceMs: 0,
+      endMs: PERIOD_START + 1,
+      classification: "not_a_bucket",
+    });
+    const report = new WindowReport({
+      periodStartMs: PERIOD_START,
+      periodEndMs: PERIOD_END,
+      revisionId: 1,
+      graceMs: 0,
+      graceSource: GRACE_DECLARED,
+      windows: [forged],
+    });
+
+    expect(() => report.counts()).toThrow(RangeError);
+    expect(() => report.counts()).toThrow(/not_a_bucket/);
+    // Not a member of the refusal family, so a caller catching refusals does
+    // not silently absorb it.
+    expect(() => report.counts()).not.toThrow(WindowRefusal);
   });
 
   test("an empty or inverted period is refused", () => {

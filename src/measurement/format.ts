@@ -158,3 +158,62 @@ export function isAscii(text: string): boolean {
   }
   return true;
 }
+
+/**
+ * Python's `repr()` for a string -- what a refusal message's `!r` produces.
+ *
+ * Several ported refusals interpolate a caller-supplied value with `!r`, and the
+ * message text is a parity surface for the same reason the figures are: an
+ * operator reads it, and `D-0017` allows the wording to change only where the
+ * port has no equivalent of what it named. So the escaping is matched, not
+ * approximated.
+ *
+ * Python's rules, verified against CPython 3.12 rather than recalled:
+ *
+ * - Single quotes normally. A string containing `'` but no `"` is quoted with
+ *   `"` instead, and the `'` is then **not** escaped. A string with both is
+ *   quoted with `'` and its `'` escaped.
+ * - A backslash doubles; the active quote escapes; newline, carriage return and
+ *   tab take their short forms; every other C0 control and `\x7f` becomes
+ *   `\xNN`.
+ * - Printable non-ASCII passes through unescaped (Python 3's `repr` is not
+ *   `ascii()`).
+ *
+ * That last rule is deliberate rather than an oversight, and it interacts with
+ * `D-0006`: a refusal naming a non-ASCII id will carry it into the message. That
+ * is exactly what interlock does, and it is the same disclosed inherited
+ * limitation as the unescaped `action_id` in the false-termination renderer --
+ * settled by the operator on 2026-08-22 as reproduce-and-disclose. Escaping here
+ * would make continuo's refusal text differ from interlock's for the same input.
+ *
+ * The naive single-quote wrap is what this replaces, and it was wrong in a way
+ * worth naming: a value containing a newline injected a line break into an
+ * operator-facing message, so a crafted id could forge what looked like a second
+ * line of a refusal.
+ */
+export function pythonRepr(value: string): string {
+  const hasSingle = value.includes("'");
+  const hasDouble = value.includes('"');
+  const quote = hasSingle && !hasDouble ? '"' : "'";
+
+  let body = "";
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (character === "\\") {
+      body += "\\\\";
+    } else if (character === quote) {
+      body += `\\${character}`;
+    } else if (character === "\n") {
+      body += "\\n";
+    } else if (character === "\r") {
+      body += "\\r";
+    } else if (character === "\t") {
+      body += "\\t";
+    } else if (code < 0x20 || code === 0x7f) {
+      body += `\\x${code.toString(16).padStart(2, "0")}`;
+    } else {
+      body += character;
+    }
+  }
+  return `${quote}${body}${quote}`;
+}

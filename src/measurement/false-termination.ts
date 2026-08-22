@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
-import { formatFixed } from "./format.js";
+import { formatFixed, pythonRepr } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 /**
@@ -462,11 +462,11 @@ export function adjudicate(options: {
     }
     if (verdict !== VERDICT_STUCK && verdict !== VERDICT_NOT_STUCK) {
       throw new UnknownGroundTruthVerdict(
-        `ground-truth source ${quote(source)} answered ${quote(verdict)} for ` +
-          `action_id=${quote(actionId)}; the only answers are ` +
-          `${quote(VERDICT_STUCK)} and ${quote(VERDICT_NOT_STUCK)}, and a source ` +
+        `ground-truth source ${pythonRepr(source)} answered ${pythonRepr(verdict)} for ` +
+          `action_id=${pythonRepr(actionId)}; the only answers are ` +
+          `${pythonRepr(VERDICT_STUCK)} and ${pythonRepr(VERDICT_NOT_STUCK)}, and a source ` +
           `with no opinion says nothing rather than saying ` +
-          `${quote(VERDICT_UNDETERMINED)}`,
+          `${pythonRepr(VERDICT_UNDETERMINED)}`,
       );
     }
   }
@@ -861,15 +861,4 @@ function percent(value: number | null): string {
   // `formatFixed`, not `toFixed`: they disagree on exact ties and a rate is
   // `count / count * 100`, which reaches them (D-0104).
   return `${formatFixed(value * 100, 2)} percent`;
-}
-
-/**
- * Python's `!r` for a string, which is what the refusal messages interpolate.
- *
- * Single quotes, because that is what `repr` uses for a string with no single
- * quote in it -- and every value reaching here is a verdict word, a source name
- * or an `action_id`.
- */
-function quote(value: string): string {
-  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }

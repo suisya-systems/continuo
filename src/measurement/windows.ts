@@ -2,6 +2,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { detectionLatency, resolveToleranceMs, subjectUnitMs } from "../control_plane/policy.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
+import { pythonRepr } from "./format.js";
 import { frozenList, readOnlyMap } from "./immutable.js";
 
 /**
@@ -347,7 +348,28 @@ export class WindowReport {
       WINDOW_CLASSIFICATIONS.map((name): [string, number] => [name, 0]),
     );
     for (const window of this.windows) {
-      tally.set(window.classification, (tally.get(window.classification) ?? 0) + 1);
+      const seen = tally.get(window.classification);
+      if (seen === undefined) {
+        // The source indexes a pre-seeded dict here, so a window carrying a
+        // classification this module does not have raises `KeyError` there. A
+        // `?? 0` fallback would instead grow a fourth bucket and print it as
+        // legitimate report output -- the one thing a fixed key set exists to
+        // prevent.
+        //
+        // A `RangeError` rather than a `WindowRefusal`, deliberately: the source
+        // raises `KeyError`, which is outside its refusal family, so `except
+        // WindowRefusal` does not catch it. A caller catching the refusal family
+        // must not swallow this either, because it means a window object was
+        // built with a classification no classifier produces -- a bug, not an
+        // input the report may decline.
+        throw new RangeError(
+          `episode ${pythonRepr(window.episodeId)} carries classification ` +
+            `${pythonRepr(window.classification)}, which is not one of ` +
+            `${WINDOW_CLASSIFICATIONS.join(", ")}; a window with a classification ` +
+            `this module does not produce cannot be counted into a report`,
+        );
+      }
+      tally.set(window.classification, seen + 1);
     }
     return readOnlyMap(tally);
   }
@@ -368,7 +390,7 @@ export class WindowReport {
   idsFor(classification: string): readonly string[] {
     if (!WINDOW_CLASSIFICATIONS.includes(classification)) {
       throw new WindowRefusal(
-        `${quote(classification)} is not one of ${WINDOW_CLASSIFICATIONS.join(", ")}`,
+        `${pythonRepr(classification)} is not one of ${WINDOW_CLASSIFICATIONS.join(", ")}`,
       );
     }
     return frozenList(
@@ -459,7 +481,7 @@ export function resolveBudgetMs(
   }
   if (subject === null) {
     throw new SubjectRequired(
-      `${quote(incidentClass)} has budget_kind=${quote(budgetKind)}, so L is a ` +
+      `${pythonRepr(incidentClass)} has budget_kind=${pythonRepr(budgetKind)}, so L is a ` +
         `multiple (${budgetValue}) of the subject's own TTL or interval; an ` +
         `episode of this class must name its subject`,
     );
@@ -499,7 +521,7 @@ function resolveToleranceOrNull(
     // exception types for one absent subject would eventually catch only the
     // one it had seen.
     throw new SubjectRequired(
-      `${quote(incidentClass)} has threshold_kind=${quote(thresholdKind)}, so T ` +
+      `${pythonRepr(incidentClass)} has threshold_kind=${pythonRepr(thresholdKind)}, so T ` +
         `is a multiple of the subject's own interval or TTL; an episode of this ` +
         `class must name its subject`,
     );
@@ -690,7 +712,7 @@ export function classifyEpisodes(
       // duplicate is invisible in the counts -- the totals simply come out one
       // too high. Refusing names the input defect where it happened.
       throw new DuplicateEpisodeRefused(
-        `episode_id=${quote(episode.episodeId)} appears more than once in this ` +
+        `episode_id=${pythonRepr(episode.episodeId)} appears more than once in this ` +
           `report's input; one episode is one condition and would be counted twice`,
       );
     }
@@ -731,9 +753,4 @@ function emptyPeriodMessage(periodStartMs: number, periodEndMs: number): string 
     `a half-open window must have an end strictly after its start ` +
     `(time-base-policy.md section 2, rule 4)`
   );
-}
-
-/** Python's `!r` for a string, which is what the refusal messages interpolate. */
-function quote(value: string): string {
-  return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }

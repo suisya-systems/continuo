@@ -50,11 +50,12 @@
       }
     ],
     "target_only_tests": {
-      "count": 1,
+      "count": 2,
       "ids": [
-        "test/measurement/windows.test.ts::the buckets > idsFor refuses a classification this module does not have (target-only)"
+        "test/measurement/windows.test.ts::the buckets > idsFor refuses a classification this module does not have (target-only)",
+        "test/measurement/windows.test.ts::the buckets > counts refuses a window carrying an unknown classification (target-only)"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The one here pins WindowReport.idsFor's refusal of an unrecognised bucket name, which a mutation sweep found unguarded on BOTH sides: interlock calls ids_for only with the three real classifications, so deleting its own guard leaves its suite green too. It matters because idsFor FILTERS -- without the guard a misspelled bucket returns an empty list rather than an error, and a caller would print a zero, which is the exact reading counts() emits all three keys to prevent. Production behaviour is unchanged and still matches interlock's. This module has no seam (nothing in it is monkeypatched by the source), so rule 5's liveness requirement does not apply, and its number handling is integer millisecond arithmetic with no rendering, so D-0104's formatter is not involved."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The one here pins WindowReport.idsFor's refusal of an unrecognised bucket name, which a mutation sweep found unguarded on BOTH sides: interlock calls ids_for only with the three real classifications, so deleting its own guard leaves its suite green too. It matters because idsFor FILTERS -- without the guard a misspelled bucket returns an empty list rather than an error, and a caller would print a zero, which is the exact reading counts() emits all three keys to prevent. Production behaviour is unchanged and still matches interlock's. This module has no seam (nothing in it is monkeypatched by the source), so rule 5's liveness requirement does not apply, and its number handling is integer millisecond arithmetic with no rendering, so D-0104's formatter is not involved. The second pins a PORT divergence a review caught rather than an inherited gap: the source indexes a pre-seeded dict in counts(), so a window carrying an unknown classification raises KeyError there, while the port's first cut used a `?? 0` fallback and grew a fourth bucket. Fixed to throw, and deliberately a RangeError rather than a WindowRefusal -- KeyError is outside the source's refusal family, so a caller catching refusals must not swallow it."
     },
     "approved_non_running": []
   },
