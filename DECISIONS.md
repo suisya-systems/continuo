@@ -52,6 +52,7 @@ spaces distinct.
 | D-0022 | Inherited defects are disclosed and repaired after parity, not during | superseded by D-0023 |
 | D-0023 | Inherited defects are repaired in continuo, at the first belt that touches them | accepted |
 | D-0024 | The control_plane inherited-defect repairs, and what a failed COMMIT costs | accepted |
+| D-0025 | An expensive, identical fixture is built once per test file and copied per case | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -3100,6 +3101,100 @@ forgetting it is invisible.
 **Falsified by.** Node gaining stable, default-on type stripping across every required cell, which
 would let the hook be TypeScript and load its dependencies from source -- the same condition
 `D-0204` records for revisiting, tracked in suisya-systems/continuo#18.
+
+---
+
+## D-0025 -- An expensive, identical fixture is built once per test file and copied per case
+
+**Context.** Almost every ported case starts from the same thing: a production control plane
+migrated to head. Creating one is not cheap, because the control plane runs with
+`synchronous = FULL` (D-0012) and fsyncs on every commit. Measured on this worker's Linux box,
+N=30: **87.5ms to create one, 0.97ms to copy an existing one -- about 90x.** Lane B measured the
+same ratio on CI hardware (51ms against 0.5ms). The suite creates one in roughly 250 places, 227 of
+them in `measurement` alone.
+
+That cost is now a scheduling problem rather than an annoyance. The Windows cell hit the 20-minute
+CI cap and PRs were being cancelled; the cap was raised to 40 minutes as first aid, and `main`
+alone already sits at 15m31s -- 78% of the old cap -- with the port less than half done.
+
+The obvious fix, migrating one database per file and copying it, was tried and failed: a template
+built in a `caseRoot()` is removed when the case that built it finishes, so **236 cases failed with
+`ENOENT`** on the second case onward. The missing piece was not the copy. It was that the testkit
+had no temporary directory whose lifetime is longer than one case.
+
+**Decision.** The testkit gains a second scope alongside `caseRoot()`, which is unchanged:
+
+- `suiteRoot(label)` -- a temporary directory shared by every test in the **file**, removed when the
+  file's tests finish.
+- `suiteTemplate(filename, build)` -- the form callers actually want: `build` runs **once**, lazily,
+  on the first `copyInto()`, and each case gets its own copy in its own `caseRoot()`.
+
+Four properties are load-bearing.
+
+*The scope is the file, not the run.* `isolate: true` gives each file its own worker, so a
+file-scoped template never crosses a worker boundary, and D-0005's "no test shares filesystem state
+with another" holds unchanged -- what is shared is build-once, read-only, and copied before use.
+
+*The build is lazy and its outcome is memoized, failures included.* A file whose selected cases
+never copy pays nothing, and a build that throws reports the same diagnosis to every later case
+rather than re-running a known failure 25 times.
+
+*The copy carries `<name>-*` sidecars.* The control plane uses the rollback journal and not WAL
+(D-0012) and leaves no `-journal` / `-wal` / `-shm` behind once closed, so today this copies nothing
+extra. It is written this way so that correctness does not **depend** on that: a template that did
+leave a WAL, copied without it, would hand out a database quietly missing committed rows -- a silent
+wrong answer, which is strictly worse than a loud failure. The rule is "do not depend on the count
+being zero", not "the count is zero, so skip it".
+
+*Both helpers must be called from the top level of the test file.* Two distinct ways of getting this
+wrong were measured on Vitest 4.1.11, and both now throw. An `afterAll` registered from inside a
+running test is accepted and then **never runs**, so the directory would silently outlive the run.
+An `afterAll` registered inside a `describe` body binds to **that block**, so the directory is
+removed when the block finishes -- while a sibling block, or a later top-level test, is still copying
+from it. The second was raised by the review gate against an earlier draft whose own documentation
+invited it, and was reproduced before being fixed: a `suiteRoot()` taken in one `describe` was
+already gone by the time a second `describe` ran. Rejecting both is what makes the promised lifetime
+true rather than usually true. The check is for a **parent collector**, not for a name: Vitest leaves
+the file collector's name empty, and `describe("")` is legal and produces a nested collector with an
+empty name too, so a name check would wave through the one shape most likely to be written by
+accident -- a block whose title is parametrised and comes out empty. That escape was raised by the
+review gate against the first version of the guard, and is now pinned by its own case.
+
+**Alternatives.**
+
+- **One template for the whole run, via `globalSetup` + `provide` (rejected).** It saves 19
+  migrations rather than 250 -- about 1.6 seconds beyond what the file scope already gets, which is
+  roughly 7% of the available win. In exchange it buys shared read-only state crossing worker
+  boundaries, its own teardown, and Windows file-locking on a handle no test owns. The cost/benefit
+  does not carry.
+- **A template in a `caseRoot()` (rejected -- this is the failure being repaired).** Pinned as a
+  negative control in `testkit.contract.test.ts`: two symmetric cases copy a case-scoped template,
+  and an `afterAll` asserts that exactly one copied and exactly one saw `ENOENT`. Without it, the
+  positive test would be measured against nothing.
+- **Copy only the database file (rejected).** See the sidecar property above.
+- **Move every lane's `productionDb()` in this PR (rejected).** Three lanes are porting in parallel
+  into the same tree. The helper lands on its own, with one converted file as evidence that it
+  works; each lane moves its own cases afterwards.
+
+**Consequences.**
+
+- `test/measurement/cohort.test.ts` is converted as the worked example: 25 migrations become 1.
+  Same 26 cases, all green across four seeds; the file's test time falls from **1.38s to 0.36s**.
+- Extrapolated over the roughly 250 creation sites, the suite stands to lose on the order of 20
+  seconds of fsync per run per matrix cell, which is the point of the exercise on the Windows cell.
+- `caseRoot()` keeps its exact semantics and every existing caller is untouched.
+- The new contract is verified by deliberate breakage, not by being green: reverting the template to
+  case scope fails with `ENOENT: ... copyfile ... template.sqlite3`; removing the sidecar copy fails
+  the sidecar assertion; dropping the memoization fails `builds === 1`. All three were run.
+
+**Falsifier.** If a case ever needs a template it may write to in place, or two files need to share
+one build, the file scope is the wrong shape and the run-scoped alternative gets re-costed against
+its failure modes rather than against its saving.
+
+**Status.** accepted
+
+**Source.** Task `continuo-testkit-suite-tmpdir`, 2026-08-22. Scope and naming ratified by the
+window before implementation, on the measurement above.
 
 
 ## D-0109 -- A renderer's ASCII claim covers the values it prints, not only the words it authors

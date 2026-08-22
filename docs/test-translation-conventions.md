@@ -214,6 +214,30 @@ random ordering exists to expose, arriving as noise instead of signal.
   A helper that creates the file defeats them silently. `databasePath(root)` only joins a path.
 - *Windows separators.* Never assert on a path string built with `/`.
 
+**The one directory that is deliberately shared by a file.** `suiteRoot()` / `suiteTemplate()` (same
+module, D-0025) give a directory whose lifetime is the **file**, and they are not an exception to the
+paragraph above -- they are the narrow case it does not cover. What may live there is *build-once,
+read-only* material that every case wants an identical copy of, and the expensive one is a migrated
+control plane: about 87.5ms to create, about 0.97ms to copy. Each case still receives its own copy in
+its own `caseRoot()` and still writes only there, so no case observes another's state and the
+shuffled order stays meaningful.
+
+```ts
+const production = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+function productionDb(): string {
+  return production.copyInto(caseRoot("cohort"));
+}
+```
+
+Both must be called from the **top level of the file** -- not from inside a test, and not from inside
+a `describe` body either. An `afterAll` registered inside a test is accepted by Vitest and then never
+runs, so the directory would outlive the whole run; one registered inside a `describe` binds to that
+block, so the directory is removed when the block finishes, while a sibling block or a later
+top-level test is still using it. Both cases throw instead, naming which one it was.
+
 ---
 
 ## 7. caplog
