@@ -193,6 +193,20 @@ export {
  * only `.` (D-0002), so a name absent from here is one an installed consumer
  * cannot reach.
  */
+/**
+ * The G6 harness's AC-9 cohort (section 2.1).
+ *
+ * Re-exported by name for the reason the entries above are: the package exports
+ * only `.` (D-0002), so a name absent from here is one an installed consumer
+ * cannot reach.
+ */
+/**
+ * The G6 harness's per-module query catalogues, module-qualified.
+ *
+ * See the note in `src/measurement/index.ts`: Python namespaces these and a flat
+ * export surface cannot, so both are qualified rather than one keeping the bare
+ * name by having been ported first.
+ */
 export {
   type Adjudication,
   AsynchronousReportRefused,
@@ -205,6 +219,9 @@ export {
   ClassDirectoryMismatch,
   ClassLatency,
   ClockNotSynthetic,
+  COHORT_QUERY_DEFINITIONS,
+  COHORT_REASONS,
+  COHORT_RUNS_QUERY,
   CorpusCompositionRefused,
   classify,
   classifyEpisodes,
@@ -217,12 +234,14 @@ export {
   EpisodeOutsidePeriod,
   EpisodeWindow,
   EvaluationRefusal,
+  EXCLUDED_REASONS,
   EXPECTED_FILENAME,
   ExpectedLabel,
   episodeWindow,
   evaluate,
   FACT_STATES,
   FALSE_POSITIVE,
+  FALSE_TERMINATION_QUERY_DEFINITIONS,
   FalseTerminationRefusal,
   FalseTerminationReport,
   FixtureCase,
@@ -234,11 +253,13 @@ export {
   GRACE_REVISION_RECONCILE_PERIOD,
   GROUND_TRUTH_PREFERENCE,
   GraceNotDeclared,
+  IN_FLIGHT_AT_PERIOD_END,
   IN_PERIOD,
   INGESTION_LAG_QUERY,
   IncidentBeforeOnset,
   IngestionLag,
   isAscii,
+  KNOWN_RUN_STATUSES,
   LABEL_FIELDS,
   LabelMalformed,
   LatencyRefusal,
@@ -256,15 +277,18 @@ export {
   noShadowReference,
   Observation,
   OutcomeMissing,
+  OWNERSHIP_COLLISION_QUERY,
+  OwnershipAssertionRefused,
   openForMeasurement,
+  PeriodNotClosedRefused,
   PeriodRefused,
   PositiveCasesRequired,
   PRODUCTIVE_EVENT_TYPES_REQUIRED,
   PROVENANCE_KINDS,
   ProducedIncident,
   proveReadOnly,
-  QUERY_DEFINITIONS,
   ReadOnlyCapabilityRefused,
+  RunCohort,
   readTerminateActions,
   renderFalseTerminationReport,
   renderFixtureReport,
@@ -280,6 +304,7 @@ export {
   SOURCE_HUMAN_ADJUDICATION,
   SOURCE_NONE,
   SOURCE_SUBSEQUENT_EVIDENCE,
+  STARTED_BEFORE_PERIOD,
   STATUS_APPLIED,
   STATUS_PENDING,
   STATUS_REFUSED,
@@ -287,17 +312,23 @@ export {
   SUBSEQUENT_ACTIVITY_QUERY,
   SubjectRequired,
   SyntheticClock,
+  selectCohort,
   shadowFromBothBucket,
   subsequentActivityVerdicts,
+  TERMINAL_STATUS_UNKNOWN,
   TERMINATE_ACTIONS_QUERY,
   TERMINATE_SESSION_KIND,
   TerminateAction,
   TRACE_FILENAME,
   TRUE_NEGATIVE,
   TraceMalformed,
+  terminalInstantMs,
+  touchesPeriod,
   UnknownCaseInOutcomes,
   UnknownEpisodeDetection,
   UnknownGroundTruthVerdict,
+  UnknownRunStatusRefused,
+  V1_OWNED,
   VERDICT_NOT_STUCK,
   VERDICT_STUCK,
   VERDICT_UNDETERMINED,

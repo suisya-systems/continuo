@@ -1,0 +1,324 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. cohort is the sixth file of this lane and the first unblocked by the control-plane belt's gate ledger: it imports TERMINAL_RUN_STATUSES from gates.ts rather than repeating it, which is the property that makes terminal_status_unknown a schema-integrity signal rather than a copy that drifts."
+    },
+    "file": {
+      "path": "tests/measurement/test_cohort.py",
+      "collected": 23,
+      "inventory": "parity/source-inventory/measurement.test_cohort.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/cohort.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "frozen dataclass, tuple fields, MappingProxyType",
+        "to": "frozen class, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention established in the false-termination belt (D-0105's sibling reasoning). RunCohort is frozen and both its run list and its bucket mapping are copied through the helpers; readOnlyMap preserves insertion order, which the ported case asserting the key order of `excluded` depends on.",
+        "affects": "every entry that reads a cohort field"
+      },
+      {
+        "from": "Mapping[str, tuple[str, ...]] buckets and Mapping[str, int] counts",
+        "to": "ReadonlyMap, read with .get and compared via Object.fromEntries",
+        "why": "D-0105: keys here are the module's own closed reason set rather than database-supplied, so the prototype hazard does not arise -- but the container convention is applied uniformly so there is no per-site judgement about which map is which. Object.fromEntries is used only to BUILD a plain object for a whole-mapping comparison, never to look one up.",
+        "affects": "the entries that assert whole bucket mappings"
+      },
+      {
+        "from": "sorted(set(v1_shadow_run_ids))",
+        "to": "[...new Set(...)].sort(comparePythonStrings)",
+        "why": "Python sorts by code point and JavaScript's default sort by UTF-16 code unit; the shadow ids are caller-supplied strings, so the divergence is reachable. comparePythonStrings was added in the fixtures belt for the same reason.",
+        "affects": "the two entries that supply a shadow input"
+      }
+    ],
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/measurement/cohort.test.ts::properties the ported cases leave unguarded (target-only) > the published query text carries the period-end bound",
+        "test/measurement/cohort.test.ts::properties the ported cases leave unguarded (target-only) > a shadow input past SQLite's parameter ceiling is chunked, not refused",
+        "test/measurement/cohort.test.ts::properties the ported cases leave unguarded (target-only) > the denominator counts the cohort and nothing else"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All three close INHERITED blind spots found by a 24-mutation sweep and confirmed against interlock 65f36c5. Production behaviour is unchanged. This module has no seam and renders no figure, so neither rule 5's liveness obligation nor D-0104's formatter applies."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 23,
+    "ported": 21,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "cohort.ts does not re-export TERMINAL_RUN_STATUSES, though the source's __all__ lists it.",
+      "why": "__all__ has no TypeScript equivalent, and re-exporting would create a second import path for a constant whose entire point -- stated in the source's own import comment -- is that there is one definition. continuo already exports it from its owner, src/control_plane/gates.ts."
+    },
+    {
+      "what": "The barrel exposes the two query catalogues as FALSE_TERMINATION_QUERY_DEFINITIONS and COHORT_QUERY_DEFINITIONS.",
+      "why": "Python namespaces them (false_termination.QUERY_DEFINITIONS, cohort.QUERY_DEFINITIONS) and a flat barrel cannot carry two exports of one spelling. Both are qualified rather than letting whichever module was ported first keep the bare name, so no catalogue is privileged by porting order. Each module still exports QUERY_DEFINITIONS under its own path, exactly as the source does."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "The v1_owned bucket is whatever the caller passes and is never checked against anything except a collision with this database. A shadow input that omitted half of v1's runs would produce a smaller v1_owned bucket and no signal at all.",
+      "matches_source": true,
+      "note": "Structural upstream and reproduced: interlock D-0013 leaves no v1-owned run in this database to find, so there is nothing here to reconcile the input against. The one assertion the module CAN make -- that no run is claimed by both systems -- it makes, and refuses rather than excluding quietly.",
+      "where_a_fix_belongs": "upstream, and only alongside a v1 store the harness could read directly."
+    },
+    {
+      "behaviour": "The terminal instant is derived from updated_at_ms rather than read from a terminal-timestamp column, which rests on run.status being the only mutable column on the run table.",
+      "matches_source": true,
+      "note": "Interlock states the derivation and its assumption explicitly, and localises it in one function so that adding a dedicated terminated_at_ms column later is a one-place change. Reproduced exactly, including the localisation. A schema change adding a second mutable column to `run` would invalidate it silently on both sides.",
+      "where_a_fix_belongs": "upstream, as a terminated_at_ms column plus the one-line change this function's shape already anticipates."
+    },
+    {
+      "behaviour": "Three properties are unguarded by interlock's own suite: the period-end bound in the published query text (behaviourally redundant with touchesPeriod), the shadow-input chunking (no test passes enough ids to reach the parameter ceiling), and the denominator excluding the in-flight bucket (asserted only where that bucket is empty).",
+      "matches_source": true,
+      "note": "Found by a mutation sweep on the port and verified against interlock 65f36c5. The port reproduces the production behaviour exactly; it adds three target-only tests so the properties stop being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
+      "where_a_fix_belongs": "upstream, as the same three cases added to interlock's tests/measurement/test_cohort.py."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_the_known_statuses_are_exactly_the_run_tables_own_check",
+      "target_id": "test/measurement/cohort.test.ts::the vocabulary is the schema's > the known statuses are exactly the run table's own check",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_the_terminal_instant_is_updated_at_for_a_terminal_run",
+      "target_id": "test/measurement/cohort.test.ts::the terminal instant > the terminal instant is updated_at for a terminal run",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_that_has_not_terminated_has_no_terminal_instant",
+      "target_id": "test/measurement/cohort.test.ts::the terminal instant > a run that has not terminated has no terminal instant",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_an_unknown_status_is_refused_rather_than_read_as_in_flight",
+      "target_id": "test/measurement/cohort.test.ts::the terminal instant > an unknown status is refused rather than read as in flight",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_created_exactly_at_the_period_start_is_in_the_cohort",
+      "target_id": "test/measurement/cohort.test.ts::both ends of the half-open period > a run created exactly at the period start is in the cohort",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_created_one_millisecond_before_the_start_is_excluded",
+      "target_id": "test/measurement/cohort.test.ts::both ends of the half-open period > a run created one millisecond before the start is excluded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_terminal_one_millisecond_before_the_end_is_in_the_cohort",
+      "target_id": "test/measurement/cohort.test.ts::both ends of the half-open period > a run terminal one millisecond before the end is in the cohort",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_terminal_exactly_at_the_period_end_is_excluded",
+      "target_id": "test/measurement/cohort.test.ts::both ends of the half-open period > a run terminal exactly at the period end is excluded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_created_exactly_at_the_period_end_belongs_to_the_next_period",
+      "target_id": "test/measurement/cohort.test.ts::both ends of the half-open period > a run created exactly at the period end belongs to the next period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_terminal_in_the_period_but_started_before_it_is_not_the_cohort",
+      "target_id": "test/measurement/cohort.test.ts::the distinction section 2.1 insists on > terminal in the period but started before it is not the cohort",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_still_in_flight_is_bucketed_not_counted",
+      "target_id": "test/measurement/cohort.test.ts::the distinction section 2.1 insists on > a run still in flight is bucketed, not counted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_spanning_the_whole_period_is_in_flight_at_its_end",
+      "target_id": "test/measurement/cohort.test.ts::the distinction section 2.1 insists on > a run spanning the whole period is in flight at its end",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_run_wholly_outside_the_period_appears_nowhere",
+      "target_id": "test/measurement/cohort.test.ts::runs the report has nothing to say about > a run wholly outside the period appears nowhere",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_every_touching_run_lands_in_exactly_one_place",
+      "target_id": "test/measurement/cohort.test.ts::the partition property > every touching run lands in exactly one place",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source removes the run table's status CHECK with `PRAGMA writable_schema` through a plain sqlite3 connection. better-sqlite3 enables SQLITE_DBCONFIG_DEFENSIVE by default, which refuses a direct write to sqlite_master even under writable_schema = ON, while Python's sqlite3 has no defensive mode -- so the helper additionally calls unsafeMode(true). The testkit's rawConnection lowers the same flag for the same reason (see parity/control-plane.ledger.json). The forged state and every assertion over it are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_all_four_buckets_are_emitted_over_an_empty_database",
+      "target_id": "test/measurement/cohort.test.ts::the buckets are always emitted > all four buckets are emitted over an empty database",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_terminal_status_unknown_is_a_schema_integrity_signal",
+      "target_id": "test/measurement/cohort.test.ts::the buckets are always emitted > terminal_status_unknown is a schema-integrity signal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source removes the run table's status CHECK with `PRAGMA writable_schema` through a plain sqlite3 connection. better-sqlite3 enables SQLITE_DBCONFIG_DEFENSIVE by default, which refuses a direct write to sqlite_master even under writable_schema = ON, while Python's sqlite3 has no defensive mode -- so the helper additionally calls unsafeMode(true). The testkit's rawConnection lowers the same flag for the same reason (see parity/control-plane.ledger.json). The forged state and every assertion over it are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_v1_owned_is_empty_without_a_shadow_input_however_many_runs_exist",
+      "target_id": "test/measurement/cohort.test.ts::ownership is asserted, never derived > v1_owned is empty without a shadow input, however many runs exist",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_v1_owned_is_populated_only_from_the_supplied_shadow_input",
+      "target_id": "test/measurement/cohort.test.ts::ownership is asserted, never derived > v1_owned is populated only from the supplied shadow input",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_shadow_id_this_database_also_holds_is_refused",
+      "target_id": "test/measurement/cohort.test.ts::ownership is asserted, never derived > a shadow id this database also holds is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_a_period_that_has_not_ended_is_refused",
+      "target_id": "test/measurement/cohort.test.ts::the period bounds themselves > a period that has not ended is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_the_instant_the_period_closes_is_already_reportable",
+      "target_id": "test/measurement/cohort.test.ts::the period bounds themselves > the instant the period closes is already reportable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_an_empty_or_inverted_period_is_refused",
+      "target_id": "test/measurement/cohort.test.ts::the period bounds themselves > an empty or inverted period is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_cohort.py::test_selecting_the_cohort_writes_nothing",
+      "target_id": "test/measurement/cohort.test.ts::the instrument does not disturb what it measures > selecting the cohort writes nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "24 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 21,
+    "survivors": [
+      {
+        "mutation": "COHORT_RUNS_QUERY loses its WHERE created_at_ms < :period_end_ms clause",
+        "verdict": "behaviourally equivalent, but NOT equivalent for the published artefact -- closed with a target-only test",
+        "note": "touchesPeriod independently refuses a run created at or after the period end, so no verdict changes and no ported case on either side can see the mutation. The query TEXT is the thing that changes: it is exported and lands in the report's provenance header (section 6), where it is what a reader re-runs by hand, and the module's own comment states this bound is the only one SQL carries. The new case asserts the published text rather than a verdict."
+      },
+      {
+        "mutation": "assertNoRunIsClaimedByBoth drops the 500-id chunking",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The shadow input is a list of whatever length v1 hands over, and neither interlock's tests nor these ported ones pass more than a handful. The ceiling is real and was measured on this build: an IN list of 32,766 bound parameters succeeds and 32,767 fails with SQLITE_ERROR. The source's comment cites 999, which was SQLite's older default -- the guard is right either way and 500 is well under both. The new case passes 33,000 ids and also plants a collision at the end, so the chunking cannot pass by quietly stopping after the first chunk."
+      },
+      {
+        "mutation": "RunCohort.denominator adds the in_flight_at_period_end bucket's length",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "`denominator` is asserted once in the ported cases, in a population where the in-flight bucket happens to be empty, so inflating it by that bucket changes no assertion; interlock's case is the same one. Inflating the divisor with right-censored runs is the precise defect section 2.1's cohort definition exists to prevent, so the new case uses a population where the two differ."
+      }
+    ]
+  }
+}
