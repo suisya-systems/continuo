@@ -412,6 +412,13 @@ so **nothing in them was ever going to notice.**
 - **Pin the repair AND the thing it must not break.** Both instances above now carry a target-only
   test for each half, and rule 10's probe applies to both: revert the repair, confirm its test goes
   red; then revert only the *ordering*, and confirm the other test goes red.
+- **Read the failure, not the colour.** "It went red" is not the observation -- the message and the
+  error type are. A probe can go red for a reason that has nothing to do with the property: a
+  collection-time crash, a fixture that never built, a module that failed to import. Each of those
+  reports red while the assertion under examination never ran, so the probe confirms nothing and
+  reads as though it confirmed everything. This matters more for a repair than for a translation,
+  because a repair's probe is usually the *only* evidence that the new code does what it claims.
+  See rule 10, which carries a measured instance of exactly this.
 - **Treat a generalisation as a repair.** A shared helper replacing N copies is new code with no
   source counterpart, and it acquires input classes none of the copies had.
 
