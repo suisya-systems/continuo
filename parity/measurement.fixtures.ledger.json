@@ -1,0 +1,697 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. fixtures is the fifth file of this lane and the largest; it is also the first to carry DATA rather than only code -- the labelled corpus at test/fixtures/labelled/, byte-identical to interlock's tests/fixtures/labelled/."
+    },
+    "file": {
+      "path": "tests/measurement/test_fixtures.py",
+      "collected": 59,
+      "inventory": "parity/source-inventory/measurement.test_fixtures.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/fixtures.test.ts",
+    "carried_data": {
+      "path": "test/fixtures/labelled/",
+      "from": "interlock tests/fixtures/labelled/ at 65f36c5",
+      "verification": "Byte-identical (`diff -r` clean), and -- the stronger check -- interlock's own load_corpus run against BOTH trees produces the same content digest, 1b498122287a8443e6a259ecf9904fe8bc90c517dbfa588dfae176e595b18847. A target-only test pins that value, so the two halves it proves (the files arrived unaltered, and this port's digest construction agrees with the source's) cannot drift apart silently.",
+      "protection": "Two ways it could rot were closed rather than left to luck: biome.json now excludes test/fixtures/labelled/** and parity/oracle/** from formatting (a reflowed JSON file changes the digest), and .gitattributes already pins eol=lf globally (a CRLF checkout would too)."
+    },
+    "systematic_mappings": [
+      {
+        "from": "pathlib.Path",
+        "to": "string paths with node:path and node:fs",
+        "why": "No Path type in the standard library. Every path operation the source performs (is_dir, iterdir, read_text, read_bytes, /) has a direct node:fs or node:path equivalent, and the case_id is still built from the directory names so it is identical on both sides.",
+        "affects": "every entry that loads from disk"
+      },
+      {
+        "from": "frozen dataclasses, tuple fields, MappingProxyType",
+        "to": "frozen classes, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention established in the false-termination belt (D-0105's sibling reasoning). Applied to Observation, ExpectedLabel, FixtureCase, FixtureCorpus, ProducedIncident, CaseOutcome and FixtureEvaluation.",
+        "affects": "every entry that constructs or reads a loaded object"
+      },
+      {
+        "from": "@pytest.mark.parametrize",
+        "to": "parametrize() with pytest's ids written out",
+        "why": "Rule 2 of docs/test-translation-conventions.md. Five parametrized source cases expand to 21 of the 59 node ids ([trace.jsonl], the seven LABEL_FIELDS, three window fields, six overridesN, six trace ids), and each expansion is its own ledger row. The LABEL_FIELDS one is parametrized over the module's own exported constant, exactly as the source is, so a field added to the table is covered the day it is added.",
+        "affects": "21 entries"
+      },
+      {
+        "from": "f\"{value:.2f}\"",
+        "to": "formatFixed(value, 2)",
+        "why": "D-0104: toFixed and Python's .2f disagree on exact ties, and a rate is count/count. An implementation change, not a test change.",
+        "affects": "the rendered rate lines; no entry's assertion changed"
+      }
+    ],
+    "target_only_tests": {
+      "count": 14,
+      "ids": [
+        "test/measurement/fixtures.test.ts::the shipped corpus > the carried corpus digests to interlock's own value (target-only)",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the missing-field check is what refuses a missing field, not a downstream type check",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > budget_ms of zero is refused BY THE BUDGET RULE, not by T > L",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > every clock instant is checked before ANY case is graded",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a rate over an empty denominator is null, not zero",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the latency percentiles are nearest-rank, on a sample where interpolation would differ",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the rendered rate goes through formatFixed, not toFixed",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the corpus walk orders case ids by code point, as Python does",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the composition map is copied, not borrowed",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a case with very many matching incidents is graded, not crashed",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a fixture file that is not valid UTF-8 is refused, not silently repaired",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > an integer beyond MAX_SAFE_INTEGER is refused rather than silently rounded",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > a float-valued label number is refused, as Python's isinstance(int) does",
+        "test/measurement/fixtures.test.ts::properties the ported cases leave unguarded (target-only) > the clock refuses a sum beyond MAX_SAFE_INTEGER, not only its operands"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. This one is the parity evidence for the carried DATA rather than for code: it pins the corpus content digest to the value interlock's own loader produces over interlock's own tree, which proves both that the files arrived unaltered and that this port's digest construction (id, NUL, filename, NUL, bytes, NUL, over cases sorted by id) agrees with the source's. Interlock has no such test because it has only one copy of the corpus and nothing to compare against. Six more close properties a 36-mutation sweep found unguarded; each is recorded with its verdict under mutation_sweep below. Five are inherited (interlock's suite cannot tell the mutated module from the real one either, verified against 65f36c5 in each case) and one is a port artifact. Production behaviour is unchanged throughout. Three more were added after the codex review gate found three PORT DIVERGENCES (not inherited gaps) in the same pass: the corpus walk sorted by UTF-16 code unit where Python sorts by code point, the composition map was borrowed rather than copied, and the earliest-alarm minimum spread an unbounded array into Math.min. All three are fixed in the module and pinned here."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 59,
+    "ported": 57,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The corpus refuses to load without at least one negative AND one positive case, so a corpus cannot be grown one case at a time from empty -- the first two cases must arrive together.",
+      "matches_source": true,
+      "note": "Deliberate upstream: the arithmetic is the argument. A positive-only corpus scores a perfect miss rate for a detector that alarms on everything, and a negative-only one scores a perfect false-positive rate for a detector that alarms on nothing. The friction is the point and is recorded so it is not mistaken for a bug.",
+      "where_a_fix_belongs": "nowhere -- this is the design."
+    },
+    {
+      "behaviour": "The grader runs no detector. It reads a caller-supplied map of case id to produced incidents, so nothing here verifies that the incidents were produced by replaying the trace at all.",
+      "matches_source": true,
+      "note": "Structural upstream and reproduced: the module loads and grades and explicitly does not run detectors. The one property it CAN enforce about the detector's honesty -- that every instant came from the injected clock -- it does enforce, and refuses anything else (ClockNotSynthetic).",
+      "where_a_fix_belongs": "upstream, in whatever eventually drives the replay; out of scope for the parity port by interlock#74 acceptance criterion 6."
+    },
+    {
+      "behaviour": "Five properties of the loader and grader are unguarded by interlock's own suite: the budget_ms minimum (shadowed by the T > L rule), the upfront-versus-interleaved clock check (the source's case for it cannot discriminate), the null-versus-zero empty-denominator rate, nearest-rank percentiles, and the rate formatter.",
+      "matches_source": true,
+      "note": "Found by a 36-mutation sweep on the port and verified against interlock 65f36c5 case by case. The port reproduces the production behaviour exactly and does not change it; it adds five target-only tests so the properties stop being unguarded on this side. The clock one is the notable entry: interlock HAS a case for it whose docstring states the hazard precisely, and the case cannot detect it because the corpus's sort order grades the stamped case first.",
+      "where_a_fix_belongs": "upstream, as the same five cases added to interlock's tests/measurement/test_fixtures.py."
+    },
+    {
+      "behaviour": "renderFixtureReport interpolates the corpus root path, case ids, incident classes and recommendation names verbatim, so a corpus under a non-ASCII path -- or with a non-ASCII name anywhere -- produces a report that breaks the rendering's own ASCII guarantee.",
+      "matches_source": true,
+      "note": "Raised by the codex review gate as a P2. Identical upstream: interlock's render_fixture_report interpolates the same f-strings and validates none of them, and its own cp932 assertion only ever sees the shipped ASCII corpus. NOT fixed: escaping would make continuo's report differ from interlock's for the same corpus. Handled under the precedent the operator set for the action_id escaping question on 2026-08-22 -- reproduce and disclose, do not repair one side alone -- and it is the same defect in the same shape, now in a second module.",
+      "where_a_fix_belongs": "upstream, as an ASCII-safe rendering of externally supplied fields applied to both sides together."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_half_a_case_is_refused[trace.jsonl]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > half a case is refused[trace.jsonl]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_half_a_case_is_refused[expected.json]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > half a case is refused[expected.json]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_third_file_in_a_case_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a third file in a case is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_missing_label_field_is_refused[incident_class]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every missing label field is refused[incident_class]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_missing_label_field_is_refused[onset_offset_ms]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every missing label field is refused[onset_offset_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_missing_label_field_is_refused[tolerance_ms]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every missing label field is refused[tolerance_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_missing_label_field_is_refused[budget_ms]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every missing label field is refused[budget_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_missing_label_field_is_refused[fact_state]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every missing label field is refused[fact_state]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_missing_label_field_is_refused[must_not_recommend]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every missing label field is refused[must_not_recommend]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_missing_label_field_is_refused[provenance]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every missing label field is refused[provenance]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_unknown_label_field_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > an unknown label field is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_unknown_fact_state_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > an unknown fact state is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_free_text_provenance_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > free text provenance is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_must_not_recommend_must_be_a_list_of_strings",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > must_not_recommend must be a list of strings",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_negative_case_may_not_carry_a_window[onset_offset_ms]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a negative case may not carry a window[onset_offset_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_negative_case_may_not_carry_a_window[tolerance_ms]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a negative case may not carry a window[tolerance_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_negative_case_may_not_carry_a_window[budget_ms]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a negative case may not carry a window[budget_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_positive_case_needs_real_numbers[overrides0]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a positive case needs real numbers[overrides0]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_positive_case_needs_real_numbers[overrides1]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a positive case needs real numbers[overrides1]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_positive_case_needs_real_numbers[overrides2]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a positive case needs real numbers[overrides2]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_positive_case_needs_real_numbers[overrides3]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a positive case needs real numbers[overrides3]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_positive_case_needs_real_numbers[overrides4]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a positive case needs real numbers[overrides4]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_positive_case_needs_real_numbers[overrides5]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a positive case needs real numbers[overrides5]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_tolerance_may_not_exceed_the_budget",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > tolerance may not exceed the budget",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_malformed_trace_is_refused[not_json]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every malformed trace is refused[not_json]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_malformed_trace_is_refused[no_offset]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every malformed trace is refused[no_offset]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_malformed_trace_is_refused[offset_not_int]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every malformed trace is refused[offset_not_int]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_malformed_trace_is_refused[no_kind]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every malformed trace is refused[no_kind]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_malformed_trace_is_refused[offsets_go_backwards]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every malformed trace is refused[offsets_go_backwards]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_malformed_trace_is_refused[no_observations]",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > every malformed trace is refused[no_observations]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_malformed_label_json_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a malformed label json is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_trace_extras_are_carried_unread",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > trace extras are carried unread",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_positive_case_filed_under_another_class_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a positive case filed under another class is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_negative_case_may_sit_under_any_class",
+      "target_id": "test/measurement/fixtures.test.ts::the loader refuses every malformed shape > a negative case may sit under any class",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_corpus_with_no_negative_case_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the corpus as a whole > a corpus with no negative case is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_refused_positive_only_corpus_would_have_scored_perfectly",
+      "target_id": "test/measurement/fixtures.test.ts::the corpus as a whole > the refused positive-only corpus would have scored perfectly",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_corpus_with_no_positive_case_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the corpus as a whole > a corpus with no positive case is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_readmes_are_ignored_and_other_strays_are_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the corpus as a whole > readmes are ignored and other strays are refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_digest_is_over_content_not_counts",
+      "target_id": "test/measurement/fixtures.test.ts::the corpus as a whole > the digest is over content, not counts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_unknown_case_id_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the corpus as a whole > an unknown case id is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_detection_inside_the_budget_has_an_exact_latency",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > a detection inside the budget has an exact latency",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_alarm_at_the_onset_instant_is_a_zero_latency_detection",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > an alarm at the onset instant is a zero-latency detection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_deadline_is_the_last_instant_that_counts",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > the deadline is the last instant that counts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_silence_is_a_miss_with_no_late_alarm",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > silence is a miss with no late alarm",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_alarm_of_the_wrong_class_does_not_detect_the_case",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > an alarm of the wrong class does not detect the case",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_right_class_with_the_wrong_fact_is_detected_and_recorded",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > the right class with the wrong fact is detected and recorded",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_earliest_matching_alarm_is_the_detection",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > the earliest matching alarm is the detection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_alarm_before_its_own_onset_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > an alarm before its own onset is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_stall_alarm_on_an_outage_is_the_false_positive",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > a stall alarm on an outage is the false positive",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_forbidden_recommendation_counts_only_when_applied",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > a forbidden recommendation counts only when applied",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_instant_the_clock_did_not_mint_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > an instant the clock did not mint is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_one_cases_minting_cannot_vouch_for_another",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > one case's minting cannot vouch for another",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_a_case_with_no_outcome_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > a case with no outcome is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_an_outcome_for_an_unknown_case_is_refused",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > an outcome for an unknown case is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_synthetic_clock_refuses_an_offset_before_t0",
+      "target_id": "test/measurement/fixtures.test.ts::the evaluator > the synthetic clock refuses an offset before t0",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts only `pytest.raises(Exception)`, which any error satisfies. The port names the type the module actually raises (EvaluationRefusal), which is strictly STRONGER: a different error would pass upstream and fails here. Recorded as adapted rather than ported because a reviewer comparing the two sees a narrower assertion and should find the reason here, not reconstruct it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_shipped_corpus_loads_and_reports_its_composition",
+      "target_id": "test/measurement/fixtures.test.ts::the shipped corpus > the shipped corpus loads and reports its composition",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_every_shipped_onset_is_an_observation_in_its_own_trace",
+      "target_id": "test/measurement/fixtures.test.ts::the shipped corpus > every shipped onset is an observation in its own trace",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_shipped_labels_match_the_policy_revision_they_claim",
+      "target_id": "test/measurement/fixtures.test.ts::the shipped corpus > shipped labels match the policy revision they claim",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_fixtures.py::test_the_report_is_ascii_and_prints_composition_beside_both_rates",
+      "target_id": "test/measurement/fixtures.test.ts::the shipped corpus > the report is ascii and prints composition beside both rates",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts ASCII twice, by encoding the rendered text to cp932 AND to ascii -- the cp932 encode is the one that reproduces the Japanese-console crash a UTF-8 pytest capture never sees. JavaScript has no cp932 encoder and needs none: ASCII is a strict SUBSET of cp932, so `isAscii(text)` implies both source assertions and neither is weakened. Every other assertion in the case is unchanged.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "36 mutations, one per property the ported cases claim to pin, 2026-08-22",
+    "caught": 30,
+    "survivors": [
+      {
+        "mutation": "parseLabel drops the 'missing required field(s)' check",
+        "verdict": "PORT ARTIFACT, closed with a target-only test",
+        "note": "In Python the next line raises KeyError -- a different type -- so the seven ported cases fail. In TypeScript a missing key reads as `undefined`, flows into that field's own type check, and produces a LabelMalformed naming the same field, so the seven pass either way. The check still earns its place: it names ALL missing fields at once and cites section 3.2, where the downstream checks report only the first. That wording is what the new case pins."
+      },
+      {
+        "mutation": "parseLabel allows budget_ms of 0",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported case drives budget_ms=0 but asserts only LabelMalformed, and with the minimum lowered the refusal still fires -- via tolerance_ms=180000 > budget_ms=0. Interlock's case is identical. The new case sets T=0 so the T > L rule cannot fire and only the minimum can."
+      },
+      {
+        "mutation": "evaluate checks clock instants interleaved with grading instead of all upfront",
+        "verdict": "inherited blind spot, closed with a target-only test -- and the source's own case for it does not work",
+        "note": "interlock has test_one_cases_minting_cannot_vouch_for_another, whose docstring states this hazard exactly, and it cannot detect it: it puts the foreign stamp on the NEGATIVE case, and load_corpus sorts by directory, so observation_unavailable is graded FIRST and nothing has minted anything by the time it is checked. Verified against interlock 65f36c5 -- the same corpus yields the same order there. The discriminator needs two POSITIVE cases, so that grading the first mints the instant the second's foreign stamp uses."
+      },
+      {
+        "mutation": "missRate / falsePositiveRate return 0 instead of null on an empty denominator",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Unreachable through loadCorpus, which refuses a corpus with no positives or no negatives -- but FixtureEvaluation is exported and a caller can build one, and interlock's is equally reachable and equally untested. The distinction is the module's own stated design: printing 0.00 for a rate over zero cases is the harness claiming a result it has no cases to support."
+      },
+      {
+        "mutation": "the latency percentile interpolates instead of using nearest rank",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The shipped-corpus report case detects every positive at the same 45 s, so a percentile over identical values is identical under either rule; interlock's sample is the same. The new case uses three distinct latencies, where nearest-rank p90 is the 3rd smallest and interpolation returns a value no detection exhibited."
+      },
+      {
+        "mutation": "the rate helper uses toFixed instead of formatFixed",
+        "verdict": "inherited liveness gap, closed with a target-only test",
+        "note": "The same shape as the one closed in the false-termination belt: D-0104's oracle proves formatFixed correct but not that this module calls it, and no ported case drives a rate to an exact tie. The new case makes the miss rate 1/8 = 0.125, where CPython prints 0.12 and toFixed prints 0.13."
+      },
+      {
+        "mutation": "(codex review, not the sweep) sort order, composition copy, spread minimum",
+        "verdict": "three PORT DIVERGENCES, all fixed and pinned",
+        "note": "Found by the review gate rather than by the sweep, and worth recording beside it because they are the class the sweep is worst at: a mutation list asks 'is this property tested', and these are places where the port silently did something Python does not. (1) JavaScript's `<` and default sort compare UTF-16 code units, Python compares code points; they disagree for every supplementary character, and the corpus digest is taken over cases in SORTED order -- so the cross-runtime digest identity this belt claims was true only for BMP names. `comparePythonStrings` in src/measurement/format.ts now backs every string sort in fixtures.ts and latency.ts. (2) `composition` was assigned from the caller's Map rather than copied, so a caller could set a new denominator into a published evaluation. (3) `Math.min(...array)` throws past roughly a hundred thousand elements where Python's min() has no ceiling, so a noisy detector would crash this harness and not interlock's."
+      },
+      {
+        "mutation": "(codex review round 2) lenient UTF-8 decoding, and integers beyond 2^53",
+        "verdict": "two more PORT DIVERGENCES, both fixed and pinned",
+        "note": "(1) Python's read_text(encoding='utf-8') raises UnicodeDecodeError; Node's readFileSync(.., 'utf8') substitutes U+FFFD and succeeds. Silent repair is the worst outcome available here because the digest is over the RAW BYTES -- the corpus would load, grade and report under a digest identifying bytes it did not evaluate. Fixed with the fatal TextDecoder D-0015 already uses for migration step files. (2) Python's ints are arbitrary precision, so the source accepts 9007199254740993 exactly; JSON.parse has already rounded it to ...992 and Number.isInteger still says yes. Now refused via Number.isSafeInteger on every millisecond input (label fields, trace offsets, and the synthetic clock). Refusing rejects an input the source accepts, which is a deliberate divergence in the safe direction and the posture D-0007 already records for this runtime beyond 2^53 -- a millisecond offset past 2^53 is some 285,000 years."
+      },
+      {
+        "mutation": "(codex review round 3) float-valued JSON numbers, and unsafe clock sums",
+        "verdict": "two more PORT DIVERGENCES, both fixed and pinned",
+        "note": "(1) Python's json.loads gives 1.0 and 1e3 as FLOAT and the source's _require_int does isinstance(value, int), so both are refused. JavaScript has one number type and JSON.parse collapses 300000.0, 3e5 and 300000 to the same value. Preserved at parse time from the reviver's SOURCE TEXT (Node 21+), which is the only place the original token survives: a non-integer numeric token becomes a marker object that is not a `number` and is therefore refused by exactly the checks that would have refused a Python float -- including the negative-case rule, where a float in a windowed field is still 'not null'. (2) The safe-integer check covered both operands but not their SUM: with t0 near 2^53, at(2) and at(3) mint the same instant, so two detections a millisecond apart become one."
+      }
+    ]
+  }
+}

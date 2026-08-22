@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!package-lock.json"]
+    "includes": ["**", "!package-lock.json", "!test/fixtures/labelled", "!parity/oracle"]
   },
   "formatter": {
     "enabled": true,
