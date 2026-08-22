@@ -46,6 +46,8 @@ spaces distinct.
 | D-0016 | Mapping Python sqlite3 exception classes to better-sqlite3 result codes | accepted |
 | D-0017 | What refusal message text may change in translation, and what may not | accepted |
 | D-0018 | The differential oracle, and the one face this pilot implements | accepted |
+| D-0019 | One parity ledger per source test file | accepted |
+| D-0020 | A temp-directory label may not contain refusal vocabulary | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -1204,6 +1206,109 @@ meaningless rather than merely out of date.
 
 ---
 
+## D-0019 — One parity ledger per source test file
+
+**Context.** The pilot shipped one ledger, `parity/control-plane.ledger.json`, covering one source
+file. `scripts/parity-check.mjs` is written to that shape: `source.file.inventory` names a single
+file's collected node ids, `source.file.collected` is that file's count, and the "unmapped" sweep is
+gated on `id.startsWith(`${ledger.target.test_file}::`)` -- one target file's prefix. The port now
+has twelve more `control_plane` source files to account for, and three lanes translating
+concurrently, so the question is whether a lane keeps one ledger listing many files or one ledger
+per file.
+
+**Decision.** One ledger per **source test file**, named
+`parity/<subsystem>.<source-file>.ledger.json`, and each lane appends its ledgers to `LEDGERS` as a
+labelled block. This is the canonical form for all three lanes.
+
+The deciding property is that it needs **no change to the shared check**. A multi-file ledger would
+mean generalizing `source.file` to a list and reworking the inventory, totals and unmapped sweeps --
+an edit to the one script every lane depends on, made while two other lanes are mid-flight. Per-file
+ledgers reach the same coverage guarantee with additive data only.
+
+Per-file also matches what the ledger is *for*. It is reconciled by a human against
+`pytest --collect-only` output for one file at a time, and `source.file.collected` is a per-file
+count. A merge conflict between lanes is then a block boundary in `LEDGERS`, not two lanes editing
+one line.
+
+**Alternatives.**
+
+- **One ledger per lane, listing many source files (rejected).** It matches the way work is
+  dispatched, but the unit of *reconciliation* is the file, and it would require the shared-script
+  change described above, at the moment it is most expensive to make.
+- **One ledger for the whole subsystem (rejected).** A single 585-entry file that three lanes all
+  append to is a merge conflict on every PR.
+- **Keep the pilot's single ledger and grow it (rejected).** Same conflict surface, and it would put
+  a lane's entries inside the artefact the pilot's reviewers already signed off on.
+
+**Consequences.**
+
+- `LEDGERS` grows by one line per translated file. That is the intended conflict surface: additive,
+  and trivially resolvable.
+- **A target test file with no ledger at all is invisible to the check.** The unmapped sweep only
+  examines files some ledger claims, so a whole translated file could be added with no ledger and
+  the gate would stay green. This is a pre-existing hole, not one this decision opens, but per-file
+  ledgers make it easier to hit by accident. Closing it -- failing when a file under
+  `test/control_plane/` is claimed by no ledger and is not declared target-only -- is a change to the
+  shared script and is deliberately left to a coordinated cross-lane change rather than folded in
+  here.
+
+**Falsifier.** If the shared check is generalized to multi-file ledgers for another reason, the
+argument above (no shared-script change) no longer holds and the packaging should be revisited.
+
+**Status.** accepted
+
+**Source.** Lane A, 2026-08-22, ratified by the operator as the form for all three lanes.
+
+---
+
+## D-0020 — A temp-directory label may not contain refusal vocabulary
+
+**Context.** Every control-plane refusal interpolates the database path into its message, and
+`caseRoot(label)` puts the label into that path. `expectRefusal(fn, Type, match)` reproduces
+`pytest.raises(Type, match=)`, which is a regex **search** over the whole message. Put those three
+facts together and a label that shares a word with a refusal message makes that word's `match`
+**vacuous**: the pattern matches the path, so it can no longer fail, and the case silently degrades
+to a bare `instanceof` check.
+
+This was found in review, not in theory. With the label `"spike-schema"`, the four expansions of
+`a database that lost a constraint is refused` kept their source's `match="schema"` and it could not
+discriminate: every one of them would have stayed green for an `integrity_check` failure, a missing
+state table, or a foreign `application_id` -- any `CorruptStateRefused` at all -- rather than the
+fingerprint mismatch they exist to pin. In interlock the same pattern *is* discriminating, because
+pytest names `tmp_path` after the test function and this one truncates to
+`test_a_database_that_lost_a_co0`, which contains no `schema`.
+
+**Decision.** A `caseRoot` label may not contain any word that appears in a refusal message the file
+asserts on. Labels are short module nicknames -- `s5`, `migrator`, `policy` -- not descriptions.
+Confirmed by mutation: with the label fixed, changing the fingerprint refusal's wording turns all
+four expansions red, and restoring it turns them green again.
+
+**Alternatives.**
+
+- **Tighten each `match` to a phrase unique to the branch (rejected as the primary fix).** It works,
+  but it changes what the case asserts relative to its source, and a parity port must not do that on
+  the way in. Renaming the label restores the source's exact discrimination instead.
+- **Assert in the testkit that a match pattern does not also match the database path (deferred).**
+  The right long-term guard, and it would catch this class for every lane. `test/testkit/` is frozen,
+  so it is a helper-only PR merged ahead of the belts that need it, not an edit made in passing.
+- **Leave it and disclose (rejected).** The whole point of the `match` half is that the refusal
+  family's members share a message shape and differ by type and wording; a vacuous match is a case
+  that has stopped testing the thing it names.
+
+**Consequences.**
+
+- Checked mechanically for all four `test/control_plane/*.test.ts` files as of this PR: no
+  `expectRefusal` / `expectSqliteError` match literal is satisfied by the temp path its case builds.
+- The hazard is worst for a `parametrize`d case, where one vacuous match hides behind several
+  passing expansions.
+
+**Falsifier.** If refusal messages stop interpolating the database path, or the testkit gains the
+guard described above, the label restriction stops being load-bearing.
+
+**Status.** accepted
+
+**Source.** Lane A pre-Codex self-review, 2026-08-22; found independently by two adversarial audit
+passes and confirmed by mutation.
 ## D-0100 — The read-only capability is an open flag, not a `mode=ro` URI
 
 **Context.** Interlock's measurement harness is read-only **by capability, not by convention**

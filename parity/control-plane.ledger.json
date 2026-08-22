@@ -46,9 +46,9 @@
   },
   "totals": {
     "source_cases": 64,
-    "ported": 57,
+    "ported": 59,
     "adapted": 5,
-    "not_ported": 2,
+    "not_ported": 0,
     "waivers": 0
   },
   "entries": [
@@ -459,20 +459,20 @@
     },
     {
       "source_nodeid": "tests/control_plane/test_migrator.py::test_a_spike_database_is_refused_by_the_production_opener",
-      "target_id": null,
-      "disposition": "not-ported",
+      "target_id": "test/control_plane/migrator.test.ts::the two databases never meet > a spike database is refused by the production opener",
+      "disposition": "ported",
       "source_status": "passed",
-      "target_status": "absent",
-      "reason": "Requires interlock control_plane/schema.py (the spike schema creator and opener), which is out of this pilot scope. Not satisfied by a hand-stamped application_id: that would exercise the production-side branch while proving nothing about the spike module, and the mirror case has no target-side function to call at all. Deferred to the belt that ports schema.py.",
+      "target_status": "passed",
+      "reason": null,
       "source_revision": "65f36c5"
     },
     {
       "source_nodeid": "tests/control_plane/test_migrator.py::test_a_production_database_is_refused_by_the_spike_opener",
-      "target_id": null,
-      "disposition": "not-ported",
+      "target_id": "test/control_plane/migrator.test.ts::the two databases never meet > a production database is refused by the spike opener",
+      "disposition": "ported",
       "source_status": "passed",
-      "target_status": "absent",
-      "reason": "Requires interlock control_plane/schema.py (the spike schema creator and opener), which is out of this pilot scope. Not satisfied by a hand-stamped application_id: that would exercise the production-side branch while proving nothing about the spike module, and the mirror case has no target-side function to call at all. Deferred to the belt that ports schema.py.",
+      "target_status": "passed",
+      "reason": null,
       "source_revision": "65f36c5"
     },
     {

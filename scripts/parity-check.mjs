@@ -37,7 +37,22 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const LEDGERS = ["parity/control-plane.ledger.json", "parity/measurement.ledger.json"];
+/**
+ * One ledger per **source test file**, because that is the unit this check
+ * reasons about: `source.file.inventory` is a single file's collected node ids
+ * and `target.test_file` is a single target file's prefix. A lane appends its
+ * ledgers as a labelled block, so a merge conflict between concurrent lanes is
+ * a block boundary rather than an edit to a shared line.
+ */
+const LEDGERS = [
+  // pilot
+  "parity/control-plane.ledger.json",
+  // lane A -- control_plane
+  "parity/control-plane.spike-schema.ledger.json",
+  "parity/control-plane.policy-seed.ledger.json",
+  // lane B -- measurement
+  "parity/measurement.ledger.json",
+];
 
 /**
  * Constructs that stop a test from running, or expect it to fail.

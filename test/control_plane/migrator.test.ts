@@ -2,9 +2,13 @@
  * The production migrator -- every rule of production-schema.md section 3.2.
  *
  * Ported from interlock `tests/control_plane/test_migrator.py` at `65f36c5`.
- * Every case here maps to one source node id; the mapping, and the four cases
- * that are adapted or deferred rather than translated straight, are recorded in
+ * Every case here maps to one source node id; the mapping, and the five cases
+ * that are adapted rather than translated straight, are recorded in
  * `parity/control-plane.ledger.json`.
+ *
+ * The two cases the pilot deferred -- the spike/production opener pair, which
+ * needed interlock's `control_plane/schema.py` -- are ported now that
+ * `src/control_plane/schema.ts` exists. This file has no deferred cases left.
  *
  * Section 3.2 is six numbered rules, and each of them is here as an executable
  * property rather than as prose: forward-only with no reverse step, one step per
@@ -60,6 +64,7 @@ import {
   MigrationStepsRefused,
   MissingStateRefused,
 } from "../../src/control_plane/refusals.js";
+import { createControlPlane, openControlPlane } from "../../src/control_plane/schema.js";
 import { SPIKE_APPLICATION_ID } from "../../src/control_plane/spike.js";
 import {
   bytesOf,
@@ -955,15 +960,45 @@ describe("the two databases never meet", () => {
     }
   });
 
-  // `a spike database is refused by the production opener` and `a production
-  // database is refused by the spike opener` are NOT ported here. Both need
-  // interlock's `control_plane/schema.py` -- the spike creator and the spike
-  // opener -- which is out of this pilot's scope. They are recorded in the
-  // parity ledger as not yet ported, with that reason, rather than satisfied by
-  // stamping an application id by hand: a hand-built "spike database" would
-  // exercise the same production-side branch while proving nothing about the
-  // spike module, and the mirror case has no target-side function to call at
-  // all.
+  // These two were the pilot's declared gap: both need interlock's
+  // `control_plane/schema.py` -- the spike creator and the spike opener -- which
+  // the pilot did not port, and the ledger recorded them as `not-ported` rather
+  // than satisfying them by stamping an application id by hand. A hand-built
+  // "spike database" would have exercised the same production-side branch while
+  // proving nothing about the spike module, and the mirror case had no
+  // target-side function to call at all.
+  //
+  // `src/control_plane/schema.ts` now exists, so both are translated straight,
+  // and the ledger entries move from `not-ported` to `ported`.
+
+  test("a spike database is refused by the production opener", () => {
+    const { root, ledger } = scratch();
+    const spike = join(root, "spike.sqlite3");
+    createControlPlane(spike).close();
+
+    // There is no migration from the spike schema and none will be written
+    // (D-0026, D-0013: the cutover is at the run boundary with no state
+    // conversion), so the refusal has to be by identity -- before a single row
+    // is read and before the missing tables can be mistaken for "needs
+    // migrating".
+    expectRefusal(
+      () => openProductionControlPlane(spike, { migrationsDir: ledger }),
+      CorruptStateRefused,
+      /spike database/,
+    );
+    expectRefusal(
+      () => migrateControlPlane(spike, { nowMs: T0, migrationsDir: ledger }),
+      CorruptStateRefused,
+      /spike database/,
+    );
+  });
+
+  test("a production database is refused by the spike opener", () => {
+    const { ledger, dbPath } = scratch();
+    createProductionControlPlane(dbPath, { nowMs: T0, migrationsDir: ledger }).close();
+
+    expectRefusal(() => openControlPlane(dbPath), CorruptStateRefused, /application_id/);
+  });
 
   test("a foreign database is refused", () => {
     const { root, ledger } = scratch();

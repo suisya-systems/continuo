@@ -1,0 +1,628 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "subsystem": {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt"
+    },
+    "file": {
+      "path": "tests/control_plane/test_spike_schema.py",
+      "collected": 62,
+      "inventory": "parity/source-inventory/control_plane.test_spike_schema.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/control_plane/spike-schema.test.ts",
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/control_plane/spike-schema.test.ts::seam liveness (target-only) > loadSchemaSql reads the schema path through the seam record",
+        "test/control_plane/spike-schema.test.ts::seam liveness (target-only) > createControlPlane connects through the seam record",
+        "test/control_plane/spike-schema.test.ts::seam liveness (target-only) > openControlPlane connects through the seam record"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. These three are the seam-liveness tests required by docs/test-translation-conventions.md rule 5: three source cases replace an entry on schemaSeams, and without a liveness test a seam can rot into a decoration -- a refactor that made production call the underlying function directly would leave every one of those cases green, because the replacement is simply never reached and the assertions, which are about refusals, still hold for the wrong reason."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 62,
+    "ported": 56,
+    "adapted": 6,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_schema_file_itself_carries_the_spike_marking",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 1 -- the marking is in the schema file itself (D-0026) > the schema file itself carries the spike marking",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_marking_says_q_0001_is_not_answered_here",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 1 -- the marking is in the schema file itself (D-0026) > the marking says q 0001 is not answered here",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_ddl_is_refused_if_the_marking_is_removed",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 1 -- the marking is in the schema file itself (D-0026) > the ddl is refused if the marking is removed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "monkeypatch.setattr(s5, 'SPIKE_SCHEMA_PATH', stripped) has no ESM equivalent, so it goes through schemaSeams.spikeSchemaPath with patchSeam (D-0014); pinned by the target-only seam-liveness test. Also uses replaceAll rather than replace, because JS replace substitutes only the first occurrence where Python's str.replace substitutes every one. Both refusals (loadSchemaSql and createControlPlane), the message match and the not-created assertion are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_slice_is_exactly_the_six_named_tables",
+      "target_id": "test/control_plane/spike-schema.test.ts::the slice -- six tables and nothing else > the slice is exactly the six named tables",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_every_table_is_reachable_from_a_reconstruction_query",
+      "target_id": "test/control_plane/spike-schema.test.ts::the slice -- six tables and nothing else > every table is reachable from a reconstruction query",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_incident_dedup_key_and_retry_count_are_present_and_non_nullable",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 3 -- dedup key and retry count on incidents (D-0007) > incident dedup key and retry count are present and non nullable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_incident_without_a_dedup_key_is_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 3 -- dedup key and retry count on incidents (D-0007) > an incident without a dedup key is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_incident_retry_count_is_never_null_and_never_decreases",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 3 -- dedup key and retry count on incidents (D-0007) > an incident retry count is never null and never decreases",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_no_table_assigns_a_writer_to_a_state_item",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 4 -- no Q-0001 and no Q-0002 answer is encoded > no table assigns a writer to a state item",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_incident_dedup_key_is_indexed_but_not_unique",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 4 -- no Q-0001 and no Q-0002 answer is encoded > the incident dedup key is indexed but not unique",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_both_q_0002_collapse_rules_are_expressible[increment_in_place]",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 4 -- no Q-0001 and no Q-0002 answer is encoded > both q 0002 collapse rules are expressible[increment_in_place]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_both_q_0002_collapse_rules_are_expressible[linked_incident]",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 4 -- no Q-0001 and no Q-0002 answer is encoded > both q 0002 collapse rules are expressible[linked_incident]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_no_renotification_window_is_baked_into_the_schema",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 4 -- no Q-0001 and no Q-0002 answer is encoded > no renotification window is baked into the schema",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_fact_state_vocabulary_is_not_frozen_in_the_ddl",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 4 -- no Q-0001 and no Q-0002 answer is encoded > a fact state vocabulary is not frozen in the ddl",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_second_active_session_for_one_run_is_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > a second active session for one run is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_released_binding_frees_the_run_for_the_next_session",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > a released binding frees the run for the next session",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_session_cannot_be_bound_to_a_run_that_does_not_exist",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > a session cannot be bound to a run that does not exist",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_readout_is_never_stored_empty",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > a readout is never stored empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_binding_phase_vocabulary_is_closed",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > the binding phase vocabulary is closed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_pre_readback_binding_may_not_claim_an_observation",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > a pre readback binding may not claim an observation",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_binding_phase_only_moves_forward",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > the binding phase only moves forward",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_timestamp_that_is_not_an_integer_is_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 2 -- one session per run, across the crash window > a timestamp that is not an integer is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_lease_epoch_never_goes_backwards",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > a lease epoch never goes backwards",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_change_of_holder_must_raise_the_epoch",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > a change of holder must raise the epoch",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_lease_resource_cannot_be_renamed_out_of_the_way",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > a lease resource cannot be renamed out of the way",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_outbox_row_keeps_the_identity_its_ack_was_recorded_against",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > an outbox row keeps the identity its ack was recorded against",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_lease_row_is_expired_not_deleted",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > a lease row is expired not deleted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_protected_write_validates_the_fencing_token_in_the_write",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > a protected write validates the fencing token in the write",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_outbox_retry_count_is_monotonic_and_survives_a_restart",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > an outbox retry count is monotonic and survives a restart",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_acked_message_is_acked_once",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > an acked message is acked once",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_outbox_row_cannot_claim_a_state_its_timestamps_deny",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > an outbox row cannot claim a state its timestamps deny",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_one_effect_per_idempotency_key_and_refusals_stay_recordable",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > one effect per idempotency key and refusals stay recordable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_action_must_name_its_exactly_once_mechanism",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > an action must name its exactly once mechanism",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_applied_action_is_applied_once",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > an applied action is applied once",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_refused_action_carries_its_reason",
+      "target_id": "test/control_plane/spike-schema.test.ts::gate item 5 -- lease, fencing token, outbox, ack, dedup > a refused action carries its reason",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_reconstruction_reads_only_what_is_still_in_flight",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 2 -- state is reconstructable by query from SQLite alone (D-0001) > reconstruction reads only what is still in flight",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_lease_liveness_is_read_against_the_callers_clock",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 2 -- state is reconstructable by query from SQLite alone (D-0001) > lease liveness is read against the callers clock",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_incident_packet_is_reconstructed_whole",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 2 -- state is reconstructable by query from SQLite alone (D-0001) > the incident packet is reconstructed whole",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_state_survives_the_process_that_wrote_it",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 2 -- state is reconstructable by query from SQLite alone (D-0001) > state survives the process that wrote it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Still a real child process (node child_process.spawnSync), so the property -- state outlives the process that wrote it -- is exercised, and all six per-field comparisons plus the exit-status-with-child-output assertion are kept. What changed is how the child reaches the module: Python passes PYTHONPATH and `python -c`, while the target's src/ is TypeScript with NodeNext '.js' specifiers, so the case writes two ASCII-only files into the case's temp dir (a resolve hook mapping './x.js' to './x.ts', and the recovery program) and runs the child under Node's type stripping, adding --experimental-strip-types only on Node releases older than 22.18 that need it. Every dynamic import path goes through pathToFileURL (Windows). Field names compared are the port's camelCase ControlPlaneState fields.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_absent_database_is_refused_and_not_created",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > an absent database is refused and not created",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_file_that_is_not_a_database_is_refused_and_left_alone",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > a file that is not a database is refused and left alone",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_truncated_database_is_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > a truncated database is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_database_missing_a_state_table_is_refused_not_rebuilt",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > a database missing a state table is refused not rebuilt",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_database_from_another_application_is_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > a database from another application is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_database_at_another_revision_is_refused_rather_than_migrated",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > a database at another revision is refused rather than migrated",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_dangling_reference_is_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > a dangling reference is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The sabotage needs a connection with foreign keys off. Python's sqlite3.connect leaves them off by default, which is exactly the careless writer the case describes; better-sqlite3 turns foreign_keys ON for every connection it opens, so the raw connection issues an explicit `PRAGMA foreign_keys = OFF` to reproduce that writer. Without it the INSERT fails and the refusal under test is never reached. The refusal type and the `foreign key` message match are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_creating_over_an_existing_path_is_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > creating over an existing path is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_created_database_is_stamped_so_it_can_be_recognised",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > a created database is stamped so it can be recognised",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_opened_connection_enforces_foreign_keys",
+      "target_id": "test/control_plane/spike-schema.test.ts::criterion 5 -- corrupt state is refused, never recovered as empty (R3) > an opened connection enforces foreign keys",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_action_keeps_the_idempotency_key_it_was_recorded_with",
+      "target_id": "test/control_plane/spike-schema.test.ts::durable evidence cannot be edited away (round-1 self-review) > an action keeps the idempotency key it was recorded with",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_refused_action_stays_refused",
+      "target_id": "test/control_plane/spike-schema.test.ts::durable evidence cannot be edited away (round-1 self-review) > a refused action stays refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_outbox_lifecycle_does_not_walk_backwards",
+      "target_id": "test/control_plane/spike-schema.test.ts::durable evidence cannot be edited away (round-1 self-review) > the outbox lifecycle does not walk backwards",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_an_empty_reason_is_as_empty_as_a_missing_one",
+      "target_id": "test/control_plane/spike-schema.test.ts::durable evidence cannot be edited away (round-1 self-review) > an empty reason is as empty as a missing one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_database_that_lost_a_constraint_is_refused[DROP INDEX session_one_active_binding_per_run]",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > a database that lost a constraint is refused[DROP INDEX session_one_active_binding_per_run]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_database_that_lost_a_constraint_is_refused[DROP INDEX action_one_effect_per_key]",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > a database that lost a constraint is refused[DROP INDEX action_one_effect_per_key]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_database_that_lost_a_constraint_is_refused[DROP TRIGGER lease_epoch_is_monotonic]",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > a database that lost a constraint is refused[DROP TRIGGER lease_epoch_is_monotonic]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_database_that_lost_a_constraint_is_refused[DROP TRIGGER outbox_ack_is_set_once]",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > a database that lost a constraint is refused[DROP TRIGGER outbox_ack_is_set_once]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_the_expected_fingerprint_is_derived_from_the_ddl_not_pinned_beside_it",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > the expected fingerprint is derived from the ddl not pinned beside it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The assertion is byte-identical in substance (schemaFingerprint(cp) === expectedSchemaFingerprint()), but Python reads the module-private `_schema_fingerprint` while TypeScript has no module-private access from a test. The only change is production visibility: `schemaFingerprint` in src/control_plane/schema.ts is now `export`ed, with a comment saying why. Recomputing the digest inside the test was rejected -- it would compare the test's construction with itself and pin nothing.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_creation_that_loses_a_race_does_not_delete_the_winners_database",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > a creation that loses a race does not delete the winners database",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source makes the loser's pre-check useless by monkeypatching Path.exists to return False. createControlPlane has no exists() pre-check to falsify -- it claims the path with an O_EXCL open -- so that sabotage is unconstructible. The strongest faithful statement of the same property is asserted instead, and it is stronger than the source's on one axis: schemaSeams.connect is armed to fail the test if production reaches it at all, so the case pins that the loser is refused BEFORE it ever connects (the step the source's dangerous cleanup hung off), plus the source's three original assertions -- ControlPlaneRefusal matching 'already exists', the winner's file still present, and the survivor still holding its one run row. The seam is disarmed mid-test where the source calls monkeypatch.undo().",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_run_with_nothing_hanging_off_it_still_reconstructs",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > a run with nothing hanging off it still reconstructs",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_exactly_once_evidence_cannot_be_deleted_out_of_the_way",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > exactly once evidence cannot be deleted out of the way",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/control_plane/test_spike_schema.py::test_a_creation_that_cannot_connect_leaves_no_file_behind",
+      "target_id": "test/control_plane/spike-schema.test.ts::the shape of the schema is verified, not just the names (round-1 self-review) > a creation that cannot connect leaves no file behind",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "monkeypatch.setattr(s5.sqlite3, 'connect', unavailable) becomes patchSeam on schemaSeams.connect (D-0014). better-sqlite3 has no exception hierarchy, so the seam throws an error shaped the way the driver shapes one (code SQLITE_CANTOPEN, message 'unable to open database file') and the assertion keeps both halves through expectSqliteError, asserting the result code rather than only the message (D-0016). The seam is disarmed mid-test where the source calls monkeypatch.undo(); the two closing assertions -- no file left behind, and a subsequent creation succeeding -- are unchanged.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "Python's explicit connection.commit() calls have no counterpart.",
+      "status": "inherited, not fixed",
+      "detail": "better-sqlite3 runs in autocommit, so a statement is durable when it returns. Nothing downstream of a dropped commit changes, and the restart/reopen cases still cross a real close/open boundary, so the property each case pins is unchanged."
+    },
+    {
+      "topic": "sqlite3.IntegrityError is asserted as a result code, not an exception class.",
+      "status": "inherited from the driver, recorded under D-0016",
+      "detail": "better-sqlite3 raises one error type for everything, so every pytest.raises(sqlite3.IntegrityError) becomes expectSqliteError with code /^SQLITE_CONSTRAINT/. The source's match= half is kept wherever it had one, so no case asserts less."
+    },
+    {
+      "topic": "openControlPlane's post-verification connect refuses to create a missing file; Python's sqlite3.connect would create one.",
+      "status": "divergence, deliberate and disclosed",
+      "detail": "The two differ only inside the TOCTOU window between the existence check and the connect -- if the file is removed in that window, interlock returns a connection to a freshly created empty database and continuo refuses. Continuo's behaviour is the safer one and is therefore a place the port is NOT at parity; interlock#74 acceptance criterion 5 requires that to be disclosed rather than silently kept. Reachable by no ported case. A fix that moved both sides together belongs upstream."
+    },
+    {
+      "topic": "renderRow / renderRows are duplicated between migrator.ts and schema.ts.",
+      "status": "known duplication",
+      "detail": "D-0017 rule 4 asks for one renderer for rows interpolated into messages. The two modules are siblings with no shared internal-utility module to import one from, so the renderer is currently copied. Extracting it touches the merged pilot's migrator.ts and is deliberately left to a follow-up rather than folded into this PR."
+    },
+    {
+      "topic": "APPLICATION_ID is reached as SPIKE_APPLICATION_ID from ./spike.js, not from the schema module.",
+      "status": "structural, disclosed",
+      "detail": "schema.py exports APPLICATION_ID in its __all__ and its test module imports it from there. In the port the constant lives in the small spike.ts module that both migrator.ts and schema.ts import, so the production verifier does not have to depend on the whole spike opener to read one id. The value asserted is identical; only the import path differs."
+    },
+    {
+      "topic": "openControlPlane does not re-verify the writable connection it returns, so a database replaced in the verify-close-reopen window is returned unverified.",
+      "status": "inherited, not fixed",
+      "detail": "interlock's control_plane/schema.py open_control_plane runs _verify_readonly(target), then sqlite3.connect(target), then returns -- with no second verification over the handle it hands back. So a foreign, differently-versioned or corrupt database substituted between the close and the reopen is opened rather than refused. The port reproduces this exactly. Note the asymmetry is interlock's own: the PRODUCTION opener (migrator.open_production_control_plane) DOES close the same window, and continuo's migrator.ts carries that -- the ported cases under 'the verify-close-reopen window' in migrator.test.ts are precisely about it. Closing the gap on the spike side would make continuo's spike opener stronger than interlock's, which interlock#74 acceptance criterion 5 forbids doing silently. Raised by the Codex review gate (2026-08-22, P2) and recorded here so it is a disclosed review topic rather than an oversight. A fix belongs upstream in interlock, or in a change that moves both sides together."
+    }
+  ]
+}
