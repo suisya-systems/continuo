@@ -1508,6 +1508,14 @@ describe("every externally-supplied field at once (target-only)", () => {
     expect(named.filter((line) => line.includes("`query_definitions.q`"))).toHaveLength(1);
     expect(named.filter((line) => line.includes("`query_definitions.q `"))).toHaveLength(1);
 
+    // detector_versions is an ARRAY field, and the hostile detector_version is
+    // inside it. One external value must have one representation across the
+    // document: escaping the elements and then the joined string again would
+    // print `\\u2014` here while the banner and the JSON say `\u2014`.
+    const detectorRow = tableLines.find((line) => line.includes("`detector_versions`"));
+    expect(detectorRow).toContain("d\\u20141");
+    expect(detectorRow).not.toContain("d\\\\u2014");
+
     const bannerLines = markdown.split("\n").slice(0, header.banner().length);
     expect(bannerLines).toEqual(header.banner().map((line) => reportValue(line)));
     expect(markdown.split("\n")[header.banner().length]).toBe("");

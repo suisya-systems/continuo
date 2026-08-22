@@ -1491,27 +1491,42 @@ function flatten(prefix: string, value: HeaderValue): [string, string][] {
  * one column left, which is a rendering that silently mislabels values -- so it
  * is escaped rather than trusted not to appear.
  */
+/**
+ * One table cell: rendered once, then escaped once.
+ *
+ * The two steps are separate functions because folding them together escapes an
+ * array twice -- `cell` recursing into its elements would run `reportValue` on
+ * each and then again on the joined result, and an em dash inside a
+ * `detector_versions` entry would render as `\\u2014` here while the banner and
+ * the JSON both say `\u2014`. One external value must have one representation
+ * across the whole document.
+ */
 function cell(value: HeaderValue): string {
-  let rendered: string;
-  if (value === null) {
-    rendered = "(none)";
-  } else if (typeof value === "boolean") {
-    rendered = value ? "true" : "false";
-  } else if (Array.isArray(value)) {
-    rendered =
-      value.length > 0 ? value.map((item) => cell(item as HeaderValue)).join(", ") : "(none)";
-  } else {
-    rendered = String(value);
-  }
   // D-0109: escaped for the console as well as for the table. The JSON
   // rendering has been ASCII-safe from the start (ensure_ascii); this makes the
   // Markdown one match, so both renderings honour the same claim their
   // docstrings make.
   //
-  // The value is escaped FIRST and the table's own pipe escape added after.
-  // The other order doubles it: reportValue would escape the backslash the pipe
+  // The value is escaped FIRST and the table's own pipe escape added after. The
+  // other order doubles it: reportValue would escape the backslash the pipe
   // escape just introduced, and the cell would read `\\|` where the table needs
   // `\|`. A newline needs no separate fold either -- reportValue turns it into
   // an escape, which says more than the source's space did.
-  return `${reportValue(rendered.trim())}`.replaceAll("|", "\\|");
+  return reportValue(renderCell(value).trim()).replaceAll("|", "\\|");
+}
+
+/** A cell's text, before any escaping. Recurses; never escapes. */
+function renderCell(value: HeaderValue): string {
+  if (value === null) {
+    return "(none)";
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0
+      ? value.map((item) => renderCell(item as HeaderValue)).join(", ")
+      : "(none)";
+  }
+  return String(value);
 }
