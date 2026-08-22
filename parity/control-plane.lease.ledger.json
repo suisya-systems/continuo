@@ -27,8 +27,8 @@
   "totals": {
     "source_cases": 60,
     "ported": 49,
-    "adapted": 10,
-    "not_ported": 1,
+    "adapted": 11,
+    "not_ported": 0,
     "waivers": 0
   },
   "entries": [
@@ -511,11 +511,11 @@
     },
     {
       "source_nodeid": "tests/control_plane/test_lease.py::test_the_package_does_not_silently_shadow_a_clashing_name",
-      "target_id": null,
-      "disposition": "not-ported",
+      "target_id": "test/control_plane/lease.test.ts::Criterion 6 -- no test may lean on the provider refusing a duplicate. Every case above must pass with the provider's refusal assumed absent. > the package does not silently shadow a clashing name",
+      "disposition": "adapted",
       "source_status": "passed",
-      "target_status": "not-run",
-      "reason": "Requires interlock's S7 outbox module, which is not ported yet. The source case asserts across BOTH modules that define the colliding names: four of its seven assertions are about outbox -- that it re-exports StaleWriterRefused, that the re-export is the same class object, and that its EXACTLY_ONCE_MECHANISMS has not drifted from lease's copy. Translating only the three that can run and calling the case covered would be strictly weaker than the source, and worse, the surviving `expect(pkg.Destination).not.toBe(DestinationFencing)` would pass VACUOUSLY against an undefined left-hand side. Recorded not-ported rather than satisfied by the passing half. What unblocks it: src/control_plane/outbox.ts, in the belt that ports it -- where the entry point must also be imported BEFORE the outbox module, since a missing outbox otherwise masks whether the entry-point half passes at all.",
+      "target_status": "passed",
+      "reason": "Deferred one belt while outbox.ts did not exist, and translated in full here. One half is adapted: Python's `Destination` is a runtime_checkable Protocol and therefore a real object in __all__, so the source asserts the package's Destination is not lease's DestinationFencing. The port's Destination is a TypeScript interface -- a compile-time type with no runtime existence -- so that identity comparison has nothing to compare. The runtime stand-in is isDestination, the structural predicate replacing isinstance(x, Destination); asserting on it preserves the property (the destination contract and the lease-side fencing type are separate exported things) against the port's actual runtime surface, and an added assertion pins DestinationFencing's own identity. That the TYPE is exported is proved at compile time by the test file importing it. Every other assertion, including all four about outbox, is translated straight. The entry point is imported BEFORE the outbox module, per the note this ledger carried while the case was deferred: importing outbox first threw, and the assertions below it never ran.",
       "source_revision": "65f36c5"
     },
     {

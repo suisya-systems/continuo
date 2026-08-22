@@ -2091,7 +2091,7 @@ export class EpochGuardedDestination {
  * -- refuses one, matching the source exactly. The two are deliberately
  * different functions: this module imports nothing from `txn.ts`.
  */
-function withImmediate(connection: SqliteDatabase, body: () => void): void {
+export function withImmediate(connection: SqliteDatabase, body: () => void): void {
   if (connection.inTransaction) {
     throw new LeaseUsageError(
       "this connection is already in a transaction. A lease operation owns its transaction: " +
