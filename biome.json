@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!package-lock.json"]
+    "includes": ["**", "!package-lock.json", "!parity/oracle", "!src/fencing/roles.json"]
   },
   "formatter": {
     "enabled": true,

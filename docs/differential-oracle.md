@@ -203,6 +203,12 @@ Two properties keep that from happening:
 The consequence is the intended one: a change to the vector appears in review as a change to the
 oracle -- a line someone has to justify -- rather than as a test that kept passing.
 
+The same reasoning is why `parity/oracle/**` is excluded from Biome in `biome.json`. A vector is
+**generated output**, not source: its bytes are whatever the Python half emitted. Letting the
+formatter rewrite them would make the committed file differ from what the generator produces, so the
+next regeneration would show a diff that is pure formatting -- and a vector whose diff is noise is a
+vector nobody reads. The exclusion is scoped to that directory, and nothing under it is hand-edited.
+
 ## 6. What the oracle caught on its first run
 
 Both faces failed on their first run, and neither failure was reachable from the ported tests.
