@@ -59,10 +59,16 @@
         "to": "a per-test productionDb() plus withWriter (rule 8)",
         "why": "The convention every measurement test file in this port uses.",
         "affects": "every entry that touches a database"
+      },
+      {
+        "from": "Python int arithmetic over the projected columns",
+        "to": "safeIntegers(true) on the cohort statement and BigInt accumulation",
+        "why": "Raised by the codex review gate. Python's int is unbounded and sums these exactly; better-sqlite3's default returns a JavaScript number and rounds 9007199254740993 to ...992 on the way in, so every AC-9 figure would be computed over values the database does not hold (D-0007, docs/sqlite-value-contract.md). The sums are BigInt and each total is converted at the boundary where it becomes a report field.",
+        "affects": "every entry that reads a token or response figure"
       }
     ],
     "target_only_tests": {
-      "count": 11,
+      "count": 12,
       "ids": [
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the p95 is nearest rank at a sample size where rounding disagrees",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort with no covered row has no p95 and no sensitivity figure",
@@ -74,9 +80,10 @@
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the itemisations are ordered by invocation id, whatever the insert order",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort past SQLite's parameter ceiling is chunked, not refused",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a percentage on an exact tie rounds Python's way",
-        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the coincide line is absent when coverage is not complete"
+        "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the coincide line is absent when coverage is not complete",
+        "test/measurement/ac9.test.ts::exact integer arithmetic (target-only) > an output figure past 2^53 is summed exactly, not rounded"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python."
     }
   },
   "totals": {
@@ -104,6 +111,12 @@
       "matches_source": true,
       "note": "Measured rather than assumed. A tie needs the value to be a dyadic rational of the form k/8, and percent()'s inputs are coverage ratios (k/n) and reductions (1 - a/b), neither of which lands exactly there -- a scan of every k/n with n up to 4000 found no input on which formatFixed and toFixed disagree. rate()'s input is total * 100 / cohortSize, which IS dyadic at 100/800 = 0.125, so the rule is pinned there by a target-only case. Substituting toFixed in percent() alone is therefore an EQUIVALENT MUTANT for constructible data; substituting it in rate() is not, and is caught.",
       "where_a_fix_belongs": "nowhere; the helper is correct and the class is simply unreachable through it."
+    },
+    {
+      "behaviour": "A total that does not fit a JavaScript number exactly is REFUSED (FigureExceedsExactRangeRefused) where interlock would carry and print it.",
+      "matches_source": false,
+      "note": "A disclosed divergence in the refusing direction, introduced by the fix above. Python's unbounded int has no such boundary; JavaScript's number does, and this module's subject is a figure that quietly differs from the measurement -- printing a rounded token total would be that failure exactly. Nothing an actual ledger can hold reaches it: 2^53 output tokens is nine quadrillion. The new target-only case builds the state deliberately, one row at MAX_SAFE_INTEGER (carried) and two (refused).",
+      "where_a_fix_belongs": "nowhere while the report field is a JavaScript number; carrying BigInt out to consumers would change the package's public shape for a value no ledger produces."
     }
   ],
   "entries": [

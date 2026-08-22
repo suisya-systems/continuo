@@ -615,18 +615,60 @@ export class Ac9Report {
   }
 }
 
-/** One `ai_invocation` row, as the cohort query projects it. */
+/**
+ * One `ai_invocation` row, as the cohort query projects it.
+ *
+ * Every integer arrives as a BigInt, because the statement runs with
+ * `safeIntegers(true)`. Python's `int` is unbounded and sums these exactly;
+ * better-sqlite3's default would hand back a JavaScript number and round
+ * `9007199254740993` to `...992` on the way in, so the arithmetic below would be
+ * over values the database does not hold. `D-0007` and
+ * `docs/sqlite-value-contract.md` name that hazard, and a token total is the one
+ * place in this module where a silently wrong number is the entire failure it
+ * exists to prevent.
+ */
 interface InvocationRow {
   readonly invocation_id: string;
   readonly incident_id: string | null;
   readonly usage_status: string;
-  readonly output_tokens: number | null;
-  readonly input_tokens: number | null;
-  readonly cache_read_tokens: number | null;
-  readonly max_output_tokens: number | null;
-  readonly model_response_count: number;
-  readonly attempt_count: number;
-  readonly finished_at_ms: number | null;
+  readonly output_tokens: bigint | null;
+  readonly input_tokens: bigint | null;
+  readonly cache_read_tokens: bigint | null;
+  readonly max_output_tokens: bigint | null;
+  readonly model_response_count: bigint;
+  readonly attempt_count: bigint;
+  readonly finished_at_ms: bigint | null;
+}
+
+/**
+ * A figure that cannot be carried on this report without being rounded.
+ *
+ * A **disclosed divergence** from interlock, in the refusing direction. Python's
+ * `int` is unbounded, so a total past 2^53 is simply carried and printed;
+ * JavaScript's number cannot hold it, and this module's whole subject is a
+ * figure that quietly differs from the measurement. So the sums are exact
+ * (BigInt) and the refusal is at the boundary where a total becomes a report
+ * field. Nothing an actual ledger can hold reaches it: 2^53 output tokens is
+ * nine quadrillion.
+ */
+export class FigureExceedsExactRangeRefused extends Ac9MeasurementRefused {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "FigureExceedsExactRangeRefused";
+    Object.setPrototypeOf(this, FigureExceedsExactRangeRefused.prototype);
+  }
+}
+
+/** A BigInt total as a report field, or a refusal if it cannot be one exactly. */
+function exactly(label: string, total: bigint): number {
+  if (total > BigInt(Number.MAX_SAFE_INTEGER) || total < -BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new FigureExceedsExactRangeRefused(
+      `${label} is ${total}, which is outside the range a JavaScript number ` +
+        "represents exactly; the report would print a rounded figure and call " +
+        "it a measurement (D-0007, docs/sqlite-value-contract.md)",
+    );
+  }
+  return Number(total);
 }
 
 /**
@@ -655,14 +697,14 @@ export function measureAc9(
   const baseline = options.baseline ?? V1_MEASURED_BASELINE;
   const rows = readCohortInvocations(connection, cohort.runIds);
 
-  let modelResponseTotal = 0;
-  let attemptTotal = 0;
+  let modelResponseTotal = 0n;
+  let attemptTotal = 0n;
   let coveredCount = 0;
-  let observedOutputTokens = 0;
-  let inputTokensTotal = 0;
-  let cacheReadTokensTotal = 0;
-  let imputedBoundedTokens = 0;
-  const coveredValues: number[] = [];
+  let observedOutputTokens = 0n;
+  let inputTokensTotal = 0n;
+  let cacheReadTokensTotal = 0n;
+  let imputedBoundedTokens = 0n;
+  const coveredValues: bigint[] = [];
   const unboundedMissing: string[] = [];
   const unconfirmed: string[] = [];
   const ac1Violations: string[] = [];
@@ -701,11 +743,11 @@ export function measureAc9(
     // section 5 calls it a bandwidth indicator, "not new input tokens and not a
     // billing figure", and at 1.4e9 in the baseline it would swamp every AC-9
     // figure it were added to.
-    inputTokensTotal += row.input_tokens ?? 0;
-    cacheReadTokensTotal += row.cache_read_tokens ?? 0;
+    inputTokensTotal += row.input_tokens ?? 0n;
+    cacheReadTokensTotal += row.cache_read_tokens ?? 0n;
 
     if (usageStatus === "reported") {
-      const outputTokens = row.output_tokens as number;
+      const outputTokens = row.output_tokens as bigint;
       coveredCount += 1;
       observedOutputTokens += outputTokens;
       coveredValues.push(outputTokens);
@@ -744,7 +786,7 @@ export function measureAc9(
   // oversight: it is the difference between "what can be bounded" and "what can
   // be guessed at", and the report prints the itemisations beside both.
   const sensitivityOutputTokens =
-    p95Value === null ? null : observedOutputTokens + p95Value * missingCount;
+    p95Value === null ? null : observedOutputTokens + p95Value * BigInt(missingCount);
 
   return new Ac9Report({
     periodStartMs: cohort.periodStartMs,
@@ -752,16 +794,22 @@ export function measureAc9(
     generatedAtMs: options.nowMs,
     cohortSize: cohort.denominator,
     baseline,
-    modelResponseTotal,
+    modelResponseTotal: exactly("the model response total", modelResponseTotal),
     invocationCount: rows.length,
-    attemptTotal,
+    attemptTotal: exactly("the attempt total", attemptTotal),
     coveredCount,
-    observedOutputTokens,
-    inputTokensTotal,
-    cacheReadTokensTotal,
-    boundedOutputTokens: observedOutputTokens + imputedBoundedTokens,
-    sensitivityOutputTokens,
-    coveredP95OutputTokens: p95Value,
+    observedOutputTokens: exactly("the observed output-token total", observedOutputTokens),
+    inputTokensTotal: exactly("the input-token total", inputTokensTotal),
+    cacheReadTokensTotal: exactly("the cache-read-token total", cacheReadTokensTotal),
+    boundedOutputTokens: exactly(
+      "the bounded output-token total",
+      observedOutputTokens + imputedBoundedTokens,
+    ),
+    sensitivityOutputTokens:
+      sensitivityOutputTokens === null
+        ? null
+        : exactly("the sensitivity output-token total", sensitivityOutputTokens),
+    coveredP95OutputTokens: p95Value === null ? null : exactly("the covered p95", p95Value),
     unboundedMissing,
     unconfirmedResponseCount: unconfirmed,
     ac1Violations,
@@ -931,13 +979,13 @@ function reduction(interlockPer100: number | null, baselinePer100: number): numb
  * ledger ever exhibited. It is also reproducible byte for byte across builds,
  * which `D-0040` asks of every figure in a report.
  */
-function p95(values: readonly number[]): number | null {
+function p95(values: readonly bigint[]): bigint | null {
   if (values.length === 0) {
     return null;
   }
-  const ordered = [...values].sort((left, right) => left - right);
+  const ordered = [...values].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   const rank = Math.max(1, Math.ceil(0.95 * ordered.length));
-  return ordered[rank - 1] as number;
+  return ordered[rank - 1] as bigint;
 }
 
 /**
@@ -963,6 +1011,7 @@ function readCohortInvocations(
     rows.push(
       ...(connection
         .prepare(COHORT_INVOCATIONS_QUERY.replace("{placeholders}", placeholders))
+        .safeIntegers(true)
         .all(...chunk) as InvocationRow[]),
     );
   }

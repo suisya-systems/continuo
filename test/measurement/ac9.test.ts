@@ -51,6 +51,7 @@ import { effectiveRevisionId } from "../../src/control_plane/policy.js";
 import {
   type Ac9Report,
   BaselineRefused,
+  FigureExceedsExactRangeRefused,
   KIND_ASSUMPTION,
   KIND_LOWER_BOUND,
   MeasuredBaseline,
@@ -1195,5 +1196,59 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     const report = measure(path);
     expect(report.coverageIsComplete).toBe(false);
     expect(renderAc9Report(report)).not.toContain("coincide");
+  });
+});
+
+describe("exact integer arithmetic (target-only)", () => {
+  test("an output figure past 2^53 is summed exactly, not rounded", () => {
+    // Target-only, and a PORT DIVERGENCE the codex review gate caught. Python's
+    // int is unbounded, so ac9.py sums these exactly; better-sqlite3's default
+    // would hand back a JavaScript number and round 9007199254740993 to ...992
+    // on the way in, so every figure downstream would be over a value the
+    // database does not hold (D-0007, docs/sqlite-value-contract.md). The
+    // statement now runs with safeIntegers and the sums are BigInt.
+    //
+    // Two rows one apart at the top of the safe range: under rounding they read
+    // as the same number and the totals coincide.
+    const path = productionDb();
+    withWriter(path, (cp) => {
+      addCohortRun(cp, "run-1");
+      addIncident(cp, "inc-1", "run-1");
+      invoke(cp, "inv-1", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        outputTokens: Number.MAX_SAFE_INTEGER,
+        maxOutputTokens: Number.MAX_SAFE_INTEGER,
+      });
+    });
+    const atTheLimit = measure(path).observedOutputTokens;
+    expect(atTheLimit).toBe(Number.MAX_SAFE_INTEGER);
+
+    // And one past it is refused rather than printed as a rounded figure: a
+    // report whose token total is off by one is the exact failure this module
+    // exists to prevent, and interlock's unbounded int has no equivalent.
+    const beyond = productionDb("beyond.sqlite3");
+    withWriter(beyond, (cp) => {
+      addCohortRun(cp, "run-1");
+      addIncident(cp, "inc-1", "run-1");
+      invoke(cp, "inv-1", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        outputTokens: Number.MAX_SAFE_INTEGER,
+        maxOutputTokens: Number.MAX_SAFE_INTEGER,
+      });
+      // A second row of the same size: the SUM is what leaves the safe range,
+      // and each row on its own is representable.
+      invoke(cp, "inv-2", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        outputTokens: Number.MAX_SAFE_INTEGER,
+        maxOutputTokens: Number.MAX_SAFE_INTEGER,
+      });
+    });
+
+    const refusal = expectRefusal(() => measure(beyond), FigureExceedsExactRangeRefused);
+    expect(refusal.message).toContain("observed output-token total");
+    expect(refusal.message).toContain("rounded figure");
   });
 });
