@@ -188,6 +188,68 @@ export {
   transaction,
 } from "./control_plane/txn.js";
 /**
+ * Per-role fencing: the rule model, the renderer, and the breach battery.
+ *
+ * Listed by name for the reason the entries above are: the package exports only
+ * `.` (D-0002), so a name absent from here is one an installed consumer cannot
+ * reach -- and `dist/fencing/roles.json` being present is not the same as the
+ * renderer that reads it being importable.
+ *
+ * The surface mirrors interlock's `fencing/__init__.py` `__all__`, restricted to
+ * what is ported. Absent because they are not ported yet, not because they were
+ * judged internal: `EVENT_ADMITTED`, `EVENT_REFUSED`, `FenceLedger`,
+ * `FencedSpawner`, `SpawnOutcome`, `SpawnPlan`, `default_hook_script`,
+ * `FenceDiff`, `FenceStateError`, `diff_fences`, `read_fence`, `write_fence`.
+ * Each arrives with its own module and its own translated cases.
+ *
+ * The CPython transcriptions (`fnmatch`, `shlex`, `pypath`, `pyrepr`, `pyjson`,
+ * `pysemantics`, `pyregex`, `uescape`) are deliberately absent. In interlock
+ * those behaviours are the standard library, so they are not part of the
+ * package's surface there either; here they are an implementation detail of the
+ * fence, pinned by a differential vector (D-0200) rather than offered as API.
+ */
+export {
+  BatteryReport,
+  BreachProbe,
+  ProbeResult,
+  ProbeSynthesisError,
+  probeFor,
+  probeIds,
+  probesFor,
+  runBattery,
+} from "./fencing/battery.js";
+export {
+  bundledDocumentPath,
+  DISCARDED_ROLE_KEYS,
+  FenceContext,
+  FenceRefusal,
+  loadDocument,
+  RefusalReason,
+  type RefusalReasonCode,
+  type RoleDocument,
+  renderFence,
+  roleNames,
+} from "./fencing/renderer.js";
+export {
+  type Decision,
+  decide,
+  Fence,
+  FenceRule,
+  FenceRuleNotFound,
+  KIND_PERMISSION_DENY,
+  KIND_SANDBOX_DENY_READ,
+  KIND_SANDBOX_DENY_WRITE,
+  LAYER_PERMISSIONS,
+  LAYER_SANDBOX,
+  makeDecision,
+  parsePermissionRule,
+  parseSandboxEntry,
+  RuleSyntaxError,
+  type ToolInput,
+  WITNESS_TOKEN,
+  witnessSubject,
+} from "./fencing/rules.js";
+/**
  * The G6 measurement harness.
  *
  * Only the measurement-specific names are listed: the refusal family it shares

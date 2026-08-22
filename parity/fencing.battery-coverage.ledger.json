@@ -1,0 +1,135 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "fencing",
+      "collected": 124,
+      "inventory": "parity/source-inventory/fencing.all.txt"
+    },
+    "file": {
+      "path": "tests/fencing/test_battery_coverage.py",
+      "collected": 9,
+      "inventory": "parity/source-inventory/fencing.test_battery_coverage.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/fencing/battery.test.ts",
+    "target_only_tests": {
+      "count": 11,
+      "ids": [
+        "test/fencing/fnmatch-shlex-oracle.test.ts::the vector is not vacuous > the corpus rebuilds to the size the vector was generated at",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::the vector is not vacuous > the corpus exercises both answers, and both outcomes of a split",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::fnmatch.fnmatchcase agrees with CPython at every position > every pattern x name in the corpus",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::shlex agrees with CPython at every position > split, including the inputs CPython refuses",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::shlex agrees with CPython at every position > quote",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::shlex agrees with CPython at every position > quote and split round-trip, which is the property the renderer needs",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::posixpath agrees with CPython at every position > normpath",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::posixpath agrees with CPython at every position > expanduser, with HOME pinned to the value the vector was generated at",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::the Python string semantics in rules.ts agree with CPython > repr, over strings",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::the Python string semantics in rules.ts agree with CPython > repr, over the non-string values a malformed document can carry",
+        "test/fencing/fnmatch-shlex-oracle.test.ts::the Python string semantics in rules.ts agree with CPython > strip, where it parts company with trim()"
+      ],
+      "note": "The CPython differential oracle (test/fencing/fnmatch-shlex-oracle.test.ts). Target-only: these translate NO interlock node id and are NOT counted as ported coverage. They exist because src/fencing/fnmatch.ts, shlex.ts, pypath.ts, pyrepr.ts and pyregex.ts are transcriptions of CPython, and a transcription is only checkable against the thing it transcribes -- interlock's suite has nothing to say about behaviour its standard library supplied by construction. See DECISIONS.md D-0200 and docs/differential-oracle.md. They are declared on this ledger rather than the renderer's because they belong to no single ported source file; the choice is bookkeeping, and either ledger would satisfy the check."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 9,
+    "ported": 9,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestCoverageIsMechanical::test_every_rule_of_every_role_has_exactly_one_probe",
+      "target_id": "test/fencing/battery.test.ts::coverage is mechanical > every rule of every role has exactly one probe",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestCoverageIsMechanical::test_every_probe_is_denied_by_the_rule_it_targets",
+      "target_id": "test/fencing/battery.test.ts::coverage is mechanical > every probe is denied by the rule it targets",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestCoverageIsMechanical::test_coverage_grows_when_a_rule_is_added",
+      "target_id": "test/fencing/battery.test.ts::coverage is mechanical > coverage grows when a rule is added",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestCoverageIsMechanical::test_a_rule_whose_probe_cannot_be_synthesized_is_an_error_not_a_gap",
+      "target_id": "test/fencing/battery.test.ts::coverage is mechanical > a rule whose probe cannot be synthesized is an error not a gap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestCoverageIsMechanical::test_the_battery_reports_a_breach_rather_than_hiding_it",
+      "target_id": "test/fencing/battery.test.ts::coverage is mechanical > the battery reports a breach rather than hiding it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestProbesAreForbiddenOperations::test_a_probe_operand_is_inert",
+      "target_id": "test/fencing/battery.test.ts::probes are forbidden operations > a probe operand is inert",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestProbesAreForbiddenOperations::test_sandbox_write_probes_target_the_denied_path",
+      "target_id": "test/fencing/battery.test.ts::probes are forbidden operations > sandbox write probes target the denied path",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestProbesAreForbiddenOperations::test_a_probe_aimed_at_one_role_does_not_certify_another",
+      "target_id": "test/fencing/battery.test.ts::probes are forbidden operations > a probe aimed at one role does not certify another",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_battery_coverage.py::TestLayerOrdering::test_a_sandbox_deny_is_not_overridable_by_the_permission_layer",
+      "target_id": "test/fencing/battery.test.ts::layer ordering > a sandbox deny is not overridable by the permission layer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": []
+}
