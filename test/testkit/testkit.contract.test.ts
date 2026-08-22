@@ -1,9 +1,10 @@
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import process from "node:process";
 
-import { describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test } from "vitest";
 
-import { caseRoot, databasePath, sidecars, writeStep } from "./cases.js";
+import { caseRoot, databasePath, sidecars, suiteRoot, suiteTemplate, writeStep } from "./cases.js";
 import { chdirForTest } from "./cwd.js";
 import { expectRefusal, expectSqliteError } from "./errors.js";
 import { recordingSink } from "./logsink.js";
@@ -299,5 +300,172 @@ describe("the log sink captures records, not rendered text", () => {
     const cause = new Error("underlying");
     sink.emit({ level: "error", logger: "x", message: "wrapped", error: cause });
     expect(sink.at("error")[0]?.error).toBe(cause);
+  });
+});
+
+// File top level, which is the only place these may be taken -- an afterAll
+// registered inside a describe is undone when that block ends, not when the
+// file does. `builds` lives here too, so a build that ran twice is visible from
+// either test whichever order they run in.
+let builds = 0;
+const template = suiteTemplate("template.sqlite3", (path) => {
+  builds += 1;
+  writeFileSync(path, "migrated");
+  // A sidecar beside the template. The control plane leaves none (D-0012), so
+  // this is the case that pins the behaviour anyway: a template that DID leave
+  // a WAL must not be copied without it.
+  writeFileSync(`${path}-journal`, "journal");
+});
+
+describe("a suite template is built once and outlives the case that built it", () => {
+  const copies: string[] = [];
+
+  // Two symmetric cases. Under `sequence.shuffle.tests` either may run first,
+  // so neither may assert anything that depends on being the one that ran
+  // first; what the pair must show is asserted once, after both, in afterAll.
+  for (const name of ["first", "second"]) {
+    test(`the ${name} case gets a copy of the template`, () => {
+      const copy = template.copyInto(caseRoot("suite-template"));
+      copies.push(copy);
+
+      expect(readFileSync(copy, "utf8")).toBe("migrated");
+      // The copy is the case's own file: writing to it is safe, and is what
+      // the next assertion checks did not reach the template.
+      writeFileSync(copy, `touched by ${name}`);
+      // Exactly one build has happened by the time any case has copied.
+      expect(builds).toBe(1);
+    });
+  }
+
+  afterAll(() => {
+    // The property the pair exists to show, and the one a per-case root cannot
+    // satisfy: both cases got a copy, from a single build, and the copies were
+    // distinct files.
+    expect(builds).toBe(1);
+    expect(copies).toHaveLength(2);
+    expect(new Set(copies).size).toBe(2);
+  });
+
+  test("sidecars beside the template travel with the copy, renamed to match", () => {
+    const root = caseRoot("suite-template-sidecar");
+    const copy = template.copyInto(root, "renamed.sqlite3");
+    expect(basename(copy)).toBe("renamed.sqlite3");
+    expect(sidecars(copy).map((path) => basename(path))).toEqual(["renamed.sqlite3-journal"]);
+    expect(readFileSync(`${copy}-journal`, "utf8")).toBe("journal");
+  });
+});
+
+describe("the same template in a caseRoot does not survive -- the failure this replaces", () => {
+  /**
+   * The negative control.
+   *
+   * A template built in a per-case root is exactly what was tried first, and it
+   * fails on the *second* case: the first case's root is removed when that case
+   * finishes, taking the template with it. Pinning it here means the helper
+   * above is measured against a construction that is known to break, rather
+   * than against nothing.
+   */
+  let built: string | undefined;
+  const outcomes: string[] = [];
+
+  function caseScopedTemplate(): string {
+    if (built === undefined) {
+      built = join(caseRoot("broken-template"), "template.sqlite3");
+      writeFileSync(built, "migrated");
+    }
+    return built;
+  }
+
+  for (const name of ["first", "second"]) {
+    test(`the ${name} case tries to copy a case-scoped template`, () => {
+      const source = caseScopedTemplate();
+      const target = join(caseRoot("broken-copy"), "production.sqlite3");
+      try {
+        copyFileSync(source, target);
+        outcomes.push("copied");
+      } catch (error) {
+        // The reason matters, not just the failure: ENOENT on the template is
+        // the symptom the 236 cases hit, and a different code here would mean
+        // this control is pinning something else.
+        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+        outcomes.push("enoent");
+      }
+    });
+  }
+
+  afterAll(() => {
+    // Whichever ran first copied; whichever ran second found the template gone.
+    // Two "copied" would mean the per-case root stopped being per-case, and the
+    // helper above would no longer be solving a real problem.
+    expect([...outcomes].sort()).toEqual(["copied", "enoent"]);
+  });
+});
+
+/** Taken at the file's top level, which is where the helper requires it. */
+const collected = suiteRoot("collected");
+
+/**
+ * The same call from inside a `describe` body, which is a refusal.
+ *
+ * Taken here, during collection, because that is the only place the mistake can
+ * actually be made; the message is asserted from a test above. Before the guard
+ * existed this call succeeded and handed back a directory that was removed when
+ * this block finished -- measured, then fixed.
+ */
+let describeScoped = "no refusal";
+let unnamedDescribeScoped = "no refusal";
+
+describe("named", () => {
+  try {
+    suiteRoot("in-describe");
+  } catch (error) {
+    describeScoped = (error as Error).message;
+  }
+
+  test("the attempt above refused, so this block has no suite directory", () => {
+    expect(describeScoped).not.toBe("no refusal");
+  });
+});
+
+describe("", () => {
+  try {
+    suiteRoot("in-unnamed-describe");
+  } catch (error) {
+    unnamedDescribeScoped = (error as Error).message;
+  }
+
+  test("an unnamed block refused as well", () => {
+    expect(unnamedDescribeScoped).not.toBe("no refusal");
+  });
+});
+
+describe("a suite-scoped directory must be taken at the top level of the file", () => {
+  test("calling it from inside a running test fails, and says why", () => {
+    // Vitest accepts an afterAll registered from inside a test and then never
+    // runs it, so the directory would silently outlive the run. Measured, not
+    // assumed -- and this is the assertion that keeps the guard in place.
+    expectRefusal(() => suiteRoot("too-late"), Error, /must be called at collection time/);
+  });
+
+  test("calling it from inside a describe body fails too", () => {
+    // The subtler half, and the one that reads as working: an afterAll
+    // registered inside a describe is undone when that BLOCK ends, so the
+    // directory is removed while a sibling block is still copying from it. The
+    // call below is inside a test rather than inside a collecting describe, so
+    // what it can pin is that the guard exists and names the block; the
+    // lifetime itself is what `describeScoped` below measures.
+    expect(describeScoped).toMatch(/was called inside describe\("named"\)/);
+  });
+
+  test("an unnamed describe is a describe too", () => {
+    // Vitest leaves the FILE collector's name empty, and `describe("")` is
+    // legal, so a guard that discriminated on the name would wave this one
+    // through -- and it is the shape someone parametrising a block title writes
+    // by accident. The guard tests for a parent collector instead.
+    expect(unnamedDescribeScoped).toMatch(/was called inside an unnamed describe block/);
+  });
+
+  test("and at the top level it yields a directory that exists", () => {
+    expect(existsSync(collected)).toBe(true);
   });
 });
