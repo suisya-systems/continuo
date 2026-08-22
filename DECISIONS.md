@@ -48,6 +48,7 @@ spaces distinct.
 | D-0018 | The differential oracle, and the one face this pilot implements | accepted |
 | D-0019 | One parity ledger per source test file | accepted |
 | D-0020 | A temp-directory label may not contain refusal vocabulary | accepted |
+| D-0021 | Values read from SQLite are not re-narrowed to reproduce Python's `int()` | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -1309,6 +1310,62 @@ guard described above, the label restriction stops being load-bearing.
 
 **Source.** Lane A pre-Codex self-review, 2026-08-22; found independently by two adversarial audit
 passes and confirmed by mutation.
+
+---
+
+## D-0021 — Values read from SQLite are not re-narrowed to reproduce Python's `int()`
+
+**Context.** interlock narrows almost every numeric read with `int(...)`: `int(row[3])`,
+`None if row[0] is None else int(row[0])`, and so on. The port reads the same columns with
+`Number(...)`. These are not the same function, and the columns are not as constrained as they look:
+`policy_detection_latency`, `watcher_scope` and `lease` declare their numeric columns `INTEGER` but
+carry no `typeof(x) = 'integer'` `CHECK`, and SQLite's INTEGER *affinity* stores a value it cannot
+losslessly convert -- a REAL, or a non-numeric TEXT -- exactly as given.
+
+So for a row that a hand-run `sqlite3` session damaged, the two languages diverge: Python truncates
+`3.5` to `3`, and raises `ValueError`/`TypeError` on `'abc'`; the port propagates `3.5`, and turns
+`'abc'` into `NaN`. `NaN` then flows into `toleranceMs + periodMs <= budgetMs`, which is always
+false, so the subject is reported as a budget violation with `excessMs: NaN` rather than raising.
+
+**Decision.** Do not re-narrow. `INTEGER -> number` as `D-0007` fixes it, applied at the read, with
+no truncation and no coercion error. The divergence is disclosed in the affected files' parity
+ledgers instead.
+
+The reason is that the alternative is already a rejected decision. `D-0007`'s alternatives record
+"a row-mapping layer that normalizes types on read (**rejected** at bootstrap: it is an abstraction
+whose requirements are not yet known, and interposing it later is cheaper than removing it)". A
+shared `asInt()` applied at every numeric read site is that layer under another name, and adopting
+it here -- inside a lane, for one module -- would settle a repository-wide representation question
+as a side effect of a translation, which is the specific failure `D-0007` exists to prevent.
+
+**Alternatives.**
+
+- **A shared `asInt()` reproducing `int()`'s truncate-or-refuse behaviour (rejected, above).** It is
+  the more faithful answer in isolation and the wrong way to decide it. If the port later wants it,
+  it is a `D-0007` amendment applied everywhere at once, against a passing baseline.
+- **Per-site `Math.trunc()` (rejected).** It reproduces the truncation and silently drops the
+  refusal half, so a `TEXT` in a numeric column becomes `NaN` anyway -- the worse half of both
+  options.
+- **Add `typeof` CHECKs to the DDL so the state is unreachable (rejected).** The SQL carries
+  verbatim; changing it is a schema change, not a translation.
+
+**Consequences.**
+
+- No ported case reaches the divergence: it needs a row that violates the column's declared type,
+  which only a hand-damaged database has. It is a robustness difference, not a behavioural one under
+  test.
+- Every affected ledger carries an `inherited_limitations` entry pointing here, so the difference is
+  a disclosed review topic rather than something a reader has to rediscover from the diff.
+
+**Falsifier.** If a later belt finds a case where the divergence is reachable through the public API
+-- or if `D-0007` is amended to adopt a normalization layer -- this entry is superseded.
+
+**Status.** accepted
+
+**Source.** Lane A adversarial audit of `policy.ts`, 2026-08-22; the affinity behaviour was measured
+on better-sqlite3 13.0.3 (`CREATE TABLE t(v INTEGER)` binding `3.5` reads back `3.5`; binding
+`'abc'` reads back `'abc'`), not taken from documentation.
+
 ## D-0100 — The read-only capability is an open flag, not a `mode=ro` URI
 
 **Context.** Interlock's measurement harness is read-only **by capability, not by convention**
