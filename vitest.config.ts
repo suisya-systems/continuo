@@ -74,6 +74,30 @@ export default defineConfig({
     // Explicit imports from "vitest" rather than injected globals.
     globals: false,
 
+    // Vitest's default is 5s, and that is a statement about how fast the
+    // machine is, not about whether the code is correct.
+    //
+    // This suite is I/O-bound: the control plane runs with
+    // `synchronous = FULL` (D-0012), which fsyncs on every commit, and a single
+    // ported case can create, migrate and re-verify a database several times
+    // over. Measured on one CI run, for the same test on the same OS:
+    //
+    //   linux-latest              28ms
+    //   windows-latest (healthy) 321ms
+    //   windows-latest (slow)  13,556ms
+    //
+    // The two Windows numbers are the same commit, the same workflow, two
+    // runners -- a 42x spread with no code between them. At the 5s default that
+    // spread is the difference between green and a red merge gate.
+    //
+    // The budget is deliberately several times the worst figure observed. The
+    // costs are asymmetric: a false red blocks a merge and spends a person's
+    // attention on a machine's bad afternoon, while a genuinely hung test still
+    // fails, just later. Correctness here is protected by `retry: 0` and the
+    // double-green rule (D-0005), not by a stopwatch.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
+
     sequence: {
       // Both axes: file order and, within a file, test order.
       shuffle: { files: true, tests: true },
