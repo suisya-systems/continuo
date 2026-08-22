@@ -39,6 +39,7 @@ import {
   comparePythonStrings,
   formatFixed,
   isAscii,
+  pythonFloatRepr,
   pythonRepr,
 } from "../../src/measurement/format.js";
 
@@ -407,5 +408,160 @@ describe("comparePythonStrings (target-only)", () => {
     const prefix = String.fromCodePoint(0x1f600);
     expect(comparePythonStrings(`${prefix}a`, `${prefix}b`)).toBeLessThan(0);
     expect(comparePythonStrings(`${prefix}b`, `${prefix}a`)).toBeGreaterThan(0);
+  });
+});
+
+// --------------------------------------------------------------------------
+// the float-repr oracle (target-only)
+// --------------------------------------------------------------------------
+
+/**
+ * The corpus `scripts/oracle/dump_float_repr.py` renders, rebuilt from the same
+ * rules. Only Python's answers are committed; see the fixed-format corpus above
+ * for why the corpus itself is not.
+ */
+function floatCorpus(): number[] {
+  const values: number[] = [];
+  const view = new DataView(new ArrayBuffer(8));
+
+  const floatOf = (bits: bigint): number => {
+    view.setBigUint64(0, bits & 0xffff_ffff_ffff_ffffn);
+    return view.getFloat64(0);
+  };
+  const bitsOf = (value: number): bigint => {
+    view.setFloat64(0, value);
+    return view.getBigUint64(0);
+  };
+  const neighbours = (value: number): number[] => {
+    if (!Number.isFinite(value)) {
+      return [value];
+    }
+    const bits = bitsOf(value);
+    return [value, floatOf(bits + 1n), floatOf(bits - 1n)];
+  };
+
+  for (let exponent = -323; exponent <= 308; exponent += 1) {
+    values.push(...neighbours(Number(`1e${exponent}`)));
+    values.push(...neighbours(Number(`-1e${exponent}`)));
+  }
+
+  for (let whole = 0; whole <= 24; whole += 1) {
+    values.push(whole);
+    values.push(-whole);
+  }
+  for (let power = 0; power < 63; power += 1) {
+    values.push(...neighbours(Number(2n ** BigInt(power))));
+  }
+
+  for (let total = 1; total <= 24; total += 1) {
+    for (let covered = 0; covered <= total; covered += 1) {
+      values.push(covered / total);
+    }
+  }
+
+  for (const bits of [1n, 2n, 3n, 7n, 1n << 20n, 1n << 40n, (1n << 52n) - 1n, 1n << 52n]) {
+    values.push(floatOf(bits));
+    values.push(-floatOf(bits));
+  }
+  values.push(
+    Number.MAX_VALUE,
+    -Number.MAX_VALUE,
+    // Python's sys.float_info.min is the smallest NORMAL double, which is not
+    // Number.MIN_VALUE (the smallest subnormal). 2^-1022, spelled as a power so
+    // no decimal literal has to round-trip.
+    2 ** -1022,
+    -(2 ** -1022),
+    Number.EPSILON,
+    0,
+    -0,
+  );
+
+  let walk = -500;
+  for (let step = 0; step < 500; step += 1) {
+    values.push(walk);
+    walk += Math.PI;
+  }
+  for (let step = 1; step < 400; step += 1) {
+    values.push(step / 7919);
+  }
+
+  values.push(Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN);
+  return values;
+}
+
+interface FloatVector {
+  readonly source: {
+    readonly corpus_length: number;
+    readonly python_version: string;
+  };
+  readonly rendered: readonly string[];
+  readonly json_dumps: readonly string[];
+}
+
+const floatVector = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL("../../parity/oracle/float-repr-vector.json", import.meta.url)),
+    "utf8",
+  ),
+) as FloatVector;
+
+describe("the float-repr oracle (target-only)", () => {
+  test("the rebuilt corpus is the one the vector was produced from", () => {
+    expect(floatCorpus()).toHaveLength(floatVector.source.corpus_length);
+  });
+
+  test("the vector is not vacuous", () => {
+    expect(floatVector.source.corpus_length).toBeGreaterThan(4_000);
+    expect(floatVector.source.python_version).toMatch(/^\d+\.\d+/);
+    expect(floatVector.rendered).toHaveLength(floatVector.source.corpus_length);
+    expect(floatVector.json_dumps).toHaveLength(floatVector.source.corpus_length);
+  });
+
+  test("pythonFloatRepr agrees with CPython on every corpus value", () => {
+    const values = floatCorpus();
+    const mismatches: string[] = [];
+    for (const [index, value] of values.entries()) {
+      const ours = pythonFloatRepr(value);
+      const theirs = floatVector.rendered[index];
+      if (ours !== theirs && mismatches.length < 20) {
+        mismatches.push(`index ${index}: python ${String(theirs)}, continuo ${ours}`);
+      }
+    }
+    expect(mismatches, `${mismatches.length} mismatch(es) against CPython`).toEqual([]);
+  });
+
+  test("the three differences from String(value) are the ones this exists for", () => {
+    // A regression guard on the motivation. If `pythonFloatRepr` were ever
+    // quietly replaced by `String`, the corpus comparison would catch it -- but
+    // this names the classes, so the failure says what broke.
+
+    // 1. An integral float keeps its `.0`. This is the one a real report
+    //    reaches: a coverage ratio of exactly 1.0.
+    expect(pythonFloatRepr(1)).toBe("1.0");
+    expect(String(1)).toBe("1");
+    expect(pythonFloatRepr(4 / 4)).toBe("1.0");
+    expect(pythonFloatRepr(0)).toBe("0.0");
+    expect(pythonFloatRepr(-0)).toBe("-0.0");
+
+    // 2. The fixed/exponential threshold. Python leaves fixed notation above
+    //    1e16 and below 1e-4; JavaScript at 1e21 and 1e-7.
+    expect(pythonFloatRepr(1e16)).toBe("1e+16");
+    expect(String(1e16)).toBe("10000000000000000");
+    expect(pythonFloatRepr(1e15)).toBe("1000000000000000.0");
+    expect(pythonFloatRepr(0.0001)).toBe("0.0001");
+    expect(pythonFloatRepr(0.00001)).toBe("1e-05");
+    expect(String(0.00001)).toBe("0.00001");
+
+    // 3. The exponent is padded to two digits and always signed.
+    expect(pythonFloatRepr(1e-7)).toBe("1e-07");
+    expect(String(1e-7)).toBe("1e-7");
+    expect(pythonFloatRepr(5e-324)).toBe("5e-324");
+
+    // The non-finite values, which SQLite can hold in a REAL column and which
+    // Python spells without JavaScript's capitals.
+    expect(pythonFloatRepr(Number.NaN)).toBe("nan");
+    expect(pythonFloatRepr(Number.POSITIVE_INFINITY)).toBe("inf");
+    expect(pythonFloatRepr(Number.NEGATIVE_INFINITY)).toBe("-inf");
+    expect(String(Number.NaN)).toBe("NaN");
   });
 });
