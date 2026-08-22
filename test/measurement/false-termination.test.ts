@@ -924,6 +924,47 @@ describe("the report itself", () => {
     });
     labels.push("added afterwards");
     expect(other.recommendedTerminate).toEqual(["a-applied"]);
+
+    // An Adjudication handed in as a plain object literal is normalised too:
+    // `readOnlyMap` copies the map STRUCTURE, so without this a caller could
+    // still rewrite the evidence a published report renders.
+    const supplied = {
+      actionId: "a-supplied",
+      verdict: VERDICT_STUCK,
+      source: SOURCE_FIXTURE_LABEL,
+      overruled: [[SOURCE_HUMAN_ADJUDICATION, VERDICT_NOT_STUCK]] as [string, string][],
+    };
+    const third = new FalseTerminationReport({
+      periodStartMs: PERIOD_START,
+      periodEndMs: PERIOD_END,
+      generatedAtMs: NOW_MS,
+      recommendedTerminate: [],
+      declinedRefused: [],
+      stillPending: [],
+      appliedAfterPeriodEnd: [],
+      appliedFromEarlierRecommendation: [],
+      appliedTerminate: ["a-supplied"],
+      falseTerminationIds: [],
+      justifiedIds: ["a-supplied"],
+      undeterminedIds: [],
+      adjudications: new Map([["a-supplied", supplied]]),
+    });
+    const stored = third.adjudications.get("a-supplied");
+    expect(stored).toBeDefined();
+    expect(() => {
+      (stored as { source: string }).source = "forged";
+    }).toThrow(TypeError);
+    const storedOverruled = stored === undefined ? undefined : stored.overruled;
+    expect(storedOverruled).toBeDefined();
+    expect(() => (storedOverruled as [string, string][]).push(["forged", VERDICT_STUCK])).toThrow(
+      TypeError,
+    );
+    expect(third.adjudications.get("a-supplied")?.source).toBe(SOURCE_FIXTURE_LABEL);
+
+    // The exported query catalogue is MappingProxyType upstream, and downstream
+    // reports quote it to say what was measured.
+    const catalogue = QUERY_DEFINITIONS as unknown as { set?: unknown };
+    expect(catalogue.set).toBeUndefined();
   });
 
   test("the report states what it does not count", () => {

@@ -173,7 +173,7 @@ SELECT 1
  LIMIT 1
 `;
 
-export const QUERY_DEFINITIONS: ReadonlyMap<string, string> = new Map([
+export const QUERY_DEFINITIONS: ReadonlyMap<string, string> = readOnlyMap([
   ["terminate_actions", TERMINATE_ACTIONS_QUERY],
   ["subsequent_activity", SUBSEQUENT_ACTIVITY_QUERY],
   ["terminate_session_kind", TERMINATE_SESSION_KIND],
@@ -361,7 +361,20 @@ export class FalseTerminationReport {
     this.falseTerminationIds = frozenList(fields.falseTerminationIds);
     this.justifiedIds = frozenList(fields.justifiedIds);
     this.undeterminedIds = frozenList(fields.undeterminedIds);
-    this.adjudications = readOnlyMap(fields.adjudications);
+    // Each value is normalised as well as the map: `readOnlyMap` copies the
+    // map STRUCTURE, and an Adjudication handed in as a plain object literal
+    // would otherwise stay mutable inside a published report -- a caller could
+    // rewrite `.source` or append to `.overruled` and change the rendered
+    // evidence. Adjudications built by `adjudicate` are already frozen; this
+    // covers the ones a caller constructs.
+    this.adjudications = readOnlyMap(
+      [...fields.adjudications].map(([actionId, decision]): [string, Adjudication] => [
+        actionId,
+        Object.isFrozen(decision) && Object.isFrozen(decision.overruled)
+          ? decision
+          : Object.freeze({ ...decision, overruled: frozenList(decision.overruled) }),
+      ]),
+    );
     Object.freeze(this);
   }
 
@@ -732,7 +745,7 @@ export function renderFalseTerminationReport(report: FalseTerminationReport): st
   const lines: string[] = [];
   lines.push("False termination -- counted at the applied effect (section 3.4)");
   lines.push(
-    `  period          [${report.periodStartMs}, ${report.periodEndMs}) ` + `(half-open, epoch ms)`,
+    `  period          [${report.periodStartMs}, ${report.periodEndMs}) (half-open, epoch ms)`,
   );
   lines.push(`  generated at    ${report.generatedAtMs}`);
   lines.push(
