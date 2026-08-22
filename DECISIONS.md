@@ -2312,3 +2312,68 @@ from `.` exactly as the others are.
 **Falsified by.** interlock widening `measurement/__init__.py` to re-export its whole harness, which
 would mean it had either dropped the assertion or reconciled it with canary's vocabulary upstream --
 and this port would then follow whichever it chose.
+
+## D-0108 -- An invariant a public constructor can walk around is repaired, not disclosed
+
+**Context.** `D-0022` ruled that a defect reproduced faithfully from interlock, pinned by no case on
+either side, and raised by review rather than by a failing test, is **disclosed** in the parity
+ledger and repaired in a dedicated change after parity. The operator **withdrew that rule on
+2026-08-22**: interlock is frozen, so "after parity, follow upstream" has no upstream to follow, and
+every inherited defect will eventually have to be repaired here. The cheapest moment to repair one
+is the belt already editing that file.
+
+This entry is the measurement lane's first application of the withdrawal, covering three defects the
+review gate raised across three belts and this lane disclosed under `D-0022`. All three were
+verified against interlock at `65f36c5` before being recorded, and all three are now repaired.
+
+**The first two share their shape with `D-0107`**, which is why they are settled together:
+
+- `ShadowReference`'s constructor validates only the distribution for a present reference, so one
+  built with a distribution and no `bothBucketCount` is accepted and the renderer emits `over null
+  both-bucket episode(s)` -- a heading that announces a comparison and names no population.
+- `classifyEpisodes` resolves a caller-declared `graceMs` and never validates it when the episode
+  list is empty, because `requireGraceMs` runs inside `episodeWindow`. A report over zero episodes
+  therefore carries `grace_ms = -1` and states it. The source's own docstring names the consequence:
+  "on a report that classified no episodes, nothing would ever raise, so it would render clean."
+
+In both, the invariant exists, the module's own API upholds it, and the **exported constructor walks
+around it**. That is exactly `D-0107`'s finding -- an optional count defaulting to zero reintroduced
+the contradiction that decision removed -- and the same answer applies: a type this package exports
+is a public door, and an invariant that only the tidy path enforces is not an invariant.
+
+The third is different in kind and is repaired for its own reason:
+
+- `renderShadowReconciliation` prints `POSITIONAL_KEY_CAVEAT` only when an episode in the
+  `unmatched_key` bucket is positional -- and that is the bucket where a positional episode is
+  *least* likely to be the story. An escalation whose key composed and found no counterpart is filed
+  `interlock_only` or `v1_only`, and a run of exactly those is what an ordering divergence looks
+  like. The warning went missing precisely when the key was the first thing to doubt.
+
+**Decision.** All three are repaired, and each is recorded in its ledger under `divergences` rather
+than `inherited_limitations`, with the interlock behaviour it departs from, the evidence that
+interlock behaves that way, and the target-only case that pins the new behaviour.
+
+`requireGraceMs` is **called** a second time rather than copied: the same function, in
+`classifyEpisodes`, after the grace is resolved. `require_grace_ms`'s own docstring argues against a
+second copy of the check, and that argument is about a second *definition* of what a legal grace is,
+not about a second call site.
+
+**Alternatives.**
+
+- **Keep disclosing (rejected -- this is the withdrawn `D-0022`).** It was the right rule while an
+  upstream repair was possible to follow. With interlock frozen it means shipping a defect nobody
+  will ever fix, in a package that is now the authority for this behaviour.
+- **Repair the two constructors and leave the caveat (rejected).** The caveat's failure is the one a
+  reader actually meets: the other two need a hand-built object, while an unpaired escalation is
+  ordinary output. Fixing only what a reviewer typed first is how a rule becomes case-by-case.
+- **Validate `graceMs` by duplicating the check in `classifyEpisodes` (rejected).** Two definitions
+  of a legal grace drift; one function called twice does not.
+
+**Consequences.** continuo refuses two inputs interlock accepts, and prints a caveat interlock omits.
+Each is reachable from its ledger's `divergences` block, so the `interlock#74` AC3 reconciliation
+finds a recorded decision rather than an unexplained difference. `D-0022` remains in this file as the
+record of what was decided and when; its withdrawal is noted here rather than by editing it, because
+it belongs to another lane.
+
+**Falsified by.** interlock resuming. Every one of these would then be a bug report upstream, and
+continuo would follow whatever interlock decided rather than keeping its own answer.

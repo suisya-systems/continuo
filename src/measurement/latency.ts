@@ -232,6 +232,21 @@ export class ShadowReference {
           "a present shadow reference must carry the v1 distribution it is a reference to",
         );
       }
+      // D-0108, and the same argument D-0107 makes about a defaulted count: the
+      // renderer prints "over N both-bucket episode(s)" from this field, so a
+      // present reference without one renders "over null both-bucket
+      // episode(s)" -- a heading that states a comparison and names no
+      // population. interlock's __post_init__ checks only the distribution, so
+      // the state is constructible there and here; this type is exported, so
+      // the door is public, and a caller with nothing to count says `0`.
+      if (this.bothBucketCount === null) {
+        throw new ShadowReferenceUnstated(
+          "a present shadow reference must say how many both-bucket episodes " +
+            "its distribution is over; the report prints that count beside the " +
+            "comparison, and a comparison over an unstated population is not " +
+            "one (measurement-harness.md section 4)",
+        );
+      }
       Object.freeze(this);
       return;
     }
