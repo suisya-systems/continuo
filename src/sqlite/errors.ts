@@ -74,3 +74,16 @@ export function isBusyError(error: unknown): boolean {
   const code = sqliteCodeOf(error);
   return code !== undefined && (code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED"));
 }
+
+/**
+ * A `CHECK`, `UNIQUE`, `NOT NULL`, foreign-key or `RAISE(ABORT, ...)`
+ * violation -- the `sqlite3.IntegrityError` row of the table.
+ *
+ * `repo_link.ts`'s `upsertRepository` reaches this for the one case a
+ * pre-check cannot rule out: a rename whose new slug collides with a
+ * *different* repository row, caught by `repository_by_slug`'s unique index
+ * rather than by a `SELECT` taken before the write lock was held.
+ */
+export function isConstraintError(error: unknown): boolean {
+  return sqliteCodeOf(error)?.startsWith("SQLITE_CONSTRAINT") ?? false;
+}
