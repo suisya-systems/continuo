@@ -56,6 +56,54 @@ export {
   VERDICT_UNDETERMINED,
 } from "./false-termination.js";
 /**
+ * AC-10's ground truth: the labelled fixture corpus, its loader and its
+ * evaluator (section 3.2).
+ *
+ * The refusal family is exported in full because every one of them is a
+ * distinct thing a corpus can be wrong about, and an operator fixing a corpus
+ * needs to know which.
+ */
+export {
+  CASE_FILES,
+  CaseIncomplete,
+  CaseOutcome,
+  ClassDirectoryMismatch,
+  ClockNotSynthetic,
+  CorpusCompositionRefused,
+  DETECTED,
+  EvaluationRefusal,
+  EXPECTED_FILENAME,
+  ExpectedLabel,
+  evaluate,
+  FACT_STATES,
+  FALSE_POSITIVE,
+  FixtureCase,
+  FixtureCorpus,
+  FixtureEvaluation,
+  FixtureRefusal,
+  IncidentBeforeOnset,
+  LABEL_FIELDS,
+  LabelMalformed,
+  loadCase,
+  loadCorpus,
+  MISS,
+  NegativeCasesRequired,
+  NONE_CLASS,
+  Observation,
+  OutcomeMissing,
+  PositiveCasesRequired,
+  PROVENANCE_KINDS,
+  ProducedIncident,
+  renderFixtureReport,
+  StrayEntryRefused,
+  SyntheticClock,
+  TRACE_FILENAME,
+  TRUE_NEGATIVE,
+  TraceMalformed,
+  UnknownCaseInOutcomes,
+  VERDICTS,
+} from "./fixtures.js";
+/**
  * Number rendering that matches Python's, which is a parity surface here rather
  * than presentation (`D-0104`). Exported because every later module in this
  * harness renders figures and must use the same one.
