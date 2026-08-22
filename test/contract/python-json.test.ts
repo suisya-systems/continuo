@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  pythonJsonDocumentSorted,
   pythonJsonDumpsSorted,
   pythonJsonList,
   pythonJsonObject,
@@ -83,6 +84,16 @@ describe("python_json (contract)", () => {
     expect(pythonJsonDumpsSorted({ "\u{1F600}": 1, "\uffff": 2, a: 3 })).toBe(
       '{"a": 3, "\\uffff": 2, "\\ud83d\\ude00": 1}',
     );
+  });
+
+  test("a sparse array renders its holes as null, not as invalid JSON", () => {
+    // `.map` skips holes, so the obvious rendering emits `[1, , 2]`, which is
+    // not JSON -- the json_valid CHECK on the payload columns would reject it
+    // and the fact would be refused rather than recorded. Python has no sparse
+    // array, so this is a hazard the translation introduces.
+    // biome-ignore lint/suspicious/noSparseArray: the hole is the thing under test
+    expect(pythonJsonDocumentSorted([1, , 2])).toBe("[1, null, 2]");
+    expect(pythonJsonDocumentSorted([1, undefined, 2])).toBe("[1, null, 2]");
   });
 
   test("a payload shape this package does not write is refused", () => {
