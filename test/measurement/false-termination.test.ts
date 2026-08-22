@@ -64,7 +64,7 @@ import {
   VERDICT_STUCK,
   VERDICT_UNDETERMINED,
 } from "../../src/measurement/false-termination.js";
-import { isAscii, reportValue } from "../../src/measurement/format.js";
+import { isAscii } from "../../src/measurement/format.js";
 import { openForMeasurement } from "../../src/measurement/reader.js";
 import { caseRoot } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
@@ -991,17 +991,42 @@ describe("a deliberate divergence from interlock (target-only)", () => {
   test("an action id cannot forge a line of the itemisation", () => {
     // Target-only, and `D-0109`. `action.action_id` is unconstrained TEXT in
     // the DDL, and interlock interpolates it into the itemisation raw -- so an
-    // id spelling a newline plus spaces produces a line a reader cannot tell
-    // from one the harness wrote. Raised on the false-termination belt, ruled
-    // "reproduce and disclose" on 2026-08-22 under `D-0022`, and repaired here
-    // when that rule was withdrawn: interlock is frozen, so the defect would
-    // otherwise be permanent.
-    const forged = "a1\n      justified: 999";
-    expect(reportValue(forged)).toBe("a1\\u000a      justified: 999");
-    expect(reportValue(forged).includes("\n")).toBe(false);
-    // Non-ASCII goes the same way, so the renderer's own ASCII claim now covers
-    // the values it prints and not only the words it authors.
-    expect(reportValue("\u65e5\u672c\u8a9e")).toBe("\\u65e5\\u672c\\u8a9e");
-    expect(isAscii(reportValue("\u2014"))).toBe(true);
+    // id spelling a newline plus six spaces produces a line a reader cannot
+    // tell from one the harness wrote. Raised on the false-termination belt,
+    // ruled "reproduce and disclose" on 2026-08-22 under `D-0022`, and repaired
+    // here when that rule was withdrawn: interlock is frozen, so the defect
+    // would otherwise be permanent.
+    //
+    // Asserted against the RENDERED REPORT, not against reportValue itself. A
+    // first version of this case tested the helper, which passes whether or not
+    // the renderer calls it -- and reverting the renderer's call left it green.
+    const path = productionDb();
+    const forged = "a1\n      a2  settled by: fixture_label";
+    makeAction(path, {
+      actionId: forged,
+      status: STATUS_APPLIED,
+      createdAtMs: PERIOD_START + 10,
+      appliedAtMs: PERIOD_START + 20,
+      kind: TERMINATE_SESSION_KIND,
+    });
+    makeAction(path, {
+      actionId: "b\u20141",
+      status: STATUS_APPLIED,
+      createdAtMs: PERIOD_START + 30,
+      appliedAtMs: PERIOD_START + 40,
+      kind: TERMINATE_SESSION_KIND,
+    });
+
+    const rendered = renderFalseTerminationReport(measure(path));
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(rendered).toContain("\\u000a");
+    expect(rendered).toContain("\\u2014");
+    // Two actions were applied, so the undetermined itemisation holds exactly
+    // two lines. Unescaped, the forged id would make it three.
+    const itemised = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("      ") && line.includes("settled by:"));
+    expect(itemised).toHaveLength(2);
   });
 });

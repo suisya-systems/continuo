@@ -41,20 +41,22 @@ import { createProductionControlPlane } from "../../src/control_plane/migrator.j
 import { detectionLatency } from "../../src/control_plane/policy.js";
 import { isAscii } from "../../src/measurement/format.js";
 import {
+  ClassLatency,
   DetectionBeforeOnset,
   Distribution,
+  IngestionLag,
   LatencyRefusal,
-  type LatencyReport,
+  LatencyReport,
   measureIngestionLag,
   measureLatency,
   noShadowReference,
   renderLatencyReport,
   SHADOW_ABSENT,
   SHADOW_PRESENT,
+  shadowFromBothBucket,
   ShadowReference,
   ShadowReferenceUnstated,
   ShadowSource,
-  shadowFromBothBucket,
   UnknownEpisodeDetection,
 } from "../../src/measurement/latency.js";
 import { openForMeasurement } from "../../src/measurement/reader.js";
@@ -824,3 +826,51 @@ describe("the report itself", () => {
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+
+describe("hostile values in the rendering (target-only)", () => {
+  test("an incident class cannot forge a line and cannot reach a cp932 console", () => {
+    // Target-only, and `D-0109`. Found by reading the renderer rather than from
+    // a ledger disclosure -- this module was not among the three the inventory
+    // listed. incident_class comes from the policy table and the shadow
+    // reference's absence reason is caller text; both went into the report
+    // verbatim.
+    const rendered = renderLatencyReport(
+      new LatencyReport({
+        periodStartMs: PERIOD_START,
+        periodEndMs: PERIOD_END,
+        generatedAtMs: PERIOD_END + 1,
+        revisionId: 1,
+        graceMs: 0,
+        graceSource: "declared",
+        classes: [
+          new ClassLatency({
+            incidentClass: "stalled\n  Class forged",
+            distribution: Distribution.of([10]),
+            budgetsMs: [1_000],
+            overBudgetIds: [],
+            undetectedIds: ["e1\u2014one"],
+            censoredIds: [],
+            censoredLeftIds: [],
+            shadow: ShadowReference.absent("outside the shadow period\u2014really"),
+          }),
+        ],
+        shadow: new ShadowSource({
+          status: SHADOW_ABSENT,
+          samples: null,
+          reason: "no v1 in this period",
+        }),
+        ingestionLag: new IngestionLag({
+          distribution: Distribution.of([]),
+          negativeCount: 0,
+          eventCount: 0,
+        }),
+      }),
+    );
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(rendered).toContain("\\u000a");
+    expect(rendered).toContain("\\u2014");
+    // One class heading, not two.
+    expect(rendered.split("\n").filter((line) => line.startsWith("Class "))).toHaveLength(1);
+  });
+});

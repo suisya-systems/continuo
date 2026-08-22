@@ -1409,3 +1409,27 @@ describe("properties the ported cases leave unguarded (target-only)", () => {
     expect(buckets.get("liveness:inc-at-epoch")).toBe("0");
   });
 });
+
+describe("hostile values in the rendering (target-only)", () => {
+  test("an episode id cannot forge a line and cannot reach a cp932 console", () => {
+    // Target-only, and `D-0109`. This module was NOT among the three the
+    // inventory listed: the ledger recorded no disclosure for it, and the
+    // defect was found by reading the renderer rather than the ledger. Episode
+    // ids, shapes and evidence values all arrive from the v1 adapter or the
+    // database, and all went into the line verbatim.
+    const candidate = anEpisode("v1-1\n    - forged: a line the harness never wrote", {
+      shape: "relay_gap\u2014em-dash",
+      parts: ["github", "o/r", "9"],
+    });
+    const rendered = renderShadowReconciliation(reconciled([], [candidate]));
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(rendered).toContain("\\u000a");
+    expect(rendered).toContain("\\u2014");
+    // The itemisation still has exactly one entry: the newline did not open a
+    // second.
+    expect(rendered.split("\n").filter((line) => line.trimStart().startsWith("- "))).toHaveLength(
+      1,
+    );
+  });
+});

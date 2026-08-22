@@ -160,8 +160,8 @@ const SECTION_6_FIELDS: readonly string[] = [
 // --------------------------------------------------------------------------
 
 /** The source's `db` fixture, as a per-test call (rule 8). */
-function productionDb(): string {
-  const path = join(caseRoot("provenance"), "production.sqlite3");
+function productionDb(name = "production.sqlite3"): string {
+  const path = join(caseRoot("provenance"), name);
   createProductionControlPlane(path, { nowMs: T0 }).close();
   return path;
 }

@@ -1300,3 +1300,37 @@ describe("a deliberate divergence from interlock (target-only)", () => {
     expect(imputation.supportsAcceptanceClaim).toBe(false);
   });
 });
+
+describe("hostile values in the rendering (target-only)", () => {
+  test("an invocation id cannot forge a line and cannot reach a cp932 console", () => {
+    // Target-only, and `D-0109`. Found by reading the renderer rather than from
+    // a ledger disclosure -- this module was not among the three the inventory
+    // listed. Every itemisation here prints `      <invocation_id>`, and
+    // ai_invocation.invocation_id is unconstrained TEXT.
+    const path = productionDb();
+    withWriter(path, (cp) => {
+      addCohortRun(cp, "run-1");
+      addIncident(cp, "inc-1", "run-1");
+      invoke(cp, "inv-1", { runId: "run-1", incidentId: "inc-1", outputTokens: 100 });
+      invoke(cp, "inv-hostile\n      inv-forged", {
+        runId: "run-1",
+        incidentId: "inc-1",
+        usageStatus: "unavailable",
+        maxOutputTokens: null,
+      });
+      invoke(cp, "inv-em\u2014dash", { runId: "run-1", incidentId: null, outputTokens: 10 });
+    });
+
+    const report = measure(path);
+    const rendered = renderAc9Report(report);
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(rendered).toContain("\\u000a");
+    expect(rendered).toContain("\\u2014");
+    // The unbounded_missing itemisation has one entry, not two.
+    expect(report.unboundedMissing).toHaveLength(1);
+    expect(
+      rendered.split("\n").filter((line) => line.startsWith("      inv-hostile")),
+    ).toHaveLength(1);
+  });
+});

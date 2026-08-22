@@ -1301,7 +1301,8 @@ function renderWriterAudit(audit: WriterAudit): string[] {
   ];
   if (!audit.available) {
     lines.push("  v1 store: ABSENT");
-    lines.push(`  reason: ${audit.absentReason}`);
+    // D-0109: the v1 adapter names itself and its own reasons.
+    lines.push(`  reason: ${reportValue(String(audit.absentReason))}`);
     lines.push(
       `  Interlock records read: ${audit.interlockRecordCount}. ` +
         "No comparison is reported: with one store's records missing, " +
@@ -1309,7 +1310,7 @@ function renderWriterAudit(audit: WriterAudit): string[] {
     );
     return lines;
   }
-  lines.push(`  v1 store: ${audit.v1Source}`);
+  lines.push(`  v1 store: ${reportValue(String(audit.v1Source))}`);
   lines.push(
     `  records compared: interlock=${audit.interlockRecordCount}, v1=${audit.v1RecordCount}`,
   );
@@ -1336,7 +1337,7 @@ function renderOwnership(ledger: OwnershipLedger): string[] {
   ];
   if (!ledger.available) {
     lines.push("  v1 claims: ABSENT");
-    lines.push(`  reason: ${ledger.absentReason}`);
+    lines.push(`  reason: ${reportValue(String(ledger.absentReason))}`);
     lines.push(
       `  Interlock-owned runs listed: ${ledger.entries.length}. ` +
         "No collision is reported: a run changing owner mid-flight is only " +
@@ -1345,7 +1346,7 @@ function renderOwnership(ledger: OwnershipLedger): string[] {
     );
     return lines;
   }
-  lines.push(`  v1 claims from: ${ledger.v1Source}`);
+  lines.push(`  v1 claims from: ${reportValue(String(ledger.v1Source))}`);
   lines.push(`  ledger entries: ${ledger.entries.length}`);
   for (const entry of ledger.entries) {
     lines.push(
