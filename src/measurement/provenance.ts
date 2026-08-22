@@ -494,6 +494,14 @@ function feedRows(
   columns: readonly string[],
 ): void {
   const projection = columns.map((column) => `"${quoted(column)}"`).join(", ");
+  // Ordered by every column, verbatim from the source -- including its one soft
+  // spot, which is disclosed rather than repaired. SQLite's ORDER BY compares
+  // INTEGER 1 and REAL 1.0 as EQUAL, while feedValue deliberately hashes them
+  // apart, so two databases holding that pair of rows in opposite insertion
+  // orders can produce two digests for the same content. A tie-breaker would
+  // fix it and would also move every digest this port produces away from the
+  // one interlock produces over the same rows, which is the comparison the
+  // field exists to support. Recorded in the ledger as an inherited limitation.
   const statement = `SELECT ${projection} FROM "${quoted(table)}" ORDER BY ${projection}`;
   const rows = connection.prepare(statement).raw().safeIntegers(true).all() as unknown[][];
   for (const row of rows) {
@@ -542,7 +550,14 @@ export class QueryCatalogue {
     readonly definitions: ReadonlyMap<string, string>;
     readonly digest: string;
   }) {
-    this.definitions = fields.definitions;
+    // Copied, not adopted. The digest is computed once and frozen with the
+    // object; a caller who kept a reference to the Map they passed could edit
+    // the text afterwards and leave the catalogue claiming a digest for SQL it
+    // no longer carries -- which is the one thing this type asserts. Python's
+    // frozen dataclass has the same hole and the factory is the only
+    // constructor the source uses; this port applies its own readOnlyMap
+    // convention at the boundary instead.
+    this.definitions = readOnlyMap(fields.definitions);
     this.digest = fields.digest;
     Object.freeze(this);
   }
@@ -960,7 +975,10 @@ export class ReportHeader {
     this.coverage = fields.coverage;
     this.censored = fields.censored;
     this.censoredLeft = fields.censoredLeft;
-    this.unmatched = fields.unmatched;
+    // Copied for the reason QueryCatalogue copies its definitions: a published
+    // header is a value, and a caller holding the Map they passed could change
+    // what both renderings say after the fact.
+    this.unmatched = readOnlyMap(fields.unmatched);
     Object.freeze(this);
   }
 

@@ -62,7 +62,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 12,
+      "count": 13,
       "ids": [
         "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > TOOL_VERSION is the version package.json declares",
         "test/measurement/provenance.test.ts::properties the ported cases leave unguarded (target-only) > an integral coverage ratio renders as Python spells a float",
@@ -75,9 +75,10 @@
         "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > the digest is over content, so insertion order does not move it",
         "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > aggregate mode uses MAX(seq) where the table has one",
         "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a database with an empty migration ledger has no head to record",
-        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a non-ASCII query text is escaped, not printed"
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a non-ASCII query text is escaped, not printed",
+        "test/measurement/provenance.test.ts::the fingerprint's unexercised guarantees (target-only) > a published catalogue and header cannot be edited through the caller's map"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Four pin PORT DIVERGENCES this port had to design around -- the version literal, an integral float rendering as 1.0 rather than 1, an INTEGER hashing apart from the REAL that equals it, and a digest that stays exact past 2^53 -- and none of them has a source case because none of the three underlying differences exists in Python. The other eight close gaps a 37-mutation sweep found, all INHERITED: each mutation was applied to interlock's own provenance.py at 65f36c5 and its 61 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Four pin PORT DIVERGENCES this port had to design around -- the version literal, an integral float rendering as 1.0 rather than 1, an INTEGER hashing apart from the REAL that equals it, and a digest that stays exact past 2^53 -- and none of them has a source case because none of the three underlying differences exists in Python. The other eight close gaps a 37-mutation sweep found, all INHERITED: each mutation was applied to interlock's own provenance.py at 65f36c5 and its 61 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A thirteenth was added after the codex review gate found two exported frozen types adopting the caller's Map instead of copying it: Python's frozen dataclasses do the same and its factory is the only constructor the source uses, so nothing upstream notices, but both types are exported here and a caller holding that Map could change the rendered query text after the digest was computed."
     }
   },
   "totals": {
@@ -109,6 +110,12 @@
       "matches_source": false,
       "note": "A disclosed divergence in the refusal TYPE, not in what is accepted: both stop, at the same instant, and neither renders a header. The source's failure escapes the ControlPlaneRefusal family and arrives as an arithmetic error with no explanation; this port keeps it inside the family the caller is already catching and says what the limit is. No ported case reaches it.",
       "where_a_fix_belongs": "upstream, if interlock ever wants that boundary inside its refusal hierarchy."
+    },
+    {
+      "behaviour": "The content fingerprint is not canonical for two rows that differ only by SQLite storage class. ORDER BY compares INTEGER 1 and REAL 1.0 as EQUAL, while the type tag hashes them apart, so two databases holding that pair in opposite insertion orders can produce two digests over the same content.",
+      "matches_source": true,
+      "note": "Raised by the codex review gate (P2) and NOT repaired, deliberately. interlock's implementation has the same ORDER BY and the same type tags, so the soft spot is upstream. A storage-class tie-breaker would fix it here and would also move every digest this port produces away from the digest interlock produces over the same rows -- and comparing those two digests is the whole reason the field is a parity surface. The direction of the failure is the safe one: it can report two reads of the same content as different (a false alarm a reader investigates), never two different contents as the same. Disclosed in the module at the ORDER BY itself.",
+      "where_a_fix_belongs": "upstream, in interlock's ordering, and then here in the same shape."
     }
   ],
   "entries": [

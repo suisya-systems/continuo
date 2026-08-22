@@ -80,6 +80,7 @@ import {
   NotAProductionDatabase,
   PeriodRefused,
   ProvenanceRefusal,
+  QueryCatalogue,
   QueryDefinitionsRefused,
   queryCatalogue,
   type ReportHeader,
@@ -1285,6 +1286,29 @@ describe("the fingerprint's unexercised guarantees (target-only)", () => {
     } finally {
       reading.close();
     }
+  });
+
+  test("a published catalogue and header cannot be edited through the caller's map", () => {
+    // Target-only, and a PORT DIVERGENCE the codex review gate caught. Python's
+    // frozen dataclasses hold whatever mapping the caller passed, and the
+    // source only ever constructs them through the factory, so nothing there
+    // notices. Both types are exported here, and a caller who kept their Map
+    // could change the rendered query text after the digest was computed --
+    // leaving the catalogue claiming a digest for SQL it no longer carries,
+    // which is the one thing it asserts. Both constructors copy now.
+    const definitions = new Map([["episodes", "SELECT 1"]]);
+    const catalogue = queryCatalogue(definitions);
+    const direct = new QueryCatalogue({ definitions, digest: catalogue.digest });
+    definitions.set("episodes", "SELECT 2");
+    expect(catalogue.definitions.get("episodes")).toBe("SELECT 1");
+    expect(direct.definitions.get("episodes")).toBe("SELECT 1");
+
+    const path = productionDb();
+    populate(path);
+    const unmatched = new Map([["unmatched_key", 2]]);
+    const header = headerOver(path, { revisionId: seedRevisionId(path), unmatched });
+    unmatched.set("unmatched_key", 99);
+    expect((documentOf(header).unmatched as Record<string, number>).unmatched_key).toBe(2);
   });
 
   test("a non-ASCII query text is escaped, not printed", () => {
