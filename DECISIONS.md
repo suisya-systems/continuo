@@ -49,7 +49,7 @@ spaces distinct.
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
-| D-0103 | A report snapshot refuses an asynchronous body rather than awaiting it | accepted |
+| D-0103 | A report snapshot refuses a deferred body rather than awaiting or draining it | accepted |
 
 ---
 
@@ -1392,7 +1392,7 @@ would reopen the question of what to do with an unclassifiable refusal -- the an
 
 ---
 
-## D-0103 — A report snapshot refuses an asynchronous body rather than awaiting it
+## D-0103 — A report snapshot refuses a deferred body rather than awaiting or draining it
 
 **Context.** Interlock's `measurement_snapshot` is a Python `@contextmanager`, used with `with`. A
 `with` body cannot return early and carry on later: the scope ends when the body ends, and the read
@@ -1413,18 +1413,23 @@ This is a hazard the **translation** created. It is not in interlock and could n
   unknown)`, which collapses to `never` for a Promise-returning body, so the call site does not
   compile. Verified: `Argument of type '() => Promise<number>' is not assignable to parameter of
   type '(connection: Database) => never'`.
-- **Runtime, before invocation.** An `async function` is knowable without calling it
-  (`Object.prototype.toString` reads an internal class `async` sets and no userland property can
-  forge). That check runs before the snapshot is opened, so this branch genuinely **prevents** the
-  work: the body never runs and no lock is ever taken.
-- **Runtime, after invocation.** An ordinary function that *returns* a Promise is not an
-  `AsyncFunction`, and by the time the Promise is in hand the body has already started. Nothing can
+- **Runtime, before invocation.** A function's laziness is knowable from its own kind without
+  calling it (`Object.prototype.toString` reads an internal class the syntax sets and no userland
+  property can forge). Three kinds defer and all three are refused by one rule: `async` returns at
+  its first `await`, `function*` returns an iterator having executed **nothing at all**, and `async
+  function*` does both. This check runs before the snapshot is opened, so this branch genuinely
+  **prevents** the work: the body never runs and no lock is ever taken.
+- **Runtime, after invocation.** An ordinary function that *returns* a Promise or an iterator is
+  none of those kinds, and by the time the value is in hand the body has already been entered. Nothing can
   un-start it, so this branch is **containment and a report, not prevention**, and it is written
   down that way rather than claimed as a guarantee. It does two things: the check runs **inside** the
   `try`, so the existing `finally` still releases the snapshot -- refusing must not leak the lock it
   is refusing to hold -- and the abandoned Promise gets a no-op rejection handler, because the caller
   never receives it and an unhandled rejection terminates Node by default, which would turn a refusal
-  into a crash.
+  into a crash. An iterator result is discriminated by a callable `next` **and** a self-iteration
+  protocol, not by `Symbol.iterator` alone: an array of rows is iterable and already fully evaluated,
+  and it is the most obvious thing a report body returns, so refusing it would be a worse bug than
+  the one being fixed.
 
 Thenables are detected structurally (a callable `.then`) rather than by `instanceof Promise`, because
 a Promise from another realm and a userland thenable suspend in exactly the same way.
@@ -1460,10 +1465,12 @@ a Promise from another realm and a userland thenable suspend in exactly the same
   re-exported from `src/index.ts` -- the package exports only `.` (`D-0002`), so a name absent from
   the root entry point is one an installed consumer cannot reach at all. It descends from
   `ControlPlaneRefusal`, so a caller catching the family catches this too.
-- The two branches are pinned separately by the target-only test, because they promise different
-  things: branch 1 asserts the body never ran and no transaction was opened, branch 2 asserts the
-  snapshot was released and no unhandled rejection escaped. A single test over one of them would
-  read as a guarantee the other does not make.
+- The branches are pinned separately by the target-only test, because they promise different things:
+  the before-invocation branches assert the body never ran and no transaction was opened, the
+  after-invocation branches assert only that the snapshot was released and no unhandled rejection
+  escaped. A single test over one of them would read as a guarantee the others do not make. The test
+  also pins the **negative** case -- an ordinary iterable result is accepted -- so the discrimination
+  cannot silently widen into "refuse anything iterable".
 - Every later belt that translates a Python `@contextmanager` to a callback inherits this question.
   The answer is this entry: refuse, guard at both levels, and do not quietly make the scope async.
 

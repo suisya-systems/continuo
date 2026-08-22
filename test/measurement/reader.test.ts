@@ -708,7 +708,7 @@ describe("the report snapshot", () => {
     }
   });
 
-  test("an asynchronous report body is refused, not awaited (target-only)", () => {
+  test("a deferred report body is refused, not awaited or drained (target-only)", () => {
     // Target-only: this translates no source case and is not counted as ported
     // coverage. It guards a hazard the TRANSLATION introduced and interlock
     // cannot have (D-0103).
@@ -741,7 +741,7 @@ describe("the report snapshot", () => {
       expectRefusal(
         () => measurementSnapshot(connection, { target: path }, cast(asyncBody)),
         AsynchronousReportRefused,
-        /asynchronous report body/,
+        /deferred report body/,
       );
       expect(ranAtAll).toBe(false);
       expect(connection.inTransaction).toBe(false);
@@ -756,9 +756,43 @@ describe("the report snapshot", () => {
       expectRefusal(
         () => measurementSnapshot(connection, { target: path }, cast(rejectingBody)),
         AsynchronousReportRefused,
-        /asynchronous report body/,
+        /deferred report body/,
       );
       expect(connection.inTransaction).toBe(false);
+
+      // Branch 3 -- a generator function. Calling it executes NOTHING; it
+      // returns an iterator, and the report's reads would happen when someone
+      // drained it, long after the snapshot was released. Refused before
+      // invocation, like branch 1, and for the same reason.
+      let generatorRan = false;
+      function* generatorBody() {
+        generatorRan = true;
+        yield 1;
+      }
+      expectRefusal(
+        () => measurementSnapshot(connection, { target: path }, cast(generatorBody)),
+        AsynchronousReportRefused,
+        /deferred report body/,
+      );
+      expect(generatorRan).toBe(false);
+      expect(connection.inTransaction).toBe(false);
+
+      // Branch 4 -- an ordinary function returning an iterator, which the
+      // before-invocation check cannot see. Contained after the fact.
+      const iteratorBody = () => [1, 2][Symbol.iterator]();
+      expectRefusal(
+        () => measurementSnapshot(connection, { target: path }, cast(iteratorBody)),
+        AsynchronousReportRefused,
+        /deferred report body/,
+      );
+      expect(connection.inTransaction).toBe(false);
+
+      // ...and the discrimination is real: an ordinary iterable result, which a
+      // report may legitimately return, is NOT refused. Without this the guard
+      // could be "refuse anything with Symbol.iterator", which would reject an
+      // array of rows -- the most obvious thing a report body returns.
+      const rows = measurementSnapshot(connection, { target: path }, () => [1, 2, 3]);
+      expect(rows).toEqual([1, 2, 3]);
     } finally {
       connection.close();
     }

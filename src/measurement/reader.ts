@@ -330,12 +330,13 @@ export function measurementSnapshot<T>(
 ): T {
   const target = options.target;
 
-  // Before anything is opened, so a refused report takes no lock at all. An
-  // `async function` is knowable without calling it, which is the only point at
-  // which the refusal can prevent the work rather than merely report it -- see
-  // the thenable check further down for the case that cannot be prevented.
-  if (isAsyncFunction(body)) {
-    throw new AsynchronousReportRefused(asynchronousBodyMessage(target));
+  // Before anything is opened, so a refused report takes no lock at all. A
+  // function's laziness is knowable from its own kind without calling it, which
+  // is the only point at which the refusal can prevent the work rather than
+  // merely report it -- see the deferred-result check further down for the
+  // cases that cannot be prevented.
+  if (isLazyFunction(body)) {
+    throw new AsynchronousReportRefused(deferredBodyMessage(target));
   }
 
   if (connection.inTransaction) {
@@ -355,11 +356,12 @@ export function measurementSnapshot<T>(
     connection.prepare("SELECT count(*) FROM sqlite_master").get();
     requireQueryOnly(target, connection, "inside the report snapshot");
     const result = body(connection);
-    // The residual case the check above cannot reach: an ordinary function that
-    // returns a Promise. By the time the Promise is in hand the body has
-    // already started, and nothing here can un-start it -- so this is
-    // containment and a report, not prevention, and it is written down that way
-    // rather than claimed as a guarantee (D-0103).
+    // The residual cases the check above cannot reach: an ordinary function
+    // that *returns* a Promise, or one that returns an iterator. By the time
+    // the value is in hand the body has already been entered, and nothing here
+    // can un-enter it -- so this is containment and a report, not prevention,
+    // and it is written down that way rather than claimed as a guarantee
+    // (D-0103).
     //
     // Checked inside the try, so the `finally` below still releases the
     // snapshot: refusing must not also leak the lock it is refusing to hold.
@@ -373,7 +375,10 @@ export function measurementSnapshot<T>(
         () => undefined,
         () => undefined,
       );
-      throw new AsynchronousReportRefused(asynchronousBodyMessage(target));
+      throw new AsynchronousReportRefused(deferredBodyMessage(target));
+    }
+    if (isIterator(result)) {
+      throw new AsynchronousReportRefused(deferredBodyMessage(target));
     }
     return result;
   } finally {
@@ -736,29 +741,67 @@ function isThenable(value: unknown): boolean {
 }
 
 /**
- * Is `body` an `async function`, decidable without calling it?
+ * The kinds of function whose body does **not** run to completion when called,
+ * decidable without calling it.
  *
- * `Object.prototype.toString` reads the function's internal class, which
- * `async` sets and which no userland property can forge. This is the only test
+ * Three shapes defer: `async` (returns at the first `await`), `function*`
+ * (returns an iterator having executed nothing at all), and `async function*`
+ * (both). All three are the same defect -- the report's reads happen after this
+ * scope has released the snapshot -- so all three are refused by one rule
+ * rather than by three that could drift apart.
+ *
+ * `Object.prototype.toString` reads the function's internal class, which the
+ * syntax sets and which no userland property can forge. This is the only test
  * available *before* invocation, and invocation is the moment after which the
  * refusal can no longer prevent anything.
  *
- * It is deliberately not the whole answer: a plain function that returns a
- * Promise is not an `AsyncFunction` and is caught by the thenable check
- * instead, after it has already started.
+ * It is deliberately not the whole answer: a plain function that *returns* a
+ * Promise or an iterator is none of these kinds, and is caught by the
+ * deferred-result checks instead, after it has already been entered.
  */
-function isAsyncFunction(body: unknown): boolean {
-  return Object.prototype.toString.call(body) === "[object AsyncFunction]";
+function isLazyFunction(body: unknown): boolean {
+  const kind = Object.prototype.toString.call(body);
+  return (
+    kind === "[object AsyncFunction]" ||
+    kind === "[object GeneratorFunction]" ||
+    kind === "[object AsyncGeneratorFunction]"
+  );
 }
 
-/** The one refusal text, so the two guards cannot drift into two diagnoses. */
-function asynchronousBodyMessage(target: string | undefined): string {
+/**
+ * Is `value` an iterator -- something whose work happens when it is *drained*?
+ *
+ * A callable `next` **and** a self-iteration protocol, which together are what
+ * distinguishes a lazy iterator from an ordinary iterable a report might
+ * legitimately return. An array or a `Set` is iterable and already fully
+ * evaluated; it has no `next` of its own and is not refused.
+ */
+function isIterator(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return false;
+  }
+  const candidate = value as {
+    next?: unknown;
+    [Symbol.iterator]?: unknown;
+    [Symbol.asyncIterator]?: unknown;
+  };
   return (
-    `${names(target)} was given an asynchronous report body. A report snapshot ` +
-    `is one synchronous scope: an async body returns at its first await, the ` +
-    `snapshot would be released there, and every read after it would run on a ` +
-    `different state of the database -- which is the defect the snapshot exists ` +
-    `to remove. Nothing in the harness is asynchronous (better-sqlite3 is a ` +
-    `synchronous driver); build the report synchronously inside the scope`
+    typeof candidate.next === "function" &&
+    (typeof candidate[Symbol.iterator] === "function" ||
+      typeof candidate[Symbol.asyncIterator] === "function")
+  );
+}
+
+/** The one refusal text, so the guards cannot drift into separate diagnoses. */
+function deferredBodyMessage(target: string | undefined): string {
+  return (
+    `${names(target)} was given a deferred report body -- an async function, a ` +
+    `generator, or a callback returning a promise or an iterator. A report ` +
+    `snapshot is one synchronous scope: a deferred body returns before its ` +
+    `reads have run, the snapshot would be released there, and every read after ` +
+    `it would run on a different state of the database -- which is the defect ` +
+    `the snapshot exists to remove. Nothing in the harness is asynchronous or ` +
+    `lazy (better-sqlite3 is a synchronous driver); build the report ` +
+    `synchronously inside the scope`
   );
 }
