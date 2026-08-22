@@ -1,0 +1,295 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. windows is the third file of this lane and the first unblocked by the control-plane belt's policy module: it resolves T and L through policy.detectionLatency / resolveToleranceMs / subjectUnitMs rather than re-deriving them."
+    },
+    "file": {
+      "path": "tests/measurement/test_windows.py",
+      "collected": 22,
+      "inventory": "parity/source-inventory/measurement.test_windows.txt"
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/windows.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "@pytest.mark.parametrize over incident_class",
+        "to": "parametrize() from test/testkit/parametrize.ts with the ids written out",
+        "why": "Rule 2 of docs/test-translation-conventions.md: the id is taken verbatim from pytest --collect-only ([lease_orphan] / [watcher_silence]) so the target id is a stable function of the source id and the ledger can tell a rename from a deletion. Counted as two ledger rows, one per expansion.",
+        "affects": "test_a_relative_class_refuses_rather_than_defaults_without_a_subject"
+      },
+      {
+        "from": "frozen dataclass, tuple fields, and Mapping returns",
+        "to": "frozen classes, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "Established by D-0105's sibling reasoning in the false-termination belt: TypeScript's readonly is erased at runtime and Object.freeze is shallow, so the source's runtime immutability has to be built. Episode, EpisodeWindow and WindowReport are frozen, WindowReport.windows is a frozen list, and counts() returns a read-only mapping as the source's MappingProxyType does. Changes how a case spells a construction or a read, never what it asserts.",
+        "affects": "every entry that constructs an Episode or reads a report field"
+      },
+      {
+        "from": "assert report.counts() == {IN_PERIOD: 1, ...}",
+        "to": "expect(Object.fromEntries(report.counts())).toEqual({...})",
+        "why": "A whole-mapping equality against a ReadonlyMap. Object.fromEntries is used only to BUILD a plain object for comparison, never to look one up, so the prototype hazard D-0105 is about does not arise -- and the keys here are the module's own classification constants, a closed set, not database-supplied.",
+        "affects": "the three entries that compare a whole counts() mapping"
+      },
+      {
+        "from": "divmod(tolerance_ms, threshold_value)",
+        "to": "Math.floor(a / b) and a % b",
+        "why": "No divmod in JavaScript. Both halves are kept -- the quotient AND the remainder -- because the source asserts the remainders are zero, which is what proves each side divided exactly by its own multiple rather than approximately.",
+        "affects": "test_tolerance_and_budget_scale_by_the_same_subject_unit"
+      }
+    ],
+    "target_only_tests": {
+      "count": 2,
+      "ids": [
+        "test/measurement/windows.test.ts::the buckets > idsFor refuses a classification this module does not have (target-only)",
+        "test/measurement/windows.test.ts::the buckets > counts refuses a window carrying an unknown classification (target-only)"
+      ],
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. The one here pins WindowReport.idsFor's refusal of an unrecognised bucket name, which a mutation sweep found unguarded on BOTH sides: interlock calls ids_for only with the three real classifications, so deleting its own guard leaves its suite green too. It matters because idsFor FILTERS -- without the guard a misspelled bucket returns an empty list rather than an error, and a caller would print a zero, which is the exact reading counts() emits all three keys to prevent. Production behaviour is unchanged and still matches interlock's. This module has no seam (nothing in it is monkeypatched by the source), so rule 5's liveness requirement does not apply, and its number handling is integer millisecond arithmetic with no rendering, so D-0104's formatter is not involved. The second pins a PORT divergence a review caught rather than an inherited gap: the source indexes a pre-seeded dict in counts(), so a window carrying an unknown classification raises KeyError there, while the port's first cut used a `?? 0` fallback and grew a fourth bucket. Fixed to throw, and deliberately a RangeError rather than a WindowRefusal -- KeyError is outside the source's refusal family, so a caller catching refusals must not swallow it."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 22,
+    "ported": 22,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "An episode whose window does not overlap the report period at all is REFUSED (EpisodeOutsidePeriod) rather than dropped or counted, so one bad row in a caller's selection fails the whole report.",
+      "matches_source": true,
+      "note": "Deliberate upstream and reproduced exactly. The alternatives are worse in ways that are invisible: filing it censored inflates the one number that says 'this period is too short for these budgets', and dropping it lets a selection bug live forever. Recorded so the strictness is not mistaken for an oversight.",
+      "where_a_fix_belongs": "nowhere -- this is the design."
+    },
+    {
+      "behaviour": "defaultGraceMs refuses (GraceNotDeclared) for any revision whose classes carry more than one reconcile_period_ms, so a revision that moves one class to a coarser pass makes every report over it require an explicit grace.",
+      "matches_source": true,
+      "note": "Section 3.5 wants one grace per report and section 3.3 permits a coarse class; choosing between the periods would be this module deciding policy. The refusal is not a dead end -- declaring grace explicitly still works, and the ported case asserts both halves.",
+      "where_a_fix_belongs": "upstream, and only alongside a section 3.5 change that says which period wins."
+    },
+    {
+      "behaviour": "WindowReport.idsFor's refusal of an unrecognised classification is never exercised by interlock's suite: every call there passes one of the three real bucket names, so the guard could be deleted upstream without turning anything red.",
+      "matches_source": true,
+      "note": "Found by a mutation sweep on the port, then confirmed against interlock 65f36c5 (four ids_for call sites in tests/measurement/test_windows.py, all with valid classifications). The port reproduces the guard exactly as upstream has it and does NOT change behaviour; it adds a target-only test so the property stops being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
+      "where_a_fix_belongs": "upstream, as the same case added to interlock's tests/measurement/test_windows.py."
+    },
+    {
+      "behaviour": "classifyEpisodes does not validate a caller-declared graceMs when the episode list is EMPTY. requireGraceMs runs inside episodeWindow, so a report over zero episodes with graceMs = -1 is returned with grace_ms = -1 and no refusal.",
+      "matches_source": true,
+      "note": "Raised by the codex review gate on this PR as a P2. Verified empirically against interlock 65f36c5: classify_episodes(..., episodes=[], grace_ms=-1) returns a report with grace_ms = -1 and raises nothing, identically. The source is aware of the shape -- require_grace_ms's own docstring ends '...and on a report that classified no episodes, nothing would ever raise, so it would render clean.' NOT fixed here, for two reasons that point the same way: (1) validating in classifyEpisodes as well would be the SECOND COPY of the check that same docstring argues against, and (2) it would make continuo refuse an input interlock accepts, which is a silent behavioural divergence in a parity port. Handled under the precedent the operator set for the action_id escaping question on 2026-08-22: reproduce and disclose, do not repair one side alone.",
+      "where_a_fix_belongs": "upstream, and as a move of the check rather than a duplication of it -- require_grace_ms called once in classify_episodes after grace is resolved, with episode_window's call kept only for its own direct callers. That is a change to both sides together."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_window_ending_exactly_at_period_end_is_in_period",
+      "target_id": "test/measurement/windows.test.ts::half-openness, at both ends > window ending exactly at period end is in period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_window_ending_one_ms_past_period_end_is_censored",
+      "target_id": "test/measurement/windows.test.ts::half-openness, at both ends > window ending one ms past period end is censored",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_onset_exactly_at_period_start_is_in_period",
+      "target_id": "test/measurement/windows.test.ts::half-openness, at both ends > onset exactly at period start is in period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_onset_one_ms_before_period_start_is_censored_left",
+      "target_id": "test/measurement/windows.test.ts::half-openness, at both ends > onset one ms before period start is censored left",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_episode_spanning_the_whole_period_is_censored_left",
+      "target_id": "test/measurement/windows.test.ts::half-openness, at both ends > episode spanning the whole period is censored left",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_grace_defaults_to_the_revision_reconcile_period",
+      "target_id": "test/measurement/windows.test.ts::grace is read from the revision > grace defaults to the revision reconcile period",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_changing_the_revisions_reconcile_period_changes_the_classification",
+      "target_id": "test/measurement/windows.test.ts::grace is read from the revision > changing the revision's reconcile period changes the classification",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_declared_grace_is_used_and_recorded_as_declared",
+      "target_id": "test/measurement/windows.test.ts::grace is read from the revision > declared grace is used and recorded as declared",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_a_revision_with_two_reconcile_periods_refuses_to_default",
+      "target_id": "test/measurement/windows.test.ts::grace is read from the revision > a revision with two reconcile periods refuses to default",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_negative_grace_is_refused",
+      "target_id": "test/measurement/windows.test.ts::grace is read from the revision > negative grace is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_relative_budget_scales_with_that_lease",
+      "target_id": "test/measurement/windows.test.ts::relative classes resolve through their subject > relative budget scales with that lease",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_tolerance_and_budget_scale_by_the_same_subject_unit",
+      "target_id": "test/measurement/windows.test.ts::relative classes resolve through their subject > tolerance and budget scale by the same subject unit",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_relative_threshold_scales_with_that_scope",
+      "target_id": "test/measurement/windows.test.ts::relative classes resolve through their subject > relative threshold scales with that scope",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_a_relative_class_refuses_rather_than_defaults_without_a_subject[lease_orphan]",
+      "target_id": "test/measurement/windows.test.ts::relative classes resolve through their subject > a relative class refuses rather than defaults without a subject[lease_orphan]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_a_relative_class_refuses_rather_than_defaults_without_a_subject[watcher_silence]",
+      "target_id": "test/measurement/windows.test.ts::relative classes resolve through their subject > a relative class refuses rather than defaults without a subject[watcher_silence]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_resolve_budget_refuses_the_relative_budget_without_a_subject",
+      "target_id": "test/measurement/windows.test.ts::relative classes resolve through their subject > resolveBudgetMs refuses the relative budget without a subject",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_a_count_threshold_yields_no_tolerance_but_still_a_window",
+      "target_id": "test/measurement/windows.test.ts::relative classes resolve through their subject > a count threshold yields no tolerance but still a window",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_censored_buckets_are_distinguished_and_leak_into_neither_numerator",
+      "target_id": "test/measurement/windows.test.ts::the buckets > censored buckets are distinguished and leak into neither numerator",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_counts_are_emitted_even_at_zero",
+      "target_id": "test/measurement/windows.test.ts::the buckets > counts are emitted even at zero",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_an_episode_outside_the_period_is_refused_not_censored",
+      "target_id": "test/measurement/windows.test.ts::the buckets > an episode outside the period is refused, not censored",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_duplicate_episode_ids_are_refused",
+      "target_id": "test/measurement/windows.test.ts::the buckets > duplicate episode ids are refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_windows.py::test_an_empty_or_inverted_period_is_refused",
+      "target_id": "test/measurement/windows.test.ts::the buckets > an empty or inverted period is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

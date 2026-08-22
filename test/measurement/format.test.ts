@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { formatFixed, isAscii } from "../../src/measurement/format.js";
+import { formatFixed, isAscii, pythonRepr } from "../../src/measurement/format.js";
 
 /**
  * The corpus, rebuilt from the same rules as `dump_fixed_format.py:corpus()`.
@@ -277,5 +277,83 @@ describe("isAscii (target-only)", () => {
     // lone surrogate as one too.
     expect(isAscii("\u{1f600}")).toBe(false);
     expect(isAscii("\ud800")).toBe(false);
+  });
+});
+
+describe("pythonRepr (target-only)", () => {
+  // Target-only: translates no source case. Interlock does not test `repr` --
+  // it is the standard library's -- but continuo had to REIMPLEMENT it, because
+  // several ported refusals interpolate a caller-supplied value with `!r` and
+  // the message an operator reads is a parity surface (D-0017).
+  //
+  // Every expectation below is CPython 3.12's actual output, captured by
+  // running `repr()` on the same input rather than reasoned about. Inputs and
+  // expectations are written with escapes throughout, because this file is
+  // scanned by test/contract/ascii-output-policy.test.ts, which reads whole
+  // files rather than deciding which literals are printed.
+
+  test("it matches CPython on the quoting rules", () => {
+    expect(pythonRepr("plain")).toBe("'plain'");
+    // A string with an apostrophe and no double quote is quoted with DOUBLE
+    // quotes, and the apostrophe is then NOT escaped -- the rule a hand-rolled
+    // escaper gets wrong first.
+    expect(pythonRepr("it's")).toBe('"it\'s"');
+    expect(pythonRepr('quote"double')).toBe("'quote\"double'");
+    // With both, Python falls back to single quotes and escapes the apostrophe.
+    expect(pythonRepr("both'and\"")).toBe("'both\\'and\"'");
+    expect(pythonRepr("")).toBe("''");
+  });
+
+  test("it escapes backslashes and the short-form controls", () => {
+    expect(pythonRepr("back\\slash")).toBe("'back\\\\slash'");
+    expect(pythonRepr("new\nline")).toBe("'new\\nline'");
+    expect(pythonRepr("tab\there")).toBe("'tab\\there'");
+    expect(pythonRepr("\r")).toBe("'\\r'");
+  });
+
+  test("it escapes every other control character as a hex escape", () => {
+    // The defect this replaced: a raw newline or escape character in a
+    // caller-supplied id went verbatim into an operator-facing refusal, so a
+    // crafted id could forge what looked like a second line of the message.
+    expect(pythonRepr("null\u0000byte")).toBe("'null\\x00byte'");
+    expect(pythonRepr("bell\u0007")).toBe("'bell\\x07'");
+    expect(pythonRepr("esc\u001b")).toBe("'esc\\x1b'");
+    expect(pythonRepr("del\u007f")).toBe("'del\\x7f'");
+    expect(pythonRepr("\u000b\u000c")).toBe("'\\x0b\\x0c'");
+  });
+
+  test("it escapes every character str.isprintable() rejects, not only C0", () => {
+    // Raised by the review after the first cut handled only C0 and DEL.
+    // Python's rule is a general-category test -- Cc, Cf, Cs, Co, Cn, Zl, Zp,
+    // Zs, with U+0020 carved back out -- and the miss was not cosmetic: U+2028
+    // is a LINE SEPARATOR, so an id carrying one could break an operator-facing
+    // refusal across lines exactly as a raw newline could.
+    expect(pythonRepr("\u0085")).toBe("'\\x85'"); // NEL, a Cc above DEL
+    expect(pythonRepr("\u00a0")).toBe("'\\xa0'"); // no-break space, a Zs
+    expect(pythonRepr("\u00ad")).toBe("'\\xad'"); // soft hyphen, a Cf
+    expect(pythonRepr("\u2028")).toBe("'\\u2028'"); // line separator, a Zl
+    expect(pythonRepr("\u2029")).toBe("'\\u2029'"); // paragraph separator, Zp
+    expect(pythonRepr("\u200b")).toBe("'\\u200b'"); // zero-width space, a Cf
+    expect(pythonRepr("\u3000")).toBe("'\\u3000'"); // ideographic space, a Zs
+    expect(pythonRepr("\uffff")).toBe("'\\uffff'"); // unassigned, a Cn
+    // A lone surrogate reaches here as its own character and must be escaped
+    // rather than emitted, where it would produce invalid UTF-8.
+    expect(pythonRepr("\ud800")).toBe("'\\ud800'");
+    // Above the BMP, Python widens the escape to eight digits.
+    expect(pythonRepr("\u{e0001}")).toBe("'\\U000e0001'");
+    // ...and an ordinary space is printable, which is the one Zs exception.
+    expect(pythonRepr("a b")).toBe("'a b'");
+  });
+
+  test("printable non-ASCII passes through, as Python 3's repr does", () => {
+    // Deliberate, not an oversight: Python 3's `repr` is not `ascii()`. It
+    // interacts with D-0006 -- a refusal naming such an id carries it into the
+    // message -- and that is the same disclosed inherited limitation as the
+    // unescaped action_id in the false-termination renderer, settled by the
+    // operator as reproduce-and-disclose. Escaping here would make continuo's
+    // refusal text differ from interlock's for the same input.
+    expect(pythonRepr("\u00e9")).toBe("'\u00e9'");
+    expect(pythonRepr("\u{1f600}")).toBe("'\u{1f600}'");
+    expect(isAscii(pythonRepr("\u00e9"))).toBe(false);
   });
 });
