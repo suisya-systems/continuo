@@ -3820,22 +3820,39 @@ second and third pin the proof's two premises, and review moved both of them fro
 SPELLING to checking the PROPERTY -- which is the same lesson as the enumeration itself, one level
 down:
 
-- *The consumer set.* Counted per file, over the whole directory read at run time rather than a list
-  of file names, and over every REFERENCE to the identifier rather than over occurrences of the text
-  `pyIterate(` -- because `const it = pyIterate; it(v)` and `xs.map(pyIterate)` are consumers that a
-  call-spelling scan never sees. Comments are stripped first, so a typo fix in prose cannot fire a
-  case that would then be turned off rather than read.
+- *The consumer set.* Counted per file, over the directory WALKED RECURSIVELY at run time rather
+  than over a list of file names, and over every REFERENCE to the identifier rather than over
+  occurrences of the text `pyIterate(` -- because `const it = pyIterate; it(v)` and
+  `xs.map(pyIterate)` are consumers that a call-spelling scan never sees, and a `src/fencing/helpers/`
+  that does not exist today is one directory away from a consumer a flat scan never reads. Comments
+  are stripped first, so a typo fix in prose cannot fire a case that would then be turned off rather
+  than read.
 - *The package surface.* Asserted by IDENTITY against the entry module's actual exported values, not
   by grepping `src/index.ts` for a `from` string: a re-export through some other barrel, or under a
   renamed binding, reaches a caller just as well and mentions nothing. Whatever route it takes it
-  arrives as the same function object. The manifest's `exports` map is asserted alongside it, since
-  a subpath export needs no line in `src/index.ts` at all.
+  arrives as the same function object. Collected one level THROUGH namespace objects, because
+  `export * as semantics from "./fencing/pysemantics.js"` puts one object on the surface and every
+  function behind it. The manifest's `exports` map is asserted WHOLE rather than by its keys, since a
+  new condition under the existing `"."` publishes a second target without adding a subpath.
 
-Each case was confirmed to fail, alone and for its stated reason, with its premise broken: adding
-the carry fails the first and nothing else, which is itself the corroboration that the drop is
-unobservable; a reference in a file the sweep had not named, and an aliased reference carrying no
-call spelling, each fail the second; a barrel re-export under a new name, and a `package.json`
-subpath export, each fail the third.
+*What these two cases are, and are not.* They are TRIPWIRES on the premises, not a decision
+procedure for reachability. A source scan cannot be exhaustive -- `eval`, a dynamic `import()`, a
+build step that emits a new entry point, all pass it -- and an entry-point identity check sees the
+surface as it is built today. What they are for is making the premises LOUD: the realistic ways this
+proof stops holding are someone adding a call site or exporting the module, and both now turn a
+suite red rather than passing unnoticed. Stated here because the alternative reading -- that these
+cases prove unreachability -- is exactly the overstated-coverage failure `D-0211` was written about,
+and it would be an odd entry that repeated it while correcting it. Three review rounds, each naming
+a different escape route (an unlisted file, an aliased reference, a nested directory, a renamed
+re-export, a namespace re-export, an export condition), are the evidence for the modesty rather than
+against it: the guards got stronger each round and the class of escapes did not close.
+
+Each case was confirmed to fail, alone and for its stated reason, with its premise broken. Adding
+the carry fails the first and NOTHING ELSE, which is itself the corroboration that the drop is
+unobservable. Three vectors fail the second: a reference in a file the sweep had not named, an
+aliased reference carrying no call spelling, and a reference under a nested directory. Three fail
+the third: a barrel re-export under a new name, an `export * as` namespace re-export, and a
+`package.json` export target -- both a new subpath and a new condition under the existing one.
 
 **What this entry can and cannot claim.** It can claim the sweep was mechanical and its scope
 closed: `src/fencing` imports nothing outside itself and only `src/index.ts` re-exports it, and that

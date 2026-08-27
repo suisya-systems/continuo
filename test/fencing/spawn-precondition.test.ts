@@ -889,22 +889,36 @@ describe("pyIterate's array branch drops the record, provably harmlessly (target
     // Counted per file rather than per line so that moving code within a file
     // does not fire this, and so that what fires is the thing that matters: a
     // reference nobody has traced to its consumer.
-    const dir = join(import.meta.dirname, "..", "..", "src", "fencing");
+    // Walked RECURSIVELY. The directory is flat today, and a proof that holds
+    // only while it stays flat is one `src/fencing/helpers/` away from being
+    // false with nothing going red.
+    const root = join(import.meta.dirname, "..", "..", "src", "fencing");
     const counts: [string, number][] = [];
-    for (const file of readdirSync(dir).sort()) {
-      // `.mjs` too: the deny hook is JavaScript and is shipped from this
-      // directory, so a reference there would be as real as any other.
-      if (!file.endsWith(".ts") && !file.endsWith(".mjs")) {
-        continue;
+    const walk = (dir: string, prefix: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+      )) {
+        const name = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+        if (entry.isDirectory()) {
+          walk(join(dir, entry.name), name);
+          continue;
+        }
+        // `.mjs` too: the deny hook is JavaScript and is shipped from this
+        // directory, so a reference there would be as real as any other.
+        if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".mjs")) {
+          continue;
+        }
+        const code = readFileSync(join(dir, entry.name), "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, " ")
+          .replace(/\/\/[^\n]*/g, " ");
+        const references = (code.match(/\bpyIterate\b/g) ?? []).length;
+        if (references > 0) {
+          counts.push([name, references]);
+        }
       }
-      const code = readFileSync(join(dir, file), "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, " ")
-        .replace(/\/\/[^\n]*/g, " ");
-      const references = (code.match(/\bpyIterate\b/g) ?? []).length;
-      if (references > 0) {
-        counts.push([file, references]);
-      }
-    }
+    };
+    walk(root, "");
+    counts.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     // `renderer.ts` 5 = one import specifier + four calls: the permission-mode
     // list, `forbidden_allow_exact`, `forbidden_allow_regex` and a hook group,
     // all ending in `pyRepr`, `pyStr` or set membership. `state.ts` 2 = one
@@ -943,21 +957,40 @@ describe("pyIterate's array branch drops the record, provably harmlessly (target
     // barrel, or a renamed binding, satisfies without the name ever appearing.
     // Comparing the exported VALUES catches every spelling of a re-export,
     // because whatever route it takes it arrives as the same function object.
-    const surface = new Set(Object.values(api));
+    //
+    // Collected THROUGH namespace objects, because `export * as semantics from
+    // "./fencing/pysemantics.js"` puts one object on the surface and every
+    // function behind it -- and a scan of the top level alone sees only the
+    // object. One level of nesting is the whole of what an entry module can
+    // produce this way.
+    const surface = new Set<unknown>();
+    for (const value of Object.values(api)) {
+      surface.add(value);
+      if (typeof value === "object" && value !== null) {
+        for (const nested of Object.values(value as Record<string, unknown>)) {
+          surface.add(nested);
+        }
+      }
+    }
     for (const [name, value] of Object.entries(semantics)) {
       expect(
         surface.has(value),
-        `src/index.ts re-exports pysemantics.${name}; D-0212's proof for pyIterate assumed it could not`,
+        `the package entry point exposes pysemantics.${name}; D-0212's proof for pyIterate assumed it could not`,
       ).toBe(false);
     }
-    // The other route to the same reachability: a subpath export in
-    // `package.json` pointing at the module directly, which needs no line in
-    // `src/index.ts` at all. The package deliberately publishes one entry point
-    // and its manifest.
+    // The other route to the same reachability: `package.json` pointing at the
+    // module directly, which needs no line in `src/index.ts` at all. The whole
+    // map is asserted rather than its keys, because a new CONDITION under the
+    // existing `"."` -- or a repointed `"./package.json"` -- publishes a second
+    // target without adding a subpath. The package deliberately publishes one
+    // entry point and its manifest.
     const manifest = JSON.parse(
       readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
-    ) as { exports: Record<string, unknown> };
-    expect(Object.keys(manifest.exports).sort()).toStrictEqual([".", "./package.json"]);
+    ) as { exports: unknown };
+    expect(manifest.exports).toStrictEqual({
+      ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+      "./package.json": "./package.json",
+    });
   });
 });
 
