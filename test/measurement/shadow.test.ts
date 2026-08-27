@@ -1480,3 +1480,65 @@ describe("hostile values in the rendering (target-only)", () => {
     );
   });
 });
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("a reconciliation whose every caller value is hostile still renders one report", () => {
+    // Target-only, and the structural form of the D-0109 check. The v1 adapter
+    // supplies its own name, every episode id, every shape and every evidence
+    // pair, and the report prints all of them.
+    const ours = new ShadowEpisode({
+      episodeId: "ours-1\u2014one",
+      subjectClass: SUBJECT_WORKER_ESCALATION,
+      shape: "received\u2014shape",
+      onsetMs: T0,
+      keyGap: "gate.run_id is NULL\nNOTE: forged",
+      evidence: [["gate_id\u2014k", "g\n    - forged evidence"]],
+    });
+    const theirs = new ShadowEpisode({
+      episodeId: "v1-1\n    - forged: a line the harness never wrote",
+      subjectClass: SUBJECT_PR_MERGE,
+      shape: "merged\u2014shape",
+      onsetMs: T0,
+      key: new CorrelationKey({ subjectClass: SUBJECT_PR_MERGE, parts: ["github", "o/r", "1"] }),
+      evidence: [["note\u2014k", "v\u20141"]],
+    });
+
+    const report = reconcile({
+      periodStartMs: PERIOD_START,
+      periodEndMs: PERIOD_END,
+      interlockEpisodes: [ours],
+      v1Reference: V1Reference.observed({
+        source: "v1-adapter\u2014one\n  shadow reference: forged",
+        episodes: [theirs],
+      }),
+      censoredIds: [],
+      fixtureLabels: new Map(),
+    });
+    const rendered = renderShadowReconciliation(report);
+
+    expect(isAscii(rendered)).toBe(true);
+    // One line per bucket, one awaiting-adjudication entry, and no forged ones.
+    expect(
+      rendered.split("\n").filter((line) => line.startsWith("  shadow reference:")),
+    ).toHaveLength(1);
+    expect(rendered.split("\n").filter((line) => line.trimStart().startsWith("- "))).toHaveLength(
+      1,
+    );
+  });
+});
+
+describe("the absent branch, fully escaped (target-only)", () => {
+  test("an absent reference's reason is escaped too", () => {
+    // The absence reason is rendered by a branch no other case reaches, and
+    // reverting its escape was the one site the all-fields case above missed --
+    // measured by reverting each of this renderer's six sites in turn.
+    const report = reconciled(
+      [anEpisode("ours-1")],
+      V1Reference.absent({ reason: "outside the shadow period\u2014entirely\n  reason: forged" }),
+    );
+    const rendered = renderShadowReconciliation(report);
+
+    expect(isAscii(rendered)).toBe(true);
+    expect(rendered.split("\n").filter((line) => line.startsWith("  reason: "))).toHaveLength(1);
+  });
+});
