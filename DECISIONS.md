@@ -74,6 +74,8 @@ spaces distinct.
 | D-0207 | The hook's argv surface reproduces argparse's two passes, rather than being waived | accepted |
 | D-0208 | The deny hook must be the program the hook command runs, not a string it mentions | accepted |
 | D-0209 | `npm test` builds first, because the deny hook's dependencies come from `dist/` | accepted |
+| D-0210 | A JSON number's Python spelling is recorded on its container slot, never inside the value | accepted |
+| D-0211 | Every container rebuild carries the number record, and the sites are enumerated and pinned | accepted |
 
 ---
 
@@ -3470,7 +3472,14 @@ loads, and `parity/fencing.restart.ledger.json` says why that is deliberate rath
 - `pyStr` still renders an integral float as an int, visible only for a role document that spells
   `role_kind` or `permission_mode` as a number.
 - A container rebuilt without carrying its spellings loses them, exactly as it would lose its key
-  order. Every rebuild site in the port (`stripMeta`, `substitute`, `pyDict`) now carries both.
+  order, and nothing makes a site that forgets go red. **This entry shipped claiming the port's
+  rebuild sites all carried the record, and naming three; there were four, and the fourth --
+  `deepSortKeys` -- was the last call `settingsPayload` makes before the result becomes
+  `fence.settings`. So the repair reached everything except `settings.local.json` and the persisted
+  fence, which are the artefacts it was for.** `D-0211` repairs that, finds a fifth site
+  (`settingsPayload` itself), pins both, and replaces the claim with the list of five and the
+  obligation on any site added later. The corrected list lives in the header of
+  `src/fencing/pyjson.ts`.
 
 **Measured, not argued.** interlock's `FencedSpawner.spawn` and continuo's were driven to an
 admission over the shipped role document with the same context paths, the same `python`, the same
@@ -3497,6 +3506,107 @@ With the spelling ignored, 16 of them fail.
   parse error this port is pinned against, and trading that surface for one property is the wrong
   direction.
 
+**Measured over the wrong corpus, and that is the lesson `D-0211` carries.** The measurement above
+is sound and it is not sufficient: it drove the SHIPPED role document, which carries no number
+anywhere in `env`, `permissions`, `sandbox` or `hooks`. Every artefact it compared was byte-equal
+whether or not `deepSortKeys` carried the record, so the control it ran ("remove the assertion and
+watch the ledger diverge") could only ever see the one field it had been built around. A
+differential measurement is bounded by the inputs it is run over, and this one's inputs could not
+express the property the repair was about.
+
 **Falsified by.** A fencing artefact that needs a scalar at its root, or a role document that spells
 `role_kind` as a number -- either would move an item out of the "not fixed" list above and into the
 work.
+
+---
+
+## D-0211 — Every container rebuild carries the number record, and the sites are enumerated and pinned
+
+**Status.** accepted (2026-08-28)
+
+**Context.** `D-0210` records a JSON number's Python spelling on its CONTAINER SLOT, because a
+number is a primitive with nothing to hang a record on. The cost of that choice is an obligation it
+cannot enforce: a rebuilt container is a NEW container, its record starts empty, and a site that
+forgets to carry the old one across loses every spelling under it. Nothing goes red. The values are
+still numbers, every comparison still holds, and the only visible effect is bytes in a file that
+`D-0201` compares across a restart.
+
+That obligation was not met, and the entry said it was. `D-0210` shipped naming three rebuild sites
+(`stripMeta`, `substitute`, `pyDict`) and claiming they were all of them. There was a fourth,
+`deepSortKeys`, and it is the LAST call `settingsPayload` makes before the result becomes
+`fence.settings` -- so the repair stopped one call short of `settings.local.json` and the persisted
+fence, which are the two artefacts it was made for. Measured with `"env": {"A": 1.0, "B":
+9007199254740993}`: interlock writes `1.0` and `9007199254740993`, continuo wrote `1` and
+`9007199254740992`. The READBACK half was sound throughout; only the RENDER half diverged, which is
+the direction that writes a wrong file.
+
+Asking the same question of the call one level up found a **fifth** site: `settingsPayload` builds a
+new object out of `rendered`, so a section whose value is a bare number (`"env": 1.0`) leaves its
+spelling behind. A section is normally a mapping, whose record rides on the mapping object itself,
+which is why no other shape reaches the gap and why nothing had noticed it.
+
+**Decision.** Three parts, and the third is the one that keeps the first two from recurring.
+
+1. **Both sites carry the record.** `deepSortKeys` calls `carryNumberSpellings` on both branches --
+   the mapped array and the sorted object -- and deliberately does NOT call `rememberKeyOrder`,
+   because replacing the source order with a sorted one is the whole point of that rebuild.
+   `settingsPayload` carries key by key instead, because one of its keys (`permissionMode`) does not
+   come from the container it copies, and handing that key a spelling recorded for some role
+   document's own `permissionMode` would be the stale-spelling trap described below.
+2. **Both are pinned, at the artefact.** Two target-only cases in
+   `test/fencing/spawn-precondition.test.ts` drive `FencedSpawner.spawn` and assert on the BYTES of
+   the written `settings.local.json` and the published fence. The document has to arrive as TEXT --
+   serialised, patched, and read back through `loadDocument` -- because a spelling cannot be written
+   in TypeScript at all: the literal `1.0` IS `1`, so a case that built the role body in code would
+   carry no spelling into the document and would pass against the broken renderer. That is why the
+   gap existed. Both cases were confirmed to fail, for the stated reason, with each repair reverted
+   (`docs/test-translation-conventions.md` section 10).
+3. **The claim is replaced by an enumeration plus an obligation.** The header of
+   `src/fencing/pyjson.ts` now lists all five sites and says that a new one must carry the record
+   AND be pinned. A normative record that overstates its own coverage is worse than one that states
+   a narrow claim, because the reader who checks it stops looking.
+
+**The measurement is a file now.** `D-0210`'s commit message claims 91,775 comparisons over 18,355
+documents with no divergence. The harness that produced it was never committed, so when this lane
+restarted the number could not be reproduced or re-run -- the only evidence left was the sentence
+claiming it, which is the same failure mode as a normative comment that overstates its coverage.
+`scripts/pyjson-roundtrip-sweep.mjs` is the replacement: it generates the product of 48 numeric
+literals and six container shapes, asks CPython for the five spellings this subsystem persists or
+asserts on (`dumps`, `dumps(sort_keys)`, `dumps(sort_keys, indent=2)`, `dumps(sort_keys,
+separators)`, and `type(x).__name__` at every number), and compares. **No divergence over 4,800
+documents / 24,000 comparisons**, re-run at this lane's tip. It is deliberately not wired into
+`npm run verify` or CI, for the reason `scripts/oracle/` is not either: the matrix cells have no
+CPython, which is why a vector is committed instead. The durable check stays
+`pyjson.number_documents` in `parity/oracle/fnmatch-shlex-corpus.json`, which runs on every cell.
+
+Writing it hit the trap it was written to check: the walker used `Object.keys`, JavaScript hoisted
+`"10"` in front of `"2"`, and the harness reported 48 divergences of its own making before `pyKeys`
+replaced it. The same collapse `pyjson.ts` exists to close, met while building the check for it.
+
+**A safety claim that described an armed trap as disarmed.** `carryNumberSpellings` said entries
+whose value the rebuild REPLACED are harmless "because a spelling is only consulted for a value that
+is still a number". A replacement number IS still a number: the function carries the whole record
+keyed by NAME, with no check that the value under each name is the one whose spelling was recorded,
+so loading `{"x": 1.0}` and rebuilding with `x = 2` dumps `2.0` where CPython dumps `2`. No site in
+this port replaces a number, so nothing reaches it today -- which is precisely why the comment is
+the only thing standing between it and the next rebuild site. The comment now states the trap, names
+the condition under which carrying the record wholesale is correct, and says what a site that
+replaces values has to do instead.
+
+**Alternatives.**
+
+- **Record the spelling inside the value after all (rejected).** It removes the obligation by
+  removing the container, and it is the alternative `D-0210` rejected for reasons that have not
+  changed: a boxed `Number` or a `bigint` breaks `===`, `typeof` and arithmetic across a tree the
+  fence's own comparisons walk. Trading a byte-level property for a comparison-level one is the
+  wrong direction.
+- **A runtime assertion that every rebuilt container carries a record (rejected).** Most rebuilds
+  legitimately have nothing to carry, so the assertion would have to know which ones should -- which
+  is the enumeration it was supposed to replace, written twice.
+- **Leave `settingsPayload` and add a sixth bullet to the "not fixed" list (rejected).** It is a
+  five-line carry with a case that pins it. Listing a defect one can fix, in the same edit that
+  criticises an entry for overstating coverage, is the failure repeating itself in the other
+  direction.
+
+**Falsified by.** A rebuild site that has to REPLACE a number under a key it keeps -- the wholesale
+carry is then wrong for that site, and the trap above stops being hypothetical.

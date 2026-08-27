@@ -810,10 +810,25 @@ export function pyNumberSpelling(
  * makes, and needed at exactly the same places for exactly the same reason: a
  * rebuilt object or a mapped array is a NEW container, and a spelling that
  * stayed behind on the old one is a `1.0` that reaches `settings.local.json` as
- * `1`. Entries for keys the rebuild dropped are harmless -- a spelling is only
- * ever read through a key that is still there -- and entries whose value the
- * rebuild REPLACED are harmless too, because a spelling is only consulted for a
- * value that is still a number.
+ * `1`.
+ *
+ * Entries for keys the rebuild DROPPED are harmless: a spelling is only ever
+ * read through a key that is still there.
+ *
+ * **Entries whose value the rebuild REPLACED are not.** This carries the whole
+ * record across, keyed by name, with no check that the value under each name is
+ * the one whose spelling was recorded -- so a rebuild that substitutes a
+ * DIFFERENT number under a name it kept hands that number the old one's
+ * spelling. Loading `{"x": 1.0}` and rebuilding with `x = 2` dumps `2.0`, where
+ * CPython dumps `2`. No rebuild site in this port replaces a number
+ * (`substitute` rewrites strings only, and the other four copy values through),
+ * so nothing reaches it today -- which is exactly why it is written down here
+ * rather than left as an invariant somebody has to rediscover. A site that
+ * starts replacing values must drop or update the affected entries; carrying
+ * the record wholesale is correct only for a rebuild that preserves them.
+ * {@link ../fencing/renderer.ts | settingsPayload} is the one site that cannot
+ * use this function for the neighbouring reason -- a key of its own that comes
+ * from somewhere other than the container it copies.
  */
 export function carryNumberSpellings<T extends object>(from: unknown, to: T): T {
   if (typeof from !== "object" || from === null) {

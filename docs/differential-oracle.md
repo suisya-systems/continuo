@@ -195,6 +195,20 @@ port compiled, which is the "interlock refuses, continuo renders" direction. Tha
 moved from the deviation list into the ordinary refusal comparison. All three are recorded in
 `D-0200`.
 
+### The wide sweep beside the committed vector
+
+The corpus is hand-chosen and it is checked on every cell, which is the trade it makes: a
+committed vector needs no CPython at test time, and a hand-chosen corpus covers what someone
+thought of. `scripts/pyjson-roundtrip-sweep.mjs` is the other half for the one transcription whose
+output is compared BY BYTES -- it generates the product of 48 numeric literals and six container
+shapes and compares five spellings of each against CPython, on demand. It is **not** wired into
+`npm run verify` or CI, for the same reason `scripts/oracle/` is not: the matrix cells have no
+Python, which is why a vector is committed instead. Run it when `pyjson.ts` or `pysemantics.ts`
+changes; the durable check stays `pyjson.number_documents`.
+
+`D-0211` records why it is a file rather than a number in a commit message, and what a sweep run
+only over the SHIPPED role document failed to see.
+
 ## 3. What is normalised, and why each part is there
 
 The dump is not "whatever the database happens to return". Every element of the shape is a decision

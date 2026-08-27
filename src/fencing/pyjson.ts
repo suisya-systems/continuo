@@ -73,10 +73,20 @@
  *   `pyJsonLoads("1.0")` still dumps as `1`. Every fencing artefact -- the
  *   persisted fence, a settings document, a ledger line, a role document -- has
  *   an object at its root.
- * - a container REBUILT without carrying its spellings across loses them. The
- *   rebuild sites in this port (`stripMeta`, `substitute`, `pyDict`) carry them
- *   with `carryNumberSpellings`, next to the `rememberKeyOrder` call they
- *   already made for the same reason.
+ * - a container REBUILT without carrying its spellings across loses them. This
+ *   is a standing obligation on every rebuild site, not a property the module
+ *   can enforce: the record hangs on the container, so a new container starts
+ *   empty and nothing goes red when one forgets. The five sites in this port
+ *   are `stripMeta`, `substitute`, `deepSortKeys` and `settingsPayload` in
+ *   `renderer.ts`, and `pyDict` in `pysemantics.ts`; four carry the record with
+ *   `carryNumberSpellings`, next to the `rememberKeyOrder` call they already
+ *   made for the same reason, and `settingsPayload` carries it key by key
+ *   because one of its keys does not come from the container it copies. **Any
+ *   new rebuild site has to do the same, and has to be pinned**: D-0210 shipped
+ *   with `deepSortKeys` uncarried and this list naming only three, and neither
+ *   the suite nor this comment said so -- the repair reached everything except
+ *   `settings.local.json` and the persisted fence, which were the artefacts it
+ *   was for. See D-0211.
  * - `pyStr` still renders an integral float as an int, which is visible only
  *   for a role document that spells `role_kind` or `permission_mode` as a
  *   number. Recorded there rather than fixed in passing.

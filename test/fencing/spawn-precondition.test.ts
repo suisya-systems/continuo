@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -9,8 +9,13 @@ import {
   ProbeSynthesisError,
   runBattery,
 } from "../../src/fencing/battery.js";
-import { pyJsonLoads } from "../../src/fencing/pyjson.js";
-import { type FenceContext, RefusalReason, type RoleDocument } from "../../src/fencing/renderer.js";
+import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
+import {
+  type FenceContext,
+  loadDocument,
+  RefusalReason,
+  type RoleDocument,
+} from "../../src/fencing/renderer.js";
 import { makeDecision } from "../../src/fencing/rules.js";
 import {
   EVENT_ADMITTED,
@@ -592,6 +597,140 @@ describe("the canary acceptance is wired, not merely implemented (target-only)",
     // And the precondition is reached from the spawn path through the seam
     // record, which is what the liveness case above proves is live.
     expect(source).toContain("spawnSeams.runBattery(");
+  });
+});
+
+describe("a document's number spelling reaches settings.local.json (target-only, D-0211)", () => {
+  // The hole this closes was invisible to every other case in the suite, and
+  // that is the point of the case rather than an aside. D-0210 records a JSON
+  // number's Python spelling on its CONTAINER SLOT, so every rebuild of a
+  // container has to carry the record across. Three of the four rebuild sites
+  // did; `deepSortKeys` did not -- and `settingsPayload` calls it as its LAST
+  // step, so the repair stopped one call short of `fence.settings`, which is
+  // exactly the payload that becomes `settings.local.json` and the persisted
+  // fence. The readback half was sound the whole time. Only the RENDER half
+  // diverged, which is the direction that writes a wrong file.
+  //
+  // Nothing pinned it because a spelling cannot be written in TypeScript: the
+  // JavaScript literal `1.0` IS `1`, so a case that built the role body in code
+  // would have carried no spelling into the document and would have passed
+  // against the broken renderer. The value has to arrive as DOCUMENT TEXT,
+  // which is why the body below is serialised, patched as text, and read back
+  // through `loadDocument` -- the production read path -- rather than assembled
+  // as an object.
+
+  /**
+   * The shipped document with `worker.env` carrying two numbers a JavaScript
+   * literal cannot express, written as source text.
+   *
+   * The sentinel-and-replace is not a shortcut around building the object: it
+   * is the only way to get a `1.0` and an exact `9007199254740993` INTO a
+   * document from a test written in TypeScript. `JSON.parse` -- and every
+   * object literal -- has already collapsed both by the time any assembled
+   * value exists.
+   */
+  function documentWithNumericEnv(root: string): RoleDocument {
+    const authored = mutate(fenceDocument(), "worker", {
+      env: {
+        // An integral float. CPython's `json.dumps` writes `1.0`; a port that
+        // lost the spelling writes `1`.
+        CONTINUO_INTEGRAL_FLOAT: "<<1.0>>",
+        // 2**53 + 1, the smallest integer a double cannot hold. CPython writes
+        // the digits back; a port that kept only the parsed value writes
+        // `9007199254740992`.
+        CONTINUO_BIG_INT: "<<9007199254740993>>",
+      },
+    });
+    const text = pyJsonDumps(authored, { indent: 2 }).replaceAll(
+      /"<<([^"]+)>>"/g,
+      (_whole, literal: string) => literal,
+    );
+    const path = join(root, "roles-with-numeric-env.json");
+    writeFileSync(path, text, "utf8");
+    return loadDocument(path);
+  }
+
+  test("an integral float and an exact big integer survive to the written settings file", () => {
+    const { root, ctx, ledger } = fixtures();
+    const document = documentWithNumericEnv(root);
+    const outcome = new FencedSpawner({ ledger, document }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    expect(outcome.admitted, JSON.stringify(outcome.reasons)).toBe(true);
+    const plan = outcome.plan;
+    expect(plan).not.toBeNull();
+    if (plan === null) {
+      return;
+    }
+    // BYTES, not a parsed value: `pyJsonLoads` of the file would collapse both
+    // spellings again and the case would assert nothing. This is the same
+    // reason the LF case in `restart-preserves-fence.test.ts` reads bytes.
+    const written = readFileSync(plan.settingsPath, "utf8");
+    expect(written).toContain('"CONTINUO_INTEGRAL_FLOAT": 1.0');
+    expect(written).toContain('"CONTINUO_BIG_INT": 9007199254740993');
+    // And the persisted fence, which the restart path compares BY BYTES, holds
+    // the same two spellings -- it carries the same `settings` payload.
+    const fence = readFileSync(plan.fencePath, "utf8");
+    expect(fence).toContain('"CONTINUO_INTEGRAL_FLOAT": 1.0');
+    expect(fence).toContain('"CONTINUO_BIG_INT": 9007199254740993');
+  });
+
+  test("the in-memory settings payload is where the spelling has to survive", () => {
+    // The half above reads files, so it would also go green if the spelling
+    // were re-attached somewhere on the way to disk. This one names the object
+    // the repair is actually about: `fence.settings` is what `writeSettings`
+    // serialises and what the restart diff compares, and it is the value
+    // `deepSortKeys` returns.
+    const { root, ctx, ledger } = fixtures();
+    const document = documentWithNumericEnv(root);
+    const outcome = new FencedSpawner({ ledger, document }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    const settings = outcome.fence?.settings;
+    expect(settings).toBeDefined();
+    expect(pyJsonDumps(settings, { sortKeys: true })).toContain('"CONTINUO_INTEGRAL_FLOAT": 1.0');
+    // The parsed VALUE of the big integer is still the rounded double -- only
+    // the digits are recovered, for re-emission. Stated here as well as in the
+    // pyjson header so the case cannot be read as a claim of exact arithmetic.
+    const env = (settings as Record<string, unknown>)["env"] as Record<string, unknown>;
+    expect(env["CONTINUO_BIG_INT"]).toBe(9007199254740992);
+  });
+
+  test("a settings section that is itself a number keeps its spelling", () => {
+    // The FIFTH rebuild site, found by asking the same question of the call one
+    // level up: `settingsPayload` builds a new object out of `rendered`, so a
+    // section whose value is a bare NUMBER leaves its spelling behind on
+    // `rendered` exactly as `deepSortKeys` did. A section is normally a
+    // mapping, whose spellings ride on the mapping object itself, so this is
+    // the only shape that reaches the gap -- and it is the shape no other case
+    // in the suite constructs.
+    //
+    // Measured before the carry existed: CPython writes `"env": 1.0` here and
+    // this port wrote `"env": 1`.
+    const { root, ctx, ledger } = fixtures();
+    const authored = mutate(fenceDocument(), "worker", { env: "<<1.0>>" });
+    const text = pyJsonDumps(authored, { indent: 2 }).replaceAll(
+      /"<<([^"]+)>>"/g,
+      (_whole, literal: string) => literal,
+    );
+    const path = join(root, "roles-with-scalar-env.json");
+    writeFileSync(path, text, "utf8");
+    const outcome = new FencedSpawner({ ledger, document: loadDocument(path) }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    expect(outcome.admitted, JSON.stringify(outcome.reasons)).toBe(true);
+    const plan = outcome.plan;
+    expect(plan).not.toBeNull();
+    if (plan === null) {
+      return;
+    }
+    expect(readFileSync(plan.settingsPath, "utf8")).toContain('"env": 1.0');
   });
 });
 
