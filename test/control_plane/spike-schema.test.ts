@@ -69,7 +69,7 @@ import {
   schemaSeams,
 } from "../../src/control_plane/schema.js";
 import { SPIKE_APPLICATION_ID } from "../../src/control_plane/spike.js";
-import { bytesOf, caseRoot, rawConnection } from "../testkit/cases.js";
+import { bytesOf, caseRoot, rawConnection, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
 import { parametrize } from "../testkit/parametrize.js";
 import { patchSeam } from "../testkit/seams.js";
@@ -81,13 +81,53 @@ const T0 = 1_700_000_000_000;
 type Cell = string | number | null;
 
 /**
+ * The database's name inside a case root.
+ *
+ * Shared with {@link spikeTemplate} rather than written twice: the template is
+ * copied in under this name, so a case that takes a copy and a case that
+ * creates its own agree on the path without anyone having to keep two string
+ * literals in step. The path is not cosmetic here -- every refusal this module
+ * raises interpolates it (see the label note in {@link controlPlane}).
+ */
+const DATABASE_NAME = "control-plane.sqlite3";
+
+/**
  * The source's `db_path` fixture: a name inside a fresh per-test directory,
  * where no file exists yet. Several cases assert nothing was created there, so
  * this must not create it.
  */
 function databaseName(root: string): string {
-  return join(root, "control-plane.sqlite3");
+  return join(root, DATABASE_NAME);
 }
+
+/**
+ * The database every case starts from, built once for this file (D-0028).
+ *
+ * Every case here wants the same thing -- a spike control plane at
+ * {@link SCHEMA_REVISION}, with no clock and no options to vary, because
+ * `createControlPlane` takes neither -- so the per-case fixture is identical by
+ * construction and a copy of one build is the same database the case used to
+ * create for itself. Measured N=30 on this box, on the pinned prebuilt
+ * better-sqlite3 (D-0009): 97.5ms to create one against 2.7ms to copy and open
+ * one.
+ *
+ * The 97.5ms is fsyncs, not SQL: the DDL runs at SQLite's own default of
+ * `synchronous = FULL`, and the same creation with `synchronous = OFF` takes
+ * 2.7ms (the DDL against an in-memory database takes 0.5ms). So what the copy
+ * removes is one durable commit per case of a file no case needs to be durable
+ * -- which is why opening the copy is cheap even though `openControlPlane`
+ * does strictly more work than `createControlPlane` does.
+ *
+ * The build runs inside whichever case copies first, which under a shuffled
+ * order is not a fixed case. That is safe here only because no case in this
+ * file patches a `schemaSeams` entry *before* taking its fixture -- every seam
+ * test takes its control plane first and patches afterwards -- so the template
+ * is never built through a replaced seam. A new case that patches first must
+ * take {@link createdControlPlane} instead.
+ */
+const spikeTemplate = suiteTemplate(DATABASE_NAME, (path) => {
+  createControlPlane(path).close();
+});
 
 /**
  * The source's `cp` fixture, as a plain call (function scope).
@@ -96,6 +136,16 @@ function databaseName(root: string): string {
  * opened, not by a file-level `afterEach`: several cases close it themselves
  * partway through, and on Windows a connection left open keeps a lock that
  * makes the temp-directory cleanup fail.
+ *
+ * The database is a copy of {@link spikeTemplate} opened with
+ * `openControlPlane`, not a fresh `createControlPlane`. Both hand back a
+ * connection carrying the same two pragmas (`configureConnection`), and opening
+ * verifies the copy is at head -- so a template that failed to build, or built
+ * something that is not this schema, is a typed refusal at the first case
+ * rather than a case that quietly runs against the wrong database.
+ *
+ * Four cases must NOT use this, and take {@link createdControlPlane}: the ones
+ * whose subject is creation itself.
  */
 function controlPlane(): { root: string; dbPath: string; cp: SqliteDatabase } {
   // The label is `s5` -- interlock's own name for this module -- and NOT
@@ -120,17 +170,29 @@ function controlPlane(): { root: string; dbPath: string; cp: SqliteDatabase } {
   // refusal message uses. A `parametrize`d case is the dangerous one, because
   // one vacuous match hides behind several passing expansions.
   const root = caseRoot("s5");
+  const dbPath = spikeTemplate.copyInto(root);
+  return { root, dbPath, cp: closeAfterTest(openControlPlane(dbPath)) };
+}
+
+/**
+ * The same fixture, created rather than copied.
+ *
+ * For the cases whose subject is `createControlPlane` itself. Handing those a
+ * copy would not merely be slower-for-nothing; it would delete what they
+ * assert. Two of them call `createControlPlane` as the act under test and need
+ * a database that a *creation* put there ("creating over an existing path is
+ * refused", "a creation that loses a race does not delete the winners
+ * database"). The other two assert exactly what `openControlPlane` verifies on
+ * the way in -- the `application_id` / `user_version` stamps, and that the
+ * database's fingerprint matches the one derived from the DDL -- so over a
+ * copy their assertions could no longer fail: the fixture would have refused
+ * first, and the specific pin would be gone (section 10 of
+ * docs/test-translation-conventions.md).
+ */
+function createdControlPlane(): { root: string; dbPath: string; cp: SqliteDatabase } {
+  const root = caseRoot("s5");
   const dbPath = databaseName(root);
-  const cp = createControlPlane(dbPath);
-  onTestFinished(() => {
-    try {
-      cp.close();
-    } catch {
-      // Already closed by the test. Closing twice is not an error worth
-      // failing a passing test over.
-    }
-  });
-  return { root, dbPath, cp };
+  return { root, dbPath, cp: closeAfterTest(createControlPlane(dbPath)) };
 }
 
 /** Close a connection when the test finishes, whatever the test does with it. */
@@ -139,7 +201,8 @@ function closeAfterTest(connection: SqliteDatabase): SqliteDatabase {
     try {
       connection.close();
     } catch {
-      // See controlPlane().
+      // Already closed by the test. Closing twice is not an error worth
+      // failing a passing test over.
     }
   });
   return connection;
@@ -1413,7 +1476,10 @@ describe("criterion 5 -- corrupt state is refused, never recovered as empty (R3)
   });
 
   test("creating over an existing path is refused", () => {
-    const { cp, dbPath } = controlPlane();
+    // Created, not copied: the act under test is `createControlPlane`, and the
+    // database it must refuse to create over has to be one a creation put
+    // there. See createdControlPlane().
+    const { cp, dbPath } = createdControlPlane();
     addRun(cp);
 
     expectRefusal(() => createControlPlane(dbPath), ControlPlaneRefusal, "already exists");
@@ -1422,7 +1488,10 @@ describe("criterion 5 -- corrupt state is refused, never recovered as empty (R3)
   });
 
   test("a created database is stamped so it can be recognised", () => {
-    const { cp } = controlPlane();
+    // Created, not copied: `openControlPlane` verifies both stamps on the way
+    // in, so over a template copy neither assertion could fail and this pin
+    // would be gone. See createdControlPlane().
+    const { cp } = createdControlPlane();
     expect(cp.pragma("application_id", { simple: true })).toBe(SPIKE_APPLICATION_ID);
     expect(cp.pragma("user_version", { simple: true })).toBe(SCHEMA_REVISION);
   });
@@ -1599,7 +1668,10 @@ describe("the shape of the schema is verified, not just the names (round-1 self-
   );
 
   test("the expected fingerprint is derived from the ddl not pinned beside it", () => {
-    const { cp } = controlPlane();
+    // Created, not copied: this is the same comparison `openControlPlane`
+    // makes while verifying, so over a template copy it would be asserting
+    // what the fixture had already established. See createdControlPlane().
+    const { cp } = createdControlPlane();
     expect(schemaFingerprint(cp)).toBe(expectedSchemaFingerprint());
   });
 
@@ -1616,7 +1688,10 @@ describe("the shape of the schema is verified, not just the names (round-1 self-
     // property is that the loser is refused *before it ever connects*: the
     // connect seam is armed to fail the test if production reaches it, which
     // is the step the source's cleanup hung off.
-    const { cp, dbPath } = controlPlane();
+    //
+    // Created, not copied: the winner's database is the one a creation won the
+    // race for. See createdControlPlane().
+    const { cp, dbPath } = createdControlPlane();
     addRun(cp);
 
     const real = schemaSeams.connect;

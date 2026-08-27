@@ -55,6 +55,7 @@ spaces distinct.
 | D-0025 | An expensive, identical fixture is built once per test file and copied per case | accepted |
 | D-0026 | A gate relay targets the stage the gate is about to enter | accepted |
 | D-0027 | A converted control-plane fixture opens the template copy through the public entry point | accepted |
+| D-0028 | The spike-schema template stops short of the cases whose subject is creation | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -3466,3 +3467,107 @@ rather than bending the template to cover it.
 
 **Source.** Task `continuo-control-plane-productiondb`, 2026-08-28. Decision id allocated by the
 window; recipe and file list from continuo issue 37.
+
+
+## D-0028 -- The spike-schema template stops short of the cases whose subject is creation
+
+**Context.** D-0027 converted the nine control_plane files that build a *production* control plane
+and left `spike-schema.test.ts` explicitly out of scope: it is the one file in the lane that uses the
+spike `createControlPlane`, so it needed a template of its own rather than a tenth copy of that
+recipe. This is that template.
+
+The file qualifies more cleanly than any of the nine did. `createControlPlane` takes a path and
+nothing else -- no clock, no `migrationsDir`, no options at all -- so D-0027's first three properties
+("one create call, every case on `T0`, no override") are not merely satisfied here, they are
+unfalsifiable: every one of the 50 fixture calls in the file was already asking for a byte-identical
+database. What is left to judge is only D-0027's fourth property, the one about a template handing
+out a database that exists.
+
+**Decision.** 46 of the 50 fixture call sites take a copy of one `suiteTemplate`, opened with
+`openControlPlane`. Four keep calling `createControlPlane`, through a second fixture
+(`createdControlPlane()`) that exists to be named at those call sites.
+
+The four are not the ones D-0027's rule would have caught. No case in this file asserts that the
+database is *absent* while also taking the fixture -- the three that assert absence (`an absent
+database is refused and not created`, `the ddl is refused if the marking is removed`, `a creation
+that cannot connect leaves no file behind`) build their own paths and never touched the fixture to
+begin with. The four that
+must keep creating split into two kinds, and only the first kind is what D-0027 meant by "creation
+itself is what it tests":
+
+- **`createControlPlane` is the act under test.** `creating over an existing path is refused` and
+  `a creation that loses a race does not delete the winners database`. Both call `createControlPlane`
+  as the statement being asserted about, and both need the database it refuses over to be one a
+  creation put there. A copy would still make them pass, which is the problem: they would be passing
+  about a situation their prose does not describe.
+- **The assertion is one `openControlPlane` already makes.** `a created database is stamped so it can
+  be recognised` asserts `application_id` and `user_version`; `the expected fingerprint is derived
+  from the ddl not pinned beside it` asserts `schemaFingerprint(cp) == expectedSchemaFingerprint()`.
+  `openControlPlane` verifies all three on the way in. Over a copy neither case could fail on its own
+  assertion -- the fixture would have refused first -- so each would be reduced to a second report of
+  a failure every other case in the file was already reporting.
+
+That second kind is new. D-0027 did not meet it because `openProductionControlPlane` verifies a
+*ledger head*, which no production case asserts directly; `openControlPlane` verifies the *stamps and
+the schema shape*, which two spike cases assert exactly. It is the shape section 10 of
+`docs/test-translation-conventions.md` is about, arriving from the fixture rather than from the
+subject: green would still have been green, and red would still have been red, but the case would no
+longer have been the thing deciding which.
+
+Measured rather than argued. With the `application_id` stamp deleted from `createControlPlane`,
+`a created database is stamped so it can be recognised` fails on its own assertion
+(`expected +0 to be 1229736757`) rather than on the fixture -- which is the property the exclusion
+buys, and it is only observable while the case still creates its own database.
+
+**Decision, second half.** The template is opened with `openControlPlane` for D-0027's reason
+unchanged: a template that built something that is not this schema becomes a typed refusal at the
+first case rather than a case running against the wrong database. Both entry points end at
+`configureConnection`, so the handle a converted case gets carries the same two pragmas it always
+did.
+
+**Measurement.** N=30 on this worker's Linux box, on the pinned prebuilt better-sqlite3 (D-0009):
+**97.5ms to create a spike control plane, 2.70ms to copy one and open it, 0.33ms to copy it alone.**
+
+The 97.5ms is worth recording because it is not where one would look for it. It is not the DDL: the
+same schema against an in-memory database is 0.5ms, and the same creation with `synchronous = OFF` is
+2.68ms. It is fsyncs -- the DDL runs at SQLite's own default of `synchronous = FULL`, before
+`configureConnection` is reached -- so what the template removes is one durable commit per case, of a
+file no case needs to be durable. That is also why `openControlPlane` is affordable here despite
+doing strictly more work than `createControlPlane`: it opens four connections and builds the DDL
+twice in memory to verify, and all of that together is 2.4ms against one fsync's 95ms.
+
+**Alternatives.**
+
+- **Convert all 50 (rejected).** It is faster by four creations, roughly 0.4s, and it costs the two
+  pins above. The four exclusions are 8% of the file's fixture calls and the whole of its evidence
+  that creation stamps what it claims to stamp.
+- **Keep one fixture and pass a flag (rejected).** `controlPlane({ create: true })` reads as a
+  performance switch at the call site. A separately named `createdControlPlane()` makes the call site
+  say which property it depends on, which is the thing a later reader has to get right.
+- **Give the two `openControlPlane`-verifies-it cases a `rawConnection` over the copy (rejected).**
+  It would restore their ability to fail without a creation, but by asserting against a connection
+  with none of the module's discipline -- so a stamp written by `createControlPlane` and a stamp
+  written by nothing would look the same to them if the template were ever built another way.
+
+**Consequences.**
+
+- 46 fixture call sites are served by one template build; four creations remain, plus the eleven
+  cases that build their own paths, or no database at all, and never used the fixture. The file's case count is unchanged at 65,
+  and the suite's at 1363.
+- The file's measured test time falls from **7.18s to 1.38s**.
+- No ledger changes: nothing about what is ported changed, only what the fixture copies.
+- The template's lazy build now runs inside whichever case copies first, which under a shuffled order
+  is not a fixed case. That is sound here only because no case in this file patches a `schemaSeams`
+  entry before taking its fixture -- every seam case takes its control plane first and patches
+  afterwards -- so the template is never built through a replaced seam. Recorded at the declaration,
+  because a new case that patched first would build the template through the patch and the failure
+  would appear in a different case.
+
+**Falsifier.** A spike-schema case that needs a database which does not exist yet, or that patches a
+`schemaSeams` entry before taking its fixture. Either puts that case back on `createdControlPlane()`
+rather than bending the template to cover it.
+
+**Status.** accepted
+
+**Source.** Task `continuo-spike-schema-template`, 2026-08-28. Decision id allocated by the window;
+scope and exclusion from continuo issue 37.
