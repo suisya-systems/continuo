@@ -68,7 +68,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 14,
+      "count": 15,
       "ids": [
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the p95 is nearest rank at a sample size where rounding disagrees",
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > a cohort with no covered row has no p95 and no sensitivity figure",
@@ -83,9 +83,10 @@
         "test/measurement/ac9.test.ts::properties the ported cases leave unguarded (target-only) > the coincide line is absent when coverage is not complete",
         "test/measurement/ac9.test.ts::exact integer arithmetic (target-only) > an output figure past 2^53 is summed exactly, not rounded",
         "test/measurement/ac9.test.ts::a deliberate divergence from interlock (target-only) > the header's acceptance predicate agrees with the report's",
-        "test/measurement/ac9.test.ts::hostile values in the rendering (target-only) > an invocation id cannot forge a line and cannot reach a cp932 console"
+        "test/measurement/ac9.test.ts::hostile values in the rendering (target-only) > an invocation id cannot forge a line and cannot reach a cp932 console",
+        "test/measurement/ac9.test.ts::every externally-supplied field at once (target-only) > an AC-9 report whose every caller value is hostile still renders one report"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python. A thirteenth is the evidence for D-0107, the one place this port deliberately and permanently diverges from interlock: the header's acceptance predicate now agrees with the report's. See divergences. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. All eleven close gaps a 32-mutation sweep found, and all eleven are INHERITED: each mutation was applied to interlock's own ac9.py at 65f36c5 and its 23 cases stayed green (measured, not inferred). Each is recorded with its verdict under mutation_sweep and each was confirmed to kill its mutation and only its mutation. A twelfth is different in kind: a PORT DIVERGENCE the codex review gate found, with no inherited counterpart because the difference does not exist in Python. A thirteenth is the evidence for D-0107, the one place this port deliberately and permanently diverges from interlock: the header's acceptance predicate now agrees with the report's. See divergences. Further cases were added by the D-0109 / D-0110 remediation belt, which repaired defects this ledger had disclosed (and, in four modules, defects it had not): each is the evidence for a divergence recorded above. The D-0109 belt's follow-up added an 'every externally-supplied field at once' case for this renderer. It is structural rather than per-field: a case that drives ONE field hostile passes as soon as any other field is escaped, which is how four review rounds each found one more raw field. scripts/escaping-coverage.mjs measures whether it actually covers this module's reportValue sites by removing each in turn."
     }
   },
   "totals": {
