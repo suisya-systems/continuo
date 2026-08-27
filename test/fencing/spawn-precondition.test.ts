@@ -887,8 +887,7 @@ describe("pyIterate's array branch drops the record, provably harmlessly (target
       const text = readFileSync(join(dir, file), "utf8");
       // The declaration in `pysemantics.ts` is not a call site.
       const calls =
-        (text.match(/pyIterate\(/g) ?? []).length -
-        (text.includes("function pyIterate(") ? 1 : 0);
+        (text.match(/pyIterate\(/g) ?? []).length - (text.includes("function pyIterate(") ? 1 : 0);
       if (calls > 0) {
         counts.push([file, calls]);
       }
