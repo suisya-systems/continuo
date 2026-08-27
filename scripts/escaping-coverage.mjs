@@ -55,7 +55,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const MODULES = [
   "ac9",
@@ -116,7 +116,13 @@ function main() {
   for (const entry of ["src", "test", "package.json", "tsconfig.json", "vitest.config.ts"]) {
     cpSync(entry, join(scratch, entry), { recursive: true });
   }
-  symlinkSync(join(process.cwd(), "node_modules"), join(scratch, "node_modules"));
+  // "junction" rather than a plain directory symlink: on Windows, creating a
+  // directory symlink needs Developer Mode or SeCreateSymbolicLinkPrivilege, so
+  // an ordinary non-administrator run fails with EPERM here -- before a single
+  // test runs, on the platform whose CI cells this script is meant to serve.
+  // A junction needs no privilege and no elevation. The type argument is
+  // ignored on POSIX, so this is the same call there.
+  symlinkSync(resolve("node_modules"), join(scratch, "node_modules"), "junction");
 
   // Run vitest through this same node binary and vitest's own entry script
   // rather than through `npx`. `execFileSync` without a shell cannot launch
