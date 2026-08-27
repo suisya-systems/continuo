@@ -3842,7 +3842,10 @@ twice in memory to verify, and all of that together is 2.4ms against one fsync's
 - 46 fixture call sites are served by one template build; four creations remain, plus the eleven
   cases that build their own paths, or no database at all, and never used the fixture. The file's case count is unchanged at 65,
   and the suite's at 1363.
-- The file's measured test time falls from **7.18s to 1.38s**.
+- The file's measured test time falls from **7.18s to 1.38s** on an idle box. The pair is
+  load-sensitive -- re-measured while the other lanes were running, the same comparison is 6.0s to
+  2.2s -- so the ratio is worth less than the per-case figures above; both halves of each pair were
+  measured together.
 - No ledger changes: nothing about what is ported changed, only what the fixture copies.
 - The template's lazy build now runs inside whichever case copies first, which under a shuffled order
   is not a fixed case. That is sound here only because no case in this file patches a `schemaSeams`
