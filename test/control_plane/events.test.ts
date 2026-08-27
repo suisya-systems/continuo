@@ -77,7 +77,10 @@ import {
   undrained,
   unsubscribe,
 } from "../../src/control_plane/events.js";
-import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
+import {
+  createProductionControlPlane,
+  openProductionControlPlane,
+} from "../../src/control_plane/migrator.js";
 import {
   effectiveRevisionId,
   NotADuration,
@@ -89,7 +92,7 @@ import {
   TransactionUsageError,
   transaction,
 } from "../../src/control_plane/txn.js";
-import { caseRoot, databasePath, rawConnection } from "../testkit/cases.js";
+import { caseRoot, databasePath, rawConnection, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -116,14 +119,47 @@ class TheCallersOwnFailure extends Error {
 // fixtures
 // --------------------------------------------------------------------------
 
-/** The source's `db_path` fixture: a name inside a fresh directory. */
+/**
+ * The source's `db_path` fixture: a name inside a fresh directory, where no
+ * file exists yet.
+ *
+ * Kept for the one case that hands the bare name to `rawConnection` and builds
+ * its own table in it. Every case that wants a *control plane* takes
+ * {@link productionDb} instead, which is the same name with the template
+ * already copied to it.
+ */
 function dbPathFixture(): string {
   return databasePath(caseRoot("spine"));
 }
 
-/** The source's `cp` fixture: a production control plane created at `T0`. */
-function cpFixture(path: string = dbPathFixture()): SqliteDatabase {
-  const connection = createProductionControlPlane(path, { nowMs: T0 });
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Every case here wants the same thing -- a production control plane created at
+ * `T0`, at head, with no `migrationsDir` override -- and creating one costs
+ * about 44ms against about 2.8ms to copy one and open it. Building it once per
+ * file and handing each case its own copy keeps the per-case fixture identical
+ * while removing the migrations this file used to run (D-0027).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/** A fresh copy of the template, in a fresh per-case directory. */
+function productionDb(): string {
+  return productionTemplate.copyInto(caseRoot("spine"));
+}
+
+/**
+ * The source's `cp` fixture: a production control plane created at `T0`.
+ *
+ * The connection now comes from `openProductionControlPlane` over a copy rather
+ * than from creating one. Both apply the same two pragmas, and opening verifies
+ * the copy is at head -- so a template that failed to build is a refusal here
+ * rather than a case that quietly runs against the wrong schema.
+ */
+function cpFixture(path: string = productionDb()): SqliteDatabase {
+  const connection = openProductionControlPlane(path);
   onTestFinished(() => {
     connection.close();
   });
@@ -387,7 +423,7 @@ describe("the shared transaction helper", () => {
   });
 
   test("transaction rolls the whole block back on any exception", () => {
-    const path = dbPathFixture();
+    const path = productionDb();
     const cp = cpFixture(path);
     addRun(cp);
     expectRefusal(
@@ -412,7 +448,7 @@ describe("the shared transaction helper", () => {
   });
 
   test("a nested transaction joins the outer one instead of committing early", () => {
-    const path = dbPathFixture();
+    const path = productionDb();
     const cp = cpFixture(path);
     addRun(cp);
     expectRefusal(
@@ -570,7 +606,7 @@ describe("the append transaction -- section 5.4", () => {
   });
 
   test("a failing side effect leaves no event no consumption and no outbox row", () => {
-    const path = dbPathFixture();
+    const path = productionDb();
     const cp = cpFixture(path);
     addRun(cp);
     addConsumer(cp, "relay", { kind: "delivery", recipient: "secretary-pane" });
@@ -1635,7 +1671,7 @@ describe("the orphaned-outbox pass", () => {
     // The pasted form was in this test and it stayed green while the shipped
     // predicate was rewritten into the degraded arithmetic below, which is the
     // whole regression the assertion claims to catch.
-    const path = dbPathFixture();
+    const path = productionDb();
     const cp = cpFixture(path);
     const params = {
       now_ms: T0,

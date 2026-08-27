@@ -81,8 +81,11 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
-import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
-import { caseRoot, databasePath } from "../testkit/cases.js";
+import {
+  createProductionControlPlane,
+  openProductionControlPlane,
+} from "../../src/control_plane/migrator.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectSqliteError } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -114,14 +117,43 @@ const SEED_NOTE =
 // fixtures
 // --------------------------------------------------------------------------
 
-/** The source's `db_path` fixture: a name inside a fresh per-test directory. */
-function dbPathFixture(): string {
-  return databasePath(caseRoot("s11"));
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Every case here wants the same thing -- a production control plane created at
+ * `T0`, at head, with no `migrationsDir` override -- and creating one costs
+ * about 44ms against about 2.8ms to copy one and open it. Building it once per
+ * file and handing each case its own copy keeps the per-case fixture identical
+ * while removing the migrations this file used to run (D-0027).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/**
+ * The source's `db_path` fixture, as a per-test call: a fresh copy of the
+ * template in a fresh per-case directory.
+ *
+ * The source hands out a name where no file exists yet; this hands out one that
+ * already holds the migrated database. Every case in this file passed that name
+ * straight to the `cp` fixture, so nothing here observes the difference -- the
+ * cases that do assert about an absent database live in `migrator.test.ts`,
+ * which is why that file keeps creating its own.
+ */
+function productionDb(): string {
+  return productionTemplate.copyInto(caseRoot("s11"));
 }
 
-/** The source's `cp` fixture: a production control plane created at `T0`. */
-function cpFixture(path: string = dbPathFixture()): SqliteDatabase {
-  const connection = createProductionControlPlane(path, { nowMs: T0 });
+/**
+ * The source's `cp` fixture: a production control plane created at `T0`.
+ *
+ * The connection now comes from `openProductionControlPlane` over a copy rather
+ * than from creating one. Both apply the same two pragmas, and opening verifies
+ * the copy is at head -- so a template that failed to build is a refusal here
+ * rather than a case that quietly runs against the wrong schema.
+ */
+function cpFixture(path: string = productionDb()): SqliteDatabase {
+  const connection = openProductionControlPlane(path);
   onTestFinished(() => {
     connection.close();
   });
@@ -1288,7 +1320,7 @@ describe("section 5 -- the event spine", () => {
     // row arriving at `N-1`. SQLite serialises write transactions, so `seq` is
     // assigned in commit order. This test is the thing that fails if this
     // database is ever put behind something that admits concurrent writers.
-    const dbPath = dbPathFixture();
+    const dbPath = productionDb();
     cpFixture(dbPath);
 
     const writerA = secondConnection(dbPath);
@@ -2366,7 +2398,7 @@ describe("target only", () => {
    * that goes red instead.
    */
   test("the second connection is configured the way the source configures it", () => {
-    const dbPath = dbPathFixture();
+    const dbPath = productionDb();
     cpFixture(dbPath);
 
     const connection = secondConnection(dbPath);

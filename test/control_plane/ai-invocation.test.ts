@@ -109,8 +109,11 @@ import {
   UsageStatusContradictsTokensRefused,
   UsageWithoutRecordRefused,
 } from "../../src/control_plane/ai_invocation.js";
-import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
-import { caseRoot, databasePath } from "../testkit/cases.js";
+import {
+  createProductionControlPlane,
+  openProductionControlPlane,
+} from "../../src/control_plane/migrator.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
 import { parametrize } from "../testkit/parametrize.js";
 
@@ -132,11 +135,37 @@ const CONSTRAINT = /^SQLITE_CONSTRAINT/;
 // --------------------------------------------------------------------------
 
 /**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Every case here wants the same thing -- a production control plane created at
+ * `T0`, at head, with no `migrationsDir` override -- and creating one costs
+ * about 44ms against about 2.8ms to copy one and open it. Building it once per
+ * file and handing each case its own copy keeps the per-case fixture identical
+ * while removing the migrations this file used to run (D-0027).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/**
+ * The source's `db_path` fixture, as a per-test call: a fresh copy of the
+ * template in a fresh per-case directory.
+ */
+function productionDb(): string {
+  return productionTemplate.copyInto(caseRoot("ai"));
+}
+
+/**
  * The source's `cp` fixture: a production control plane created at `T0`, with
  * the run and the incident an invocation may be attributed to already in it.
+ *
+ * The connection now comes from `openProductionControlPlane` over a copy rather
+ * than from creating one. Both apply the same two pragmas, and opening verifies
+ * the copy is at head -- so a template that failed to build is a refusal here
+ * rather than a case that quietly runs against the wrong schema.
  */
 function cpFixture(): SqliteDatabase {
-  const connection = createProductionControlPlane(databasePath(caseRoot("ai")), { nowMs: T0 });
+  const connection = openProductionControlPlane(productionDb());
   onTestFinished(() => {
     connection.close();
   });

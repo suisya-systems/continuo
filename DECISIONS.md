@@ -54,6 +54,7 @@ spaces distinct.
 | D-0024 | The control_plane inherited-defect repairs, and what a failed COMMIT costs | accepted |
 | D-0025 | An expensive, identical fixture is built once per test file and copied per case | accepted |
 | D-0026 | A gate relay targets the stage the gate is about to enter | accepted |
+| D-0027 | A converted control-plane fixture opens the template copy through the public entry point | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -3385,3 +3386,83 @@ exists for. Recorded in `parity/measurement.provenance.ledger.json` under `diver
 **Falsified by.** interlock adopting the same tie-breaker, or the schema gaining a constraint that
 makes a mixed-storage-class column impossible.
 
+
+## D-0027 -- A converted control-plane fixture opens the template copy through the public entry point
+
+**Context.** D-0025 landed `suiteTemplate()` with one converted file as evidence and left each lane
+to move its own cases. This is the control_plane lane doing that. Nine files qualify --
+`ai-invocation`, `ci-ingest`, `events`, `gates`, `policy-seed`, `policy`, `production-schema`,
+`repo-link`, `watcher` -- on three properties that make the template's single build the same fixture
+every case was already getting: exactly one `createProductionControlPlane` call in the file, every
+case on `nowMs: T0`, and no `migrationsDir` override. A fourth property decides the two that do not
+convert: no case may assert about the database being **absent**, because a template hands out a
+database that exists.
+
+`migrator.test.ts` fails all four -- 39 calls, 12 assertions about `existsSync` and sidecars, three
+clock values -- and it fails them for a reason that is not incidental: *creation itself* is what that
+file tests, so a template would delete its subject. It keeps creating its own. `spike-schema.test.ts`
+uses the spike `createControlPlane` and would want a template of its own; out of scope here.
+
+The question this decision answers is the one D-0025 did not have to: `cohort.test.ts` hands its
+cases a **path**, but every fixture in these nine hands back an **open connection** from
+`createProductionControlPlane`. Copying a template does not produce a connection, so each converted
+fixture has to open the copy, and how it opens it is a real choice.
+
+**Decision.** The copy is opened with `openProductionControlPlane`, the module's public entry point
+for an existing database, rather than with `openControlPlaneConnection` + `configureConnection`
+directly.
+
+The two spellings produce an identically configured handle -- both end at `configureConnection`, so
+both carry `foreign_keys = ON` and `synchronous = FULL`, and neither sets a journal mode (D-0012).
+What separates them is what happens when the template is wrong. `openProductionControlPlane`
+verifies the file is at head before returning, so a template that built against the wrong schema, or
+copied without a sidecar it needed, is a typed refusal at the first case. The direct spelling would
+hand out the connection anyway and let the case fail somewhere downstream, or -- worse -- pass.
+
+Measured on this worker's Linux box, N=30: **44.5ms to create a migrated control plane, 2.78ms to
+copy one and open it through the public entry point, 1.34ms through the direct one.** The verification
+costs about 1.4ms per case and buys the failure mode above; against the 41.7ms the copy saves, it is
+not a trade worth making the other way. (The absolute create figure is lower than D-0025's 87.5ms
+because that one was measured cold, on the first creation of the process; the steady-state figure is
+the one a suite actually pays, and the ratio is what the decision turns on either way.)
+
+Two smaller consequences of the same rule:
+
+- **The template is the migrated schema and nothing else.** `watcher.test.ts` seeds a repository row
+  and `ai-invocation.test.ts` a run and an incident; those stay in the per-case fixture. Every file's
+  `suiteTemplate` declaration is therefore the same four lines, which is what makes it checkable by
+  eye that nine files got the same fixture.
+- **`events.test.ts` keeps `dbPathFixture()` alongside the new `productionDb()`.** One case hands the
+  bare name to `rawConnection` and builds its own table in it; it wants a name where no file exists,
+  not a control plane. Converting it would have been the absence-assertion mistake in miniature.
+  `production-schema.test.ts` had no such case, so its `dbPathFixture` is gone.
+
+**Alternatives.**
+
+- **Open with `openControlPlaneConnection` + `configureConnection` (rejected).** 1.4ms per case
+  cheaper and silent about a broken template. See above.
+- **Put each file's seed rows into its template (rejected).** It would save a handful of INSERTs
+  against making every file's template a different thing, which is the property that lets this
+  migration be reviewed as one change rather than nine.
+- **Convert `migrator.test.ts` too, with the absence cases left creating their own (rejected).** The
+  file would then hold two ways of getting a database, distinguished by a property -- "does this case
+  care that creation happened?" -- that a later case would have to re-derive to add itself correctly.
+
+**Consequences.**
+
+- 297 fixture call sites across the nine files are served by nine template builds. Case counts are
+  unchanged, file by file: 31, 25, 58, 50, 35, 34, 45, 24, 31 before and after, and the
+  `control_plane` suite stays at 605.
+- The nine files' measured test time falls from **44.3s to 10.9s** in one run of the suite. No ledger
+  changes, because nothing about what is ported changed.
+- Behaviour preservation is what the review is against, not the speed: a moved number here would be a
+  defect in the migration, and none moved.
+
+**Falsifier.** A control_plane case that needs a clock other than `T0`, a `migrationsDir` override, or
+a database that does not exist yet. Any of the three puts its file back on `createProductionControlPlane`
+rather than bending the template to cover it.
+
+**Status.** accepted
+
+**Source.** Task `continuo-control-plane-productiondb`, 2026-08-28. Decision id allocated by the
+window; recipe and file list from continuo issue 37.

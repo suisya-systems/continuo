@@ -46,8 +46,9 @@
  *   8), and it registers its `close()` with `onTestFinished` at the point of
  *   acquisition (rule 1) -- which is stricter than the source's `try/finally`,
  *   whose seeding INSERT runs before the `try` and would leak the connection on a
- *   failure there. The database file is named with `databasePath`, never with a
- *   `/` (rule 6).
+ *   failure there. The database file is named by the testkit (`copyInto` joins
+ *   the case directory and the template name with `node:path`), never with a `/`
+ *   (rule 6).
  * * The `caseRoot` label is `s8`, the schema section this module answers to
  *   (D-0020). No refusal in this file interpolates a filesystem path, no case
  *   asserts on one, and no assertion literal below occurs in
@@ -74,7 +75,10 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
 import { acquire } from "../../src/control_plane/lease.js";
-import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
+import {
+  createProductionControlPlane,
+  openProductionControlPlane,
+} from "../../src/control_plane/migrator.js";
 import {
   errorStreakScopes,
   HeartbeatRefused,
@@ -88,7 +92,7 @@ import {
   WatcherUsageError,
   watcherSeams,
 } from "../../src/control_plane/watcher.js";
-import { caseRoot, databasePath } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -115,9 +119,41 @@ const MODULE_SOURCE_PATH = fileURLToPath(
 // fixtures
 // --------------------------------------------------------------------------
 
-/** The source's `cp` fixture: a production control plane with one repository. */
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Every case here wants the same thing -- a production control plane created at
+ * `T0`, at head, with no `migrationsDir` override -- and creating one costs
+ * about 44ms against about 2.8ms to copy one and open it. Building it once per
+ * file and handing each case its own copy keeps the per-case fixture identical
+ * while removing the migrations this file used to run (D-0027).
+ *
+ * The repository row stays in `cpFixture` rather than in the template: the
+ * template is the migrated schema and nothing else, so every file's copy of this
+ * declaration is the same one.
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/**
+ * The source's `db_path` fixture, as a per-test call: a fresh copy of the
+ * template in a fresh per-case directory.
+ */
+function productionDb(): string {
+  return productionTemplate.copyInto(caseRoot("s8"));
+}
+
+/**
+ * The source's `cp` fixture: a production control plane with one repository.
+ *
+ * The connection now comes from `openProductionControlPlane` over a copy rather
+ * than from creating one. Both apply the same two pragmas, and opening verifies
+ * the copy is at head -- so a template that failed to build is a refusal here
+ * rather than a case that quietly runs against the wrong schema.
+ */
 function cpFixture(): SqliteDatabase {
-  const connection = createProductionControlPlane(databasePath(caseRoot("s8")), { nowMs: T0 });
+  const connection = openProductionControlPlane(productionDb());
   onTestFinished(() => {
     connection.close();
   });
