@@ -3885,7 +3885,36 @@ both now repaired with the half they must not break pinned beside them.
    --`, and `-- settings` reaching a subcommand choice as `invalid choice: '--'`). Reading the
    source of `argparse` would have given the first answer; running it gave the right one.
 
-**Verified by.** `npm run verify` green: lint, knip, typecheck, native smoke, 1527 tests, parity.
+**What the gate found in round 2, and the one thing it changed about the first response.** Three
+more P2s, all measured against CPython before being believed. Two were argparse: a
+negative-number-shaped token (`--out -1`) was classified as an unknown option, so the preceding
+option failed -- the first draft of `argparse.ts` claimed `_negative_number_matcher` "has no
+subject", which mistook the matcher's subject (the ARGUMENT token) for the condition that gates it
+(`_has_negative_number_optionals`, decided by the declared option strings); and an unrecognized
+option ahead of a valid subcommand was collected into `extras` and then abandoned by the subparser
+path's early return, so `claude-org-runtime --bogus settings generate ...` GENERATED a settings file
+for a command line the parser did not understand. `parse_args` is now `parse_known_args` plus a
+root-level extras report, which is argparse's own structure and the reason CPython names the ROOT
+prog for an extra found on either side of the subcommand.
+
+The third changed the first response rather than adding to it. Round 1 repaired
+`_kept_entry_string`'s `startswith("/")` and recorded the two sibling sites as
+deliberately-not-changed, on the reasoning that their consequence is reachability rather than
+emitted shape. Round 2 raised one of them, and reading the three together showed the boundary was
+not a boundary: `startswith("/")` IS `posixpath.isabs`, so the repair is a no-op on the platform
+interlock runs on at ALL THREE sites, and the source is already inconsistent -- two neighbouring
+functions use `os.path.isabs`, one of them with a comment giving exactly this reason. All three are
+now repaired as one divergence. **The "keep the blast radius small" instinct produced a worse
+answer than making the module agree with itself**, and it is recorded because the instinct is
+usually right.
+
+Those three repairs are invisible on a POSIX cell by construction, which is not good enough for a
+repair (rule 11: a pin that cannot fail on the cell a reviewer runs is a pin nobody has seen fail).
+`pypath.ts` dispatches on `process.platform` at CALL time -- deliberately, because that is how
+Python binds `os.path` -- so three target-only cases patch that property for the length of one test
+and each revert was confirmed to turn its pin red on Linux.
+
+**Verified by.** `npm run verify` green: lint, knip, typecheck, native smoke, 1544 tests, parity.
 106/106 source cases mapped, 103 ported and 3 adapted, **no waivers and nothing not-ported**; the
 source file re-run at `65f36c5` on the porting host reports 106 passed. The `os.path` oracle agrees
 with CPython 3.12.3 at every position in both namespaces. Every one of the thirteen rebuild branches

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, onTestFinished, test } from "vitest";
 
 import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
 import { expanduser, osJoin, osRealpath, osSep } from "../../src/fencing/pypath.js";
@@ -2731,5 +2731,252 @@ describe("the two in-pass repairs (target-only, D-0213)", () => {
       }),
     );
     expect(error.message).toContain("invalid choice: '--'");
+  });
+});
+
+/**
+ * Target-only. The three repairs the review gate found in round 2, each pinned
+ * against a value MEASURED from CPython 3.12.3 on this exact parser.
+ *
+ * The round-1 separator fix is why these are measured rather than reasoned
+ * about: that one was derived by reading `argparse`'s source, and it was wrong.
+ */
+describe("the round-2 repairs (target-only, D-0213)", () => {
+  const BASE = ["--role", "demo", "--worker-dir", "/wd", "--claude-org-path", "/co"];
+
+  /**
+   * `_negative_number_matcher`. This parser declares no option string that
+   * looks like a negative number, so `_has_negative_number_optionals` is false
+   * and the matcher is honoured: a negative-number-shaped token is a VALUE.
+   *
+   * Without it, `--task-id -1` fails with `expected one argument` and a task id
+   * or filename that happens to be negative-number-shaped is unusable.
+   */
+  const NUMERIC_VALUES: readonly string[] = ["-1", "-1.5", "-", "-0"];
+  const NOT_VALUES: readonly string[] = ["-x", "-12abc", "--1"];
+
+  for (const value of NUMERIC_VALUES) {
+    test(`a negative-number-shaped token is a value: --task-id ${value} (target-only)`, () => {
+      const root = tmpPath();
+      const schemaPath = join(root, "schema.json");
+      writeFileSync(schemaPath, '{"worker_roles": {"demo": {"k": "{task_id}"}}}', {
+        encoding: "utf8",
+      });
+      const out = join(root, "out.json");
+      const rc = main([...BASE, "--task-id", value, "--schema", schemaPath, "--out", out]);
+      expect(rc).toBe(0);
+      expect(pyJsonLoads(readFileSync(out, "utf8"))).toStrictEqual({ k: value });
+    });
+  }
+
+  for (const value of NOT_VALUES) {
+    test(`a token that only looks numeric is not a value: --task-id ${value} (target-only)`, () => {
+      const error = expectRaises(ArgparseExit, () =>
+        captureStderr(() => main([...BASE, "--task-id", value])),
+      );
+      expect(error.message).toBe("argument --task-id: expected one argument");
+    });
+  }
+
+  /**
+   * Extras are reported by the ROOT parser, after the subcommand has run.
+   *
+   * This is the finding with teeth: an unknown option ahead of a valid
+   * subcommand was collected into `extras` and then abandoned by the early
+   * return, so `claude-org-runtime --bogus settings generate ...` GENERATED a
+   * settings file for a command line the parser did not understand.
+   */
+  for (const [label, argv] of [
+    ["before the subcommand", ["--bogus", "settings", "generate", ...BASE]],
+    ["between the subcommands", ["settings", "--bogus", "generate", ...BASE]],
+    ["after the subcommand", ["settings", "generate", "--bogus", ...BASE]],
+  ] as const) {
+    test(`an unrecognized option ${label} is reported, not ignored (target-only)`, () => {
+      const parser = buildRuntimeParser();
+      const error = expectRaises(ArgparseExit, () =>
+        captureStderr(() => {
+          parser.parseArgs([...argv], defaultStreams());
+          return 0;
+        }),
+      );
+      expect(error.code).toBe(2);
+      expect(error.message).toBe("unrecognized arguments: --bogus");
+    });
+  }
+
+  /**
+   * The other two sites of the `startswith("/")` repair.
+   *
+   * Parameterised by platform for the reason the first one is: the property is
+   * "absolute means `os.path.isabs`", and `os.path` is a platform choice. On
+   * POSIX these assert the unchanged behaviour; on the Windows cells they
+   * assert the repair.
+   */
+  const ABSOLUTE = process.platform === "win32" ? "C:\\secrets" : "/secrets";
+  // A PURE glob: the first segment is itself a glob, so `literalPathPrefix`
+  // finds no anchored prefix and reachability cannot be computed. `/secrets/*`
+  // would not do -- it has the literal prefix `/secrets`, takes the ordinary
+  // path and is judged on that, which is a different branch entirely.
+  const ABSOLUTE_GLOB = process.platform === "win32" ? "C:\\*" : "/*";
+
+  test("a legacy absolute string is anchored absolute, not at worker_dir (target-only)", () => {
+    // The slash test called `C:\secrets\credentials` worker_dir-RELATIVE, so
+    // its reachability was judged by joining it onto the worker directory: a
+    // path naming nothing, and a deny rule kept or dropped for a reason with
+    // nothing to do with the entry.
+    const norm = normalizeSandboxEntry(`${ABSOLUTE}/credentials`);
+    expect(norm).not.toBeNull();
+    expect(norm?.anchor).toBe("absolute");
+  });
+
+  test("a relative string is still anchored at worker_dir (target-only)", () => {
+    // The half the repair must not break: widening what counts as absolute must
+    // not make an ordinary relative entry absolute.
+    expect(normalizeSandboxEntry("secrets.env")?.anchor).toBe("worker_dir");
+    expect(normalizeSandboxEntry("**/credentials*")?.anchor).toBe("worker_dir");
+  });
+
+  test("an absolute pure-glob is kept as-is on this platform (target-only)", () => {
+    // `/*` is kept because reachability cannot be computed without fnmatching
+    // the filesystem. `C:\*` is the same pattern and was being judged as a
+    // worker_dir-anchored glob instead -- so on an escaping worker_dir it was
+    // suppressed, and the deny disappeared.
+    const workerDir = "/home/u/wd";
+    const schema = {
+      worker_roles: { demo: sandboxRole({ denyRead: [ABSOLUTE_GLOB], additional: [] }) },
+    };
+    const result = renderRoleWithMetadata(schema, {
+      role: "demo",
+      workerDir,
+      claudeOrgPath: "/home/u/co",
+      realpathFn: escapingRealpath(workerDir, "/mnt/c/Users/u/wd"),
+      wslDetector: () => true,
+    });
+    expect(result.sandbox.suppressions).toStrictEqual([]);
+    expect(filesystemOf(result)["denyRead"]).toStrictEqual([ABSOLUTE_GLOB]);
+  });
+
+  test("a relative pure-glob is still judged from worker_dir (target-only)", () => {
+    // The half that must not break: the same shape WITHOUT an absolute anchor
+    // is still anchored at worker_dir and still suppressed when worker_dir
+    // escapes. Widening `isabs` must not turn every glob into an absolute one.
+    const workerDir = "/home/u/wd";
+    const schema = {
+      worker_roles: { demo: sandboxRole({ denyRead: ["**/credentials*"], additional: [] }) },
+    };
+    const result = renderRoleWithMetadata(schema, {
+      role: "demo",
+      workerDir,
+      claudeOrgPath: "/home/u/co",
+      realpathFn: escapingRealpath(workerDir, "/mnt/c/Users/u/wd"),
+      wslDetector: () => true,
+    });
+    expect(result.sandbox.suppressions).toHaveLength(1);
+    expect(filesystemOf(result)["denyRead"]).toStrictEqual([]);
+  });
+});
+
+/**
+ * Target-only. The `startswith("/")` repair, made observable on every cell.
+ *
+ * The three pins above are parameterised by platform, and on POSIX
+ * `posixpath.isabs` IS `startswith("/")` -- so on the Linux cells they cannot
+ * go red when the repair is reverted. They discriminate only where `os.path` is
+ * `ntpath`, which is the one cell class this repository runs least.
+ *
+ * That is not good enough for a repair: rule 11's whole point is that a repair
+ * carries no warrant from the source, and a pin that cannot fail on the cell a
+ * reviewer runs is a pin nobody has seen fail. `pypath.ts` dispatches on
+ * `process.platform` at CALL time -- deliberately, because that is how Python
+ * binds `os.path` -- so the Windows branch is reachable from here by patching
+ * the property the dispatch reads. Every one of the three reverts turns this
+ * red on Linux; each was confirmed to.
+ *
+ * What this does NOT claim to be is a Windows cell. It exercises the
+ * `os.path` CHOICE, which is what these three decisions turn on; the
+ * filesystem underneath is still POSIX, which is why every case here injects
+ * `realpathFn` and touches no real path.
+ */
+describe("the absolute-path repair under a simulated ntpath (target-only, D-0213)", () => {
+  /**
+   * `process.platform`, patched for one test and restored afterwards.
+   *
+   * `Object.defineProperty` rather than assignment: `platform` is a getter on
+   * the process object, so `process.platform = x` is silently ignored -- which
+   * would leave every assertion below running on POSIX and passing for the
+   * wrong reason, the exact shape rule 10 is about. The descriptor is captured
+   * and put back, so a failure cannot leak the patch into another test.
+   */
+  function simulateWindows(): void {
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    onTestFinished(() => {
+      if (original === undefined) {
+        // Node always defines it; this is the branch that would otherwise
+        // leave a fabricated own-property behind.
+        delete (process as { platform?: string }).platform;
+      } else {
+        Object.defineProperty(process, "platform", original);
+      }
+    });
+    // The patch has to be live before anything below runs on it.
+    expect(process.platform).toBe("win32");
+  }
+
+  test("a drive-letter string anchors absolute, not at worker_dir (target-only)", () => {
+    simulateWindows();
+    const norm = normalizeSandboxEntry("C:\\secrets\\credentials");
+    expect(norm?.anchor).toBe("absolute");
+    // The half that must not break, under the same simulated namespace.
+    expect(normalizeSandboxEntry("secrets.env")?.anchor).toBe("worker_dir");
+  });
+
+  test("a drive-letter pure glob under a relative anchor is kept as-is (target-only)", () => {
+    // The STRUCTURED form with a non-absolute anchor is the only route to this
+    // branch, and that is a consequence of the first repair rather than a
+    // contrivance: a legacy string `C:\*` now normalises to anchor=absolute and
+    // is kept by the anchor check one line earlier. What is left for
+    // `absolutePattern` to decide is an absolute pure glob authored under an
+    // anchor that is not -- which without the repair is judged as a
+    // worker_dir-anchored glob and suppressed the moment worker_dir escapes,
+    // taking a deny rule with it.
+    simulateWindows();
+    const workerDir = "/home/u/wd";
+    const schema = {
+      worker_roles: {
+        demo: sandboxRole({ denyRead: [structured("worker_dir", "C:\\*")], additional: [] }),
+      },
+    };
+    const result = renderRoleWithMetadata(schema, {
+      role: "demo",
+      workerDir,
+      claudeOrgPath: "/home/u/co",
+      realpathFn: escapingRealpath(workerDir, "/mnt/c/Users/u/wd"),
+      wslDetector: () => true,
+    });
+    expect(result.sandbox.suppressions).toStrictEqual([]);
+    expect(filesystemOf(result)["denyRead"]).toStrictEqual(["C:\\*"]);
+  });
+
+  test("a kept drive-letter entry is emitted as a string, not a dict (target-only)", () => {
+    simulateWindows();
+    const entry = structured("absolute", "C:\\secrets\\credentials");
+    const schema = {
+      worker_roles: {
+        demo: sandboxRole({ denyRead: [entry], additional: ["C:\\secrets"] }),
+      },
+    };
+    const result = renderRoleWithMetadata(schema, {
+      role: "demo",
+      workerDir: "/home/u/wd",
+      claudeOrgPath: "/home/u/co",
+      realpathFn: (p) => p,
+      wslDetector: () => false,
+    });
+    const kept = filesystemOf(result)["denyRead"] as unknown[];
+    // Without the repair this is the original object, and Claude Code answers a
+    // dict in denyRead with "Expected string, but received object".
+    expect(typeof kept[0]).toBe("string");
+    expect(kept).toStrictEqual(["C:\\secrets\\credentials"]);
   });
 });

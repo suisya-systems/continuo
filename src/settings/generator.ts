@@ -535,7 +535,13 @@ interface NormalizedSandboxEntry {
  */
 export function normalizeSandboxEntry(entry: unknown): NormalizedSandboxEntry | null {
   if (typeof entry === "string") {
-    if (entry.startsWith("/")) {
+    // `osIsabs`, not `startswith("/")`. @see the note on the same repair in
+    // `keptEntryString`: on POSIX the two are the same function, and on Windows
+    // the slash test calls `C:\\secrets\\*` worker_dir-RELATIVE, so its
+    // reachability is then judged by joining it onto the worker directory --
+    // a path that names nothing, and a deny rule dropped or kept for a reason
+    // that has nothing to do with the entry.
+    if (osIsabs(entry)) {
       return { anchor: "absolute", path: entry, suppressOnSymlinkEscape: true, raw: entry };
     }
     return { anchor: "worker_dir", path: entry, suppressOnSymlinkEscape: true, raw: entry };
@@ -1064,7 +1070,10 @@ function evaluateSandboxSuppressions(
       const substitutedPath = substitute(normalized.path, mapping) as string;
       const anchorBase = anchorBasePath(normalized.anchor, ctx);
       const literal = literalPathPrefix(substitutedPath);
-      const absolutePattern = substitutedPath.startsWith("/");
+      // `osIsabs`, not `startswith("/")` -- the third and last site of the same
+      // repair, so `C:\\*` is kept as-is on Windows exactly as `/*` is on POSIX
+      // rather than being judged as a worker_dir-anchored glob.
+      const absolutePattern = osIsabs(substitutedPath);
 
       let anchoredRelativeGlob = false;
       let targetLiteral: string;

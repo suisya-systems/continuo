@@ -27,11 +27,18 @@
  * What it deliberately does NOT model, because this CLI declares none of them
  * and an unexercised branch is a branch nobody checked: positionals other than
  * the subcommand, `nargs` other than 0 and 1, short options that take an
- * argument, option strings that look like negative numbers (so
- * `_negative_number_matcher` and `_has_negative_number_optionals` have no
- * subject), `type=` conversion failures, and mutually exclusive groups. Each of
- * those is a `throw`, not a silent fallthrough, wherever the parser could reach
- * it.
+ * argument, `type=` conversion failures, and mutually exclusive groups.
+ *
+ * `_negative_number_matcher` IS modelled, and the first draft of this file said
+ * it had no subject -- a misreading worth recording, because it is the kind that
+ * looks like scoping. The matcher's subject is the ARGUMENT token (`--out -1`),
+ * not the option strings; what the option strings decide is
+ * `_has_negative_number_optionals`, the CONDITION under which argparse honours
+ * it. This parser declares none that look like a number, so the condition holds
+ * and the matcher is live: without it `--out -1` is classified as an unknown
+ * option and `--out` fails with `expected one argument`, where CPython accepts
+ * `-1` as the filename. Measured against CPython 3.12.3 on this parser: `-1`,
+ * `-1.5` and `-` are values; `-x`, `-12abc` and `--1` are not.
  *
  * Exit is modelled as {@link ArgparseExit} rather than `process.exit`, because
  * the source's `main` does not catch `SystemExit` either -- the ported case
@@ -87,6 +94,15 @@ interface ClassifiedToken {
   readonly optionString: string;
   readonly explicit: string | null;
 }
+
+/**
+ * `argparse._negative_number_matcher`, transcribed.
+ *
+ * Python's `\d` on a `str` pattern is the Unicode category `Nd`, not `[0-9]`,
+ * so it is spelled `\p{Nd}` here -- the same equivalence `pyregex.ts` documents
+ * and `hook.mjs` carries for the identical reason.
+ */
+const NEGATIVE_NUMBER = /^-\p{Nd}+$|^-\p{Nd}*\.\p{Nd}+$/u;
 
 const HELP_SPEC: ArgumentSpec = {
   optionStrings: ["-h", "--help"],
@@ -181,6 +197,17 @@ export class ArgumentParser {
   }
 
   /**
+   * `parser._has_negative_number_optionals`: does any DECLARED option string
+   * look like a negative number?
+   *
+   * Derived rather than asserted false, because it is the condition the matcher
+   * is gated on, and a later `--1`-shaped flag would have to turn it off.
+   */
+  #hasNegativeNumberOptionals(): boolean {
+    return this.#optionStrings.some(([optionString]) => NEGATIVE_NUMBER.test(optionString));
+  }
+
+  /**
    * `argparse._get_option_tuples`: every option string this token could
    * abbreviate.
    *
@@ -259,14 +286,46 @@ export class ArgumentParser {
       };
       return only;
     }
-    // A token containing a space is a negative-number-ish value to argparse.
+    // `if self._negative_number_matcher.match(arg_string): if not
+    // self._has_negative_number_optionals: return None` -- and it runs BEFORE
+    // the space test, which is the order CPython runs them in.
+    if (NEGATIVE_NUMBER.test(token) && !this.#hasNegativeNumberOptionals()) {
+      return null;
+    }
+    // A token containing a space is a value to argparse.
     if (token.includes(" ")) {
       return null;
     }
     return { spec: null, optionString: token, explicit: null };
   }
 
+  /**
+   * `parser.parse_args`: `parse_known_args`, then report the leftovers.
+   *
+   * The split is not decoration. A subparser action puts the tokens IT could
+   * not place into `namespace._UNRECOGNIZED_ARGS_ATTR`, and it is the ROOT
+   * `parse_args` that reports them -- which is why CPython answers
+   * `claude-org-runtime --bogus settings generate ...` with
+   * `claude-org-runtime: error: unrecognized arguments: --bogus` (measured),
+   * naming the root's prog for an extra found on either side of the subcommand.
+   * Reporting extras inside `#parseKnown` instead would let the subparser path
+   * return before the check ever ran, and an unknown option ahead of a valid
+   * subcommand would then be silently ignored -- the CLI would generate a
+   * settings file for a command line it did not understand.
+   */
   parseArgs(argv: readonly string[], streams: ArgparseStreams): Namespace {
+    const [namespace, extras] = this.#parseKnown(argv, streams);
+    if (extras.length > 0) {
+      this.#error(streams, `unrecognized arguments: ${extras.join(" ")}`);
+    }
+    return namespace;
+  }
+
+  /** `parser.parse_known_args`: the namespace, and what it could not place. */
+  #parseKnown(
+    argv: readonly string[],
+    streams: ArgparseStreams,
+  ): [namespace: Namespace, extras: string[]] {
     const namespace: Namespace = { ...this.#defaults };
     for (const spec of this.#specs) {
       if (spec === HELP_SPEC) {
@@ -323,8 +382,10 @@ export class ArgumentParser {
             );
           }
           namespace[this.#subparsers.dest] = token;
-          const inner = child.parseArgs(tokens.slice(index + 1), streams);
-          return { ...namespace, ...inner };
+          // The child's own extras travel UP rather than being reported here;
+          // the root reports them, with the root's prog. @see parseArgs.
+          const [inner, innerExtras] = child.#parseKnown(tokens.slice(index + 1), streams);
+          return [{ ...namespace, ...inner }, [...extras, ...innerExtras]];
         }
         extras.push(token);
         index += 1;
@@ -391,9 +452,12 @@ export class ArgumentParser {
       seen.add(spec.dest);
     }
 
-    // End of parse: required actions, then all extras -- in that order, and
-    // both AFTER consumption, which is what makes a missing `--role` outrank a
-    // stray positional.
+    // End of parse: required actions here, with THIS parser's prog, because a
+    // missing `--role` is the child's error even when the extras are the
+    // root's. Measured: `settings show --` reports
+    // `claude-org-runtime settings show: error: the following arguments are
+    // required: --role, ...` while `--bogus settings generate ...` reports
+    // `claude-org-runtime: error: unrecognized arguments: --bogus`.
     const missing = this.#specs
       .filter((spec) => spec.required === true && !seen.has(spec.dest))
       .map((spec) => spec.optionStrings[0] as string);
@@ -403,9 +467,6 @@ export class ArgumentParser {
     if (this.#subparsers !== null) {
       this.#error(streams, `the following arguments are required: ${this.#subparsers.dest}`);
     }
-    if (extras.length > 0) {
-      this.#error(streams, `unrecognized arguments: ${extras.join(" ")}`);
-    }
-    return namespace;
+    return [namespace, extras];
   }
 }
