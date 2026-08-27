@@ -77,6 +77,7 @@ spaces distinct.
 | D-0209 | `npm test` builds first, because the deny hook's dependencies come from `dist/` | accepted |
 | D-0210 | A JSON number's Python spelling is recorded on its container slot, never inside the value | accepted |
 | D-0211 | Every container rebuild carries the number record, and the sites are enumerated and pinned | accepted |
+| D-0213 | The settings generator is ported on a transcribed `os.path`, and its thirteen rebuild branches are enumerated and pinned | accepted |
 
 ---
 
@@ -3754,3 +3755,124 @@ replaces values has to do instead.
 
 **Falsified by.** A rebuild site that has to REPLACE a number under a key it keeps -- the wholesale
 carry is then wrong for that site, and the trap above stops being hypothetical.
+
+---
+
+## D-0213 — The settings generator is ported on a transcribed `os.path`, and its thirteen rebuild branches are enumerated and pinned
+
+**Status.** accepted (2026-08-28)
+
+**Context.** PR 3 of the fencing + settings lane ports
+`src/claude_org_runtime/settings/generator.py` and the 106 cases of
+`tests/test_settings_generator.py`. The module renders a role template into the `settings.local.json`
+a worker actually runs under, and on the way it makes two decisions that are security-relevant in
+**opposite** directions:
+
+- **Layer 3 suppression** DROPS a `sandbox.filesystem.deny{Read,Write}` entry whose realpath escapes
+  the sandbox read roots. Dropping too much is a deny that stops covering a credential file.
+- **Symlink canonicalisation** REWRITES a deny path that crosses an absolute symlink to its realpath,
+  so bwrap can bind it. Dropping too little -- leaving an unbindable path in the file -- is worse
+  than it looks: bubblewrap aborts the launch, and Claude Code's documented response to a failed
+  launch is to retry the command with `dangerouslyDisableSandbox`. A kept-but-unbindable entry does
+  not fail closed; it turns the sandbox off for every command that follows.
+
+Both decisions are computed from paths, and both compose `os.path` primitives whose exact answers
+决定 the outcome. Three things followed from that, and each is a decision rather than an
+implementation detail.
+
+**Decision 1: `os.path` is transcribed, both namespaces, and checked against CPython.**
+`src/fencing/pypath.ts` already transcribed `posixpath.normpath` and `os.path.expanduser` for the
+fence (D-0200). It now carries `join`, `normpath`, `isabs`, `split`, `splitdrive`, `dirname`,
+`realpath`, `islink` and `readlink`, from **both** `posixpath` and `ntpath`, dispatched on
+`process.platform` at call time the way Python binds `os.path` at import time. Node's `path` module
+is not that function on either platform: `path.posix.normalize("a/b/")` keeps the trailing separator
+that `posixpath.normpath` drops, which is precisely the difference that makes the equality half of
+`_is_inside_root`'s boundary test stop firing.
+
+`parity/oracle/ospath-vector.json` is the check -- 63 paths x 6 functions x 2 namespaces plus 30
+join argument tuples, generated from CPython 3.12.3 by `scripts/oracle/dump_ospath.py`, asserted by
+`test/settings/ospath-oracle.test.ts` on **every** matrix cell. Both namespaces are dumped from one
+interpreter because `ntpath` is importable on Linux and its answers do not depend on the host; a
+Windows-only check would leave the half this port ships to Windows unverified on the cells where
+most runs happen. Result at the time of writing: 0 divergences.
+
+`realpath` is the exception and it is named rather than glossed. `ntpath.realpath` is written on
+`nt._getfinalpathname`, a Win32 API with no user-space equivalent, so the Windows half is an
+**adaptation**: CPython's non-strict walk-back structure reproduced around Node's
+`fs.realpathSync.native`, with the three things it does not reproduce (8.3 expansion of an
+unresolved tail, the `\\?\` prefix round-trip, case canonicalisation of a missing path) written at
+the function. The POSIX half is a straight transcription of `_joinrealpath`. Neither is in the
+vector, because a static vector cannot pin a function of the filesystem.
+
+**Decision 2: the module's THIRTEEN rebuild branches are enumerated and each is pinned.**
+D-0211 made carrying a JSON number's recorded Python spelling an obligation on every container
+rebuild, enforceable only by enumeration plus pins -- a rebuilt container starts with an empty
+record, the values are still numbers, every comparison still holds, and nothing goes red. This
+module is by far the largest concentration of them in the port: it rebuilds a document at every
+level it touches, and there are thirteen branches, listed in `src/settings/generator.ts`'s header
+and referenced from `src/fencing/pyjson.ts`'s.
+
+Three of the thirteen are not a plain wholesale `carryNumberSpellings`, and one of those is the
+reason this is a decision and not a checklist item:
+
+> **The KEPT deny list is a FILTERED copy, so a wholesale carry is not merely absent -- it is
+> WRONG.** The spelling record is keyed by index. Suppress the entry at index 0 and the number that
+> was at index 1 becomes index 0, where the carried record holds the *suppressed* entry's slot --
+> usually empty, so the number is classified by value and written `1` where CPython writes `1.0`;
+> and if the dropped neighbour happened to be a float, the surviving number inherits a spelling that
+> was never its own. It is carried per surviving element instead, re-keyed as the list is built.
+
+Each of the thirteen was probed by removing its carry and confirming the corresponding pin goes
+red **for its own stated reason** (`docs/test-translation-conventions.md` section 10). The first
+draft of the pin block had one non-discriminating case -- it believed it pinned the
+`permissions.deny` object rebuild while actually pinning the array carry one call inside it, because
+a spelling hangs on the container that IMMEDIATELY holds the number and the float had been nested a
+level too deep. The probe is what found that; the block now puts one float on a key of its own at
+every level, and the note is in the test file so the next reader does not have to rediscover it.
+
+**Decision 3: the CLI's `argparse` is a second, scoped transcription -- `hook.mjs`'s is not
+generalised.** `src/fencing/hook.mjs` carries a full transcription of CPython's two-pass parser,
+measured at 0 divergences over 5,332 argv vectors (D-0207). Generalising it to serve the settings
+CLI would put the fence's argv surface -- the surface whose single fail-open instance is what made
+D-0207 reject a waiver -- behind a helper written for a different caller's needs, which is
+`docs/test-translation-conventions.md` rule 11's shape exactly. `src/settings/argparse.ts` is the
+same two-pass STRUCTURE over the option set this CLI declares, and what it does not model
+(positionals other than the subcommand, `nargs` other than 0 and 1, short options taking an
+argument, negative-number option strings, mutually exclusive groups) is a `throw` wherever the
+parser could reach it, not a silent fallthrough.
+
+**Alternatives.**
+
+- **Use Node's `path` for `os.path` (rejected).** It is the substitution D-0200 already rejected for
+  `normpath`, arriving one subsystem later with more surface. The trailing-separator difference
+  alone changes a suppression decision, and on Windows the two disagree about `C:x` and about
+  whether a normalised path keeps its separators.
+- **Extend the existing `fnmatch-shlex` vector rather than adding a second one (rejected).** It would
+  work -- the vector regenerates byte-identically, so additions are a clean diff -- but the corpus,
+  the dump script and the oracle test all belong to the fencing lane, and a parallel lane is auditing
+  two of those files right now. A separate corpus/vector/script triple is zero-conflict and reads as
+  what it is.
+- **Skip the `os.path` oracle and rely on the 106 translated cases (rejected).** They exercise the
+  transcription only through the shapes interlock's fixtures happen to use. The rule that decides a
+  suppression is `normpath` composed with a separator test, and the inputs that separate a right
+  transcription from a nearly-right one -- `a/b/`, `//a`, `C:x`, a UNC root -- are inputs no
+  translated case constructs. That is 2d's argument, applied where the fence is not the subject.
+- **Port `sandbox_doctor` in the same PR (rejected, scope).** It is PR 4 of this lane, 77 further
+  source cases in `tests/test_sandbox_symlink_deny.py`. The canonicalisation helpers it shares with
+  the generator are ported here because `render_role_with_metadata` calls them unconditionally; their
+  own dedicated cases are not, and the ledger says so.
+
+**Verified by.** `npm run verify` green: lint, knip, typecheck, native smoke, 1517 tests, parity.
+106/106 source cases mapped, 103 ported and 3 adapted, **no waivers and nothing not-ported**; the
+source file re-run at `65f36c5` on the porting host reports 106 passed. The `os.path` oracle agrees
+with CPython 3.12.3 at every position in both namespaces. Every one of the thirteen rebuild branches
+and the seam were probed red individually.
+
+**Falsified by.** CPython changing `posixpath` or `ntpath` semantics -- the vector is 3.12.3 and the
+transcription is of that version. Also falsified if `os.path.realpath`'s Windows adaptation is ever
+handed a path where 8.3 expansion or the `\\?\` prefix round-trip decides a suppression, at which
+point the adaptation stops being a spelling difference and becomes a behavioural one; the settings
+suite's tmp-directory cases realpath their `worker_dir` up front precisely because that expansion is
+observable on the Windows cells.
+
+---

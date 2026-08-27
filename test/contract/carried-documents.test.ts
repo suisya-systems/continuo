@@ -60,6 +60,13 @@ const CARRIED: readonly CarriedDocument[] = [
     sha256: "9e788ce2ee1bb80cfb186738411b8acece3fea27dc0dc4f86a61688229751a17",
     bytes: 5635,
   },
+  {
+    path: "src/settings/role_configs_schema.json",
+    sourcePath: "src/claude_org_runtime/settings/role_configs_schema.json",
+    revision: "65f36c5",
+    sha256: "a359db26b83a5d6a7e9e9f58f0444570a846e47e4ed93451690557c9ffda8ed9",
+    bytes: 25158,
+  },
 ];
 
 describe("documents carried verbatim from interlock", () => {

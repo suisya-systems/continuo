@@ -32,7 +32,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-migrations.mjs && node scripts/copy-spike-schema.mjs && node scripts/copy-roles-document.mjs && node scripts/copy-fence-hook.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-migrations.mjs && node scripts/copy-spike-schema.mjs && node scripts/copy-roles-document.mjs && node scripts/copy-fence-hook.mjs && node scripts/copy-role-schema.mjs",
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",

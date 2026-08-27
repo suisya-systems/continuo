@@ -760,5 +760,47 @@ export {
   WORKER_ESCALATION_EPISODES_QUERY,
 } from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
+/**
+ * The settings generator (D-0213).
+ *
+ * `generatorSeams` is deliberately absent: it is a seam for this module's own
+ * tests, not public API, exactly as `spawnSeams` is.
+ */
+export {
+  ArgparseExit,
+  type ArgparseStreams,
+  ArgumentParser,
+  type ArgumentSpec,
+  type Namespace,
+} from "./settings/argparse.js";
+export {
+  addArguments,
+  addShowArguments,
+  buildParser,
+  buildRuntimeParser,
+  defaultStreams,
+  main as settingsMain,
+} from "./settings/cli.js";
+export {
+  bundledSchemaPath,
+  detectWsl,
+  formatShowOutput,
+  type GeneratorContext,
+  loadSchema,
+  normalizeSandboxEntry,
+  type RenderOptions,
+  type RenderResult,
+  renderRole,
+  renderRoleWithMetadata,
+  run as settingsGenerate,
+  runShow as settingsShow,
+  type SandboxMetadata,
+  type SandboxPathRewrite,
+  type SandboxSuppression,
+  SchemaNotFoundError,
+  type SettingsArgs,
+  sandboxMetadata,
+  sandboxMetadataToJsonable,
+} from "./settings/generator.js";
 export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";

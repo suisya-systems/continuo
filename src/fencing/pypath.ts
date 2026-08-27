@@ -40,6 +40,7 @@
  * vector rather than by eye; see `docs/differential-oracle.md`.
  */
 
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { sep as platformSep } from "node:path";
 
@@ -232,7 +233,7 @@ function ntExpanduser(path: string, home: string | undefined): string {
  * and drive-relative paths (`X:Windows`, no root) join differently from
  * absolute ones.
  */
-function ntSplitRoot(p: string): [drive: string, root: string, tail: string] {
+export function ntSplitRoot(p: string): [drive: string, root: string, tail: string] {
   const sep = "\\";
   const uncPrefix = "\\\\?\\UNC\\";
   const normp = p.split("/").join(sep);
@@ -261,26 +262,49 @@ function ntSplitRoot(p: string): [drive: string, root: string, tail: string] {
   return ["", "", p];
 }
 
-/** `ntpath.join`, two-argument form -- all `ntExpanduser` needs. */
-function ntJoin(first: string, second: string): string {
+/**
+ * `ntpath.join`, in full: one leading path and any number of following ones.
+ *
+ * `ntExpanduser` only ever calls it with two, but the whole loop is here
+ * because `osJoin` below dispatches to it and `os.path.join` is variadic.
+ *
+ * -- ONE FIDELITY FIX over the two-argument version this replaces -- the
+ * different-drives branch used to `return p_drive + p_root + p_path` on the
+ * spot, which skips the UNC separator fix-up CPython applies at the end of the
+ * function. The two answers differ only when the SECOND path is drive-relative
+ * (`D:Windows`, a drive with no root) and the FIRST carries a UNC drive, which
+ * neither `ntExpanduser` call site can produce: one passes `HOMEPATH`, the
+ * other a bare username, and a drive-relative second argument is the one shape
+ * both exclude. The branch is now CPython's `continue`, so the fix-up runs.
+ */
+export function ntJoin(first: string, ...rest: readonly string[]): string {
   const sep = "\\";
   const seps = "\\/";
+  const colon = ":";
   let [resultDrive, resultRoot, resultPath] = ntSplitRoot(first);
-  const [pDrive, pRoot, pPath] = ntSplitRoot(second);
-  if (pRoot) {
-    if (pDrive || !resultDrive) {
-      resultDrive = pDrive;
+  for (const p of rest) {
+    const [pDrive, pRoot, pPath] = ntSplitRoot(p);
+    if (pRoot) {
+      // Second path is absolute.
+      if (pDrive || !resultDrive) {
+        resultDrive = pDrive;
+      }
+      resultRoot = pRoot;
+      resultPath = pPath;
+      continue;
     }
-    resultRoot = pRoot;
-    resultPath = pPath;
-  } else {
     if (pDrive && pDrive !== resultDrive) {
       if (pDrive.toLowerCase() !== resultDrive.toLowerCase()) {
-        // Different drives: the first path is ignored entirely.
-        return pDrive + pRoot + pPath;
+        // Different drives: everything before this path is ignored.
+        resultDrive = pDrive;
+        resultRoot = pRoot;
+        resultPath = pPath;
+        continue;
       }
+      // Same drive in different case.
       resultDrive = pDrive;
     }
+    // Second path is relative to the first.
     if (resultPath && !seps.includes(resultPath.slice(-1))) {
       resultPath += sep;
     }
@@ -288,14 +312,14 @@ function ntJoin(first: string, second: string): string {
   }
   // A separator is added between a UNC drive and a non-absolute path.
   const lastDriveChar = resultDrive.slice(-1);
-  if (resultPath && !resultRoot && resultDrive && !`:${seps}`.includes(lastDriveChar)) {
+  if (resultPath && !resultRoot && resultDrive && !`${colon}${seps}`.includes(lastDriveChar)) {
     return resultDrive + sep + resultPath;
   }
   return resultDrive + resultRoot + resultPath;
 }
 
 /** `ntpath.split`, for `ntBasename` / `ntDirname`. */
-function ntSplit(p: string): [head: string, tail: string] {
+export function ntSplit(p: string): [head: string, tail: string] {
   const seps = "\\/";
   const [d, r, rest] = ntSplitRoot(p);
   let i = rest.length;
@@ -355,4 +379,400 @@ function defaultPosixHome(): string {
 export function normalizePath(path: string): string {
   const expanded = expanduser(path);
   return normpath(expanded.split(platformSep).join("/"));
+}
+
+// ---------------------------------------------------------------------------
+// `os.path`, the rest of it
+// ---------------------------------------------------------------------------
+//
+// `expanduser` above is dispatched on the platform because `os.path` IS a
+// platform choice: Python binds the name to `posixpath` or `ntpath` at import
+// time. The settings generator (`src/settings/generator.ts`) reads far more of
+// that module than the fence does -- `join`, `normpath`, `isabs`, `dirname`,
+// `splitdrive`, `realpath` -- and its decisions turn on the answers:
+// `_is_inside_root` composes `normpath` with an `os.sep` boundary test to
+// decide whether a deny entry escaped the sandbox, and a kept structured entry
+// is emitted as `os.path.join(anchor_base, path)`, which is the literal string
+// that reaches `settings.local.json`.
+//
+// Node's `path` module is not that function on either platform. The trailing-
+// slash and `//` rows in the table at the top of this file are the posix half;
+// on Windows `path.win32.normalize("C:/a/")` keeps the trailing separator and
+// `ntpath.normpath` drops it, and `path.win32.isabs("/x")` answers `true` where
+// `ntpath.isabs` answers `true` as well -- but for a different reason and with
+// a different treatment of `C:x`. So both halves are transcribed here from
+// CPython 3.12's `posixpath` and `ntpath`, and checked against them by
+// `parity/oracle/ospath-vector.json` rather than by eye.
+//
+// Both namespaces are exported, not merely the dispatched pair: the oracle runs
+// BOTH on every matrix cell. A Windows-only check of the `ntpath` half would
+// leave it unverified on the Linux cells, which is where most runs happen, and
+// a POSIX-only check would leave it unverified on the cells that ship it.
+
+/** `os.sep`, read at call time exactly as `normalizePath` reads `path.sep`. */
+export function osSep(): string {
+  return process.platform === "win32" ? "\\" : "/";
+}
+
+/** `os.altsep`: `/` on Windows, `None` elsewhere. */
+export function osAltsep(): string | null {
+  return process.platform === "win32" ? "/" : null;
+}
+
+/** `os.curdir`. */
+export const OS_CURDIR = ".";
+
+/** `os.pardir`. */
+export const OS_PARDIR = "..";
+
+/** `posixpath.join`. */
+export function posixJoin(first: string, ...rest: readonly string[]): string {
+  const sep = "/";
+  let path = first;
+  for (const b of rest) {
+    if (b.startsWith(sep)) {
+      path = b;
+    } else if (path === "" || path.endsWith(sep)) {
+      path += b;
+    } else {
+      path += sep + b;
+    }
+  }
+  return path;
+}
+
+/** `posixpath.isabs`. */
+export function posixIsabs(p: string): boolean {
+  return p.startsWith("/");
+}
+
+/**
+ * `posixpath.split`.
+ *
+ * The `head != sep*len(head)` guard is what keeps `/` and `//` from being
+ * stripped to the empty string, so `dirname("/x")` is `/` and not `""`.
+ */
+export function posixSplit(p: string): [head: string, tail: string] {
+  const sep = "/";
+  const i = p.lastIndexOf(sep) + 1;
+  let head = p.slice(0, i);
+  const tail = p.slice(i);
+  if (head !== "" && head !== sep.repeat(head.length)) {
+    head = head.replace(/\/+$/, "");
+  }
+  return [head, tail];
+}
+
+/** `posixpath.splitdrive`: there are no drives on POSIX. */
+export function posixSplitdrive(p: string): [drive: string, tail: string] {
+  return ["", p];
+}
+
+/** `ntpath.splitdrive`, which is `splitroot` with the root put back on the tail. */
+export function ntSplitdrive(p: string): [drive: string, tail: string] {
+  const [drive, root, tail] = ntSplitRoot(p);
+  return [drive, root + tail];
+}
+
+/** `ntpath.isabs`. */
+export function ntIsabs(p: string): boolean {
+  // CPython's own comment calls the first test a LEGACY BUG -- `isabs("/x")` is
+  // true on Windows although the path names no drive -- and keeps it. So does
+  // this: the generator's `_absolute_symlink_in_chain` returns early for a
+  // non-absolute path, and disagreeing here would make it walk (or refuse to
+  // walk) a different set of paths from interlock's.
+  const head = p.slice(0, 3).split("/").join("\\");
+  return head.startsWith("\\") || head.startsWith(":\\", 1);
+}
+
+/**
+ * `ntpath.normpath`.
+ *
+ * Transcribed from the pure-Python fallback. On a real Windows interpreter
+ * CPython calls `nt._path_normpath` instead, and the two are contracted to
+ * agree -- the same contract `normpath` above relies on for POSIX, and the
+ * reason the oracle vector is generated from whichever one CPython actually
+ * ran rather than from the fallback's promise.
+ */
+export function ntNormpath(p: string): string {
+  const sep = "\\";
+  const path = p.split("/").join(sep);
+  const [drive, root, tail] = ntSplitRoot(path);
+  const prefix = drive + root;
+  const comps = tail.split(sep);
+  let i = 0;
+  while (i < comps.length) {
+    if (comps[i] === "" || comps[i] === OS_CURDIR) {
+      comps.splice(i, 1);
+    } else if (comps[i] === OS_PARDIR) {
+      if (i > 0 && comps[i - 1] !== OS_PARDIR) {
+        comps.splice(i - 1, 2);
+        i -= 1;
+      } else if (i === 0 && root !== "") {
+        comps.splice(i, 1);
+      } else {
+        i += 1;
+      }
+    } else {
+      i += 1;
+    }
+  }
+  if (prefix === "" && comps.length === 0) {
+    comps.push(OS_CURDIR);
+  }
+  return prefix + comps.join(sep);
+}
+
+/** `os.path.join`. */
+export function osJoin(first: string, ...rest: readonly string[]): string {
+  return process.platform === "win32" ? ntJoin(first, ...rest) : posixJoin(first, ...rest);
+}
+
+/** `os.path.normpath`. */
+export function osNormpath(p: string): string {
+  return process.platform === "win32" ? ntNormpath(p) : normpath(p);
+}
+
+/** `os.path.isabs`. */
+export function osIsabs(p: string): boolean {
+  return process.platform === "win32" ? ntIsabs(p) : posixIsabs(p);
+}
+
+/** `os.path.split`. */
+export function osSplit(p: string): [head: string, tail: string] {
+  return process.platform === "win32" ? ntSplit(p) : posixSplit(p);
+}
+
+/** `os.path.dirname`. */
+export function osDirname(p: string): string {
+  return osSplit(p)[0];
+}
+
+/** `os.path.splitdrive`. */
+export function osSplitdrive(p: string): [drive: string, tail: string] {
+  return process.platform === "win32" ? ntSplitdrive(p) : posixSplitdrive(p);
+}
+
+// ---------------------------------------------------------------------------
+// `os.path.realpath`, and the two probes that go with it
+// ---------------------------------------------------------------------------
+//
+// This is where `os.path` stops being string work and touches the filesystem,
+// and it is the one function in this file whose Windows half is an ADAPTATION
+// rather than a transcription. The reason is named rather than glossed:
+// `ntpath.realpath` is written on `nt._getfinalpathname`, a Win32 API
+// (`GetFinalPathNameByHandle`) with no user-space equivalent to transcribe.
+// Node's `fs.realpathSync.native` is the same call, so the STRUCTURE of
+// CPython's non-strict algorithm is reproduced around it -- resolve as much of
+// the path as the OS can, follow a link ourselves when it cannot, then walk one
+// component back and try again -- and what is not reproduced is listed below
+// rather than left to be discovered.
+//
+// Not covered by the differential vector, because a static vector cannot pin a
+// function of the filesystem. `parity/oracle/ospath-vector.json` covers the
+// pure string half; `realpath` is pinned by the settings suite's cases, which
+// build a real directory and, where the layout has to be a symlinked one,
+// inject `realpathFn` exactly as interlock's own tests do.
+
+/** `os.path.islink`: `stat.S_ISLNK` over `lstat`, false when it cannot be read. */
+export function osIslink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** `os.readlink`. Throws, as CPython's does, when the target is not a link. */
+export function osReadlink(p: string): string {
+  return readlinkSync(p, { encoding: "utf8" });
+}
+
+/** `posixpath.abspath`. */
+function posixAbspath(path: string): string {
+  return normpath(posixIsabs(path) ? path : posixJoin(process.cwd(), path));
+}
+
+/**
+ * `posixpath._joinrealpath`, non-strict.
+ *
+ * Returns `[path, ok]`, where `ok` is false once an unresolvable symlink loop
+ * has been met -- at which point the remainder is appended unchanged, which is
+ * what makes non-strict `realpath` return something for a cyclic path instead
+ * of raising.
+ *
+ * `seen` maps a link path to its resolution, with `null` meaning "being
+ * resolved"; meeting a `null` again IS the loop.
+ */
+function joinRealpath(
+  start: string,
+  remainder: string,
+  seen: Map<string, string | null>,
+): [path: string, ok: boolean] {
+  const sep = "/";
+  let path = start;
+  let rest = remainder;
+  if (posixIsabs(rest)) {
+    rest = rest.slice(1);
+    path = sep;
+  }
+  while (rest !== "") {
+    // `rest.partition(sep)`.
+    const cut = rest.indexOf(sep);
+    const name = cut < 0 ? rest : rest.slice(0, cut);
+    rest = cut < 0 ? "" : rest.slice(cut + 1);
+    if (name === "" || name === OS_CURDIR) {
+      continue;
+    }
+    if (name === OS_PARDIR) {
+      if (path !== "") {
+        const [head, tail] = posixSplit(path);
+        path = tail === OS_PARDIR ? posixJoin(head, OS_PARDIR, OS_PARDIR) : head;
+      } else {
+        path = OS_PARDIR;
+      }
+      continue;
+    }
+    const newpath = posixJoin(path, name);
+    if (!osIslink(newpath)) {
+      // Covers both "not a link" and "cannot be stat'ed", which is CPython's
+      // `except ignored_error: is_link = False` for the non-strict call.
+      path = newpath;
+      continue;
+    }
+    if (seen.has(newpath)) {
+      const cached = seen.get(newpath) ?? null;
+      if (cached !== null) {
+        path = cached;
+        continue;
+      }
+      // A symlink loop. Non-strict returns the resolved part plus the rest,
+      // unchanged and unresolved.
+      return [posixJoin(newpath, rest), false];
+    }
+    seen.set(newpath, null);
+    const [resolved, ok] = joinRealpath(path, osReadlink(newpath), seen);
+    if (!ok) {
+      return [posixJoin(resolved, rest), false];
+    }
+    seen.set(newpath, resolved);
+    path = resolved;
+  }
+  return [path, true];
+}
+
+/** `posixpath.realpath(path)`, with `strict=False`. */
+export function posixRealpath(path: string): string {
+  return posixAbspath(joinRealpath("", path, new Map())[0]);
+}
+
+/** `ntpath.normcase`, for the two places `ntRealpath` compares paths. */
+function ntNormcase(p: string): string {
+  return p.split("/").join("\\").toLowerCase();
+}
+
+/**
+ * `ntpath._readlink_deep`: follow a chain of links as far as it goes.
+ *
+ * CPython stops on a specific list of `winerror` codes and re-raises anything
+ * else. Node reports `errno`/`code` strings rather than `winerror`, and the
+ * codes on that list are the ones that mean "there is nothing more to follow"
+ * -- a missing file, a denied directory, a reparse point that is not a symlink.
+ * Stopping on ANY error is therefore the same answer for every case on the
+ * list, and for the cases off it turns a raise into "return what we have",
+ * which non-strict `realpath` would have produced anyway one frame up.
+ */
+function ntReadlinkDeep(start: string): string {
+  const seen = new Set<string>();
+  let path = start;
+  while (!seen.has(ntNormcase(path))) {
+    seen.add(ntNormcase(path));
+    const oldPath = path;
+    let target: string;
+    try {
+      target = osReadlink(path);
+    } catch {
+      break;
+    }
+    if (!ntIsabs(target)) {
+      if (!osIslink(oldPath)) {
+        path = oldPath;
+        break;
+      }
+      path = ntNormpath(ntJoin(ntSplit(oldPath)[0], target));
+    } else {
+      path = target;
+    }
+  }
+  return path;
+}
+
+/** `ntpath._getfinalpathname_nonstrict`, over Node's native realpath. */
+function ntFinalPathNonstrict(start: string): string {
+  let path = start;
+  let tail = "";
+  while (path !== "") {
+    try {
+      const resolved = realpathSync.native(path);
+      return tail === "" ? resolved : ntJoin(resolved, tail);
+    } catch {
+      try {
+        const followed = ntReadlinkDeep(path);
+        if (followed !== path) {
+          return tail === "" ? followed : ntJoin(followed, tail);
+        }
+      } catch {
+        // Keep traversing, exactly as CPython does when readlink fails.
+      }
+      const [head, name] = ntSplit(path);
+      if (head !== "" && name === "") {
+        return head + tail;
+      }
+      path = head;
+      tail = tail === "" ? name : ntJoin(name, tail);
+    }
+  }
+  return tail;
+}
+
+/**
+ * `ntpath.realpath(path)`, with `strict=False`.
+ *
+ * **What is reproduced.** `normpath` first, the `nul` special case, absolutise
+ * against the working directory, then `_getfinalpathname` with the non-strict
+ * walk-back on failure.
+ *
+ * **What is not, stated so it is not mistaken for parity.**
+ *
+ * - *8.3 short names and on-disk case.* `GetFinalPathNameByHandle` returns the
+ *   canonical spelling, so CPython answers `C:\Users\Barney` for `c:\users\barn~1`.
+ *   Node's native call is the same API and does the same thing, so this holds
+ *   where the path EXISTS; the walk-back half joins the unresolved tail
+ *   verbatim, as CPython's does (its own `TODO (bpo-38186)` says so).
+ * - *The `\\?\` prefix round-trip.* CPython strips a `\\?\` prefix it did not
+ *   start with, and only when the stripped form resolves to the same file.
+ *   Node's native call does not add the prefix for the paths this port hands
+ *   it, so the strip has nothing to strip. A caller that passes an explicit
+ *   `\\?\` path gets it back with the prefix, where CPython may return it
+ *   without.
+ */
+export function ntRealpath(path: string): string {
+  const normalised = ntNormpath(path);
+  if (ntNormcase(normalised) === ntNormcase("nul")) {
+    return "\\\\.\\NUL";
+  }
+  const prefix = "\\\\?\\";
+  const hadPrefix = normalised.startsWith(prefix);
+  const absolute =
+    !hadPrefix && !ntIsabs(normalised) ? ntJoin(process.cwd(), normalised) : normalised;
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    return ntFinalPathNonstrict(absolute);
+  }
+}
+
+/** `os.path.realpath`, with `strict=False`. */
+export function osRealpath(path: string): string {
+  return process.platform === "win32" ? ntRealpath(path) : posixRealpath(path);
 }

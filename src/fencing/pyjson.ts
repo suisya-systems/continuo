@@ -76,23 +76,32 @@
  * - a container REBUILT without carrying its spellings across loses them. This
  *   is a standing obligation on every rebuild site, not a property the module
  *   can enforce: the record hangs on the container, so a new container starts
- *   empty and nothing goes red when one forgets. The sites in this port are
- *   `stripMeta`, `substitute`, `deepSortKeys` and `settingsPayload` in
- *   `renderer.ts`, and BOTH branches of `pyDict` in `pysemantics.ts` -- the
- *   mapping copy and the sequence-of-pairs build, which is a rebuild site that
- *   does not look like one because the value it places arrives as element 1 of
- *   a PAIR and its record is on the pair. Four carry the record with
- *   `carryNumberSpellings`, next to the `rememberKeyOrder` call they already
- *   made for the same reason; `settingsPayload` and `pyDict`'s pair branch
- *   carry it key by key, the first because one of its keys does not come from
- *   the container it copies, the second because each value's record is on a
- *   different container. **Any new rebuild site has to do the same, and has to
+ *   empty and nothing goes red when one forgets. The branches in this port are:
+ *
+ *   - `renderer.ts`: `stripMeta`, `substitute`, `deepSortKeys`, `settingsPayload`
+ *   - `pysemantics.ts`: BOTH branches of `pyDict` -- the mapping copy and the
+ *     sequence-of-pairs build, which is a rebuild site that does not look like
+ *     one because the value it places arrives as element 1 of a PAIR and its
+ *     record is on the pair
+ *   - `../settings/generator.ts`: **thirteen**, enumerated in that module's own
+ *     header (D-0213) rather than repeated here, because the settings renderer
+ *     rebuilds a document at every level it touches
+ *
+ *   Most carry the record with `carryNumberSpellings`, next to the
+ *   `rememberKeyOrder` call they already made for the same reason. Three carry
+ *   it key by key or element by element: `settingsPayload`, because one of its
+ *   keys does not come from the container it copies; `pyDict`'s pair branch,
+ *   because each value's record is on a different container; and the settings
+ *   generator's KEPT deny list, because it is a FILTERED copy whose indices no
+ *   longer line up with the source array's -- there a wholesale carry is not
+ *   merely absent, it is WRONG, handing a surviving number the spelling of a
+ *   dropped neighbour. **Any new rebuild BRANCH has to do the same, and has to
  *   be pinned.** D-0210 shipped with `deepSortKeys` uncarried and this list
  *   naming three, and neither the suite nor this comment said so -- the repair
  *   reached everything except `settings.local.json` and the persisted fence,
  *   which were the artefacts it was for. D-0211's own first draft then named
  *   five and missed `pyDict`'s second branch, which review caught. Count the
- *   BRANCHES that build a container, not the functions. See D-0211.
+ *   BRANCHES that build a container, not the functions. See D-0211, D-0213.
  * - `pyStr` still renders an integral float as an int, which is visible only
  *   for a role document that spells `role_kind` or `permission_mode` as a
  *   number. Recorded there rather than fixed in passing.
