@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -10,7 +10,7 @@ import {
   runBattery,
 } from "../../src/fencing/battery.js";
 import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
-import { pyDict, pyTypeName, pyTypeNameOf } from "../../src/fencing/pysemantics.js";
+import { pyDict, pyIterate, pyTypeName, pyTypeNameOf } from "../../src/fencing/pysemantics.js";
 import {
   type FenceContext,
   loadDocument,
@@ -831,6 +831,100 @@ describe("a document's number spelling reaches settings.local.json (target-only,
     expect(readFileSync(clocked.path, "utf8")).toBe(
       '{"at": 0.0, "big": 9007199254740993, "event": "candidate"}\n',
     );
+  });
+});
+
+/**
+ * The two halves of the one rebuild branch that deliberately does NOT carry.
+ *
+ * D-0211 enumerated the rebuild sites and made every one of them carry the
+ * number record. D-0212 swept `src/fencing` mechanically instead of reading
+ * that enumeration, and found one more: `pyIterate`'s array branch returns
+ * `[...value]`, which drops the index-keyed record like any other rebuild.
+ *
+ * It is left uncarried ON PURPOSE, so what stands in for the carry is a proof,
+ * and a proof that nothing checks is a sentence. These are the checks. The
+ * first measures the drop, so a future carry is a deliberate change rather than
+ * a silent one; the second and third are the proof's two premises, each of
+ * which fails loudly when it stops holding.
+ */
+describe("pyIterate's array branch drops the record, provably harmlessly (target-only, D-0212)", () => {
+  test("the drop is real, and would be a divergence if a result were ever dumped", () => {
+    // The measurement behind the enumeration entry, kept executable so the
+    // entry cannot quietly become false. CPython's `json.dumps(list(x))` is
+    // `[1.0, 9007199254740993]` -- there the spelling lives in the VALUE, so
+    // `list()` cannot lose it. Here it lives on the container, so a copy starts
+    // empty. Confirmed against CPython 3.12.3.
+    const source = pyJsonLoads("[1.0, 9007199254740993]") as unknown[];
+    expect(pyJsonDumps(source)).toBe("[1.0, 9007199254740993]");
+    expect(pyJsonDumps(pyIterate(source))).toBe("[1, 9007199254740992.0]");
+  });
+
+  test("no consumer of a pyIterate result can reach a serialiser: the call sites are these", () => {
+    // The first premise. `pyIterate` is safe because its consumer set is small
+    // enough to have been checked one by one, not because copying is harmless
+    // -- the case above shows it is not. So the SET is what has to hold, and a
+    // new call site has to be classified before it can be added.
+    //
+    // The DIRECTORY is read rather than a list of file names being checked,
+    // and that is the difference between a check and a decoration. An
+    // allowlist only ever sees the files somebody thought to name, so a call
+    // site added to a file that is not on it -- or to a file that did not
+    // exist when the list was written -- passes silently, which is the exact
+    // failure mode this case exists to catch, reproduced inside the case.
+    //
+    // Counted per file rather than per line so that moving code within a file
+    // does not fire this, and so that what fires is the thing that matters: a
+    // call site that nobody has traced to its consumer.
+    const dir = join(import.meta.dirname, "..", "..", "src", "fencing");
+    const counts: [string, number][] = [];
+    for (const file of readdirSync(dir).sort()) {
+      // `.mjs` too: the deny hook is JavaScript and is shipped from this
+      // directory, so a call site there would be as real as any other.
+      if (!file.endsWith(".ts") && !file.endsWith(".mjs")) {
+        continue;
+      }
+      const text = readFileSync(join(dir, file), "utf8");
+      // The declaration in `pysemantics.ts` is not a call site.
+      const calls =
+        (text.match(/pyIterate\(/g) ?? []).length -
+        (text.includes("function pyIterate(") ? 1 : 0);
+      if (calls > 0) {
+        counts.push([file, calls]);
+      }
+    }
+    // `renderer.ts` x4: the permission-mode list, `forbidden_allow_exact`,
+    // `forbidden_allow_regex` and a hook group -- all ending in `pyRepr`,
+    // `pyStr` or set membership. `state.ts` x1: the persisted rule list, whose
+    // elements become all-string `FenceRule`s. `pysemantics.ts` x2: `pyDict`'s
+    // own two, which read each spelling off `items[index]` -- the ORIGINAL
+    // element, never the copy -- which is exactly this drop, already handled.
+    //
+    // A new FILE carrying a call site adds a row here, and a new call site in
+    // one of these three changes its count; either way the enumeration in
+    // `pyjson.ts`'s header has to be re-read before the suite goes green.
+    expect(counts).toStrictEqual([
+      ["pysemantics.ts", 2],
+      ["renderer.ts", 4],
+      ["state.ts", 1],
+    ]);
+  });
+
+  test("pysemantics is not on the package surface, so those call sites are all of them", () => {
+    // The second premise, and the one that separates `pyIterate` from `pyDict`.
+    // `pyDict` had to be repaired by D-0211 even though `FencedSpawner` never
+    // reaches its pair branch, because `Fence`, `fenceToJson` and `writeFence`
+    // ARE exported -- so a caller outside this repository can reach it and the
+    // call-site enumeration above would not bound anything.
+    //
+    // `pysemantics` is deliberately absent from the package surface
+    // (`src/index.ts` says so, with its reasons). Export it, and the proof
+    // above stops being a proof on the same day -- so the absence is asserted
+    // here rather than left as a property of a file nobody diffs against this
+    // one.
+    const index = readFileSync(join(import.meta.dirname, "..", "..", "src", "index.ts"), "utf8");
+    expect(index).not.toContain('from "./fencing/pysemantics.js"');
+    expect(index).not.toContain('from "./fencing/pyjson.js"');
   });
 });
 

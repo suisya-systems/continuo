@@ -76,23 +76,52 @@
  * - a container REBUILT without carrying its spellings across loses them. This
  *   is a standing obligation on every rebuild site, not a property the module
  *   can enforce: the record hangs on the container, so a new container starts
- *   empty and nothing goes red when one forgets. The sites in this port are
- *   `stripMeta`, `substitute`, `deepSortKeys` and `settingsPayload` in
- *   `renderer.ts`, and BOTH branches of `pyDict` in `pysemantics.ts` -- the
- *   mapping copy and the sequence-of-pairs build, which is a rebuild site that
- *   does not look like one because the value it places arrives as element 1 of
- *   a PAIR and its record is on the pair. Four carry the record with
- *   `carryNumberSpellings`, next to the `rememberKeyOrder` call they already
- *   made for the same reason; `settingsPayload` and `pyDict`'s pair branch
- *   carry it key by key, the first because one of its keys does not come from
- *   the container it copies, the second because each value's record is on a
- *   different container. **Any new rebuild site has to do the same, and has to
- *   be pinned.** D-0210 shipped with `deepSortKeys` uncarried and this list
- *   naming three, and neither the suite nor this comment said so -- the repair
- *   reached everything except `settings.local.json` and the persisted fence,
- *   which were the artefacts it was for. D-0211's own first draft then named
- *   five and missed `pyDict`'s second branch, which review caught. Count the
- *   BRANCHES that build a container, not the functions. See D-0211.
+ *   empty and nothing goes red when one forgets. **Count the BRANCHES that
+ *   build a container, not the functions** -- a carried function can hide an
+ *   uncarried branch, which is how `pyDict` stayed on the list while half of it
+ *   was broken. The ten branches in this port, enumerated by D-0212's
+ *   exhaustive sweep of `src/fencing`:
+ *
+ *   Nine CARRY the record. Six do it with `carryNumberSpellings`, next to the
+ *   `rememberKeyOrder` call they already made for the same reason --
+ *   `stripMeta`, BOTH branches of `substitute` and BOTH branches of
+ *   `deepSortKeys` in `renderer.ts`, and `pyDict`'s mapping branch in
+ *   `pysemantics.ts`. Three carry it KEY BY KEY, each because the wholesale
+ *   carry would be wrong for it: `settingsPayload` in `renderer.ts`, because
+ *   one of its keys does not come from the container it copies; `pyDict`'s
+ *   sequence-of-pairs branch in `pysemantics.ts`, a rebuild site that does not
+ *   look like one because the value it places arrives as element 1 of a PAIR
+ *   and its record is on the pair; and `FenceLedger.append` in `spawn.ts`,
+ *   whose `{event, at, ...payload}` spread is the only one of the ten on the
+ *   live spawn path, and which builds one map rather than carrying and then
+ *   asserting because `rememberNumberSpellings` REPLACES the record.
+ *
+ *   The tenth DELIBERATELY DOES NOT CARRY, and the proof is the entry:
+ *   `pyIterate`'s array branch in `pysemantics.ts` returns `[...value]`, which
+ *   drops the index-keyed record -- measured, `pyJsonDumps` of the copy of
+ *   `[1.0, 9007199254740993]` is `[1, 9007199254740992.0]`. It is unobservable
+ *   because `pysemantics` is not on the package surface (see `../index.ts`), so
+ *   its consumers are exactly the seven call sites in this subsystem, and no
+ *   result of any of them reaches `pyJsonDumps` or `pyTypeNameOf`: five end in
+ *   `pyRepr`, `pyStr` or set membership, and `pyDict`'s two read the spelling
+ *   off `items[index]` -- the ORIGINAL element -- for precisely this reason,
+ *   which is the one place the drop was already known about. Adding
+ *   the carry would ARM a trap rather than close one, because a caller may
+ *   reorder the copy (`renderer.ts` sorts it) and an index-keyed record does
+ *   not survive reordering. **The proof expires** if `pysemantics` is exported
+ *   or an eighth call site appears; both halves are pinned.
+ *
+ *   **Any new rebuild site has to carry the record, or state a proof like the
+ *   one above, and either way has to be pinned.** D-0210 shipped with
+ *   `deepSortKeys` uncarried and its list naming three, and neither the suite
+ *   nor this comment said so -- the repair reached everything except
+ *   `settings.local.json` and the persisted fence, which were the artefacts it
+ *   was for. D-0211's own first draft then named five and missed `pyDict`'s
+ *   second branch, which review caught; the list here then named six and missed
+ *   `FenceLedger.append`, which its own decision entry had already counted as
+ *   the seventh. Three drafts, three undercounts, each one caught by a wider
+ *   sweep than the last: that is why D-0212 enumerated mechanically rather than
+ *   by reading this paragraph. See D-0211 and D-0212.
  * - `pyStr` still renders an integral float as an int, which is visible only
  *   for a role document that spells `role_kind` or `permission_mode` as a
  *   number. Recorded there rather than fixed in passing.
