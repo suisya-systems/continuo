@@ -839,7 +839,9 @@ export function renderAc9Report(report: Ac9Report): string {
   );
   lines.push(`  generated at    ${report.generatedAtMs}`);
   lines.push(`  cohort size     ${report.cohortSize} runs`);
-  lines.push(`  baseline        ${report.baseline.source}`);
+  // D-0109: MeasuredBaseline.source is the caller's own description of where
+  // its figures came from, and the type is exported.
+  lines.push(`  baseline        ${reportValue(report.baseline.source)}`);
   lines.push("");
 
   lines.push("Series (each counts a different thing; none substitutes for another)");
