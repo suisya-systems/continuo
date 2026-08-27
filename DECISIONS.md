@@ -3573,7 +3573,7 @@ sides overflow to infinity, and both must keep writing `Infinity`. Both directio
    `settingsPayload` carries key by key instead, because one of its keys (`permissionMode`) does not
    come from the container it copies, and handing that key a spelling recorded for some role
    document's own `permissionMode` would be the stale-spelling trap described below.
-2. **All of them are pinned, at the artefact.** Five target-only cases in
+2. **All of them are pinned, at the artefact.** Six target-only cases in
    `test/fencing/spawn-precondition.test.ts` drive `FencedSpawner.spawn` and assert on the BYTES of
    the written `settings.local.json` and the published fence. The document has to arrive as TEXT --
    serialised, patched, and read back through `loadDocument` -- because a spelling cannot be written
@@ -3627,6 +3627,23 @@ ROOT (`1.0`, `1e16`) is the same double as the integer and reads `int` where CPy
 That is D-0210's root-slot boundary in its type-name half, and it is now asserted in BOTH directions
 -- the deviation at the root AND the correct answer for the same document inside a container -- so a
 future repair that closes it fails the case instead of silently outgrowing the disclosure.
+
+**A ninth, and the only one on the live spawn path.** `FenceLedger.append` builds its entry as
+`{event, at, ...payload}`. A SPREAD is a rebuild like any other, and this one is reached by every
+admission and every refusal continuo records. Without the carry, a caller handing it a
+document-derived payload got the numbers re-spelled by JavaScript:
+`{"at": 1.0, "big": 9007199254740993}` was written as `{"at": 1, "big": 9007199254740992.0}` -- the
+exact defect D-0210 was opened for, in the exact artefact it was opened about, one call away from
+the assertion that closed it. The record is built as ONE map rather than as a carry followed by the
+`PY_FLOAT` assertion, because `rememberNumberSpellings` REPLACES the record: asserting `at` after
+carrying the payload would have dropped everything carried. The `PY_FLOAT` assertion still applies
+only when the caller supplied no `at` of its own.
+
+That makes nine instances across three review rounds, every one of them the same shape -- a
+container rebuilt without its record -- and every one invisible to the suite before it was pinned.
+The generalisation is in the header of `src/fencing/pyjson.ts` and it is the durable part of this
+entry: the mechanism's cost is a standing obligation, the obligation has no runtime enforcement, and
+so the enumeration and the pins are the enforcement.
 
 **A safety claim that described an armed trap as disarmed.** `carryNumberSpellings` said entries
 whose value the rebuild REPLACED are harmless "because a spelling is only consulted for a value that

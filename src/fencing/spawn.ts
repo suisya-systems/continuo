@@ -71,7 +71,10 @@ import { pyJsonDumps, pyJsonLoads } from "./pyjson.js";
 import {
   isPlainObject,
   PY_FLOAT,
+  type PyNumberSpelling,
   PyTypeError,
+  pyKeys,
+  pyNumberSpelling,
   pyStrip,
   pyTypeName,
   rememberNumberSpellings,
@@ -282,12 +285,30 @@ export class FenceLedger {
     // recover; the spelling is asserted here instead, at the site that knows
     // which Python function the value stands for.
     //
+    // The spread is a REBUILD, so every spelling the payload's own numbers
+    // carried has to come across with them or the ledger line is written with
+    // the values re-spelled by JavaScript: a caller passing a document-derived
+    // `{"at": 1.0, "big": 9007199254740993}` got `{"at": 1, "big":
+    // 9007199254740992.0}` on disk. Built as ONE record rather than as a carry
+    // followed by an assert, because `rememberNumberSpellings` REPLACES the
+    // record: asserting `at` after carrying the payload would drop everything
+    // carried. See `carryNumberSpellings` for the obligation this is an
+    // instance of.
+    const spellings = new Map<string, PyNumberSpelling>();
+    for (const key of pyKeys(payload)) {
+      const spelling = pyNumberSpelling(payload, key);
+      if (spelling !== undefined) {
+        spellings.set(key, spelling);
+      }
+    }
     // Not asserted when the caller supplied its own `at`: the spread above puts
     // the payload's value in the slot, and claiming `float` over it would spell
-    // somebody else's integer as a float.
+    // somebody else's integer as a float -- and if that value came from a
+    // document, the loop above has already recorded what the document said.
     if (!Object.hasOwn(payload, "at")) {
-      rememberNumberSpellings(entry, new Map([["at", PY_FLOAT]]));
+      spellings.set("at", PY_FLOAT);
     }
+    rememberNumberSpellings(entry, spellings);
     mkdirSync(dirname(this.path), { recursive: true });
     // `fsync` on a *newly created* file does not promise its directory entry
     // survives a power loss -- the bytes would be on disk under a pathname that

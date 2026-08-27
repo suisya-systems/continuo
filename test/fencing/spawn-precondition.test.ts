@@ -21,7 +21,7 @@ import { makeDecision } from "../../src/fencing/rules.js";
 import {
   EVENT_ADMITTED,
   FencedSpawner,
-  type FenceLedger,
+  FenceLedger,
   REASON_BATTERY_INCOMPLETE,
   REASON_PROBE_UNSYNTHESIZABLE,
   type SpawnOutcome,
@@ -795,6 +795,42 @@ describe("a document's number spelling reaches settings.local.json (target-only,
       const inside = pyJsonLoads(`{"n": ${text}}`) as Record<string, unknown>;
       expect(pyTypeNameOf(inside, "n"), text).toBe("float");
     }
+  });
+
+  test("a ledger payload's own number spellings survive the append", () => {
+    // `FenceLedger.append` builds its entry as `{event, at, ...payload}`, and a
+    // SPREAD is a rebuild like any other -- the seventh branch this decision
+    // enumerates, and the only one on the live spawn path. Without the carry, a
+    // caller handing it a document-derived payload got the numbers re-spelled
+    // by JavaScript: `{"at": 1.0, "big": 9007199254740993}` was written as
+    // `{"at": 1, "big": 9007199254740992.0}`.
+    //
+    // The record is built as ONE map rather than as a carry followed by the
+    // `PY_FLOAT` assertion, because `rememberNumberSpellings` REPLACES the
+    // record: asserting `at` after carrying would drop everything carried. Both
+    // halves are asserted below, in the same case, for exactly that reason.
+    const root = fenceCaseRoot();
+    const supplied = fenceLedger(root, "supplied.jsonl");
+    supplied.append(
+      "candidate",
+      pyJsonLoads('{"at": 1.0, "big": 9007199254740993}') as Record<string, unknown>,
+    );
+    expect(readFileSync(supplied.path, "utf8")).toBe(
+      '{"at": 1.0, "big": 9007199254740993, "event": "candidate"}\n',
+    );
+
+    // The other half: with no `at` in the payload the clock's value is used, it
+    // is built in CODE, and `time.time()` is a float on every platform -- so an
+    // integral timestamp must still print `0.0`, which is the D-0210 repair
+    // this carry must not have displaced.
+    const clocked = new FenceLedger(join(root, "clocked.jsonl"), { clock: () => 0 });
+    clocked.append(
+      "candidate",
+      pyJsonLoads('{"big": 9007199254740993}') as Record<string, unknown>,
+    );
+    expect(readFileSync(clocked.path, "utf8")).toBe(
+      '{"at": 0.0, "big": 9007199254740993, "event": "candidate"}\n',
+    );
   });
 });
 
