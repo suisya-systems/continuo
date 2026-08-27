@@ -1188,6 +1188,42 @@ describe("target-only -- properties the ported cases leave unguarded", () => {
   });
 });
 
+describe("target-only -- the public constructor cannot walk around the invariant", () => {
+  test("a shadow input that is neither observed nor absent is refused", () => {
+    // D-0108, raised by the codex review gate. The source states the invariant
+    // in its two factories and leaves the dataclass constructor public beside
+    // them, so a caller who reaches for the constructor gets an input stating
+    // neither its source nor its absence -- and buildMeasurementReport then
+    // excludes those runs while the report shows an empty v1_owned bucket with
+    // nothing beside it, which reads as "v1 owned no run in this period".
+    expectRefusal(
+      () => new V1ShadowInput({ source: null, runIds: ["run-9"], absentReason: null }),
+      V1ShadowInputRefused,
+      /states neither/,
+    );
+    expectRefusal(
+      () => new V1ShadowInput({ source: "v1-export.json", runIds: [], absentReason: "and absent" }),
+      V1ShadowInputRefused,
+      /is both/,
+    );
+    expectRefusal(
+      () => new V1ShadowInput({ source: null, runIds: ["run-9"], absentReason: "none to declare" }),
+      V1ShadowInputRefused,
+      /carries 1 run ids and a reason/,
+    );
+    // And the two shapes the factories build still construct directly, so the
+    // check refuses the incoherent combinations and not the class.
+    expect(
+      new V1ShadowInput({
+        source: "v1-export.json",
+        runIds: ["run-9"],
+        absentReason: null,
+      }).runIds,
+    ).toEqual(["run-9"]);
+    expect(new V1ShadowInput({ source: null, runIds: [], absentReason: "none" }).source).toBeNull();
+  });
+});
+
 // --------------------------------------------------------------------------
 // target-only -- the header the report actually carries
 // --------------------------------------------------------------------------

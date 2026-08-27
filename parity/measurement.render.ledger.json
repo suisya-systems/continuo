@@ -87,7 +87,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 10,
+      "count": 11,
       "ids": [
         "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > every externally-supplied value in a full report is escaped",
         "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > a hostile banner cannot inject a line above the table",
@@ -98,9 +98,10 @@
         "test/measurement/render.test.ts::target-only -- properties the ported cases leave unguarded > the JSON keeps the mapping's order and carries the verdict note itself",
         "test/measurement/render.test.ts::target-only -- properties the ported cases leave unguarded > a float is rendered as a float, and an int as an int",
         "test/measurement/render.test.ts::target-only -- properties the ported cases leave unguarded > the grace and the fingerprint mode are refused before the snapshot opens",
+        "test/measurement/render.test.ts::target-only -- the public constructor cannot walk around the invariant > a shadow input that is neither observed nor absent is refused",
         "test/measurement/render.test.ts::target-only -- the header is the real one > the report's header is a ReportHeader, not only something header-shaped"
       ],
-      "why": "Ten, in three groups. FIVE are the D-0109 / D-0111 escaping belt: this module renders caller- and database-supplied values, and the source's renderer prints them verbatim, so the divergence needs cases of its own -- the structural all-fields-hostile report, the banner, a hostile fact key, a value that would close its own fence, and the fence of an ordinary report, which pins that the widening costs nothing where it is not needed. FOUR close mutations that survived the 60 ported cases (see mutation_sweep); every one of them survived for the same structural reason, which is that the headline equality case renders BOTH sides through this module's own `cell` and therefore cannot see `cell` change. ONE pins that the real report carries a real ReportHeader, which the widened `ReportHeaderLike` annotation would otherwise leave unstated."
+      "why": "Eleven, in four groups. FIVE are the D-0109 / D-0111 escaping belt: this module renders caller- and database-supplied values, and the source's renderer prints them verbatim, so the divergence needs cases of its own -- the structural all-fields-hostile report, the banner, a hostile fact key, a value that would close its own fence, and the fence of an ordinary report, which pins that the widening costs nothing where it is not needed. FOUR close mutations that survived the 60 ported cases (see mutation_sweep); every one of them survived for the same structural reason, which is that the headline equality case renders BOTH sides through this module's own `cell` and therefore cannot see `cell` change. ONE pins the D-0108 repair to V1ShadowInput's public constructor. ONE pins that the real report carries a real ReportHeader, which the widened `ReportHeaderLike` annotation would otherwise leave unstated."
     }
   },
   "totals": {
@@ -145,6 +146,18 @@
       "matches_source": true,
       "note": "Reproduced, and said out loud in the artefact: WINDOW_EPISODES_NOT_CLASSIFIED is a field of the report because a zero meaning 'nothing was censored' and a zero meaning 'no episode was classified' are different statements and section 3.5 makes the second load bearing.",
       "where_a_fix_belongs": "the driver that produces episodes, which is not part of this branch."
+    },
+    {
+      "behaviour": "FINGERPRINT_TABLES names the five tables the report's FIGURES are read off, and not `schema_migration`, which buildHeader also reads to fill schema_migration_head.",
+      "matches_source": true,
+      "note": "Reproduced; the constant is interlock's, table for table. Raised by the codex review gate as a hole in section 6's 'hash every table read'. It is a real narrowing of the digest's scope and it is not left silent: the schema identity buildHeader reads that table FOR is carried as fields of the same header -- schema_migration_head.version, schema_migration_head.name and user_version -- so two reports over different schema heads differ visibly in the document rather than only in a digest. Widening the tuple here would move every digest continuo produces away from interlock's, which is the one number this port has measured as byte-identical across the two implementations, in exchange for a fact the header already states. Conventions section 11: a repair carries no warrant from the source, and this one would cost the parity surface it was meant to protect.",
+      "where_a_fix_belongs": "interlock's own FINGERPRINT_TABLES, or a decision in this port that accepts the digest divergence deliberately. Not a translation choice."
+    },
+    {
+      "behaviour": "ReportSection copies the facts mapping one level deep, so an array or a map a caller passes as a fact VALUE stays aliased to the caller's.",
+      "matches_source": true,
+      "note": "Reproduced, and it is the source's own depth: `ReportSection.as_mapping` does `dict(self.facts)`, which is a shallow copy of a mapping whose values are ordinary mutable Python lists and dicts. Raised by the codex review gate against the runtime-immutability promise in immutable.ts -- and that promise is about the gap between the two languages (D-0105: a `readonly` annotation vanishes for a JavaScript consumer where a frozen dataclass does not), which is not the gap here: both implementations alias a nested list identically. Every fact buildMeasurementReport puts in a section is already built from frozen values, so the exposure is a caller who assembles a section of their own and keeps a reference to a value they passed.",
+      "where_a_fix_belongs": "immutable.ts, as a deep variant of readOnlyMap used by every module of this lane at once. Adding it in one module would make two report objects immutable to different depths, which is worse than one shallow depth stated here."
     }
   ],
   "entries": [
@@ -741,6 +754,15 @@
       "note": "A fenced block is closed by a line of backticks at least as long as the one that opened it, so a value carrying a line of three backticks ends the block early and everything after it -- the rest of that value, and every later block -- is read as report structure. It is the same injection D-0109 closed for table cells, one delimiter along, and the escape cannot close this one: what reaches a block includes another renderer's finished output, and escaping the backtick would need a rule reportValue does not have. Widening is the repair that changes nothing else.",
       "parity_cost": "None on a value with no backticks, which is every value an ordinary report carries -- pinned by a target-only case asserting an ordinary report's fences are exactly ```. A report whose values do carry a fence renders differently from interlock's, which is the point: interlock's is truncated.",
       "evidence": "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > a fenced value cannot close its own fence, and 'an ordinary report's fences are exactly three backticks'. Made to fail on purpose: with the widening removed the block parses back as 'before' and the case goes red naming the truncation."
+    },
+    {
+      "decision": "D-0108",
+      "behaviour": "V1ShadowInput's constructor refuses an input that states neither its source nor its absence, that states both, or that carries run ids alongside a reason for having none. interlock states the invariant only in the two classmethods and leaves the dataclass constructor public beside them.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Raised by the codex review gate on this belt, and it is exactly the shape D-0108 already rules on: an invariant a public constructor can walk around is repaired, not disclosed. The class exists because an empty v1_owned bucket rendered without saying where it came from reads as 'v1 owned no run in this period', which the report is in no position to assert. `V1ShadowInput(source=None, run_ids=('run-9',), absent_reason=None)` builds exactly that in interlock: buildMeasurementReport excludes those runs from the cohort and the report shows an empty bucket with no source and no reason beside it. The two factories keep their own messages by raising them from the constructor, so a caller gets the same explanation through either door.",
+      "parity_cost": "None on any report either implementation can build through `observed` or `absent`, which is every report the CLI produces. A caller reaching the constructor with an incoherent combination gets a refusal here and a rendered report in interlock; continuo is the reference.",
+      "evidence": "test/measurement/render.test.ts::target-only -- the public constructor cannot walk around the invariant > a shadow input that is neither observed nor absent is refused"
     },
     {
       "decision": "D-0107",

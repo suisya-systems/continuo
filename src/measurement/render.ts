@@ -412,35 +412,77 @@ export class V1ShadowInput {
   readonly runIds: readonly string[];
   readonly absentReason: string | null;
 
+  /**
+   * The invariant is checked HERE, not only in the two factories (`D-0108`).
+   *
+   * The source states it in `observed` and `absent` and leaves the dataclass's
+   * own constructor public beside them, so `V1ShadowInput(source=None,
+   * run_ids=('run-9',), absent_reason=None)` builds an input that states
+   * neither its source nor its absence -- which is the one thing this class
+   * exists to make impossible. `buildMeasurementReport` would then exclude
+   * those runs from the cohort and render an empty `v1_owned` bucket with no
+   * source and no reason beside it, which reads as "v1 owned no run in this
+   * period": an assertion the report is in no position to make, arriving
+   * through the door the two factories do not cover.
+   *
+   * Raised by the codex review gate. `D-0108` is the standing rule for exactly
+   * this shape -- an invariant a public constructor can walk around is
+   * repaired, not disclosed -- so the checks move here and the factories keep
+   * their messages by raising them from here.
+   */
   constructor(fields: {
     readonly source: string | null;
     readonly runIds: Iterable<string>;
     readonly absentReason: string | null;
   }) {
-    this.source = fields.source;
-    this.runIds = frozenList(fields.runIds);
-    this.absentReason = fields.absentReason;
-    Object.freeze(this);
-  }
-
-  static observed(source: string, runIds: Iterable<string>): V1ShadowInput {
-    if (source.trim() === "") {
+    const runIds = frozenList(fields.runIds);
+    if (fields.source !== null && fields.absentReason !== null) {
+      throw new V1ShadowInputRefused(
+        "a v1 shadow input is either observed from a named source or absent " +
+          "for a stated reason, and this one is both; a reader cannot tell " +
+          "which of the two the empty v1_owned bucket came from",
+      );
+    }
+    if (fields.source === null && fields.absentReason === null) {
+      throw new V1ShadowInputRefused(
+        "a v1 shadow input states either where its run ids came from or why " +
+          "there are none; this one states neither, and an unexplained " +
+          "absence is indistinguishable from a report that forgot to pass one",
+      );
+    }
+    if (fields.source !== null && fields.source.trim() === "") {
       throw new V1ShadowInputRefused(
         "name where the v1 shadow run ids came from; an unnamed source " +
           "cannot be checked by a reader recomputing this report",
       );
     }
+    if (fields.absentReason !== null) {
+      if (fields.absentReason.trim() === "") {
+        throw new V1ShadowInputRefused(
+          "state why this report has no v1 shadow input; an unexplained " +
+            "absence is indistinguishable from a report that forgot to pass " +
+            "one, and the two produce the same empty v1_owned bucket",
+        );
+      }
+      if (runIds.length > 0) {
+        throw new V1ShadowInputRefused(
+          `this v1 shadow input carries ${runIds.length} run ids and a reason ` +
+            "for having none; the runs would be excluded from the cohort and " +
+            "the report would say there was no shadow input to exclude them",
+        );
+      }
+    }
+    this.source = fields.source;
+    this.runIds = runIds;
+    this.absentReason = fields.absentReason;
+    Object.freeze(this);
+  }
+
+  static observed(source: string, runIds: Iterable<string>): V1ShadowInput {
     return new V1ShadowInput({ source, runIds, absentReason: null });
   }
 
   static absent(reason: string): V1ShadowInput {
-    if (reason.trim() === "") {
-      throw new V1ShadowInputRefused(
-        "state why this report has no v1 shadow input; an unexplained " +
-          "absence is indistinguishable from a report that forgot to pass " +
-          "one, and the two produce the same empty v1_owned bucket",
-      );
-    }
     return new V1ShadowInput({ source: null, runIds: [], absentReason: reason });
   }
 
