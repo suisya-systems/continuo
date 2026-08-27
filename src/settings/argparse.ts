@@ -278,8 +278,16 @@ export class ArgumentParser {
     // Pass 1: classify every token before any of them is acted on.
     const tokens = [...argv];
     const classified = new Map<number, ClassifiedToken | null>();
-    // argparse removes the FIRST `--` and treats every later one as an
-    // ordinary value, so the index is remembered rather than the token.
+    // The first `--` stops option classification; every later one is an
+    // ordinary value, so the INDEX is remembered rather than the token.
+    //
+    // What is NOT done here is remove it. `_get_values` drops the separator
+    // only when a POSITIONAL consumed it, and this parser declares none except
+    // the subcommand -- whose `nargs=PARSER` is on the short list `_get_values`
+    // does not drop it for. Measured against CPython 3.12.3: a trailing `--` is
+    // `unrecognized arguments: --`, and `claude-org-runtime -- settings` is
+    // `argument command: invalid choice: '--'`. Both fall out of leaving the
+    // token in place as an ordinary value; skipping it produced neither.
     let firstDoubleDash = -1;
     for (const [index, token] of tokens.entries()) {
       if (firstDoubleDash !== -1) {
@@ -300,10 +308,6 @@ export class ArgumentParser {
     let index = 0;
     while (index < tokens.length) {
       const token = tokens[index] as string;
-      if (index === firstDoubleDash) {
-        index += 1;
-        continue;
-      }
       const option = classified.get(index) ?? null;
       if (option === null) {
         if (this.#subparsers !== null) {
@@ -350,10 +354,27 @@ export class ArgumentParser {
         value = option.explicit;
         index += 1;
       } else {
+        // `_match_argument`. Two things exclude a token from being the value,
+        // and both are reachable:
+        //
+        // - **the `--` separator.** `_get_nargs_pattern` strips the `-` from the
+        //   pattern when the action is an OPTIONAL ("if this is an optional
+        //   action, `--` is not allowed"), so an optional's argument can never
+        //   be the separator -- not even with a value after it. Measured
+        //   against CPython 3.12.3 on this parser: `--worker-dir --` and
+        //   `--worker-dir -- /wd` are BOTH `expected one argument`. Treating
+        //   `--` as an ordinary value instead -- which is what it looks like,
+        //   since everything from the separator on is classified as a value --
+        //   parses `--worker-dir --` into a worker_dir of `"--"`, and renders a
+        //   settings file anchored on a directory nobody named.
+        // - **a token classified as an OPTION.** An option following `--role`
+        //   is not its argument.
         const next = index + 1;
-        // `_match_argument`: the next token has to exist AND be classified as a
-        // value. An option following `--role` is not its argument.
-        if (next >= tokens.length || (classified.get(next) ?? null) !== null) {
+        if (
+          next >= tokens.length ||
+          next === firstDoubleDash ||
+          (classified.get(next) ?? null) !== null
+        ) {
           this.#error(streams, `argument ${option.optionString}: expected one argument`);
         }
         value = tokens[next] as string;

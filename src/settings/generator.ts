@@ -944,7 +944,23 @@ function keptEntryString(entry: unknown, anchorBase: string, substitutedPath: st
   if (!isPlainObject(entry)) {
     return entry;
   }
-  if (substitutedPath.startsWith("/")) {
+  // -- INHERITED DEFECT, REPAIRED IN PASS (D-0023, D-0213) --
+  // The source tests `substituted_path.startswith("/")`. On Windows that is not
+  // "is this absolute": `C:\secret` fails it, falls through to the empty-anchor
+  // branch below, and is emitted as the original DICT -- which is precisely the
+  // shape this function exists to stop emitting, because Claude Code's settings
+  // schema answers it with "Expected string, but received object" and rejects
+  // the whole file. `canonicalizeSandboxDeny` already spells the same test
+  // `os.path.isabs` with a comment saying why ("a Windows entry begins with a
+  // drive letter, which the prefix test would pass over"); the source author saw
+  // it at one site and not at this one.
+  //
+  // The repair is `osIsabs`, which is IDENTICAL to `startswith("/")` on POSIX --
+  // `posixpath.isabs` is that test -- so nothing changes on the platform
+  // interlock runs on, and on Windows a drive-letter path is emitted as the
+  // string the contract asks for. Recorded as a deliberate divergence in
+  // `parity/settings.settings-generator.ledger.json`.
+  if (osIsabs(substitutedPath)) {
     // Already absolute (anchor='absolute', or an absolute path under any
     // anchor): emit verbatim.
     return substitutedPath;

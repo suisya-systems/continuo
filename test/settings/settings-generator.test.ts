@@ -2610,3 +2610,126 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
     expect((out["env"] as Record<string, unknown>)["PAIR"]).toBe("/wd/a:/wd/b");
   });
 });
+
+/**
+ * Target-only. The two repairs the review gate found, each pinned with the
+ * thing it must not break beside it (`docs/test-translation-conventions.md`
+ * rule 11: "pin the repair AND the thing it must not break").
+ */
+describe("the two in-pass repairs (target-only, D-0213)", () => {
+  test("a kept absolute entry is emitted as a string on this platform (target-only)", () => {
+    // The source asks `substituted_path.startswith("/")`, which is
+    // `posixpath.isabs` written out -- and on Windows is not "is this
+    // absolute" at all, so `C:\secret` fell through and was emitted as the
+    // original DICT, the exact shape `_kept_entry_string` exists to stop
+    // emitting.
+    //
+    // The absolute form is PARAMETERISED BY PLATFORM rather than guarded by a
+    // skip, because the property is "the emitted form follows `os.path.isabs`",
+    // and `os.path` is a platform choice. On POSIX this asserts the unchanged
+    // behaviour; on the Windows cells it asserts the repair. A `skipIf` would
+    // have made the repair unpinned on every cell that is not Windows AND
+    // needed a ledger approval for a construct that buys nothing here.
+    const absolute = process.platform === "win32" ? "C:\\secret" : "/secret";
+    const schema = {
+      worker_roles: {
+        demo: sandboxRole({
+          denyRead: [structured("absolute", absolute)],
+          additional: [absolute],
+        }),
+      },
+    };
+    const result = renderRoleWithMetadata(schema, {
+      role: "demo",
+      workerDir: "/home/u/wd",
+      claudeOrgPath: "/home/u/co",
+      realpathFn: (p) => p,
+      wslDetector: () => false,
+    });
+    const kept = filesystemOf(result)["denyRead"] as unknown[];
+    expect(kept).toStrictEqual([absolute]);
+    expect(typeof kept[0], "the contract's arrays are lists of STRINGS").toBe("string");
+  });
+
+  test("anchor=absolute with a relative path is still kept as the dict (target-only)", () => {
+    // The half the repair must not break. `osIsabs` widens what counts as
+    // absolute; it must not turn the MALFORMED case -- `anchor='absolute'` with
+    // a path that is absolute under no namespace -- into a silently
+    // wrong-anchored string. The source keeps the dict so the launcher surfaces
+    // the operator error, and so does this.
+    const bad = { anchor: "absolute", path: "etc/shadow", suppressOnSymlinkEscape: true };
+    const schema = { worker_roles: { demo: sandboxRole({ denyRead: [bad], additional: [] }) } };
+    const result = renderRoleWithMetadata(schema, {
+      role: "demo",
+      workerDir: "/home/u/wd",
+      claudeOrgPath: "/home/u/co",
+      realpathFn: (p) => p,
+      wslDetector: () => false,
+    });
+    expect(filesystemOf(result)["denyRead"]).toStrictEqual([bad]);
+  });
+
+  /**
+   * Every `--` shape, measured against CPython 3.12.3 on this exact parser
+   * rather than reasoned about.
+   *
+   * The separator was the second finding, and the first fix was wrong in the
+   * interesting direction: it assumed `(-*A-*)` let an optional absorb the
+   * separator and take the token after it, so `--worker-dir -- /wd` would
+   * parse. `_get_nargs_pattern` strips the `-` for an optional action, and
+   * CPython rejects that line -- which the table below only says because the
+   * table was produced by running it.
+   */
+  const SEPARATOR_CASES: readonly (readonly [argv: readonly string[], expected: string])[] = [
+    [
+      ["--role", "demo", "--claude-org-path", "/co", "--worker-dir", "--"],
+      "argument --worker-dir: expected one argument",
+    ],
+    [
+      ["--role", "demo", "--claude-org-path", "/co", "--worker-dir", "--", "/wd"],
+      "argument --worker-dir: expected one argument",
+    ],
+    [
+      ["--role", "demo", "--worker-dir", "--", "--claude-org-path", "/co"],
+      "argument --worker-dir: expected one argument",
+    ],
+    [
+      ["--role", "demo", "--worker-dir", "/wd", "--claude-org-path", "/co", "--"],
+      "unrecognized arguments: --",
+    ],
+    [
+      ["--role", "demo", "--worker-dir", "/wd", "--claude-org-path", "/co", "--", "x"],
+      "unrecognized arguments: -- x",
+    ],
+    [
+      ["--role", "demo", "--worker-dir", "/wd", "--", "--claude-org-path", "/co"],
+      "the following arguments are required: --claude-org-path",
+    ],
+    [
+      ["--", "--role", "demo"],
+      "the following arguments are required: --role, --worker-dir, --claude-org-path",
+    ],
+  ];
+
+  for (const [argv, expected] of SEPARATOR_CASES) {
+    test(`the -- separator: ${argv.join(" ")} (target-only)`, () => {
+      const error = expectRaises(ArgparseExit, () => captureStderr(() => main([...argv])));
+      expect(error.code).toBe(2);
+      expect(error.message).toBe(expected);
+    });
+  }
+
+  test("the -- separator reaches a subcommand choice as itself (target-only)", () => {
+    // The other half of "the separator is never removed": with a `nargs=PARSER`
+    // positional it is handed to the choice check verbatim. Measured:
+    // `claude-org-runtime -- settings` is `invalid choice: '--'`.
+    const parser = buildRuntimeParser();
+    const error = expectRaises(ArgparseExit, () =>
+      captureStderr(() => {
+        parser.parseArgs(["--", "settings", "show"], defaultStreams());
+        return 0;
+      }),
+    );
+    expect(error.message).toContain("invalid choice: '--'");
+  });
+});

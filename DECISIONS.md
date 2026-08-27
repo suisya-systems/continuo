@@ -3862,11 +3862,35 @@ parser could reach it, not a silent fallthrough.
   the generator are ported here because `render_role_with_metadata` calls them unconditionally; their
   own dedicated cases are not, and the ledger says so.
 
-**Verified by.** `npm run verify` green: lint, knip, typecheck, native smoke, 1517 tests, parity.
+**What the review gate found, and what it says about both repairs.** Two P2 findings, both real,
+both now repaired with the half they must not break pinned beside them.
+
+1. **`_kept_entry_string` asks `startswith("/")`, which is not "is this absolute" on Windows.**
+   `{anchor: 'absolute', path: 'C:\\secret'}` fell through to the empty-anchor branch and was
+   emitted as the original DICT -- the exact shape that function exists to stop emitting, since
+   Claude Code answers a dict in `denyRead` with "Expected string, but received object" and rejects
+   the file. Repaired to `osIsabs`, which is identical to the source on POSIX; the neighbouring
+   `_canonicalize_sandbox_deny` already spelled the same test `os.path.isabs` with a comment giving
+   this exact reason, so the source author saw it at one site and not the other. Recorded as an
+   intentional divergence in the ledger, along with the sibling site (`absolute_pattern`) that is
+   deliberately NOT changed, because its consequence is which entries get suppressed rather than the
+   shape of an emitted value.
+2. **The argparse `--` separator was consumed as an option's argument**, so `--worker-dir --` parsed
+   into a worker_dir of `"--"`. **The first fix for this was wrong, and the way it was wrong is the
+   point**: it assumed `_match_argument`'s `(-*A-*)` let an optional absorb the separator and take
+   the token after it. `_get_nargs_pattern` strips the `-` when the action is an optional, so
+   CPython rejects `--worker-dir -- /wd` too. Eight separator shapes were then MEASURED against
+   CPython 3.12.3 on this exact parser and are pinned as a table, byte-for-byte on the error text --
+   including the two that show the separator is never *removed* either (`unrecognized arguments:
+   --`, and `-- settings` reaching a subcommand choice as `invalid choice: '--'`). Reading the
+   source of `argparse` would have given the first answer; running it gave the right one.
+
+**Verified by.** `npm run verify` green: lint, knip, typecheck, native smoke, 1527 tests, parity.
 106/106 source cases mapped, 103 ported and 3 adapted, **no waivers and nothing not-ported**; the
 source file re-run at `65f36c5` on the porting host reports 106 passed. The `os.path` oracle agrees
 with CPython 3.12.3 at every position in both namespaces. Every one of the thirteen rebuild branches
-and the seam were probed red individually.
+and the seam were probed red individually, and the eight `--` shapes agree with CPython on the exact
+error text.
 
 **Falsified by.** CPython changing `posixpath` or `ntpath` semantics -- the vector is 3.12.3 and the
 transcription is of that version. Also falsified if `os.path.realpath`'s Windows adaptation is ever
