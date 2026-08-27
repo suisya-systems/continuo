@@ -22,15 +22,20 @@
  * - **28 of 31** once every hostile value carried BOTH at once, and cases were
  *   added for the branches only reached when a v1 side is absent.
  * - **31 of 33** as this script first reported it -- and that denominator was
- *   wrong. It found call sites with a regular expression that allowed at most
- *   one nested `(...)` group, so `reportValue(renderCell(value).trim())` in
- *   `provenance.ts` was never mutated and never counted. A site this script
- *   cannot see is a site it cannot report as uncovered, so the omission made
- *   the score look better rather than worse. The scan is now balanced-
- *   parenthesis (see `callSites`).
- * - **32 of 34** now, with the recovered site measured and covered. The two
- *   that remain are unreachable rather than unexercised, and are recorded as
- *   such in `parity/measurement.canary.ledger.json`:
+ *   wrong twice over, for the same reason in two spellings. The scan was
+ *   textual, and a text scan is blind to whatever shape it did not anticipate:
+ *   a regex allowing one nested `(...)` group missed
+ *   `reportValue(renderCell(value).trim())` in `provenance.ts`, and matching
+ *   the literal `reportValue(` missed `audit.recordClasses.map(reportValue)` in
+ *   `canary.ts`, where the function is passed rather than called. Both misses
+ *   are silent, and both fail in the one direction a measurement must not: an
+ *   unseen site is never reported as uncovered, so it shrinks the denominator
+ *   and reads as a BETTER score.
+ * - **33 of 35** now. `callSites` walks the TypeScript AST instead, which ends
+ *   that class rather than patching instances of it -- an identifier is an
+ *   identifier however it is spelled. Both recovered sites measure as covered.
+ *   The two that remain are unreachable rather than unexercised, and are
+ *   recorded as such in `parity/measurement.canary.ledger.json`:
  *   - `finding.interlock.store` is `INTERLOCK_STORE`, a module constant;
  *   - `evidence.uri` comes from `pathToFileURL`, which percent-encodes every
  *     non-ASCII byte and every control character, so the value is printable
@@ -56,6 +61,7 @@ import { cpSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "n
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import ts from "typescript";
 
 const MODULES = [
   "ac9",
@@ -68,44 +74,75 @@ const MODULES = [
 ];
 
 /**
- * Each `reportValue(...)` call, once, in source order.
+ * Every reference to `reportValue` in the module, as a mutation site.
  *
- * The argument is found by scanning for the parenthesis that balances the one
- * the call opens, NOT by a regular expression. An earlier version matched at
- * most one nested `(...)` group and so silently skipped
- * `reportValue(renderCell(value).trim())` in `provenance.ts`, which has two --
- * the call and the method call after it. That is the worst failure this script
- * can have: a site it never mutates is a site it never reports as uncovered,
- * so the omission shrinks the denominator and reads as a better result. The
- * review gate caught it; nothing here would have.
+ * Found by walking the TypeScript AST, NOT by scanning text. Two successive
+ * versions of this scan were text-based and each was found blind to a spelling
+ * it did not anticipate: a regex allowing one nested `(...)` group missed
+ * `reportValue(renderCell(value).trim())`, and matching the literal
+ * `reportValue(` missed `audit.recordClasses.map(reportValue)`, where the
+ * function is passed rather than called. Both failures are silent and both
+ * point the same way -- a site the scan cannot see is never mutated, never
+ * reported as uncovered, and quietly shrinks the denominator, so the omission
+ * always reads as a BETTER score. That is the one direction a measurement must
+ * not fail in, and a third unanticipated spelling was always going to exist.
+ *
+ * The AST ends the class rather than patching instances of it. An identifier is
+ * an identifier however it is spelled, comments and string literals are trivia
+ * and never match, and each occurrence carries its own offsets -- so two
+ * textually identical calls are two sites and are mutated separately, which the
+ * text versions could not do (they deduplicated by text and then mutated only
+ * the first occurrence).
+ *
+ * A site is mutated by removing the protection and leaving the value:
+ * a call becomes its own argument, and a reference becomes the identity
+ * function.
  */
-function callSites(source) {
+function callSites(source, fileName) {
+  const parsed = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
   const sites = [];
-  const open = "reportValue(";
-  for (let at = source.indexOf(open); at !== -1; at = source.indexOf(open, at + 1)) {
-    let depth = 0;
-    let end = -1;
-    for (let i = at + open.length - 1; i < source.length; i += 1) {
-      const ch = source[i];
-      if (ch === "(") {
-        depth += 1;
-      } else if (ch === ")") {
-        depth -= 1;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
+
+  const visit = (node) => {
+    if (ts.isIdentifier(node) && node.text === "reportValue") {
+      const parent = node.parent;
+      if (ts.isImportSpecifier(parent) || ts.isImportClause(parent)) {
+        // The import binding names the helper; it is not a use of it.
+      } else if (ts.isCallExpression(parent) && parent.expression === node) {
+        const argument = parent.arguments.map((one) => one.getText(parsed)).join(", ");
+        sites.push({
+          label: argument,
+          start: parent.getStart(parsed),
+          end: parent.getEnd(),
+          replacement: argument,
+        });
+      } else {
+        // Passed rather than called -- `.map(reportValue)` and anything else
+        // that hands the function on. Removing the protection here means
+        // handing on something that returns its input unchanged.
+        sites.push({
+          label: `${parent.getText(parsed)} (reportValue passed as a reference)`,
+          start: node.getStart(parsed),
+          end: node.getEnd(),
+          replacement: "((value) => value)",
+        });
       }
     }
-    if (end === -1) {
-      throw new Error(`unbalanced reportValue( at offset ${at}`);
-    }
-    const site = source.slice(at, end + 1);
-    if (!sites.includes(site)) {
-      sites.push(site);
-    }
-  }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(parsed);
   return sites;
+}
+
+/** `source` with exactly one site's protection removed. */
+function withoutSite(source, site) {
+  return source.slice(0, site.start) + site.replacement + source.slice(site.end);
 }
 
 function main() {
@@ -172,18 +209,18 @@ function main() {
 
     const uncovered = [];
     let hits = 0;
-    for (const site of callSites(original)) {
-      const inner = site.slice("reportValue(".length, -1);
-      writeFileSync(path, original.replace(site, inner));
+    const found = callSites(original, `${module}.ts`);
+    for (const site of found) {
+      writeFileSync(path, withoutSite(original, site));
       const red = !isGreen(module);
       writeFileSync(path, original);
       if (red) {
         hits += 1;
       } else {
-        uncovered.push(inner);
+        uncovered.push(site.label);
       }
     }
-    const total = callSites(original).length;
+    const total = found.length;
     sites += total;
     covered += hits;
     const tail = uncovered.length > 0 ? `  UNCOVERED: ${uncovered.join(", ")}` : "";
