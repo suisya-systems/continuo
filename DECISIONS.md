@@ -3816,11 +3816,26 @@ rebuild that preserves its slots, and `pyIterate` exists to hand callers an arra
 
 *What replaces the carry.* Three target-only cases, because a proof nothing checks is a sentence.
 The first MEASURES the drop, so a future carry is a deliberate change and not a silent one. The
-second and third pin the proof's two premises -- the call-site set, counted per file so that moving
-code does not fire it, and the absence of `pysemantics` from `src/index.ts`. Each was confirmed to
-fail, alone and for its stated reason, with its premise broken: adding the carry fails the first and
-nothing else, which is itself the corroboration that the drop is unobservable; an eighth call site
-fails the second; exporting `pysemantics` fails the third.
+second and third pin the proof's two premises, and review moved both of them from checking a
+SPELLING to checking the PROPERTY -- which is the same lesson as the enumeration itself, one level
+down:
+
+- *The consumer set.* Counted per file, over the whole directory read at run time rather than a list
+  of file names, and over every REFERENCE to the identifier rather than over occurrences of the text
+  `pyIterate(` -- because `const it = pyIterate; it(v)` and `xs.map(pyIterate)` are consumers that a
+  call-spelling scan never sees. Comments are stripped first, so a typo fix in prose cannot fire a
+  case that would then be turned off rather than read.
+- *The package surface.* Asserted by IDENTITY against the entry module's actual exported values, not
+  by grepping `src/index.ts` for a `from` string: a re-export through some other barrel, or under a
+  renamed binding, reaches a caller just as well and mentions nothing. Whatever route it takes it
+  arrives as the same function object. The manifest's `exports` map is asserted alongside it, since
+  a subpath export needs no line in `src/index.ts` at all.
+
+Each case was confirmed to fail, alone and for its stated reason, with its premise broken: adding
+the carry fails the first and nothing else, which is itself the corroboration that the drop is
+unobservable; a reference in a file the sweep had not named, and an aliased reference carrying no
+call spelling, each fail the second; a barrel re-export under a new name, and a `package.json`
+subpath export, each fail the third.
 
 **What this entry can and cannot claim.** It can claim the sweep was mechanical and its scope
 closed: `src/fencing` imports nothing outside itself and only `src/index.ts` re-exports it, and that

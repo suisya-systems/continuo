@@ -10,6 +10,7 @@ import {
   runBattery,
 } from "../../src/fencing/battery.js";
 import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
+import * as semantics from "../../src/fencing/pysemantics.js";
 import { pyDict, pyIterate, pyTypeName, pyTypeNameOf } from "../../src/fencing/pysemantics.js";
 import {
   type FenceContext,
@@ -27,6 +28,7 @@ import {
   type SpawnOutcome,
   spawnSeams,
 } from "../../src/fencing/spawn.js";
+import * as api from "../../src/index.js";
 import { patchSeam } from "../testkit/seams.js";
 import {
   fenceCaseRoot,
@@ -873,39 +875,51 @@ describe("pyIterate's array branch drops the record, provably harmlessly (target
     // exist when the list was written -- passes silently, which is the exact
     // failure mode this case exists to catch, reproduced inside the case.
     //
+    // Every REFERENCE to the identifier is counted, not every occurrence of the
+    // text `pyIterate(`. The two differ exactly where it matters: `const it =
+    // pyIterate; it(value)` and `values.map(pyIterate)` are consumers that the
+    // call spelling never sees, and a consumer this case cannot see is a
+    // consumer nobody classified. Counting references makes both of them move a
+    // number.
+    //
+    // Comments are stripped first. They mention the name freely -- this
+    // subsystem explains itself at length -- and a case that fired when someone
+    // fixed a typo in a comment would be turned off rather than read.
+    //
     // Counted per file rather than per line so that moving code within a file
     // does not fire this, and so that what fires is the thing that matters: a
-    // call site that nobody has traced to its consumer.
+    // reference nobody has traced to its consumer.
     const dir = join(import.meta.dirname, "..", "..", "src", "fencing");
     const counts: [string, number][] = [];
     for (const file of readdirSync(dir).sort()) {
       // `.mjs` too: the deny hook is JavaScript and is shipped from this
-      // directory, so a call site there would be as real as any other.
+      // directory, so a reference there would be as real as any other.
       if (!file.endsWith(".ts") && !file.endsWith(".mjs")) {
         continue;
       }
-      const text = readFileSync(join(dir, file), "utf8");
-      // The declaration in `pysemantics.ts` is not a call site.
-      const calls =
-        (text.match(/pyIterate\(/g) ?? []).length - (text.includes("function pyIterate(") ? 1 : 0);
-      if (calls > 0) {
-        counts.push([file, calls]);
+      const code = readFileSync(join(dir, file), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/\/\/[^\n]*/g, " ");
+      const references = (code.match(/\bpyIterate\b/g) ?? []).length;
+      if (references > 0) {
+        counts.push([file, references]);
       }
     }
-    // `renderer.ts` x4: the permission-mode list, `forbidden_allow_exact`,
-    // `forbidden_allow_regex` and a hook group -- all ending in `pyRepr`,
-    // `pyStr` or set membership. `state.ts` x1: the persisted rule list, whose
-    // elements become all-string `FenceRule`s. `pysemantics.ts` x2: `pyDict`'s
+    // `renderer.ts` 5 = one import specifier + four calls: the permission-mode
+    // list, `forbidden_allow_exact`, `forbidden_allow_regex` and a hook group,
+    // all ending in `pyRepr`, `pyStr` or set membership. `state.ts` 2 = one
+    // import specifier + the persisted rule list, whose elements become
+    // all-string `FenceRule`s. `pysemantics.ts` 3 = the declaration + `pyDict`'s
     // own two, which read each spelling off `items[index]` -- the ORIGINAL
     // element, never the copy -- which is exactly this drop, already handled.
     //
-    // A new FILE carrying a call site adds a row here, and a new call site in
+    // A new FILE referencing the name adds a row here, and a new reference in
     // one of these three changes its count; either way the enumeration in
     // `pyjson.ts`'s header has to be re-read before the suite goes green.
     expect(counts).toStrictEqual([
-      ["pysemantics.ts", 2],
-      ["renderer.ts", 4],
-      ["state.ts", 1],
+      ["pysemantics.ts", 3],
+      ["renderer.ts", 5],
+      ["state.ts", 2],
     ]);
   });
 
@@ -921,9 +935,29 @@ describe("pyIterate's array branch drops the record, provably harmlessly (target
     // above stops being a proof on the same day -- so the absence is asserted
     // here rather than left as a property of a file nobody diffs against this
     // one.
-    const index = readFileSync(join(import.meta.dirname, "..", "..", "src", "index.ts"), "utf8");
-    expect(index).not.toContain('from "./fencing/pysemantics.js"');
-    expect(index).not.toContain('from "./fencing/pyjson.js"');
+    //
+    // Asserted by IDENTITY against the entry module's actual exports, not by
+    // grepping `src/index.ts` for a `from` string. A grep answers "is this
+    // module named here", and the premise needs "can a caller outside this
+    // repository reach these functions" -- which a re-export through some other
+    // barrel, or a renamed binding, satisfies without the name ever appearing.
+    // Comparing the exported VALUES catches every spelling of a re-export,
+    // because whatever route it takes it arrives as the same function object.
+    const surface = new Set(Object.values(api));
+    for (const [name, value] of Object.entries(semantics)) {
+      expect(
+        surface.has(value),
+        `src/index.ts re-exports pysemantics.${name}; D-0212's proof for pyIterate assumed it could not`,
+      ).toBe(false);
+    }
+    // The other route to the same reachability: a subpath export in
+    // `package.json` pointing at the module directly, which needs no line in
+    // `src/index.ts` at all. The package deliberately publishes one entry point
+    // and its manifest.
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+    ) as { exports: Record<string, unknown> };
+    expect(Object.keys(manifest.exports).sort()).toStrictEqual([".", "./package.json"]);
   });
 });
 
