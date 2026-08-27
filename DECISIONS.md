@@ -66,6 +66,7 @@ spaces distinct.
 | D-0108 | An invariant a public constructor can walk around is repaired, not disclosed | accepted |
 | D-0109 | A renderer's ASCII claim covers the values it prints, not only the words it authors | accepted |
 | D-0110 | The content fingerprint orders by storage class as well as by value | accepted |
+| D-0111 | A fenced block's fence is widened past any backtick run its value holds | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -3389,6 +3390,7 @@ makes a mixed-storage-class column impossible.
 
 ## D-0027 -- A converted control-plane fixture opens the template copy through the public entry point
 
+
 **Context.** D-0025 landed `suiteTemplate()` with one converted file as evidence and left each lane
 to move its own cases. This is the control_plane lane doing that. Nine files qualify --
 `ai-invocation`, `ci-ingest`, `events`, `gates`, `policy-seed`, `policy`, `production-schema`,
@@ -3466,3 +3468,60 @@ rather than bending the template to cover it.
 
 **Source.** Task `continuo-control-plane-productiondb`, 2026-08-28. Decision id allocated by the
 window; recipe and file list from continuo issue 37.
+
+
+## D-0111 -- A fenced block's fence is widened past any backtick run its value holds
+
+**Context.** `renderMarkdown` prints a multi-line value as a fenced block rather than as a table
+cell, because a cell cannot hold a newline and collapsing a query's SQL or a section's narrative into
+one line would leave the Markdown reader with less than the JSON reader has. The fence is three
+backticks, and interlock's is always three.
+
+A fenced block is closed by a line of backticks **at least as long as the one that opened it**. A
+value carrying a line of three backticks therefore ends its own block, and everything after it -- the
+rest of that value, and every later block in the report -- is read as the report's own structure.
+That is the same injection `D-0109` closed for table cells, one delimiter along, and it is reachable
+the same way: a block's value is whatever the database or the caller supplied, and `ReportSection` is
+a public export.
+
+**The escape cannot close this one.** `D-0109`'s repair is `reportValue`, which escapes every
+non-ASCII character and every C0 control. Applied to a whole block value it escapes the newlines too
+and collapses the block back into the single line the block exists to avoid; applied line by line --
+which is what this module does, and it is how the ASCII half of the hazard is closed here -- it
+leaves the backtick alone, because a backtick is printable ASCII and escaping it would need a rule
+`reportValue` does not have and that the JSON rendering would not share.
+
+**Decision.** The fence is `max(3, longest run of backticks in the escaped value + 1)` backticks,
+and the closing fence matches. A value holding no backticks -- which is every value an ordinary
+report carries -- gets exactly the three the source emits, so no report interlock renders correctly
+is rendered differently here.
+
+**Alternatives.**
+
+- **Escape the backtick as well (rejected).** It closes the hole and costs more: the escape would
+  apply to every backtick in every value, including the ones in prose, and the JSON rendering has no
+  equivalent, so one value would have two spellings across the two renderings of one document.
+- **Indent the block by four spaces instead of fencing it (rejected).** It removes the fence and
+  the language tag with it, and it changes every block in every report rather than the ones that
+  need it.
+- **Refuse a value carrying a fence (rejected).** The value is a measurement's own text. A report
+  that refuses to print a fact because of a character in it is a worse artefact than one that prints
+  it, and the refusal would fire in the middle of a report that already holds a SHARED lock.
+- **Disclose it and leave the fence at three (rejected).** `D-0023`: interlock is frozen, so
+  "disclose now, repair after parity" has no second half. The repair is four lines and its cost on a
+  correct report is zero, which is a strictly better trade than a note in a ledger.
+
+**Consequences.** A report whose values carry a backtick fence renders differently from interlock's,
+which is the point: interlock's is truncated at that line. Recorded in
+`parity/measurement.render.ledger.json` under `divergences`, with the parity cost stated.
+
+The Markdown parser in `test/measurement/render.test.ts` reads the fence off the opening line rather
+than assuming three, for the same reason -- a parser that looked for a literal ``` would stop at the
+value's own text on exactly the report this exists for.
+
+**Made to fail on purpose.** With the widening removed, the block parses back as `before` and the
+target-only case goes red naming the truncation (conventions section 10: read the failure, not the
+colour).
+
+**Falsified by.** interlock adopting the same widening, or the block rendering being replaced by one
+with no delimiter a value can spell.
