@@ -31,18 +31,23 @@ import { pyJsonLoads } from "./pyjson.js";
 import { compilePythonRegex } from "./pyregex.js";
 import { pyRepr } from "./pyrepr.js";
 import {
+  carryNumberSpellings,
   isPlainObject,
+  type PyNumberSpelling,
   pyEntries,
   pyHashable,
   pyIn,
   pyIterate,
   pyKeys,
+  pyNumberSpelling,
   pyOr,
   pySet,
   pyStr,
   pyStrip,
   pyTypeName,
+  pyTypeNameOf,
   rememberKeyOrder,
+  rememberNumberSpellings,
 } from "./pysemantics.js";
 import {
   Fence,
@@ -485,7 +490,10 @@ export function renderFence(
   } else if (!Array.isArray(deny)) {
     reasons.push([
       RefusalReason.RULE_SYNTAX,
-      `permissions.deny must be a list, got ${pyTypeName(deny)}`,
+      // `pyTypeNameOf`, not `pyTypeName(deny)`: `"deny": 1.0` is `got float` in
+      // interlock and would be `got int` from the value alone, and this
+      // sentence is persisted in a ledger refusal detail.
+      `permissions.deny must be a list, got ${pyTypeNameOf(permissions, "deny")}`,
     ]);
     deny = [];
   }
@@ -531,7 +539,9 @@ export function renderFence(
       if (!Array.isArray(entries)) {
         reasons.push([
           RefusalReason.RULE_SYNTAX,
-          `sandbox.filesystem.${key} must be a list, got ${pyTypeName(entries)}`,
+          // @see the `permissions.deny` refusal above for why the container
+          // and the key are passed rather than the value.
+          `sandbox.filesystem.${key} must be a list, got ${pyTypeNameOf(filesystem, key)}`,
         ]);
         continue;
       }
@@ -1088,8 +1098,10 @@ function stripMeta(body: Readonly<Record<string, unknown>>): Record<string, unkn
   // from -- `{k: v for k, v in body.items() if ...}` keeps it in Python -- so
   // it is carried across explicitly. Without this, `_check_placeholders` runs
   // over `rendered`, which is always a rebuild, and the order recorded at load
-  // time never reaches it.
-  return rememberKeyOrder(out, kept);
+  // time never reaches it. The number SPELLINGS travel the same way and for the
+  // same reason: `rendered` is what reaches `settings.local.json`, and a `1.0`
+  // whose spelling stayed behind on `body` is written there as `1`.
+  return carryNumberSpellings(body, rememberKeyOrder(out, kept));
 }
 
 function substitute(value: unknown, mapping: Readonly<Record<string, string>>): unknown {
@@ -1102,7 +1114,13 @@ function substitute(value: unknown, mapping: Readonly<Record<string, string>>): 
     });
   }
   if (Array.isArray(value)) {
-    return value.map((v) => substitute(v, mapping));
+    // The mapped array is a NEW container, so the spellings of the numbers it
+    // holds -- which substitution leaves untouched -- have to come across with
+    // it. @see stripMeta.
+    return carryNumberSpellings(
+      value,
+      value.map((v) => substitute(v, mapping)),
+    );
   }
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
@@ -1111,8 +1129,8 @@ function substitute(value: unknown, mapping: Readonly<Record<string, string>>): 
       setOwn(out, k, substitute(value[k], mapping));
     }
     // @see stripMeta -- the same rebuild, and the same reason for carrying the
-    // order across it.
-    return rememberKeyOrder(out, keys);
+    // order and the number spellings across it.
+    return carryNumberSpellings(value, rememberKeyOrder(out, keys));
   }
   return value;
 }
@@ -1168,15 +1186,32 @@ function settingsPayload(
   permissionMode: unknown,
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = { permissionMode };
+  // Carried key by key rather than with `carryNumberSpellings`, and that is the
+  // one difference from the other rebuild sites: `permissionMode` does NOT come
+  // from `rendered`, so copying `rendered`'s whole record wholesale could hand
+  // it a spelling recorded for a `permissionMode` some role document happened
+  // to author -- a stale spelling on a value from somewhere else, which is the
+  // trap `carryNumberSpellings` itself warns about.
+  const spellings = new Map<string, PyNumberSpelling>();
   for (const key of ["permissions", "sandbox", "hooks", "env"]) {
     // `key in rendered` on a document-derived object: `Object.hasOwn` keeps
     // an inherited member from being copied into the child's settings, which
     // is the direction that would hand the child a key nobody authored.
     if (Object.hasOwn(rendered, key)) {
       setOwn(payload, key, rendered[key]);
+      // A section is normally a mapping, whose own spellings ride on the
+      // mapping object and need nothing here. This is for the section that is
+      // a bare NUMBER -- `"env": 1.0` -- whose spelling lives on the container
+      // it was read out of, i.e. on `rendered`, and would otherwise be left
+      // behind by this copy. Measured before the carry existed: CPython writes
+      // `"env": 1.0` and this port wrote `"env": 1`.
+      const spelling = pyNumberSpelling(rendered, key);
+      if (spelling !== undefined) {
+        spellings.set(key, spelling);
+      }
     }
   }
-  return deepSortKeys(payload) as Record<string, unknown>;
+  return deepSortKeys(rememberNumberSpellings(payload, spellings)) as Record<string, unknown>;
 }
 
 /**
@@ -1191,14 +1226,21 @@ function settingsPayload(
  */
 function deepSortKeys(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map(deepSortKeys);
+    // A mapped array is a NEW container. @see stripMeta -- the same rebuild,
+    // and the same reason for carrying the number spellings across it. An
+    // array index is not reordered here, so the recorded keys still address
+    // the same elements.
+    return carryNumberSpellings(value, value.map(deepSortKeys));
   }
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value).sort()) {
       setOwn(out, key, deepSortKeys(value[key]));
     }
-    return out;
+    // The spellings are keyed by property NAME, so sorting the keys does not
+    // disturb them. `rememberKeyOrder` is deliberately NOT called: the whole
+    // point of this rebuild is to replace the source order with a sorted one.
+    return carryNumberSpellings(value, out);
   }
   return value;
 }

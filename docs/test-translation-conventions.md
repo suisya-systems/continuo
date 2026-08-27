@@ -381,6 +381,11 @@ a translated **check** whose reach silently shrank, and translated **code** whos
 silently grew. Neither shows up as a red test, which is why both need a deliberate probe rather than
 a reading.
 
+**And the third direction: code the port adds that the source has no counterpart for** -- an extra
+accepted shape, a new path, a "more general" check -- is unreachable by the source suite, the
+differential oracle and the ledger alike; see `DECISIONS.md` D-0208, "Generalisations this port adds
+are outside parity's reach".
+
 ---
 ## 11. A repair carries no warrant from the source
 

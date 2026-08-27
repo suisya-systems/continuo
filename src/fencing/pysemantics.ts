@@ -369,7 +369,10 @@ export function pyDict(value: unknown): Record<string, unknown> {
         configurable: true,
       });
     }
-    return rememberKeyOrder(copied, keys);
+    // The spellings travel with the order, for the reason `carryNumberSpellings`
+    // gives: `dict(document)` is a REBUILD, and a `1.0` whose spelling stayed
+    // behind on the original reaches disk as `1`.
+    return carryNumberSpellings(value, rememberKeyOrder(copied, keys));
   }
   // `pyIterate` maps `null`/`undefined` to `[]` as a convenience for the
   // renderer's `pyOr` call sites. Here that convenience would turn `dict(None)`
@@ -381,6 +384,14 @@ export function pyDict(value: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const order: string[] = [];
   const seen = new Set<string>();
+  // The pair-sequence form is a rebuild too, and a less obvious one: the value
+  // arrives as element 1 of a PAIR, so its spelling was recorded on the pair --
+  // not on the mapping this loop is building. Without the transfer,
+  // `pyDict(pyJsonLoads('[["x", 1.0]]'))` dumps `{"x": 1}` where CPython dumps
+  // `{"x": 1.0}`. Reached through the exported `Fence` / `fenceToJson` surface
+  // rather than from `FencedSpawner`, which is exactly where this function's
+  // own note says the divergences live.
+  const spellings = new Map<string, PyNumberSpelling>();
   // A string iterates its CHARACTERS, which is why `dict("ab")` fails at the
   // element and not at the argument: `'a'` is a perfectly good sequence, it is
   // just one item long.
@@ -408,8 +419,21 @@ export function pyDict(value: unknown): Record<string, unknown> {
     // A repeated key keeps its FIRST position and takes the LAST value, which
     // is what `order` above and this assignment together reproduce.
     out[key] = pair[1];
+    // `items[index]`, never `pair`: `dictSequenceItem` runs the element through
+    // `pyIterate`, which COPIES an array, and the copy carries no record. The
+    // original element is still in `items`.
+    //
+    // Deleted, not skipped, when the last value for a repeated key has no
+    // spelling: the last value wins for the VALUE, so it has to win for the
+    // spelling as well, or `[["x", 1.0], ["x", 2]]` would dump `2.0`.
+    const spelling = pyNumberSpelling(items[index], 1);
+    if (spelling === undefined) {
+      spellings.delete(key);
+    } else {
+      spellings.set(key, spelling);
+    }
   }
-  return rememberKeyOrder(out, order);
+  return rememberNumberSpellings(rememberKeyOrder(out, order), spellings);
 }
 
 /**
@@ -483,8 +507,36 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
  *
  * These strings are persisted in the ledger as part of a refusal detail, so
  * they are Python's names ("list", "str", "NoneType"), not JavaScript's.
+ *
+ * For a NUMBER the answer is DOCUMENT-DERIVED, not value-derived, whenever the
+ * caller can supply the spelling the source text used -- see
+ * {@link pyNumberKind} for why the value alone cannot answer it and
+ * {@link pyTypeNameOf} for the form that looks the spelling up. `permissions.deny`
+ * set to `1.0` is `got float` in interlock and was `got int` here until the
+ * spelling reached this function; the sentence is persisted in a ledger refusal
+ * detail, so the difference is durable.
+ *
+ * WITHOUT a spelling the fallback is `Number.isInteger`, and it is deliberately
+ * NOT {@link pyNumberKind}'s. The two answer different questions. `pyNumberKind`
+ * classifies a value BUILT IN CODE for a serialiser, where `-0` can only have
+ * come from a Python float and a magnitude past 2**53 is already a claim about
+ * a rounded value, so both are floats. This function is only ever handed a
+ * value that came from a DOCUMENT -- a corrupt ledger line, a role body, a
+ * mapping key -- and the only case that reaches it without a spelling is a
+ * number at the document ROOT, which has no container slot to hang one on. For
+ * a root, the question is which LITERAL CPython read, and CPython's rule is
+ * syntactic: no `.`, `e` or `E` makes it an `int`, of arbitrary precision and
+ * with no negative zero. So `9007199254740992` and `-0` are `int` there, and
+ * sharing the serialiser's fallback reported both as `float`.
+ *
+ * What no value-derived rule can recover, stated rather than papered over: an
+ * INTEGRAL FLOAT at a root (`1.0`, `1e16`) is the same double as the integer
+ * and is reported `int` where CPython says `float`. That is the same root-slot
+ * boundary D-0210 records for the round trip, in its type-name half, and it is
+ * pinned in both directions below so it fails loudly if it ever stops being
+ * true.
  */
-export function pyTypeName(value: unknown): string {
+export function pyTypeName(value: unknown, spelling?: PyNumberSpelling | undefined): string {
   if (value === null || value === undefined) {
     return "NoneType";
   }
@@ -495,6 +547,11 @@ export function pyTypeName(value: unknown): string {
     case "string":
       return "str";
     case "number":
+      // The DOCUMENT decides when it can. See the note above for why the
+      // fallback is not `pyNumberKind`'s.
+      if (spelling !== undefined) {
+        return spelling.kind;
+      }
       return Number.isInteger(value) ? "int" : "float";
     case "bigint":
       return "int";
@@ -508,6 +565,23 @@ export function pyTypeName(value: unknown): string {
 }
 
 /**
+ * `type(mapping[key]).__name__` with the SOURCE DOCUMENT's spelling applied.
+ *
+ * The container-and-key form exists because a JavaScript number carries no
+ * provenance and cannot be given any without ceasing to be a number (see
+ * {@link rememberNumberSpellings}). The spelling lives on the container, so the
+ * only callers that can ask a document-derived question are the ones that still
+ * hold the container -- which every refusal site in the renderer does.
+ */
+export function pyTypeNameOf(container: unknown, key: string | number): string {
+  const value =
+    typeof container === "object" && container !== null
+      ? (container as Record<string, unknown>)[String(key)]
+      : undefined;
+  return pyTypeName(value, pyNumberSpelling(container, key));
+}
+
+/**
  * Python's `str()`, for the scalars a rendered fence carries.
  *
  * `String(null)` is `"null"` and `String(true)` is `"true"`; Python's `str`
@@ -518,8 +592,17 @@ export function pyTypeName(value: unknown): string {
  * whether the fence changed.
  *
  * Floats are left to `String`, which differs from Python for whole-valued
- * floats (`str(1.0)` is `"1.0"`, `String(1)` is `"1"`). JSON cannot tell those
- * apart in the first place, so there is nothing to reproduce.
+ * floats (`str(1.0)` is `"1.0"`, `String(1)` is `"1"`). This is now a REDUCIBLE
+ * residue rather than an impossibility: since {@link PyNumberSpelling} the
+ * document's spelling is recoverable, and a role document with
+ * `"role_kind": 1.0` still persists `"1"` here and `"1.0"` in interlock. It is
+ * left alone deliberately. Taking the spelling would mean threading a container
+ * and a key through all six call sites -- two of which (`state.ts`) read a
+ * value back out of a payload the port itself wrote, where the spelling is
+ * whatever this port chose -- and the field it lands in is `role_kind` /
+ * `permission_mode`, which no interlock role document spells as a number.
+ * Recorded in `parity/fencing.spawn-precondition.ledger.json` rather than
+ * fixed on the way past.
  *
  * Containers are NOT left to `String`. Python has no separate `str` for a
  * `list` or a `dict`: `str(x)` on a container IS `repr(x)`, so
@@ -637,6 +720,171 @@ export function pyKeys(value: Readonly<Record<string, unknown>>): string[] {
 /** `mapping.items()`: {@link pyKeys} paired with the values. */
 export function pyEntries(value: Readonly<Record<string, unknown>>): [string, unknown][] {
   return pyKeys(value).map((key) => [key, value[key]]);
+}
+
+/**
+ * How Python spelled one number: as an `int` or as a `float`, and with which
+ * digits.
+ *
+ * `text` is the literal EXACTLY as the source document wrote it, and it is
+ * consulted for one case only: an integer whose magnitude is past 2**53, which
+ * `JSON.parse` has already rounded to a different value. Re-emitting the
+ * recorded text is what makes `9007199254740993` come back out of
+ * {@link ../fencing/pyjson.ts | pyJsonDumps} as itself instead of as
+ * `9007199254740992`. It is `null` for a spelling asserted in code
+ * ({@link PY_FLOAT}), which has no source text behind it.
+ *
+ * What `text` is NOT: a repaired VALUE. The number in the parsed tree is still
+ * the rounded double, so arithmetic on a recovered big integer is arithmetic on
+ * the rounded one. That boundary is deliberate -- see the module header of
+ * `pyjson.ts` -- because the alternative (a `bigint` or a boxed number in the
+ * tree) buys exact arithmetic nothing in this subsystem performs at the price
+ * of `===` on ordinary numbers, which the fence's own comparisons are built on.
+ */
+export interface PyNumberSpelling {
+  readonly kind: "int" | "float";
+  readonly text: string | null;
+}
+
+/**
+ * "This number is a Python `float`", for a value produced by CODE rather than
+ * read from a document.
+ *
+ * The one call site that needs it is the fence ledger's `at`, which interlock
+ * fills from `time.time()` -- a `float` on every platform, so an integral
+ * timestamp prints `0.0` there and printed `0` here until this existed. That
+ * one field was the ONLY byte in which a continuo ledger line differed from
+ * interlock's for the same inputs.
+ */
+export const PY_FLOAT: PyNumberSpelling = { kind: "float", text: null };
+
+/**
+ * Which Python type a number is, when nobody recorded which one it was.
+ *
+ * The value alone cannot answer this -- JavaScript has ONE number type, so `1`
+ * and `1.0` are the same double and `type(x).__name__` has no local evidence to
+ * read. Where a spelling is available it is authoritative; where it is not,
+ * this is the classification, and it is chosen to be exact for the values that
+ * arise in code rather than in documents:
+ *
+ * - a safe integer is an `int`, which is what a TypeScript integer literal
+ *   stands for and what CPython reads `0`, `2` or a port number as;
+ * - `-0` is a `float`, because Python's `int` has no negative zero at all: the
+ *   only Python value spelled `-0.0` is a float, so a JavaScript `-0` can only
+ *   have come from one;
+ * - everything else -- every non-integral value, and every magnitude past
+ *   2**53, where "it was an int" is already a claim about a value that has been
+ *   rounded -- is a `float`, which also makes `1e300` print as eleven
+ *   characters rather than as a 301-digit integer.
+ */
+export function pyNumberKind(
+  value: number,
+  spelling?: PyNumberSpelling | undefined,
+): "int" | "float" {
+  if (spelling !== undefined) {
+    return spelling.kind;
+  }
+  if (Object.is(value, -0)) {
+    return "float";
+  }
+  return Number.isSafeInteger(value) ? "int" : "float";
+}
+
+/**
+ * Where a JSON number's SPELLING is kept, since the number cannot keep it.
+ *
+ * Same mechanism as {@link rememberKeyOrder} above, and for the same reason:
+ * the property JavaScript cannot represent is recorded beside the value rather
+ * than inside it. The difference is what it hangs on. Key order belongs to a
+ * mapping, so it hangs on the mapping; a number is a PRIMITIVE, has no identity
+ * to key a side table by, and cannot be given one -- a boxed `Number` or a
+ * `bigint` would carry the spelling and break `===`, `typeof` and arithmetic on
+ * every ordinary number in the tree with it. `state.ts` decides whether a
+ * persisted fence is loadable with `payload.format == 1`, and the fence's rules
+ * and decisions compare numbers by value throughout; a representation that made
+ * those comparisons stop working would be a worse defect than the one it fixed.
+ *
+ * So the spelling hangs on the CONTAINER, keyed by the property name (an object)
+ * or by the decimal index (an array). Non-enumerable, `Symbol.for`, exactly as
+ * the key order is, so `Object.keys`, `JSON.stringify` and every
+ * `isPlainObject` guard are untouched by its presence.
+ *
+ * The cost of the choice, stated rather than left to be discovered: a number
+ * that is not in a container has nowhere to hang its spelling. That is the
+ * root of a document (`pyJsonLoads("1.0")`) and nothing else -- every artefact
+ * this subsystem reads has an object or an array at its root.
+ */
+const NUMBER_SPELLINGS = Symbol.for("continuo.pyjson.number-spellings");
+
+/** Record the source spelling of every number directly inside one container. */
+export function rememberNumberSpellings<T extends object>(
+  value: T,
+  spellings: ReadonlyMap<string, PyNumberSpelling>,
+): T {
+  if (spellings.size === 0) {
+    return value;
+  }
+  Object.defineProperty(value, NUMBER_SPELLINGS, {
+    value: new Map(spellings),
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  return value;
+}
+
+/** The recorded spelling of `container[key]`, if the source text supplied one. */
+export function pyNumberSpelling(
+  container: unknown,
+  key: string | number,
+): PyNumberSpelling | undefined {
+  if (typeof container !== "object" || container === null) {
+    return undefined;
+  }
+  const recorded = (container as Record<PropertyKey, unknown>)[NUMBER_SPELLINGS];
+  if (!(recorded instanceof Map)) {
+    return undefined;
+  }
+  return (recorded as Map<string, PyNumberSpelling>).get(String(key));
+}
+
+/**
+ * Carry the recorded spellings from a container onto the container REBUILT from
+ * it.
+ *
+ * The companion of the `rememberKeyOrder` call every rebuild site already
+ * makes, and needed at exactly the same places for exactly the same reason: a
+ * rebuilt object or a mapped array is a NEW container, and a spelling that
+ * stayed behind on the old one is a `1.0` that reaches `settings.local.json` as
+ * `1`.
+ *
+ * Entries for keys the rebuild DROPPED are harmless: a spelling is only ever
+ * read through a key that is still there.
+ *
+ * **Entries whose value the rebuild REPLACED are not.** This carries the whole
+ * record across, keyed by name, with no check that the value under each name is
+ * the one whose spelling was recorded -- so a rebuild that substitutes a
+ * DIFFERENT number under a name it kept hands that number the old one's
+ * spelling. Loading `{"x": 1.0}` and rebuilding with `x = 2` dumps `2.0`, where
+ * CPython dumps `2`. No rebuild site in this port replaces a number
+ * (`substitute` rewrites strings only, and the other four copy values through),
+ * so nothing reaches it today -- which is exactly why it is written down here
+ * rather than left as an invariant somebody has to rediscover. A site that
+ * starts replacing values must drop or update the affected entries; carrying
+ * the record wholesale is correct only for a rebuild that preserves them.
+ * {@link ../fencing/renderer.ts | settingsPayload} is the one site that cannot
+ * use this function for the neighbouring reason -- a key of its own that comes
+ * from somewhere other than the container it copies.
+ */
+export function carryNumberSpellings<T extends object>(from: unknown, to: T): T {
+  if (typeof from !== "object" || from === null) {
+    return to;
+  }
+  const recorded = (from as Record<PropertyKey, unknown>)[NUMBER_SPELLINGS];
+  if (!(recorded instanceof Map)) {
+    return to;
+  }
+  return rememberNumberSpellings(to, recorded as Map<string, PyNumberSpelling>);
 }
 
 /**

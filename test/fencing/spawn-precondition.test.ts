@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -9,13 +9,19 @@ import {
   ProbeSynthesisError,
   runBattery,
 } from "../../src/fencing/battery.js";
-import { pyJsonLoads } from "../../src/fencing/pyjson.js";
-import { type FenceContext, RefusalReason, type RoleDocument } from "../../src/fencing/renderer.js";
+import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
+import { pyDict, pyTypeName, pyTypeNameOf } from "../../src/fencing/pysemantics.js";
+import {
+  type FenceContext,
+  loadDocument,
+  RefusalReason,
+  type RoleDocument,
+} from "../../src/fencing/renderer.js";
 import { makeDecision } from "../../src/fencing/rules.js";
 import {
   EVENT_ADMITTED,
   FencedSpawner,
-  type FenceLedger,
+  FenceLedger,
   REASON_BATTERY_INCOMPLETE,
   REASON_PROBE_UNSYNTHESIZABLE,
   type SpawnOutcome,
@@ -592,6 +598,239 @@ describe("the canary acceptance is wired, not merely implemented (target-only)",
     // And the precondition is reached from the spawn path through the seam
     // record, which is what the liveness case above proves is live.
     expect(source).toContain("spawnSeams.runBattery(");
+  });
+});
+
+describe("a document's number spelling reaches settings.local.json (target-only, D-0211)", () => {
+  // The hole this closes was invisible to every other case in the suite, and
+  // that is the point of the case rather than an aside. D-0210 records a JSON
+  // number's Python spelling on its CONTAINER SLOT, so every rebuild of a
+  // container has to carry the record across. Three of the four rebuild sites
+  // did; `deepSortKeys` did not -- and `settingsPayload` calls it as its LAST
+  // step, so the repair stopped one call short of `fence.settings`, which is
+  // exactly the payload that becomes `settings.local.json` and the persisted
+  // fence. The readback half was sound the whole time. Only the RENDER half
+  // diverged, which is the direction that writes a wrong file.
+  //
+  // Nothing pinned it because a spelling cannot be written in TypeScript: the
+  // JavaScript literal `1.0` IS `1`, so a case that built the role body in code
+  // would have carried no spelling into the document and would have passed
+  // against the broken renderer. The value has to arrive as DOCUMENT TEXT,
+  // which is why the body below is serialised, patched as text, and read back
+  // through `loadDocument` -- the production read path -- rather than assembled
+  // as an object.
+
+  /**
+   * The shipped document with `worker.env` carrying two numbers a JavaScript
+   * literal cannot express, written as source text.
+   *
+   * The sentinel-and-replace is not a shortcut around building the object: it
+   * is the only way to get a `1.0` and an exact `9007199254740993` INTO a
+   * document from a test written in TypeScript. `JSON.parse` -- and every
+   * object literal -- has already collapsed both by the time any assembled
+   * value exists.
+   */
+  function documentWithNumericEnv(root: string): RoleDocument {
+    const authored = mutate(fenceDocument(), "worker", {
+      env: {
+        // An integral float. CPython's `json.dumps` writes `1.0`; a port that
+        // lost the spelling writes `1`.
+        CONTINUO_INTEGRAL_FLOAT: "<<1.0>>",
+        // 2**53 + 1, the smallest integer a double cannot hold. CPython writes
+        // the digits back; a port that kept only the parsed value writes
+        // `9007199254740992`.
+        CONTINUO_BIG_INT: "<<9007199254740993>>",
+      },
+    });
+    const text = pyJsonDumps(authored, { indent: 2 }).replaceAll(
+      /"<<([^"]+)>>"/g,
+      (_whole, literal: string) => literal,
+    );
+    const path = join(root, "roles-with-numeric-env.json");
+    writeFileSync(path, text, "utf8");
+    return loadDocument(path);
+  }
+
+  test("an integral float and an exact big integer survive to the written settings file", () => {
+    const { root, ctx, ledger } = fixtures();
+    const document = documentWithNumericEnv(root);
+    const outcome = new FencedSpawner({ ledger, document }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    expect(outcome.admitted, JSON.stringify(outcome.reasons)).toBe(true);
+    const plan = outcome.plan;
+    expect(plan).not.toBeNull();
+    if (plan === null) {
+      return;
+    }
+    // BYTES, not a parsed value: `pyJsonLoads` of the file would collapse both
+    // spellings again and the case would assert nothing. This is the same
+    // reason the LF case in `restart-preserves-fence.test.ts` reads bytes.
+    const written = readFileSync(plan.settingsPath, "utf8");
+    expect(written).toContain('"CONTINUO_INTEGRAL_FLOAT": 1.0');
+    expect(written).toContain('"CONTINUO_BIG_INT": 9007199254740993');
+    // And the persisted fence, which the restart path compares BY BYTES, holds
+    // the same two spellings -- it carries the same `settings` payload.
+    const fence = readFileSync(plan.fencePath, "utf8");
+    expect(fence).toContain('"CONTINUO_INTEGRAL_FLOAT": 1.0');
+    expect(fence).toContain('"CONTINUO_BIG_INT": 9007199254740993');
+  });
+
+  test("the in-memory settings payload is where the spelling has to survive", () => {
+    // The half above reads files, so it would also go green if the spelling
+    // were re-attached somewhere on the way to disk. This one names the object
+    // the repair is actually about: `fence.settings` is what `writeSettings`
+    // serialises and what the restart diff compares, and it is the value
+    // `deepSortKeys` returns.
+    const { root, ctx, ledger } = fixtures();
+    const document = documentWithNumericEnv(root);
+    const outcome = new FencedSpawner({ ledger, document }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    const settings = outcome.fence?.settings;
+    expect(settings).toBeDefined();
+    expect(pyJsonDumps(settings, { sortKeys: true })).toContain('"CONTINUO_INTEGRAL_FLOAT": 1.0');
+    // The parsed VALUE of the big integer is still the rounded double -- only
+    // the digits are recovered, for re-emission. Stated here as well as in the
+    // pyjson header so the case cannot be read as a claim of exact arithmetic.
+    const env = (settings as Record<string, unknown>)["env"] as Record<string, unknown>;
+    expect(env["CONTINUO_BIG_INT"]).toBe(9007199254740992);
+  });
+
+  test("a settings section that is itself a number keeps its spelling", () => {
+    // The FIFTH rebuild site, found by asking the same question of the call one
+    // level up: `settingsPayload` builds a new object out of `rendered`, so a
+    // section whose value is a bare NUMBER leaves its spelling behind on
+    // `rendered` exactly as `deepSortKeys` did. A section is normally a
+    // mapping, whose spellings ride on the mapping object itself, so this is
+    // the only shape that reaches the gap -- and it is the shape no other case
+    // in the suite constructs.
+    //
+    // Measured before the carry existed: CPython writes `"env": 1.0` here and
+    // this port wrote `"env": 1`.
+    const { root, ctx, ledger } = fixtures();
+    const authored = mutate(fenceDocument(), "worker", { env: "<<1.0>>" });
+    const text = pyJsonDumps(authored, { indent: 2 }).replaceAll(
+      /"<<([^"]+)>>"/g,
+      (_whole, literal: string) => literal,
+    );
+    const path = join(root, "roles-with-scalar-env.json");
+    writeFileSync(path, text, "utf8");
+    const outcome = new FencedSpawner({ ledger, document: loadDocument(path) }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    expect(outcome.admitted, JSON.stringify(outcome.reasons)).toBe(true);
+    const plan = outcome.plan;
+    expect(plan).not.toBeNull();
+    if (plan === null) {
+      return;
+    }
+    expect(readFileSync(plan.settingsPath, "utf8")).toContain('"env": 1.0');
+  });
+
+  test("the pair-sequence form of dict() carries spellings onto the published fence", () => {
+    // `state.ts` writes the persisted fence through `pyDict(fence.settings)`,
+    // and `pyDict` has TWO rebuild branches: a mapping copied key by key, and a
+    // sequence of pairs. Only the first carried the record. The value in the
+    // second arrives as element 1 of a PAIR, so its spelling was recorded on
+    // the pair rather than on the mapping being built, and it was dropped.
+    //
+    // Not reachable from `FencedSpawner` -- a rendered fence always carries an
+    // object -- but `Fence`, `fenceToJson` and `writeFence` are exported, which
+    // is exactly where `pyDict`'s own note says its divergences live. Compared
+    // against CPython rather than reasoned about: `dict([["x", 1.0]])` dumps
+    // `{"x": 1.0}` there and dumped `{"x": 1}` here.
+    const pairs = pyJsonLoads('[["x", 1.0], ["y", 9007199254740993], ["z", 2]]');
+    expect(pyJsonDumps(pyDict(pairs), { sortKeys: true })).toBe(
+      '{"x": 1.0, "y": 9007199254740993, "z": 2}',
+    );
+    // A repeated key takes the LAST value, so it has to take the last value's
+    // spelling too -- including when the last value has none.
+    expect(pyJsonDumps(pyDict(pyJsonLoads('[["x", 1.0], ["x", 2]]')))).toBe('{"x": 2}');
+    expect(pyJsonDumps(pyDict(pyJsonLoads('[["x", 2], ["x", 1.0]]')))).toBe('{"x": 1.0}');
+  });
+
+  test("a number at a document root is typed by CPython's syntactic rule, and the residue is asserted", () => {
+    // The type-name half of the root-slot boundary D-0210 records. A number at
+    // the ROOT has no container to hang a spelling on, so `pyTypeName` has to
+    // guess -- and the guess belongs to the DOCUMENT (which literal did CPython
+    // read?), not to the serialiser (`pyNumberKind`, which classifies values
+    // built in code and calls `-0` and anything past 2**53 a float). Sharing
+    // the serialiser's fallback reported `9007199254740992` and `-0` as
+    // `float`, where CPython says `int`.
+    //
+    // Reachable through `FenceLedger.refusals()`, which reports a corrupt
+    // ledger line as `'<type>' object is not subscriptable` and persists that
+    // sentence.
+    //
+    // CPython's answers below were MEASURED (`type(json.loads(t)).__name__`),
+    // not recalled.
+    for (const [text, expected] of [
+      ["1", "int"],
+      ["-0", "int"],
+      ["9007199254740992", "int"],
+      ["0.5", "float"],
+      ["-0.5", "float"],
+      // Legal JSON that overflows the double. CPython's float overflows to
+      // `inf`, which is still a float on both sides.
+      ["1e400", "float"],
+    ] as const) {
+      expect(pyTypeName(pyJsonLoads(text)), text).toBe(expected);
+    }
+
+    // THE RESIDUE, asserted in BOTH directions so it fails loudly rather than
+    // licensing a divergence that has gone away: an integral float at a root is
+    // the same double as the integer, no value-derived rule can tell them
+    // apart, and this port answers `int` where CPython answers `float`. The
+    // same three documents inside a CONTAINER answer correctly, which is the
+    // control that says the boundary is the root slot and nothing wider.
+    for (const text of ["1.0", "-0.0", "1e16"]) {
+      expect(pyTypeName(pyJsonLoads(text)), text).toBe("int");
+      const inside = pyJsonLoads(`{"n": ${text}}`) as Record<string, unknown>;
+      expect(pyTypeNameOf(inside, "n"), text).toBe("float");
+    }
+  });
+
+  test("a ledger payload's own number spellings survive the append", () => {
+    // `FenceLedger.append` builds its entry as `{event, at, ...payload}`, and a
+    // SPREAD is a rebuild like any other -- the seventh branch this decision
+    // enumerates, and the only one on the live spawn path. Without the carry, a
+    // caller handing it a document-derived payload got the numbers re-spelled
+    // by JavaScript: `{"at": 1.0, "big": 9007199254740993}` was written as
+    // `{"at": 1, "big": 9007199254740992.0}`.
+    //
+    // The record is built as ONE map rather than as a carry followed by the
+    // `PY_FLOAT` assertion, because `rememberNumberSpellings` REPLACES the
+    // record: asserting `at` after carrying would drop everything carried. Both
+    // halves are asserted below, in the same case, for exactly that reason.
+    const root = fenceCaseRoot();
+    const supplied = fenceLedger(root, "supplied.jsonl");
+    supplied.append(
+      "candidate",
+      pyJsonLoads('{"at": 1.0, "big": 9007199254740993}') as Record<string, unknown>,
+    );
+    expect(readFileSync(supplied.path, "utf8")).toBe(
+      '{"at": 1.0, "big": 9007199254740993, "event": "candidate"}\n',
+    );
+
+    // The other half: with no `at` in the payload the clock's value is used, it
+    // is built in CODE, and `time.time()` is a float on every platform -- so an
+    // integral timestamp must still print `0.0`, which is the D-0210 repair
+    // this carry must not have displaced.
+    const clocked = new FenceLedger(join(root, "clocked.jsonl"), { clock: () => 0 });
+    clocked.append(
+      "candidate",
+      pyJsonLoads('{"big": 9007199254740993}') as Record<string, unknown>,
+    );
+    expect(readFileSync(clocked.path, "utf8")).toBe(
+      '{"at": 0.0, "big": 9007199254740993, "event": "candidate"}\n',
+    );
   });
 });
 
