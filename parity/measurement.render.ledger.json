@@ -84,6 +84,12 @@
         "to": "NO_VERDICT_NOTE from src/measurement/index.ts, re-exported as RENDER_NO_VERDICT_NOTE from src/index.ts",
         "why": "canary.ts exports a constant of the same spelling for a different note about a different open question. Python namespaces them per module and a flat export surface cannot. The collision exists only in src/index.ts -- canary is not in the measurement barrel -- so it is resolved there and each module keeps the bare name under its own path.",
         "affects": "the barrels only"
+      },
+      {
+        "from": "facts: Mapping[str, Any] on ReportSection",
+        "to": "facts: ReadonlyMap<string, ReportValue>",
+        "why": "The first spelling here took an iterable of pairs, which is wider than the source's Mapping in the direction conventions rule 9 warns about: a sequence can carry one key twice and readOnlyMap keeps the last, so the section would drop a measurement a caller supplied with no refusal and nothing in either rendering to say a fact went missing. Taking a mapping cannot express the duplicate at all, which removes the class rather than checking for it. Raised by the codex review gate; the value type is narrowed for the reason recorded beside ReportValue.",
+        "affects": "ReportSection and the three sections this module builds"
       }
     ],
     "target_only_tests": {
@@ -158,6 +164,18 @@
       "matches_source": true,
       "note": "Reproduced, and it is the source's own depth: `ReportSection.as_mapping` does `dict(self.facts)`, which is a shallow copy of a mapping whose values are ordinary mutable Python lists and dicts. Raised by the codex review gate against the runtime-immutability promise in immutable.ts -- and that promise is about the gap between the two languages (D-0105: a `readonly` annotation vanishes for a JavaScript consumer where a frozen dataclass does not), which is not the gap here: both implementations alias a nested list identically. Every fact buildMeasurementReport puts in a section is already built from frozen values, so the exposure is a caller who assembles a section of their own and keeps a reference to a value they passed.",
       "where_a_fix_belongs": "immutable.ts, as a deep variant of readOnlyMap used by every module of this lane at once. Adding it in one module would make two report objects immutable to different depths, which is worse than one shallow depth stated here."
+    },
+    {
+      "behaviour": "A fact key containing a dot produces a flattened Markdown key indistinguishable from a nested path: `{'a.b': 1}` and `{'a': {'b': 2}}` both render as `...facts.a.b`.",
+      "matches_source": true,
+      "note": "Reproduced, and the source has written down why it matters: ReportSection refuses a dot in a SECTION name with exactly this reasoning -- 'a key that collides with it renders as a different key than the JSON carries' -- and then leaves fact keys unchecked. Raised by the codex review gate. It is not repairable by refusing dots or by escaping them, because the report's OWN keys are dotted: `query_catalogue_exemptions` is keyed by `reader.measurement_snapshot`, `policy.effective_revision_id` and seven more, so either repair would refuse or re-render a report interlock produces correctly. No collision is reachable in any report either implementation builds -- a collision needs both a dotted leaf and a nesting of the same path under one mapping -- and where one did occur the Markdown would carry a duplicate row, which the test file's own parser asserts against rather than accepting.",
+      "where_a_fix_belongs": "the flattening's key syntax, in a pass that can change both implementations' rendered keys at once. Not available to a parity port."
+    },
+    {
+      "behaviour": "A mapping nested inside an ARRAY renders structurally in the JSON and as a single opaque cell in the Markdown.",
+      "matches_source": true,
+      "note": "Reproduced in a different spelling: `flatten` treats a list as a leaf by design -- the docstring says why, two reports with the same ids in a different order must not look different in one rendering and equal in the other -- and `cell` then renders the list's elements with `str`, which gives Python `\"{'a': 1}\"` and JavaScript `[object Object]`. Both disagree with the JSON; only the spelling of the disagreement differs. Raised by the codex review gate. No value in any report either implementation builds is an array of mappings, and the type that permits it is `HeaderValue`, which this module shares with the header's renderer under `ReportValue`.",
+      "where_a_fix_belongs": "HeaderValue in provenance.ts, narrowed so an array element is a scalar, in a pass that owns both renderers. Narrowing it in one of the two would make the report's value type and the header's disagree about what a header may hold, while the header is embedded in the report."
     }
   ],
   "entries": [

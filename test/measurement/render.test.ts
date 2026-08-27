@@ -454,7 +454,7 @@ function section(
   facts: readonly (readonly [string, ReportValue])[],
   narrative: string | null = null,
 ): ReportSection {
-  return new ReportSection({ name, title, facts, narrative });
+  return new ReportSection({ name, title, facts: new Map(facts), narrative });
 }
 
 // --------------------------------------------------------------------------

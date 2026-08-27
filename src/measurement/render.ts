@@ -517,10 +517,21 @@ export class ReportSection {
   readonly facts: ReadonlyMap<string, ReportValue>;
   readonly narrative: string | null;
 
+  /**
+   * `facts` is a MAPPING, not a sequence of pairs.
+   *
+   * The source's annotation is `Mapping[str, Any]` and the widened spelling was
+   * this port's, not interlock's -- and it widened in the direction rule 9
+   * warns about. A sequence of pairs can carry one key twice, and
+   * `readOnlyMap` keeps the last: the section would then drop a measurement a
+   * caller supplied, with no refusal and nothing in either rendering to say a
+   * fact went missing. A mapping cannot express the duplicate at all, so this
+   * takes one rather than checking for it. Raised by the codex review gate.
+   */
   constructor(fields: {
     readonly name: string;
     readonly title: string;
-    readonly facts: Iterable<readonly [string, ReportValue]>;
+    readonly facts: ReadonlyMap<string, ReportValue>;
     readonly narrative?: string | null;
   }) {
     const { name, title } = fields;
@@ -597,7 +608,7 @@ export function sectionFromAc9(report: Ac9Report, cohort: RunCohort): ReportSect
     name: "ac9",
     title: "AC-9 - AI prompts and output tokens",
     narrative: renderAc9Report(report),
-    facts: [
+    facts: readOnlyMap<string, ReportValue>([
       [
         "cohort",
         readOnlyMap<string, ReportValue>([
@@ -658,7 +669,7 @@ export function sectionFromAc9(report: Ac9Report, cohort: RunCohort): ReportSect
           ["cache_read_tokens", report.baseline.cacheReadTokens],
         ]),
       ],
-    ],
+    ]),
   });
 }
 
@@ -688,12 +699,12 @@ export function sectionFromWindowDeclaration(options: {
     name: "observation_window",
     title: "Observation window - the grace this report was computed under",
     narrative: null,
-    facts: [
+    facts: readOnlyMap<string, ReportValue>([
       ["grace_ms", options.graceMs],
       ["grace_source", options.graceSource],
       ["episodes_classified", options.episodesClassified],
       ["scope", WINDOW_EPISODES_NOT_CLASSIFIED],
-    ],
+    ]),
   });
 }
 
@@ -920,11 +931,11 @@ export function buildMeasurementReport(
       name: "inputs",
       title: "Inputs declared for this report",
       narrative: null,
-      facts: [
+      facts: readOnlyMap<string, ReportValue>([
         ["v1_shadow", v1Shadow.asMapping()],
         ["query_catalogue_limitation", QUERY_CATALOGUE_LIMITATION],
         ["query_catalogue_exemptions", readOnlyMap<string, ReportValue>(UNATTESTED_STATEMENTS)],
-      ],
+      ]),
     });
     return new MeasurementReport({
       header,
