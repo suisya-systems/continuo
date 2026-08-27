@@ -1055,8 +1055,17 @@ describe("every externally-supplied field at once (target-only)", () => {
     // the line is built, and recorded as unreachable in the ledger.
     const uriLine = rendered.split("\n").find((line) => line.startsWith("  uri: "));
     expect(isAscii(uriLine as string)).toBe(true);
-    expect(pathToFileURL("/tmp/a\u2014b/c.sqlite3").href).toBe("file:///tmp/a%E2%80%94b/c.sqlite3");
-    expect(pathToFileURL("/tmp/a\nb/c.sqlite3").href).toBe("file:///tmp/a%0Ab/c.sqlite3");
+    // Pinned as a PROPERTY, not as a whole href. pathToFileURL resolves a
+    // POSIX-rooted path against the current drive on Windows, so the same call
+    // yields `file:///D:/tmp/...` on those cells and `file:///tmp/...` on the
+    // others. The premise this case rests on is the percent-encoding, not the
+    // root -- an earlier version compared the entire string and so failed only
+    // on the Windows cells, for a reason that had nothing to do with escaping.
+    for (const hostile of ["/tmp/a\u2014b/c.sqlite3", "/tmp/a\nb/c.sqlite3"]) {
+      expect(isAscii(pathToFileURL(hostile).href)).toBe(true);
+    }
+    expect(pathToFileURL("/tmp/a\u2014b/c.sqlite3").href).toContain("a%E2%80%94b");
+    expect(pathToFileURL("/tmp/a\nb/c.sqlite3").href).toContain("a%0Ab");
   });
 
   test("a caller-named record class is escaped where the audit prints it", () => {
