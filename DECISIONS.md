@@ -3545,6 +3545,26 @@ new object out of `rendered`, so a section whose value is a bare number (`"env":
 spelling behind. A section is normally a mapping, whose record rides on the mapping object itself,
 which is why no other shape reaches the gap and why nothing had noticed it.
 
+The review gate then found a **sixth**, and it is the one that says why the enumeration has to be of
+BRANCHES rather than of functions: `pyDict` was on the list and carries the record -- in its mapping
+branch. Its other branch builds a mapping out of a SEQUENCE OF PAIRS, where each value arrives as
+element 1 of a pair and its record is therefore on the pair, not on the container being built.
+`dict([["x", 1.0]])` dumps `{"x": 1.0}` in CPython and dumped `{"x": 1}` here. `state.ts` writes the
+persisted fence through `pyDict(fence.settings)`; the pair form is not reachable from
+`FencedSpawner`, but `Fence`, `fenceToJson` and `writeFence` are exported, which is exactly where
+`pyDict`'s own note says its divergences live. Counting functions is what let a carried function
+hide an uncarried branch.
+
+**A seventh divergence, from the same gate, in the other half of the mechanism.** `formatNumber`
+checked NaN and the two infinities BEFORE consulting a recorded `int` spelling. A 400-digit integer
+is legal JSON; `JSON.parse` makes it `Infinity`, CPython's `int` is arbitrary precision and re-emits
+every digit. So this port wrote `Infinity` into `settings.local.json` for a value CPython writes in
+full -- and `Infinity` is not legal JSON, so the artefact stopped being readable by anything but
+CPython's own decoder, which is worse than a byte difference. The recorded spelling now outranks
+every branch below it, guarded on `kind === "int"`: `1e400` is a `float` by CPython's own rule, both
+sides overflow to infinity, and both must keep writing `Infinity`. Both directions are pinned in
+`pyjson.number_documents`.
+
 **Decision.** Three parts, and the third is the one that keeps the first two from recurring.
 
 1. **Both sites carry the record.** `deepSortKeys` calls `carryNumberSpellings` on both branches --
@@ -3553,28 +3573,35 @@ which is why no other shape reaches the gap and why nothing had noticed it.
    `settingsPayload` carries key by key instead, because one of its keys (`permissionMode`) does not
    come from the container it copies, and handing that key a spelling recorded for some role
    document's own `permissionMode` would be the stale-spelling trap described below.
-2. **Both are pinned, at the artefact.** Two target-only cases in
+2. **All of them are pinned, at the artefact.** Four target-only cases in
    `test/fencing/spawn-precondition.test.ts` drive `FencedSpawner.spawn` and assert on the BYTES of
    the written `settings.local.json` and the published fence. The document has to arrive as TEXT --
    serialised, patched, and read back through `loadDocument` -- because a spelling cannot be written
    in TypeScript at all: the literal `1.0` IS `1`, so a case that built the role body in code would
    carry no spelling into the document and would pass against the broken renderer. That is why the
-   gap existed. Both cases were confirmed to fail, for the stated reason, with each repair reverted
+   gap existed. The `formatNumber` ordering is pinned in the differential corpus instead
+   (`pyjson.number_documents` gained the 400-digit integer, its negative, and `1e400` as the control
+   that must not change), because that check runs against CPython on every cell. Every case was
+   confirmed to fail, for the stated reason, with its repair reverted
    (`docs/test-translation-conventions.md` section 10).
 3. **The claim is replaced by an enumeration plus an obligation.** The header of
-   `src/fencing/pyjson.ts` now lists all five sites and says that a new one must carry the record
-   AND be pinned. A normative record that overstates its own coverage is worse than one that states
-   a narrow claim, because the reader who checks it stops looking.
+   `src/fencing/pyjson.ts` now lists every rebuild BRANCH and says that a new one must carry the
+   record AND be pinned. A normative record that overstates its own coverage is worse than one that
+   states a narrow claim, because the reader who checks it stops looking -- and this entry's own
+   first draft proves the point: it said five sites, and the sixth was inside a function already on
+   the list.
 
 **The measurement is a file now.** `D-0210`'s commit message claims 91,775 comparisons over 18,355
 documents with no divergence. The harness that produced it was never committed, so when this lane
 restarted the number could not be reproduced or re-run -- the only evidence left was the sentence
 claiming it, which is the same failure mode as a normative comment that overstates its coverage.
-`scripts/pyjson-roundtrip-sweep.mjs` is the replacement: it generates the product of 48 numeric
+`scripts/pyjson-roundtrip-sweep.mjs` is the replacement: it generates the product of 52 numeric
 literals and six container shapes, asks CPython for the five spellings this subsystem persists or
 asserts on (`dumps`, `dumps(sort_keys)`, `dumps(sort_keys, indent=2)`, `dumps(sort_keys,
-separators)`, and `type(x).__name__` at every number), and compares. **No divergence over 4,800
-documents / 24,000 comparisons**, re-run at this lane's tip. It is deliberately not wired into
+separators)`, and `type(x).__name__` at every number), and compares. **No divergence over 5,616
+documents / 28,080 comparisons**, re-run at this lane's tip. It stopped at thirty digits as first
+written and so could not see the `formatNumber` ordering defect above; the overflow boundary and its
+`1e400` control were added when review found it, which is the sweep earning its place as a file. It is deliberately not wired into
 `npm run verify` or CI, for the reason `scripts/oracle/` is not either: the matrix cells have no
 CPython, which is why a vector is committed instead. The durable check stays
 `pyjson.number_documents` in `parity/oracle/fnmatch-shlex-corpus.json`, which runs on every cell.

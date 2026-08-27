@@ -201,7 +201,8 @@ The corpus is hand-chosen and it is checked on every cell, which is the trade it
 committed vector needs no CPython at test time, and a hand-chosen corpus covers what someone
 thought of. `scripts/pyjson-roundtrip-sweep.mjs` is the other half for the one transcription whose
 output is compared BY BYTES -- it generates the product of 48 numeric literals and six container
-shapes and compares five spellings of each against CPython, on demand. It is **not** wired into
+shapes and compares five spellings of each against CPython, on demand (52 literals, 5,616
+documents, 28,080 comparisons at the time of writing). It is **not** wired into
 `npm run verify` or CI, for the same reason `scripts/oracle/` is not: the matrix cells have no
 Python, which is why a vector is committed instead. Run it when `pyjson.ts` or `pysemantics.ts`
 changes; the durable check stays `pyjson.number_documents`.

@@ -76,17 +76,23 @@
  * - a container REBUILT without carrying its spellings across loses them. This
  *   is a standing obligation on every rebuild site, not a property the module
  *   can enforce: the record hangs on the container, so a new container starts
- *   empty and nothing goes red when one forgets. The five sites in this port
- *   are `stripMeta`, `substitute`, `deepSortKeys` and `settingsPayload` in
- *   `renderer.ts`, and `pyDict` in `pysemantics.ts`; four carry the record with
+ *   empty and nothing goes red when one forgets. The sites in this port are
+ *   `stripMeta`, `substitute`, `deepSortKeys` and `settingsPayload` in
+ *   `renderer.ts`, and BOTH branches of `pyDict` in `pysemantics.ts` -- the
+ *   mapping copy and the sequence-of-pairs build, which is a rebuild site that
+ *   does not look like one because the value it places arrives as element 1 of
+ *   a PAIR and its record is on the pair. Four carry the record with
  *   `carryNumberSpellings`, next to the `rememberKeyOrder` call they already
- *   made for the same reason, and `settingsPayload` carries it key by key
- *   because one of its keys does not come from the container it copies. **Any
- *   new rebuild site has to do the same, and has to be pinned**: D-0210 shipped
- *   with `deepSortKeys` uncarried and this list naming only three, and neither
- *   the suite nor this comment said so -- the repair reached everything except
- *   `settings.local.json` and the persisted fence, which were the artefacts it
- *   was for. See D-0211.
+ *   made for the same reason; `settingsPayload` and `pyDict`'s pair branch
+ *   carry it key by key, the first because one of its keys does not come from
+ *   the container it copies, the second because each value's record is on a
+ *   different container. **Any new rebuild site has to do the same, and has to
+ *   be pinned.** D-0210 shipped with `deepSortKeys` uncarried and this list
+ *   naming three, and neither the suite nor this comment said so -- the repair
+ *   reached everything except `settings.local.json` and the persisted fence,
+ *   which were the artefacts it was for. D-0211's own first draft then named
+ *   five and missed `pyDict`'s second branch, which review caught. Count the
+ *   BRANCHES that build a container, not the functions. See D-0211.
  * - `pyStr` still renders an integral float as an int, which is visible only
  *   for a role document that spells `role_kind` or `permission_mode` as a
  *   number. Recorded there rather than fixed in passing.
@@ -292,6 +298,25 @@ function encodeString(value: string, ensureAscii: boolean): string {
  * thirty-digit integer.
  */
 export function formatNumber(value: number, spelling?: PyNumberSpelling | undefined): string {
+  if (spelling?.kind === "int" && spelling.text != null && !Number.isSafeInteger(value)) {
+    // A recorded `int` spelling outranks EVERY branch below, including the
+    // non-finite ones, and the case that forces the order is a legal JSON
+    // integer too large for a double: `JSON.parse` of a 400-digit integer is
+    // `Infinity`, while CPython's `int` is arbitrary precision and re-emits the
+    // digits. Checked after the non-finite guards, this port wrote `Infinity`
+    // into `settings.local.json` for a value CPython writes in full -- and
+    // `Infinity` is not even legal JSON, so the file stopped being readable by
+    // anything but CPython's own decoder.
+    //
+    // `1e400` is NOT this case and must not become one: an exponent makes the
+    // literal a `float` by CPython's own rule, CPython's float overflows to
+    // `inf` too, and both sides then write `Infinity`. Only an `int` spelling
+    // reaches here, which is why the branch tests `kind` rather than `text`.
+    //
+    // `Number.isSafeInteger` keeps every ordinary integer on the `String(value)`
+    // path below, where `-0` correctly loses its sign.
+    return spelling.text;
+  }
   if (Number.isNaN(value)) {
     // `allow_nan=True` is CPython's default, and these three spellings are not
     // legal JSON. Reproduced rather than rejected: interlock never passes

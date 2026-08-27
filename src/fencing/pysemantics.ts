@@ -384,6 +384,14 @@ export function pyDict(value: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const order: string[] = [];
   const seen = new Set<string>();
+  // The pair-sequence form is a rebuild too, and a less obvious one: the value
+  // arrives as element 1 of a PAIR, so its spelling was recorded on the pair --
+  // not on the mapping this loop is building. Without the transfer,
+  // `pyDict(pyJsonLoads('[["x", 1.0]]'))` dumps `{"x": 1}` where CPython dumps
+  // `{"x": 1.0}`. Reached through the exported `Fence` / `fenceToJson` surface
+  // rather than from `FencedSpawner`, which is exactly where this function's
+  // own note says the divergences live.
+  const spellings = new Map<string, PyNumberSpelling>();
   // A string iterates its CHARACTERS, which is why `dict("ab")` fails at the
   // element and not at the argument: `'a'` is a perfectly good sequence, it is
   // just one item long.
@@ -411,8 +419,21 @@ export function pyDict(value: unknown): Record<string, unknown> {
     // A repeated key keeps its FIRST position and takes the LAST value, which
     // is what `order` above and this assignment together reproduce.
     out[key] = pair[1];
+    // `items[index]`, never `pair`: `dictSequenceItem` runs the element through
+    // `pyIterate`, which COPIES an array, and the copy carries no record. The
+    // original element is still in `items`.
+    //
+    // Deleted, not skipped, when the last value for a repeated key has no
+    // spelling: the last value wins for the VALUE, so it has to win for the
+    // spelling as well, or `[["x", 1.0], ["x", 2]]` would dump `2.0`.
+    const spelling = pyNumberSpelling(items[index], 1);
+    if (spelling === undefined) {
+      spellings.delete(key);
+    } else {
+      spellings.set(key, spelling);
+    }
   }
-  return rememberKeyOrder(out, order);
+  return rememberNumberSpellings(rememberKeyOrder(out, order), spellings);
 }
 
 /**

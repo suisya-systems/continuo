@@ -10,6 +10,7 @@ import {
   runBattery,
 } from "../../src/fencing/battery.js";
 import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
+import { pyDict } from "../../src/fencing/pysemantics.js";
 import {
   type FenceContext,
   loadDocument,
@@ -731,6 +732,28 @@ describe("a document's number spelling reaches settings.local.json (target-only,
       return;
     }
     expect(readFileSync(plan.settingsPath, "utf8")).toContain('"env": 1.0');
+  });
+
+  test("the pair-sequence form of dict() carries spellings onto the published fence", () => {
+    // `state.ts` writes the persisted fence through `pyDict(fence.settings)`,
+    // and `pyDict` has TWO rebuild branches: a mapping copied key by key, and a
+    // sequence of pairs. Only the first carried the record. The value in the
+    // second arrives as element 1 of a PAIR, so its spelling was recorded on
+    // the pair rather than on the mapping being built, and it was dropped.
+    //
+    // Not reachable from `FencedSpawner` -- a rendered fence always carries an
+    // object -- but `Fence`, `fenceToJson` and `writeFence` are exported, which
+    // is exactly where `pyDict`'s own note says its divergences live. Compared
+    // against CPython rather than reasoned about: `dict([["x", 1.0]])` dumps
+    // `{"x": 1.0}` there and dumped `{"x": 1}` here.
+    const pairs = pyJsonLoads('[["x", 1.0], ["y", 9007199254740993], ["z", 2]]');
+    expect(pyJsonDumps(pyDict(pairs), { sortKeys: true })).toBe(
+      '{"x": 1.0, "y": 9007199254740993, "z": 2}',
+    );
+    // A repeated key takes the LAST value, so it has to take the last value's
+    // spelling too -- including when the last value has none.
+    expect(pyJsonDumps(pyDict(pyJsonLoads('[["x", 1.0], ["x", 2]]')))).toBe('{"x": 2}');
+    expect(pyJsonDumps(pyDict(pyJsonLoads('[["x", 2], ["x", 1.0]]')))).toBe('{"x": 1.0}');
   });
 });
 

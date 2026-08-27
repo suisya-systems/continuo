@@ -36,7 +36,7 @@
  * Exit 0 and a count, or exit 1 and the first divergences.
  *
  * Measured on 2026-08-28 at the tip of this lane: no divergence over
- * 4,800 documents / 24,000 comparisons.
+ * 5,616 documents / 28,080 comparisons.
  */
 
 import { execFileSync } from "node:child_process";
@@ -67,6 +67,13 @@ const LITERALS = [
   "18446744073709551617",
   "123456789012345678901234567890",
   "-123456789012345678901234567890",
+  // Past the point where a double gives up. A 400-digit INTEGER is legal JSON
+  // that `JSON.parse` turns into `Infinity`, while CPython's `int` is arbitrary
+  // precision -- the case that forced the recorded spelling to outrank the
+  // non-finite guards in `formatNumber`. Added after a review found it; the
+  // sweep as first written stopped at thirty digits and could not see it.
+  `${"9".repeat(400)}`,
+  `-${"9".repeat(400)}`,
   // integral floats -- the shape a JavaScript literal cannot express
   "0.0",
   "-0.0",
@@ -101,6 +108,12 @@ const LITERALS = [
   "2.2250738585072014e-308",
   "1e300",
   "1e-300",
+  // The control for the two above: an exponent makes the literal a FLOAT by
+  // CPython's own rule, CPython's float overflows to `inf`, and both sides must
+  // keep writing `Infinity`. A repair that keyed on "has a text" rather than on
+  // "is an int" would break this one while fixing those.
+  "1e400",
+  "-1e400",
   "123456789.123456789",
 ];
 
