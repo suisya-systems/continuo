@@ -915,3 +915,48 @@ describe("hostile values in the rendering (target-only)", () => {
     expect(rendered.split("\n").filter((line) => line.startsWith("Class "))).toHaveLength(1);
   });
 });
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("a latency report whose every caller value is hostile still renders one report", () => {
+    // Target-only, and the structural form of the D-0109 check: the class name,
+    // the itemised episode ids, both shadow reasons and the grace source, all
+    // hostile at once.
+    const rendered = renderLatencyReport(
+      new LatencyReport({
+        periodStartMs: PERIOD_START,
+        periodEndMs: PERIOD_END,
+        generatedAtMs: PERIOD_END + 1,
+        revisionId: 1,
+        graceMs: 0,
+        graceSource: "declared\u2014by hand\n  grace           forged",
+        classes: [
+          new ClassLatency({
+            incidentClass: "stalled\u2014one\nClass forged",
+            distribution: Distribution.of([10]),
+            budgetsMs: [1_000],
+            overBudgetIds: ["over\u2014one"],
+            undetectedIds: ["missed\nClass also-forged"],
+            censoredIds: ["censored\u2014one"],
+            censoredLeftIds: [],
+            shadow: ShadowReference.absent("no v1 for this class\u2014none"),
+          }),
+        ],
+        shadow: new ShadowSource({
+          status: SHADOW_ABSENT,
+          samples: null,
+          reason: "outside the shadow period\u2014entirely",
+        }),
+        ingestionLag: new IngestionLag({
+          distribution: Distribution.of([]),
+          negativeCount: 0,
+          eventCount: 0,
+        }),
+      }),
+    );
+
+    expect(isAscii(rendered)).toBe(true);
+    // One class heading, whatever the class name and the ids tried to open.
+    expect(rendered.split("\n").filter((line) => line.startsWith("Class "))).toHaveLength(1);
+    expect(rendered.split("\n").filter((line) => line.startsWith("  grace  "))).toHaveLength(1);
+  });
+});

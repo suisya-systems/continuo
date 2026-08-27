@@ -1562,3 +1562,58 @@ describe("hostile values in the rendering (target-only)", () => {
     );
   });
 });
+
+describe("every externally-supplied field at once (target-only)", () => {
+  test("a fixture report whose every caller value is hostile still renders one report", () => {
+    // Target-only, and the structural form of the D-0109 check. Everything the
+    // corpus contributes is chosen by whoever laid it out: the root path, the
+    // class directory names, the case ids, and the fact_state and
+    // recommendation strings inside each label.
+    // Directory names carry the non-ASCII half of the hostility and NOT the
+    // newline: a case id IS a directory name, and a newline is invalid in one
+    // on Windows (an earlier case in this file failed only on those cells with
+    // an ENOENT from mkdir). The newline goes through the label and incident
+    // strings below, which are not paths.
+    const root = join(caseRoot("fixtures"), "corpus\u2014root");
+    mkdirSync(root, { recursive: true });
+    writeCase(root, "relay_gap", "missed\u2014case", { label: positiveLabel() });
+    writeCase(root, "relay_gap", "noisy\u2014case", { label: negativeLabel() });
+    writeCase(root, "observation_unavailable", "quiet", { label: negativeLabel() });
+
+    const corpus = loadCorpus(root);
+    const clock = new SyntheticClock(T0);
+    const evaluation = evaluate(corpus, {
+      clock,
+      outcomes: new Map(
+        corpus.cases.map((one): [string, readonly ProducedIncident[]] => [
+          one.caseId,
+          one.caseId.includes("noisy")
+            ? [
+                new ProducedIncident({
+                  // A produced incident carries a class and a fact state the
+                  // detector chose, both of which reach the notes.
+                  incidentClass: "relay_gap\u2014other",
+                  factState: "EXPLICIT_BLOCK\nforged note",
+                  createdAtMs: clock.at(60_000),
+                }),
+              ]
+            : [],
+        ]),
+      ),
+    });
+
+    const rendered = renderFixtureReport(evaluation);
+
+    expect(isAscii(rendered)).toBe(true);
+    for (const heading of [
+      "Composition and rates (one table on purpose)",
+      "Verdicts",
+      "Cases needing a reader",
+    ]) {
+      expect(
+        rendered.split("\n").filter((line) => line === heading),
+        heading,
+      ).toHaveLength(1);
+    }
+  });
+});
