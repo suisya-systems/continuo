@@ -3573,7 +3573,7 @@ sides overflow to infinity, and both must keep writing `Infinity`. Both directio
    `settingsPayload` carries key by key instead, because one of its keys (`permissionMode`) does not
    come from the container it copies, and handing that key a spelling recorded for some role
    document's own `permissionMode` would be the stale-spelling trap described below.
-2. **All of them are pinned, at the artefact.** Four target-only cases in
+2. **All of them are pinned, at the artefact.** Five target-only cases in
    `test/fencing/spawn-precondition.test.ts` drive `FencedSpawner.spawn` and assert on the BYTES of
    the written `settings.local.json` and the published fence. The document has to arrive as TEXT --
    serialised, patched, and read back through `loadDocument` -- because a spelling cannot be written
@@ -3609,6 +3609,24 @@ CPython, which is why a vector is committed instead. The durable check stays
 Writing it hit the trap it was written to check: the walker used `Object.keys`, JavaScript hoisted
 `"10"` in front of `"2"`, and the harness reported 48 divergences of its own making before `pyKeys`
 replaced it. The same collapse `pyjson.ts` exists to close, met while building the check for it.
+
+**An eighth: a serialiser's fallback answering a document's question.** `pyTypeName` classifies a
+number with no recorded spelling, and D-0210 pointed that fallback at `pyNumberKind`. The two answer
+different questions. `pyNumberKind` classifies a value BUILT IN CODE for a serialiser, where `-0` can
+only have come from a Python float and a magnitude past `2**53` is already a claim about a rounded
+value -- both float, correctly. `pyTypeName` is only ever handed a value that came from a DOCUMENT,
+and the only shape that reaches it without a spelling is a number at the document ROOT, where the
+question is which LITERAL CPython read. CPython's rule there is syntactic: no `.`, `e` or `E` is an
+`int`, arbitrary precision, no negative zero. So the shared fallback reported `9007199254740992` and
+`-0` as `float` where CPython says `int` -- a regression against `main`, in the sentence
+`FenceLedger.refusals()` persists for a corrupt ledger line (`'float' object is not subscriptable`).
+The fallback is now the document's rule, and the serialiser keeps its own.
+
+What no value-derived rule can recover is stated rather than papered over: an integral float at a
+ROOT (`1.0`, `1e16`) is the same double as the integer and reads `int` where CPython says `float`.
+That is D-0210's root-slot boundary in its type-name half, and it is now asserted in BOTH directions
+-- the deviation at the root AND the correct answer for the same document inside a container -- so a
+future repair that closes it fails the case instead of silently outgrowing the disclosure.
 
 **A safety claim that described an armed trap as disarmed.** `carryNumberSpellings` said entries
 whose value the rebuild REPLACED are harmless "because a spelling is only consulted for a value that

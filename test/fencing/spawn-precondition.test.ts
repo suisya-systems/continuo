@@ -10,7 +10,7 @@ import {
   runBattery,
 } from "../../src/fencing/battery.js";
 import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
-import { pyDict } from "../../src/fencing/pysemantics.js";
+import { pyDict, pyTypeName, pyTypeNameOf } from "../../src/fencing/pysemantics.js";
 import {
   type FenceContext,
   loadDocument,
@@ -754,6 +754,47 @@ describe("a document's number spelling reaches settings.local.json (target-only,
     // spelling too -- including when the last value has none.
     expect(pyJsonDumps(pyDict(pyJsonLoads('[["x", 1.0], ["x", 2]]')))).toBe('{"x": 2}');
     expect(pyJsonDumps(pyDict(pyJsonLoads('[["x", 2], ["x", 1.0]]')))).toBe('{"x": 1.0}');
+  });
+
+  test("a number at a document root is typed by CPython's syntactic rule, and the residue is asserted", () => {
+    // The type-name half of the root-slot boundary D-0210 records. A number at
+    // the ROOT has no container to hang a spelling on, so `pyTypeName` has to
+    // guess -- and the guess belongs to the DOCUMENT (which literal did CPython
+    // read?), not to the serialiser (`pyNumberKind`, which classifies values
+    // built in code and calls `-0` and anything past 2**53 a float). Sharing
+    // the serialiser's fallback reported `9007199254740992` and `-0` as
+    // `float`, where CPython says `int`.
+    //
+    // Reachable through `FenceLedger.refusals()`, which reports a corrupt
+    // ledger line as `'<type>' object is not subscriptable` and persists that
+    // sentence.
+    //
+    // CPython's answers below were MEASURED (`type(json.loads(t)).__name__`),
+    // not recalled.
+    for (const [text, expected] of [
+      ["1", "int"],
+      ["-0", "int"],
+      ["9007199254740992", "int"],
+      ["0.5", "float"],
+      ["-0.5", "float"],
+      // Legal JSON that overflows the double. CPython's float overflows to
+      // `inf`, which is still a float on both sides.
+      ["1e400", "float"],
+    ] as const) {
+      expect(pyTypeName(pyJsonLoads(text)), text).toBe(expected);
+    }
+
+    // THE RESIDUE, asserted in BOTH directions so it fails loudly rather than
+    // licensing a divergence that has gone away: an integral float at a root is
+    // the same double as the integer, no value-derived rule can tell them
+    // apart, and this port answers `int` where CPython answers `float`. The
+    // same three documents inside a CONTAINER answer correctly, which is the
+    // control that says the boundary is the root slot and nothing wider.
+    for (const text of ["1.0", "-0.0", "1e16"]) {
+      expect(pyTypeName(pyJsonLoads(text)), text).toBe("int");
+      const inside = pyJsonLoads(`{"n": ${text}}`) as Record<string, unknown>;
+      expect(pyTypeNameOf(inside, "n"), text).toBe("float");
+    }
   });
 });
 

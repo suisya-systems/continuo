@@ -515,6 +515,26 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
  * set to `1.0` is `got float` in interlock and was `got int` here until the
  * spelling reached this function; the sentence is persisted in a ledger refusal
  * detail, so the difference is durable.
+ *
+ * WITHOUT a spelling the fallback is `Number.isInteger`, and it is deliberately
+ * NOT {@link pyNumberKind}'s. The two answer different questions. `pyNumberKind`
+ * classifies a value BUILT IN CODE for a serialiser, where `-0` can only have
+ * come from a Python float and a magnitude past 2**53 is already a claim about
+ * a rounded value, so both are floats. This function is only ever handed a
+ * value that came from a DOCUMENT -- a corrupt ledger line, a role body, a
+ * mapping key -- and the only case that reaches it without a spelling is a
+ * number at the document ROOT, which has no container slot to hang one on. For
+ * a root, the question is which LITERAL CPython read, and CPython's rule is
+ * syntactic: no `.`, `e` or `E` makes it an `int`, of arbitrary precision and
+ * with no negative zero. So `9007199254740992` and `-0` are `int` there, and
+ * sharing the serialiser's fallback reported both as `float`.
+ *
+ * What no value-derived rule can recover, stated rather than papered over: an
+ * INTEGRAL FLOAT at a root (`1.0`, `1e16`) is the same double as the integer
+ * and is reported `int` where CPython says `float`. That is the same root-slot
+ * boundary D-0210 records for the round trip, in its type-name half, and it is
+ * pinned in both directions below so it fails loudly if it ever stops being
+ * true.
  */
 export function pyTypeName(value: unknown, spelling?: PyNumberSpelling | undefined): string {
   if (value === null || value === undefined) {
@@ -527,7 +547,12 @@ export function pyTypeName(value: unknown, spelling?: PyNumberSpelling | undefin
     case "string":
       return "str";
     case "number":
-      return pyNumberKind(value, spelling);
+      // The DOCUMENT decides when it can. See the note above for why the
+      // fallback is not `pyNumberKind`'s.
+      if (spelling !== undefined) {
+        return spelling.kind;
+      }
+      return Number.isInteger(value) ? "int" : "float";
     case "bigint":
       return "int";
     case "boolean":
