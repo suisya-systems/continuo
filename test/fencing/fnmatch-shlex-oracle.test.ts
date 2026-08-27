@@ -17,6 +17,7 @@ import {
   pySet,
   pyStr,
   pyStrip,
+  pyTypeNameOf,
 } from "../../src/fencing/pysemantics.js";
 import { quote, ShlexError, split } from "../../src/fencing/shlex.js";
 
@@ -68,6 +69,16 @@ interface LoadsExpectation {
   readonly roundtrip: string;
 }
 
+/**
+ * One number document: the bytes it round-trips to, and `type(x).__name__` at
+ * every number in it.
+ */
+interface NumberDocumentExpectation {
+  readonly roundtrip: string;
+  /** `[path, "int" | "float"]` for every number, in document order. */
+  readonly types: [string, string][];
+}
+
 interface MappingExpectation {
   readonly keys: string[];
   readonly items: [string, string][];
@@ -103,6 +114,10 @@ interface Vector {
     readonly dumps: { readonly count: number; readonly expected: string[] };
     readonly dumps_numbers: { readonly count: number; readonly expected: string[] };
     readonly loads: { readonly count: number; readonly expected: LoadsExpectation[] };
+    readonly number_documents: {
+      readonly count: number;
+      readonly expected: NumberDocumentExpectation[];
+    };
   };
   readonly pysemantics: {
     readonly or: { readonly count: number; readonly expected: string[] };
@@ -153,6 +168,7 @@ interface Corpus {
     readonly dumps_numbers: string[];
     readonly dumps_number_accepted_deviations: string[];
     readonly loads: string[];
+    readonly number_documents: string[];
   };
   readonly pysemantics: {
     readonly values: string[];
@@ -198,6 +214,7 @@ describe("the vector is not vacuous", () => {
     );
     expect(corpus.pyjson.dumps_numbers).toHaveLength(vector.pyjson.dumps_numbers.count);
     expect(corpus.pyjson.loads).toHaveLength(vector.pyjson.loads.count);
+    expect(corpus.pyjson.number_documents).toHaveLength(vector.pyjson.number_documents.count);
     expect(corpus.pysemantics.or).toHaveLength(vector.pysemantics.or.count);
     expect(corpus.pysemantics.iterate).toHaveLength(vector.pysemantics.iterate.count);
     expect(corpus.pysemantics.in).toHaveLength(vector.pysemantics.in.count);
@@ -815,6 +832,86 @@ describe("the JSON serialiser agrees with CPython byte for byte", () => {
         mismatches.push(
           `text ${text}: CPython round trip ${JSON.stringify(expected.roundtrip)}, ` +
             `continuo ${JSON.stringify(roundtrip)}`,
+        );
+      }
+    }
+    expect(mismatches, `${mismatches.length} divergence(s) from CPython`).toEqual([]);
+  });
+
+  /**
+   * Every number in one document, with the path that reaches it and the type
+   * name the DOCUMENT gives it -- the same walk the Python half does, and
+   * through `pyTypeNameOf` rather than `pyTypeName`, because the container and
+   * the key are what carry the spelling a JavaScript number cannot.
+   *
+   * `typeof child === "number"` rather than a `bool` check: JavaScript's
+   * booleans are not numbers, which is the one place this walk is SIMPLER than
+   * the Python one (where `bool` subclasses `int`).
+   */
+  function recordNumberTypes(
+    container: unknown,
+    key: string | number,
+    path: string,
+    out: [string, string][],
+  ): void {
+    const value = (container as Record<string, unknown>)[String(key)];
+    if (typeof value === "number") {
+      out.push([path, pyTypeNameOf(container, key)]);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((_child, index) => {
+        recordNumberTypes(value, index, `${path}[${index}]`, out);
+      });
+      return;
+    }
+    if (typeof value === "object" && value !== null) {
+      for (const [childKey] of pyEntries(value as Record<string, unknown>)) {
+        recordNumberTypes(value, childKey, `${path}.${childKey}`, out);
+      }
+    }
+  }
+
+  /**
+   * The number round trip: the two things JavaScript's single number type
+   * loses, measured on documents rather than on values built in code.
+   *
+   * Both were visible in artefacts this port compares BY BYTES: an integral
+   * timestamp reached the fence ledger as `"at": 0` where interlock writes
+   * `0.0`, and `JSON.parse("9007199254740993")` destroys the authored value
+   * before any serialiser can see it. The type half is asserted alongside the
+   * bytes because a refusal message names it -- `permissions.deny must be a
+   * list, got float` -- and that sentence is persisted in the ledger.
+   */
+  test("loads -> dumps carries a number's int/float spelling and its exact digits", () => {
+    const mismatches: string[] = [];
+    for (const [index, text] of corpus.pyjson.number_documents.entries()) {
+      const expected = vector.pyjson.number_documents.expected[index] as NumberDocumentExpectation;
+      const parsed = pyJsonLoads(text);
+      const roundtrip = pyJsonDumps(parsed);
+      if (roundtrip !== expected.roundtrip) {
+        mismatches.push(
+          `text ${text}: CPython round trip ${JSON.stringify(expected.roundtrip)}, ` +
+            `continuo ${JSON.stringify(roundtrip)}`,
+        );
+      }
+      const types: [string, string][] = [];
+      // The root is a container in every entry of this corpus (a scalar root
+      // has no slot to carry a spelling, which the module header states as the
+      // boundary), so the walk starts inside it.
+      if (Array.isArray(parsed)) {
+        parsed.forEach((_child, childIndex) => {
+          recordNumberTypes(parsed, childIndex, `$[${childIndex}]`, types);
+        });
+      } else {
+        for (const [key] of pyEntries(parsed as Record<string, unknown>)) {
+          recordNumberTypes(parsed, key, `$.${key}`, types);
+        }
+      }
+      if (JSON.stringify(types) !== JSON.stringify(expected.types)) {
+        mismatches.push(
+          `text ${text}: CPython types ${JSON.stringify(expected.types)}, ` +
+            `continuo ${JSON.stringify(types)}`,
         );
       }
     }
