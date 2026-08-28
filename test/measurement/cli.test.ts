@@ -598,6 +598,87 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     },
   );
 
+  test("target-only -- an integer flag accepts Python's underscore spelling", () => {
+    // `int("1_700_000_000_000")` is 1700000000000, so the source's parser takes
+    // this command line and a port that refused it would fail only for the
+    // operator who spelled a long timestamp readably. The three malformed
+    // placements Python refuses are refused here too, because accepting them
+    // would be the divergence in the other direction.
+    const path = db();
+
+    const { code, out } = captured(() =>
+      measurementCli.main([
+        "report",
+        "--db",
+        path,
+        "--period-start-ms",
+        "1_700_000_000_000",
+        "--period-end-ms",
+        String(PERIOD_END),
+        "--now-ms",
+        String(GENERATED_AT),
+      ]),
+    );
+
+    expect(code).toBe(0);
+    expect(parseMarkdown(out).get("header.period_start_ms")).toBe(String(PERIOD_START));
+
+    for (const malformed of ["_1", "1_", "1__0"]) {
+      const refused = captureStderr(() =>
+        measurementCli.main([
+          "report",
+          "--db",
+          path,
+          "--period-start-ms",
+          malformed,
+          "--period-end-ms",
+          String(PERIOD_END),
+        ]),
+      );
+      expect(refused.code, malformed).toBe(2);
+      expect(refused.text).toContain(`--period-start-ms takes an integer, got '${malformed}'`);
+    }
+  });
+
+  test("target-only -- a nested command's refusal names the nested command", () => {
+    // `error.usage` and the error line have to name the same parser. With the
+    // root's `prog` on the error line, `continuo measure report --bogus` prints
+    // `usage: continuo measure report` above `continuo: error: ...`, which sends
+    // the operator to read the flags of a command that has none of them.
+    const path = db();
+
+    const errors = captureStderr(() => topLevelCli.main(["measure", ...argvFor(path), "--bogus"]));
+
+    expect(errors.code).toBe(2);
+    expect(errors.text).toContain("usage: continuo measure report");
+    expect(errors.text).toContain("continuo measure report: error:");
+    expect(errors.text).not.toContain("\ncontinuo: error:");
+  });
+
+  test("target-only -- an unreadable shadow file refuses rather than throwing raw", () => {
+    // REPAIRED (`D-0023`). The source reads and parses the file bare, so a typo
+    // in the path leaves a `FileNotFoundError` and a malformed file a
+    // `JSONDecodeError` -- neither of them the refusal family the function
+    // documents, and the missing file is the likeliest operator error there is.
+    const path = db();
+
+    const missing = expectRefusal(
+      () =>
+        measurementCli.main(
+          argvFor(path, "--v1-shadow-run-ids", join(caseRoot("gone"), "v1.json")),
+        ),
+      ControlPlaneRefusal,
+    );
+    expect(missing.message).toContain("could not be read as the v1 shadow input");
+
+    const malformed = expectRefusal(
+      () => measurementCli.main(argvFor(path, "--v1-shadow-run-ids", writeShadow("{not json"))),
+      ControlPlaneRefusal,
+    );
+    expect(malformed.message).toContain("could not be read as the v1 shadow input");
+    expect(malformed.cause).toBeInstanceOf(SyntaxError);
+  });
+
   test("target-only -- a required flag that is absent is refused by name", () => {
     const errors = captureStderr(() => measurementCli.main(["report", "--period-start-ms", "1"]));
 

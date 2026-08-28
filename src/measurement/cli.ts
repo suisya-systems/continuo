@@ -209,7 +209,21 @@ function describeType(value: unknown): string {
  * an empty shadow input, which is the flattering answer arriving as absent data.
  */
 function readShadowRunIds(path: string): readonly string[] {
-  let payload: unknown = JSON.parse(readFileSync(path, "utf8"));
+  let payload: unknown;
+  try {
+    payload = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    // REPAIRED, not inherited (`D-0023`). The source reads and parses bare, so a
+    // path with a typo in it leaves the command with a `FileNotFoundError` and a
+    // malformed file with a `JSONDecodeError` -- neither of them the refusal
+    // family this function documents two lines above, and the missing file is
+    // the likeliest operator error there is. Only the read and the parse are
+    // inside the try, so a refusal raised below still travels as itself.
+    throw new ControlPlaneRefusal(
+      `${path} could not be read as the v1 shadow input: ${describe(error)}`,
+      { cause: error },
+    );
+  }
   if (isPlainObject(payload)) {
     // The key is this module's own literal, not a caller's, so the inherited-key
     // hazard rule 9 names for caller-keyed lookups does not arise; `Object.hasOwn`
@@ -224,6 +238,11 @@ function readShadowRunIds(path: string): readonly string[] {
     );
   }
   return payload as readonly string[];
+}
+
+/** An error's message, for interpolation into a refusal. */
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** A JSON object, told apart from the array and the null that share its `typeof`. */

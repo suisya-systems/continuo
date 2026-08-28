@@ -35,13 +35,23 @@
 
 /** Raised for a command line this parser cannot accept. */
 export class UsageError extends Error {
-  /** The parser's usage text, so the boundary can print it beside the reason. */
+  /** The usage text of the parser that refused, to print beside the reason. */
   readonly usage: string;
+  /**
+   * The `prog` of the parser that refused, which is not always the root's.
+   *
+   * `continuo measure report --bogus` is refused by the `report` parser, and an
+   * error line reading `continuo: error: ...` under a usage line reading
+   * `usage: continuo measure report` names two different commands and sends the
+   * operator to check the wrong one's flags.
+   */
+  readonly prog: string;
 
-  constructor(message: string, usage: string) {
+  constructor(message: string, parser: { readonly prog: string; formatUsage(): string }) {
     super(message);
     this.name = "UsageError";
-    this.usage = usage;
+    this.usage = parser.formatUsage();
+    this.prog = parser.prog;
   }
 }
 
@@ -128,15 +138,23 @@ export function destinationOf(flag: string): string {
  * string into `0`. A period boundary that is quietly `0` is the epoch, and every
  * window check below would compare against it without complaint.
  */
-function parseInteger(flag: string, text: string, usage: string): number {
-  if (!/^[+-]?\d+$/.test(text.trim())) {
-    throw new UsageError(`${flag} takes an integer, got '${text}'`, usage);
+function parseInteger(flag: string, text: string, parser: ArgumentParser): number {
+  const bare = text.trim();
+  // Python's own spelling rule, underscores included: a single underscore is
+  // allowed BETWEEN digits and nowhere else, so `1_700_000_000_000` is
+  // 1700000000000 and `_1`, `1_` and `1__0` are all errors. Dropped rather than
+  // refused because the source's parser accepts it -- `int("1_0")` is 10 -- and
+  // a port that refused a command line interlock runs would be wrong in the
+  // direction that is hardest to notice: it only fails for the operator who
+  // spelled a long timestamp readably.
+  if (!/^[+-]?\d(?:_?\d)*$/.test(bare)) {
+    throw new UsageError(`${flag} takes an integer, got '${text}'`, parser);
   }
-  const value = Number(text.trim());
+  const value = Number(bare.replaceAll("_", ""));
   if (!Number.isSafeInteger(value)) {
     throw new UsageError(
       `${flag} takes an integer this runtime can hold exactly, got '${text}'`,
-      usage,
+      parser,
     );
   }
   return value;
@@ -255,7 +273,6 @@ export class ArgumentParser {
    * @throws {UsageError} anything this parser does not accept.
    */
   parseArgs(argv: readonly string[]): Namespace {
-    const usage = this.formatUsage();
     const namespace: Namespace = { ...this.defaults };
     for (const option of this.options) {
       namespace[destinationOf(option.flag)] = option.fallback ?? null;
@@ -279,37 +296,37 @@ export class ArgumentParser {
       }
       const option = byFlag.get(token);
       if (option === undefined) {
-        throw new UsageError(`unrecognized argument: ${token}`, usage);
+        throw new UsageError(`unrecognized argument: ${token}`, this);
       }
       if (option.kind === "version") {
         throw new VersionRequested(`${option.version ?? ""}\n`);
       }
       const raw = argv[index + 1];
       if (raw === undefined) {
-        throw new UsageError(`${token} expects a value`, usage);
+        throw new UsageError(`${token} expects a value`, this);
       }
       if (seen.has(token)) {
         // argparse silently keeps the last one. Refused here instead: a command
         // line that names one flag twice with two values is one whose author
         // believes something about it that is not true, and the report it would
         // produce carries no sign of which half won.
-        throw new UsageError(`${token} is given more than once`, usage);
+        throw new UsageError(`${token} is given more than once`, this);
       }
       seen.add(token);
-      namespace[destinationOf(token)] = coerce(option, raw, usage);
+      namespace[destinationOf(token)] = coerce(option, raw, this);
       index += 2;
     }
 
     for (const option of this.options) {
       if (option.required === true && !seen.has(option.flag)) {
-        throw new UsageError(`the following argument is required: ${option.flag}`, usage);
+        throw new UsageError(`the following argument is required: ${option.flag}`, this);
       }
     }
 
     const rest = argv.slice(index);
     if (this.subparsers === null) {
       if (rest.length > 0) {
-        throw new UsageError(`unrecognized arguments: ${rest.join(" ")}`, usage);
+        throw new UsageError(`unrecognized arguments: ${rest.join(" ")}`, this);
       }
       return namespace;
     }
@@ -318,7 +335,7 @@ export class ArgumentParser {
     if (name === undefined) {
       throw new UsageError(
         `a command is required: ${[...this.subparsers.parsers.keys()].join(", ")}`,
-        usage,
+        this,
       );
     }
     const child = this.subparsers.parsers.get(name);
@@ -326,21 +343,21 @@ export class ArgumentParser {
       throw new UsageError(
         `invalid choice: '${name}' (choose from ` +
           `${[...this.subparsers.parsers.keys()].join(", ")})`,
-        usage,
+        this,
       );
     }
     return { ...namespace, ...child.parseArgs(rest.slice(1)) };
   }
 }
 
-function coerce(option: OptionSpec, raw: string, usage: string): string | number {
+function coerce(option: OptionSpec, raw: string, parser: ArgumentParser): string | number {
   if (option.choices !== undefined && !option.choices.includes(raw)) {
     throw new UsageError(
       `${option.flag}: invalid choice: '${raw}' (choose from ${option.choices.join(", ")})`,
-      usage,
+      parser,
     );
   }
-  return option.type === "int" ? parseInteger(option.flag, raw, usage) : raw;
+  return option.type === "int" ? parseInteger(option.flag, raw, parser) : raw;
 }
 
 function placeholderFor(option: OptionSpec): string {
@@ -416,7 +433,9 @@ export function dispatch(
       return 0;
     }
     if (error instanceof UsageError) {
-      streams.err(`${error.usage}\n${parser.prog}: error: ${error.message}\n`);
+      // `error.prog`, not `parser.prog`: the parser that refused is the one the
+      // operator has to go and read, and for a nested command it is not the root.
+      streams.err(`${error.usage}\n${error.prog}: error: ${error.message}\n`);
       return 2;
     }
     throw error;

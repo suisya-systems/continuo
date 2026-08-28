@@ -69,20 +69,23 @@
       }
     ],
     "target_only_tests": {
-      "count": 10,
+      "count": 13,
       "ids": [
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the help walk reaches the mounted subcommand's own flags",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- --help after a subcommand is the subcommand's help",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a millisecond flag that is not an integer is refused, not coerced[1.5]",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a millisecond flag that is not an integer is refused, not coerced[0x10]",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a millisecond flag that is not an integer is refused, not coerced[empty]",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- an integer flag accepts Python's underscore spelling",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a nested command's refusal names the nested command",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- an unreadable shadow file refuses rather than throwing raw",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a required flag that is absent is refused by name",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a value outside a flag's choices is refused by name",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a flag given twice is refused rather than silently last-wins",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- half a corpus reference is refused for being half",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the top-level CLI reports the build's version"
       ],
-      "why": "Ten, all of them about `src/cli/parser.ts` and `src/cli.ts` -- code this port had to write because Node has no argparse, and which therefore carries no warrant from interlock (rule 11). Two of the ten exist because a mutation sweep found the ported cases could not see the property they name: `the help walk reaches the mounted subcommand's own flags` closes the hazard that both cp932 cases are a loop over helpStrings and a walk returning nothing makes both vacuously green, and `half a corpus reference is refused for being half` closes an inherited blind spot -- the ported case (and its source) point --fixture-corpus at a directory that does not exist, so loadCorpus refuses with a FixtureRefusal, which IS a ControlPlaneRefusal, and the case stays green with the half-reference guard deleted (measured). The remaining eight pin the parser's own refusals: a required flag, a value outside a flag's choices, a flag given twice, three spellings of a non-integer millisecond value, --help routed to the subcommand rather than the root, and the version flag."
+      "why": "Thirteen, all of them about `src/cli/parser.ts`, `src/cli.ts` and the one repair in `src/measurement/cli.ts` -- code this port had to write because Node has no argparse, and which therefore carries no warrant from interlock (rule 11). Five of the thirteen exist because something could not see the property it named. Two came from the mutation sweep: `the help walk reaches the mounted subcommand's own flags` closes the hazard that both cp932 cases are a loop over helpStrings and a walk returning nothing makes both vacuously green, and `half a corpus reference is refused for being half` closes an inherited blind spot -- the ported case (and its source) point --fixture-corpus at a directory that does not exist, so loadCorpus refuses with a FixtureRefusal, which IS a ControlPlaneRefusal, and the case stays green with the half-reference guard deleted (measured). Three came from the review gate: Python's `int()` accepts underscores between digits so the source's parser takes `--period-start-ms 1_700_000_000_000` and the port's first parser refused it; a nested command's refusal named the root parser above a usage line naming the child; and a missing or malformed shadow file escaped as a raw filesystem error or SyntaxError rather than as the refusal the function documents. The remaining eight pin the parser's own refusals: a required flag, a value outside a flag's choices, a flag given twice, three spellings of a non-integer millisecond value, --help routed to the subcommand rather than the root, and the version flag."
     }
   },
   "totals": {
@@ -114,6 +117,12 @@
       "matches_source": true,
       "note": "They are about buildReportFromArgs's guard, which is below the parser and reachable by a library caller. The parser's own integer handling is pinned separately by a target-only case, which is coverage the source has no counterpart for.",
       "where_a_fix_belongs": "nowhere: the two are different boundaries and both are now covered."
+    },
+    {
+      "behaviour": "A missing or malformed --v1-shadow-run-ids file escapes as a raw FileNotFoundError / JSONDecodeError rather than as the ControlPlaneRefusal the function documents.",
+      "matches_source": false,
+      "note": "REPAIRED here per D-0023, not disclosed: the source reads and parses bare, and the missing file is the likeliest operator error there is. Only the read and the parse are wrapped, so a refusal raised below still travels as itself; the original error is kept as the `cause`. Pinned by a target-only case and by a sweep mutation.",
+      "where_a_fix_belongs": "here. interlock is frozen (D-0023), so there is no second half to 'disclose now, repair later'."
     }
   ],
   "entries": [
@@ -344,8 +353,8 @@
     }
   ],
   "mutation_sweep": {
-    "ran": "23 mutations, one per property the cases in this file claim to pin, across src/measurement/cli.ts, src/cli/parser.ts, src/cli.ts and the one line of src/measurement/reader.ts the read-only claim rests on. Harness kept at .sweep/ and not committed.",
-    "caught": 23,
+    "ran": "27 mutations, one per property the cases in this file claim to pin, across src/measurement/cli.ts, src/cli/parser.ts, src/cli.ts and the one line of src/measurement/reader.ts the read-only claim rests on. Harness kept at .sweep/ and not committed; it is 23 mutations of the belt as first written plus 4 covering the three repairs the review gate produced.",
+    "caught": 27,
     "survivors": [],
     "note": "The FIRST run of this sweep reported 21 of 21 caught, and eight of those verdicts were worthless: six mutations were `if (false)`, which TypeScript refuses, so the build failed and the harness read a failed run as a caught mutation, and two more had their JSON report mis-sliced because vitest prints its pretty failure output to the same stream. That is section 10's own hazard -- red for a reason other than the one being tested -- reached from inside the tool built to check for it. The harness now reports INCONCLUSIVE for a build that refuses a mutation and writes its report to a file rather than to stdout, and every always-false condition is written to survive the type-checker.",
     "closed_survivors": [
@@ -358,13 +367,23 @@
         "mutation": "an integer flag keeps only the safe-integer half of its guard",
         "verdict": "the target-only case could not distinguish the two guards, widened",
         "note": "`--period-start-ms 1.5` is refused by Number.isSafeInteger alone, and the case matched a message prefix both guards share. Widened to 0x10 (Number gives 16) and the empty string (Number gives 0 -- a period boundary quietly at the epoch), and the assertion now matches the whole message. Whitespace padding is deliberately NOT refused: `int(' 12 ')` is 12 in Python, so refusing it would make the port stricter than what it is a port of."
+      },
+      {
+        "mutation": "(review gate, not the sweep) an integer flag refuses Python's underscore spelling",
+        "verdict": "a divergence from the source, repaired with a target-only case",
+        "note": "`int('1_700_000_000_000')` is 1700000000000, so the source's argparse takes a command line the port's first parser refused. Fixed to Python's own rule -- a single underscore BETWEEN digits and nowhere else -- and pinned in both directions: the readable spelling is accepted, and `_1`, `1_` and `1__0` are refused. Two sweep mutations were added, one per direction."
+      },
+      {
+        "mutation": "(review gate, not the sweep) a nested command's refusal names the root parser",
+        "verdict": "a defect in this port's own code, closed with a target-only case",
+        "note": "`continuo measure report --bogus` printed `usage: continuo measure report` above `continuo: error: ...`, naming two different commands and sending the operator to read the flags of the one that has none of them. `UsageError` now carries the prog of the parser that refused."
       }
     ]
   },
   "divergences": [
     {
       "decision": "D-0112",
-      "behaviour": "The CLI is parsed by a purpose-built parser rather than by argparse, and it accepts less than argparse does: long flags only, one value each, no positional arguments, no prefix matching, no nargs. It also refuses two command lines argparse accepts -- a flag given twice (argparse keeps the last) and an integer spelled `0x10` or `` (Python's int() refuses both, so this half is parity, not divergence).",
+      "behaviour": "The CLI is parsed by a purpose-built parser rather than by argparse, and it accepts less than argparse does: long flags only, one value each, no positional arguments, no prefix matching, no nargs. It also refuses one command line argparse accepts -- a flag given twice, which argparse resolves by keeping the last value. Python's own integer spelling is matched rather than approximated, underscores between digits included.",
       "matches_source": false,
       "deliberate": true
     },
@@ -383,6 +402,12 @@
     {
       "decision": "-",
       "behaviour": "The top-level CLI mounts one subtree where interlock's mounts six; the other five name modules continuo has not ported.",
+      "matches_source": false,
+      "deliberate": true
+    },
+    {
+      "decision": "D-0023",
+      "behaviour": "A missing or malformed v1 shadow input file refuses with a ControlPlaneRefusal naming the path, where the source lets the filesystem's or the JSON parser's own error escape.",
       "matches_source": false,
       "deliberate": true
     }

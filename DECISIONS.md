@@ -4073,9 +4073,25 @@ parser's own tokens, and the integer coercion. The last two are worth naming:
   `16`, and `Number("")` is `0` -- a period boundary quietly at the epoch selects every run ever
   recorded. With only the `Number.isSafeInteger` half left, `0x10` and the empty string are both
   accepted; the target-only case originally used `1.5` alone, which the surviving half refuses, so
-  it could not tell the two guards apart. Whitespace padding is deliberately **not** refused:
-  `int(" 12 ")` is `12` in Python, and refusing it would make the port stricter than what it is a
-  port of.
+  it could not tell the two guards apart.
+
+**And two things the review gate found that the sweep could not.** A mutation sweep asks whether the
+cases can see the behaviour the module *has*; it cannot ask whether that behaviour is the source's.
+Both of these were parity questions, and both were answered by reading Python rather than by running
+anything here:
+
+- **`int()` accepts underscores between digits.** `int("1_700_000_000_000")` is `1700000000000`, so
+  the source's parser takes `--period-start-ms 1_700_000_000_000` and the first version of this one
+  refused it. That is the worst direction for a divergence to run in: it fails only for the operator
+  who spelled a long timestamp readably, and every test written against a plain spelling stays green.
+  The coercion now matches Python's rule exactly -- a single underscore **between** digits and
+  nowhere else, so `_1`, `1_` and `1__0` are still errors -- and both directions are pinned.
+  Whitespace padding is accepted for the same reason: `int(" 12 ")` is `12`.
+- **A refusal named the wrong command.** `continuo measure report --bogus` printed
+  `usage: continuo measure report` and, under it, `continuo: error: ...`. The usage line came from
+  the parser that refused and the error line from the root, so the two named different commands and
+  the operator was sent to read the flags of the one that has none of them. `UsageError` now carries
+  the `prog` of the parser that raised it.
 
 **Alternatives.**
 
