@@ -95,40 +95,8 @@ export default defineConfig({
     // attention on a machine's bad afternoon, while a genuinely hung test still
     // fails, just later. Correctness here is protected by `retry: 0` and the
     // double-green rule (D-0005), not by a stopwatch.
-    //
-    // -- RECALIBRATED, because the worst figure observed moved and the rule
-    // above stopped being honoured. The 13,556ms measurement is from 2026-08-22
-    // and 60s was ~4.4x it. Measured again on 2026-08-28, over two
-    // `windows-latest, node 24` runs of the SAME suite (763 reported durations
-    // each):
-    //
-    //                          main @ 33110511976   a PR branch @ 33136436240
-    //   p50                              2,278ms                     1,606ms
-    //   p90                              9,704ms                     7,949ms
-    //   slowest PASSING test            57,364ms                    57,156ms
-    //   tests killed at the 60s cap            1                           2
-    //
-    // A test that PASSES at 57.4s under a 60s cap is not a budget with headroom;
-    // it is a coin flip, and both runs lost it. Note the left-hand column: that
-    // is `main` failing its own gate, on a commit with none of the branch's code
-    // -- so this is runner variance being read as a hang, which is the one thing
-    // the paragraph above says this number must not do.
-    //
-    // 180s is the same "several times the worst observed" rule applied to the
-    // current worst (3.1x 57.4s). It cannot turn a passing test red; it can only
-    // stop killing tests that were going to finish. The job cap is 40 minutes
-    // and these cells run 12-20, so even a genuinely hung test still reports
-    // inside the job.
-    //
-    // What this is NOT is a fix for the pace itself. The cost is concentrated in
-    // a few database-heavy files -- on the run above, `outbox.test.ts` 464s,
-    // `spike-schema.test.ts` 360s, `lease.test.ts` 269s, `provenance.test.ts`
-    // 163s -- and interlock#37 records the remedy for that as the testkit
-    // template (`suiteTemplate` / `copyInto`, D-0025), which is per-lane work on
-    // the ~225 sites that have not been converted. A timeout is the instrument
-    // for "is this hung", not for "is this slow".
-    testTimeout: 180_000,
-    hookTimeout: 180_000,
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
 
     sequence: {
       // Both axes: file order and, within a file, test order.
