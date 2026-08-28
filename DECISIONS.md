@@ -106,6 +106,14 @@ spaces distinct.
 | D-0214 | `sandbox doctor` and the readback complete the settings subsystem, and the argparse surface grows two actions rather than one helper | accepted |
 | D-0215 | A truthy non-mapping `sandbox.filesystem` is refused, not coerced to the empty mapping | accepted |
 | D-0216 | `_is_inside_root` compares normcased paths, so Windows path identity is not a sandbox escape | accepted |
+| D-0301 | The five session verbs are `Promise`-returning, serialised per instance, and the capability probe stays synchronous | accepted |
+| D-0401 | The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store | accepted |
+| D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
+| D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
+| D-0404 | The ledger DDL is a shipped data file, and the belt asserts it reached `dist/` | accepted |
+| D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
+| D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
+| D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
 
 ---
 
@@ -5983,6 +5991,146 @@ four sites together; it is not this entry's to make unilaterally.
 the round trip` writes 2**53+1 through a foreign connection and asserts the value comes back
 identical; with `safeIntegers` removed it reads 9007199254740992 and the case goes red naming the
 loss.
+## D-0301 — The five session verbs are `Promise`-returning, serialised per instance, and the capability probe stays synchronous
+
+**Context.** The `session` belt (D-0032) ports interlock's `tests/session/` -- 142 node ids over
+`claude_org_runtime/session/`. The source is written against Python's blocking process API and uses
+it as a load-bearing guarantee, not as a convenience. `stop()` runs a `SIGTERM` -> `Popen.wait(
+timeout)` -> `SIGKILL` -> `wait(timeout)` ladder; a pid that cannot be recorded triggers an
+immediate group `SIGKILL` followed by a bounded wait; an orphan whose supervisor died is chased
+through two `time.monotonic()` deadlines polling at `time.sleep(0.05)`; and a group sweep after
+exit does the same again. Nothing in that is decoration -- `test_a_child_that_outlives_the_
+emergency_kill_is_not_abandoned`, `test_stop_reaps_a_group_member_that_outlived_the_leader` and
+their neighbours assert the ladder's *outcomes*.
+
+Node's `ChildProcess` is asynchronous, so the shape of the port is a decision that has to be taken
+before the first case is typed: retrofitting it through 142 cases is the belt's largest re-work
+risk. The question was raised as the Blocker of the pre-belt design review.
+
+**The measurement that settles it.** A child's exit status in Node is held by libuv and released
+only on a loop turn. Spawn a child that exits at t=200ms, then block the loop to t=1500ms and poll
+(Node v22.17.0, Linux 6.18.33.2 WSL2):
+
+```
+t= 300ms  exitCode=null  signalCode=null  kill(pid,0)=true  /proc/<pid>/stat state=Z
+t= 600ms  ... identical
+t= 900ms  ... identical
+t=1200ms  ... identical
+after 5000 microtask turns (await Promise.resolve())   exitCode=null
+after one macrotask turn (setTimeout(0))               exitCode=7, /proc state ENOENT
+```
+
+So an in-process **synchronous** `stop()` ladder has three candidate waits and all three are wrong:
+busy-waiting `child.exitCode` never observes an exit, so every stop escalates to `SIGKILL` and then
+reports `TIMED_OUT` after `2 x stop_timeout`, on every stop; busy-waiting `kill(pid, 0)` sees the
+unreaped zombie as alive forever, identically; and busy-waiting `/proc/<pid>/stat != "Z"` terminates
+correctly but never yields a return code, because reaping is libuv's -- which permanently destroys
+the `exited-<returncode>` state word for a child of ours.
+
+The second half of the measurement is what rules out the reflex fix: microtask asynchrony buys
+nothing. `await Promise.resolve()` 5000 times leaves `exitCode` at `null`; one `setTimeout(0)`
+releases it. Making the verbs `async` is necessary but not sufficient -- a *macrotask* yield is
+required before any read of a child's exit state.
+
+**Decision.** Four parts, taken together because each of the last three is a defect the first one
+ships without it.
+
+1. **The five D-0009 verbs are `Promise`-returning.** `start`, `listSessions`, `readState`, `stop`
+   and `resume` return `Promise<ProviderResult<...>>`, in the abstract base and in both providers.
+   `start` stays concrete and final on the base -- `requireSpawnable()` then
+   `this.startSession(request)` -- so the four contract cases that pin the gate's identity
+   (`test_a_subclass_cannot_override_the_gate_away[start]`, `[require_spawnable]` and the two mixin
+   variants) still resolve `start` to the base's own function. `startSession` remains the only
+   `_`-prefixed hook, so `test_exactly_the_five_d0009_verbs_and_no_sixth` and
+   `VERB_IMPLEMENTATION_HOOKS` are unchanged.
+
+   The asynchrony is imposed **from below and on the shared contract**, not chosen per provider:
+   `stop` needs a wait in *both* providers, and Node reports a spawn failure asynchronously where
+   Python's `Popen` raises `OSError` synchronously (measured: `spawn("/no/such/binary")` returns
+   with `pid === undefined` and fires `'error'` on a later turn), which is the classification
+   `test_a_child_that_cannot_be_spawned_is_a_failure` and its neighbours assert.
+
+2. **The capability probe stays synchronous.** `probeCapabilities`, `requireSpawnable`,
+   `checkSpawnPrecondition`, `registerWorkspaceObserver`, `evaluateWorkspaceTransition` and every
+   value constructor are synchronous. This is not a concession to tidiness: `subprocess.run(...,
+   timeout=)` has an **exact** analogue in `spawnSync`, measured to match on both branches the
+   source distinguishes -- a missing executable returns `{status: null, error.code: "ENOENT",
+   error.errno: -2}` synchronously (Python's `except OSError`), and a timeout returns
+   `{status: null, signal: "SIGKILL", error.code: "ETIMEDOUT"}` with the child already killed
+   (Python's `TimeoutExpired`), provided `killSignal: "SIGKILL"` is passed, because Node's default
+   is `SIGTERM` where `subprocess.run` sends `kill()`.
+
+   Keeping the probe synchronous is what lets
+   `test_require_spawnable_is_the_contracts_own_gate_not_each_implementations` port unchanged, and
+   it keeps the observer fan-out sequential, so
+   `test_every_observer_is_asked_even_after_a_veto`'s ordering assertion keeps its teeth with no
+   "sequential await, never `Promise.all`" caveat attached to it.
+
+3. **The five verbs are serialised per provider instance.** Each public verb body runs inside a
+   per-instance exclusion queue. In Python, `read_state` **cannot** run while `stop` is mid-ladder
+   -- one thread -- so the source gets mutual exclusion from its language for free. Without the
+   queue, a `readState` could interleave at any `await` inside `stop` and observe a half-finished
+   ladder: record replaced, incident recorded, exit not yet confirmed, the in-memory session map
+   already mutated. That is a state **no source case can construct and none forbids**, so nothing
+   in the ported suite would catch it -- which is precisely why it is decided here rather than left
+   to be discovered. No verb calls another verb in either provider, so the queue cannot deadlock.
+
+4. **Every read of a child's exit state is preceded by one macrotask yield.** The runtime adapter
+   exposes it as `settleExits()`, implemented with a real macrotask and never with
+   `await Promise.resolve()`, per the measurement above. Six cases take a readout immediately after
+   a state change; without the yield they are flaky in the "the child has exited but `exitCode` is
+   still `null`" direction, which under the shuffled double-green order (D-0005) is the worst
+   available failure shape.
+
+The asynchronous surface is confined to one internal runtime adapter (the design review's Major),
+and within it **exactly four members are asynchronous** -- `spawnChild`, `awaitExit`, `sleep` and
+`settleExits` -- because those are exactly the sites that wait on an already-running child.
+Everything else the adapter carries is synchronous in Node as it is in Python: `spawnSync` for the
+probe, `performance.now()` for the monotonic clock, `process.kill(-pgid, sig)` for group signalling,
+and `readFileSync` for `/proc` and for every durable record write.
+
+**The rejected alternative, and what it actually costs.** "Keep the verbs synchronous by moving the
+supervisor into a separate process" is not a variation on this decision; §0's measurement means it
+is the *only* way to have synchronous verbs at all, and it is worse on the belt's own subject.
+
+- With a **fresh supervisor per call**, every session is permanently an orphan, because the child is
+  re-parented when the supervisor exits. `session.process` is then always absent, which makes at
+  least eight cases unportable outright -- among them
+  `test_exit_zero_is_not_taken_as_evidence_of_success` (asserts `returncode == 0`),
+  `test_the_stderr_only_refusal_is_captured_and_surfaced` (waits for `exited-1`), and the two stub
+  cases that assert the **identity of the in-process stdin pipe object**, which cannot cross a
+  process boundary. It also makes `test_a_live_orphan_is_adopted_not_resumed_around` vacuous: under
+  it, everything is an orphan, so the case stops discriminating the path it was written to
+  discriminate. And it is expensive in exactly the place D-0029 forbids relief: one `node -e 0`
+  start measures 17.5ms here, and the suite's `_wait_for_state` helper polls every 20ms for up to
+  10s, so a single case can spend ~8.8s in process startup alone before doing any work.
+- With a **long-lived supervisor daemon**, the return code and the pipe survive, at the price of
+  inventing a daemon, a wire protocol, a blocking pipe read and a cross-process re-raise of
+  `SpawnRefused` -- none of which any source case covers. It is also self-defeating: interlock's
+  whole record-discovery and orphan-adoption machinery exists *because* no supervisor survives, and
+  a daemon puts a second live process on the state root, which is the shape this subsystem was
+  written to prevent.
+
+**Falsifier.** *Primary, and re-runnable:* a synchronous in-process way to read a child's exit
+status appears in Node. Concretely -- if the measurement above ever shows `child.exitCode` updating
+while the event loop is blocked, this decision's premise is gone, the ladder can be transcribed
+literally, and the queue, `settleExits()` and the whole asynchronous surface become indirection to
+delete. *Against part 3:* a source case that depends on a verb being re-entered while another is in
+flight. None of the 142 does, so the queue carries a target-only liveness case; if that case can be
+deleted with no source case turning red, the queue was never load-bearing and this entry
+over-reached. *Against part 4:* if, with `settleExits()` in place, the cases that read a readout
+straight after a state change are still flaky, then the own-child return code is not reproducible in
+process at all, and `exited-<returncode>` needs a decision of its own rather than being a
+consequence of this one.
+
+**Source.** Task `continuo-session-port`, 2026-08-28, against interlock `65f36c5`. The blocking-site
+census is `claude_org_runtime/session/claude_cli_provider.py` (four `Popen.wait(timeout=)` calls,
+three `time.sleep(0.05)` deadline loops, one `subprocess.run(timeout=)` probe) and
+`stub_provider.py`; `provider.py` has no blocking site at all and inherits asynchrony only through
+`start()`. Every measurement quoted here was reproduced on the porting host on Node v22.17.0,
+Linux 6.18.33.2-microsoft-standard-WSL2. The question was raised as the Blocker of the pre-belt
+design review; the recommendation there was Promise-ification, and parts 2, 3 and 4 are this belt's
+additions to it. Decision id from the `D-03xx` range allocated to this belt by D-0032.
 
 ---
 
