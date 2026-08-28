@@ -6085,7 +6085,7 @@ ships without it.
    available failure shape.
 
 The asynchronous surface is confined to one internal runtime adapter (the design review's Major),
-and within it **exactly four members are asynchronous** -- `spawnChild`, `awaitExit`, `sleep` and
+and within it **exactly four members are asynchronous** -- `spawn`, `waitForExit`, `sleep` and
 `settleExits` -- because those are exactly the sites that wait on an already-running child.
 Everything else the adapter carries is synchronous in Node as it is in Python: `spawnSync` for the
 probe, `performance.now()` for the monotonic clock, `process.kill(-pgid, sig)` for group signalling,
