@@ -66,6 +66,7 @@ spaces distinct.
 | D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
 | D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
 | D-0404 | The ledger DDL is a shipped data file, and the belt asserts it reached `dist/` | accepted |
+| D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -5732,5 +5733,80 @@ different mechanism entirely, so it is target-only rather than a translation of 
 **Falsifier.** If the build moves to a bundler that carries assets natively, the copy step becomes
 redundant and this entry is superseded -- but the target-only placement case stays, because its
 subject is the built artifact, not the mechanism that filled it.
+
+---
+
+## D-0405 -- The `INSERT OR REPLACE` bypass is real, and repairing it is its own change
+
+**Context.** The routing ledger's headline guarantee is that no run changes owning system
+mid-flight, and that this is refused **by the store, not by the discipline of the writer**. D-0401
+records how that is held: `BEFORE UPDATE` and `BEFORE DELETE` triggers, plus
+`recursive_triggers = ON` on every connection this package hands out, because with the pragma off
+`INSERT OR REPLACE` resolves a conflict with an implicit DELETE that fires no trigger.
+
+The review gate raised the obvious question the pragma leaves open: the pragma is **per-connection**,
+so what about a connection this package did not hand out? Interlock's own DDL concedes the point in
+a comment. The gate is right, and this entry records the measurement rather than the concession.
+
+**Measured** (better-sqlite3 13.0.3, SQLite 3.53.4, 2026-08-28). Against a ledger created and routed
+through this package's own API, an ordinary `new Database(path)` -- no pragmas, which is every
+caller that has not read `ledger.ts` -- ran
+
+```sql
+INSERT OR REPLACE INTO run_owner (run_id, owning_system, decision_seq, routed_at_ms)
+VALUES ('run-1', 'interlock', <seq>, 4)
+```
+
+and **succeeded**: the owner moved from `synthetic_v1` to `interlock` mid-flight. The tampered
+ledger then **passed `openRoutingLedger` in full** -- `integrity_check`, `application_id`,
+`user_version`, table presence, schema fingerprint and `foreign_key_check` all hold, because
+ownership is data and none of those rungs reads it. So the guarantee is real against every writer
+that goes through this package and absent against one that does not, and nothing downstream notices.
+
+**The repair works, and it cannot land in this belt.** A schema-level `BEFORE INSERT` guard on
+`run_owner` that refuses an insert whose key already exists closes the hole completely, and --
+measured -- closes it **with `recursive_triggers` OFF as well**, because a `BEFORE INSERT` trigger
+fires ahead of conflict resolution. That is the right fix. It is not available here, for two reasons
+that are the same reason twice:
+
+1. Firing ahead of conflict resolution is exactly what makes it work, and it means an ordinary
+   duplicate `INSERT` now raises `SQLITE_CONSTRAINT_TRIGGER` where it raised
+   `SQLITE_CONSTRAINT_PRIMARYKEY`. That is the signal D-0402's idempotent-retry path classifies on,
+   so the routing point's conflict handling has to be re-decided with it.
+2. Worse, and decisive: the two ported cases `or_replace_is_not_a_way_around_the_owner_trigger` and
+   `..._the_decision_history` assert the refusal's **message**, matching `never deleted` -- the
+   delete trigger's own sentence, which is what interlock's `match=` pins. A guard that fires first
+   changes that message. Repairing the defect inside this belt would therefore require rewriting
+   what two of the seventy translated cases assert, and they would then assert something interlock's
+   suite does not say. That is the failure `docs/test-translation-conventions.md` rule 0 exists to
+   prevent, and it is not a trade a translator may make on their own.
+
+**Decision.** The defect is **not disclosed and left** -- D-0023 removed that option, and this entry
+is not an appeal to "inherited". It is **scheduled as its own change**, which is the escape D-0023's
+second bullet provides for a repair too large for the belt in hand. That change owns, together: the
+schema guards, the D-0402 re-decision, the re-pointing of the two ported cases onto the new refusal
+(recorded as deliberate divergences, with interlock's assertions kept visible in the ledger), and a
+target-only case that reproduces the measurement above -- a foreign connection must fail to move an
+owner. Until it lands, `parity/canary.routing-ledger.ledger.json` carries the defect with a pointer
+to this entry, so the trail D-0023's third bullet requires is reachable from the ledger.
+
+Continuo's own store gains a divergence from interlock's DDL when that change lands. That is
+expected and is the point: interlock is frozen, so continuo is where this can be true.
+
+**Alternatives.**
+
+- **Repair it here and adjust the two cases' expectations (rejected).** It buys a real fix at the
+  cost of the belt's claim to be a faithful translation, in the same commit that claims 70/70. The
+  two are separable and should be separate.
+- **Widen the refusal assertions to match either message (rejected).** A pattern satisfied by both
+  the old and the new sentence is a pattern that stops testing which guard fired -- and which guard
+  fires is the entire subject of the repair.
+- **Set the pragma defensively from more places (rejected).** There is no place to set it: the
+  hostile writer is one this package never sees.
+
+**Falsifier.** If SQLite ever fires conflict-resolution DELETEs through triggers regardless of
+`recursive_triggers`, the bypass closes on its own and the scheduled change reduces to deleting this
+entry's reason for existing. Re-run `tmp/`-style probe: create a ledger, route a run, then attempt
+the `INSERT OR REPLACE` above on a bare connection.
 
 ---

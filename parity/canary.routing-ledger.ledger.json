@@ -116,6 +116,10 @@
     {
       "behaviour": "The schema fingerprint query filters with `name NOT LIKE 'sqlite_%'`, in which `_` is a single-character wildcard rather than a literal underscore, so an object named `sqliteX` and similar would also be excluded from the fingerprint.",
       "why": "Carried verbatim from `ledger.py`, and load-bearing: the fingerprint hashes exactly the rows this query returns, so narrowing the pattern (to `LIKE 'sqlite\\_%' ESCAPE '\\'`) would change every fingerprint this build computes and make it disagree with a ledger written by interlock's. `src/control_plane/schema.ts` carries the same pattern for the same reason. Raised as [P2] by the review gate; a parity port cannot narrow it unilaterally."
+    },
+    {
+      "behaviour": "A connection this package did not hand out -- an ordinary `new Database(path)`, which sets no pragmas -- can move a started run's owner with `INSERT OR REPLACE INTO run_owner`, because `recursive_triggers` is per-connection and defaults to OFF, so the implicit conflict-resolution DELETE fires no `BEFORE DELETE` trigger. Measured end to end: the owner moved from `synthetic_v1` to `interlock`, and the tampered ledger then passed `openRoutingLedger` in full, since ownership is data and no verification rung reads it.",
+      "why": "Reproduced from interlock, whose DDL concedes the same point in a comment -- but this is NOT recorded as 'inherited, therefore left': D-0023 withdrew that answer. It is SCHEDULED as its own change, and D-0405 states the whole disposition, the measurement, and the repair. The repair (a schema-level `BEFORE INSERT` guard, measured to close the hole even with the pragma OFF) cannot land in this belt: firing ahead of conflict resolution is what makes it work, and that changes both the result code D-0402 classifies on and the refusal MESSAGE that the two ported `or replace is not a way around ...` cases assert verbatim from interlock's `match=`. Repairing it here would mean two of the seventy translated cases asserting something interlock's suite does not say, which conventions rule 0 forbids. See D-0405."
     }
   ],
   "entries": [
