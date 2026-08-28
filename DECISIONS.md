@@ -82,6 +82,8 @@ spaces distinct.
 | D-0209 | `npm test` builds first, because the deny hook's dependencies come from `dist/` | accepted |
 | D-0210 | A JSON number's Python spelling is recorded on its container slot, never inside the value | accepted |
 | D-0211 | Every container rebuild carries the number record, and the sites are enumerated and pinned | accepted |
+| D-0212 | The rebuild-site enumeration is audited mechanically, and the one site that does not carry states a proof | accepted |
+| D-0213 | The settings generator is ported on a transcribed `os.path`, and its thirteen rebuild branches are enumerated and pinned | accepted |
 
 ---
 
@@ -3819,6 +3821,8 @@ colour).
 **Falsified by.** interlock adopting the same widening, or the block rendering being replaced by one
 with no delimiter a value can spell.
 
+---
+
 ## D-0028 -- The spike-schema template stops short of the cases whose subject is creation
 
 **Context.** D-0027 converted the nine control_plane files that build a *production* control plane
@@ -4014,6 +4018,320 @@ D-0028's four are.
 
 **Source.** Task `continuo-spike-schema-template`, 2026-08-28, after the PR 41 CI failure. Decision id
 allocated by the window; scope extension approved by the user through the window.
+
+---
+
+---
+
+## D-0212 — The rebuild-site enumeration is audited mechanically, and the one site that does not carry states a proof
+
+**Status.** accepted (2026-08-28)
+
+**Context.** `D-0211` closed six rebuild sites and then a seventh, one per review round, every one
+the same shape: a container rebuilt without the number record `D-0210` hangs on its slots. Six
+defects of one type, found one at a time, leaves a question the last fix cannot answer -- *is the
+class exhausted, or is the enumeration simply as far as anyone has read?* Each round had found its
+site by reading the previous round's list and asking what it missed, which is a method that cannot
+terminate: it can only ever find what a reader thinks to look for.
+
+So this entry did not read the list. It swept `src/fencing` mechanically for every construct that
+builds a container (`{...x}`, `[...x]`, `Object.fromEntries`, `Object.assign`, `.map`, `.filter`,
+`.sort`, `Array.from`), traced the three points where a spelling-bearing container can enter the
+subsystem at all -- `loadDocument` (`renderer.ts`), `FenceLedger.events` (`spawn.ts`) and
+`readFence` (`state.ts`), the only three `pyJsonLoads` call sites -- and classified every construct
+reachable from them.
+
+**Finding: no eighth defect, and two errors in the enumeration itself.**
+
+1. **The header of `src/fencing/pyjson.ts` named six branches and omitted `FenceLedger.append`.**
+   `D-0211`'s own body counts it as the seventh and its case comment calls it "the seventh branch
+   this decision enumerates", and it is byte-pinned. Only the normative comment -- the one the
+   header itself says is the enforcement -- was stale, because `append` was repaired in the last
+   commit of that lane and the paragraph above it was not re-read. Corrected here.
+
+2. **One rebuild branch had never been named at all: `pyIterate`'s array branch.** It returns
+   `[...value]`, which drops the index-keyed record exactly as every other rebuild does. Measured:
+   `pyJsonDumps` of the copy of `[1.0, 9007199254740993]` is `[1, 9007199254740992.0]`. CPython's
+   `json.dumps(list(x))` is `[1.0, 9007199254740993]` and cannot be otherwise, because there the
+   spelling lives in the VALUE and `list()` has nothing to lose. `pyIterate` is the transcription of
+   Python's iteration, so it is precisely the site where the port's container-side representation
+   parts company with Python's value-side one -- and it had been invisible for seven rounds because
+   it does not look like a rebuild. It looks like a loop.
+
+**Decision.** `pyIterate` keeps the drop, and the enumeration gains it with a proof rather than a
+carry. Both halves matter and they are separate claims.
+
+*Why it is not a defect today.* `pysemantics` is deliberately absent from the package surface
+(`src/index.ts` states this, with its reasons), so its consumers are exactly the seven call sites in
+this subsystem and that set is closed. Five end in `pyRepr`, `pyStr` or set membership; two are
+`pyDict`'s own, which read each spelling off `items[index]` -- the ORIGINAL element, never the copy
+-- because this exact drop is what `D-0211`'s sixth site was about. No result of any of the seven
+reaches `pyJsonDumps` or `pyTypeNameOf`, so no artefact's bytes and no persisted type name depend on
+the record `pyIterate` discards. This is the difference between `pyIterate` and `pyDict`, which
+`D-0211` had to repair even though `FencedSpawner` never reaches its pair branch: `Fence`,
+`fenceToJson` and `writeFence` ARE exported, and no call-site enumeration bounds a caller outside
+this repository.
+
+*Why carrying would be worse than not carrying.* `carryNumberSpellings` transfers an index-keyed
+record wholesale, and an index-keyed record does not survive REORDERING. `renderer.ts` sorts a
+`pyIterate` result (`pyIterate(allowed).map(pyStr).sort()`). Carrying there would hand element 0's
+spelling to whatever sorted into position 0 -- the stale-record trap `carryNumberSpellings` warns
+about, currently unreachable, and adding the carry is what would arm it. A carry is correct for a
+rebuild that preserves its slots, and `pyIterate` exists to hand callers an array they may rearrange.
+
+*What replaces the carry.* Three target-only cases, because a proof nothing checks is a sentence.
+The first MEASURES the drop, so a future carry is a deliberate change and not a silent one. The
+second and third pin the proof's two premises, and review moved both of them from checking a
+SPELLING to checking the PROPERTY -- which is the same lesson as the enumeration itself, one level
+down:
+
+- *The consumer set.* Counted per file, over the directory WALKED RECURSIVELY at run time rather
+  than over a list of file names, and over every REFERENCE to the identifier rather than over
+  occurrences of the text `pyIterate(` -- because `const it = pyIterate; it(v)` and
+  `xs.map(pyIterate)` are consumers that a call-spelling scan never sees, and a `src/fencing/helpers/`
+  that does not exist today is one directory away from a consumer a flat scan never reads. Comments
+  are stripped first, so a typo fix in prose cannot fire a case that would then be turned off rather
+  than read.
+- *The package surface.* Asserted by IDENTITY against the entry module's actual exported values, not
+  by grepping `src/index.ts` for a `from` string: a re-export through some other barrel, or under a
+  renamed binding, reaches a caller just as well and mentions nothing. Whatever route it takes it
+  arrives as the same function object. Collected one level THROUGH namespace objects, because
+  `export * as semantics from "./fencing/pysemantics.js"` puts one object on the surface and every
+  function behind it. The manifest's `exports` map is asserted WHOLE rather than by its keys, since a
+  new condition under the existing `"."` publishes a second target without adding a subpath.
+
+*What these two cases are, and are not.* They are TRIPWIRES on the premises, not a decision
+procedure for reachability. A source scan cannot be exhaustive -- `eval`, a dynamic `import()`, a
+build step that emits a new entry point, all pass it -- and an entry-point identity check sees the
+surface as it is built today. What they are for is making the premises LOUD: the realistic ways this
+proof stops holding are someone adding a call site or exporting the module, and both now turn a
+suite red rather than passing unnoticed. Stated here because the alternative reading -- that these
+cases prove unreachability -- is exactly the overstated-coverage failure `D-0211` was written about,
+and it would be an odd entry that repeated it while correcting it. Three review rounds, each naming
+a different escape route (an unlisted file, an aliased reference, a nested directory, a renamed
+re-export, a namespace re-export, an export condition), are the evidence for the modesty rather than
+against it: the guards got stronger each round and the class of escapes did not close.
+
+Each case was confirmed to fail, alone and for its stated reason, with its premise broken. Adding
+the carry fails the first and NOTHING ELSE, which is itself the corroboration that the drop is
+unobservable. Three vectors fail the second: a reference in a file the sweep had not named, an
+aliased reference carrying no call spelling, and a reference under a nested directory. Three fail
+the third: a barrel re-export under a new name, an `export * as` namespace re-export, and a
+`package.json` export target -- both a new subpath and a new condition under the existing one.
+
+**What this entry can and cannot claim.** It can claim the sweep was mechanical and its scope
+closed: `src/fencing` imports nothing outside itself and only `src/index.ts` re-exports it, and that
+re-export is pure, so no `pyJsonLoads` container can reach `control_plane` or `measurement` at all.
+It cannot claim there will never be a tenth branch -- it can only claim that the ninth was found by
+grep rather than by reading, and that the list it produced is falsifiable in the way the previous
+three were not.
+
+**An adjacent class this audit did NOT close, named so it is not mistaken for covered.** `pyRepr`
+never consults a spelling, at any call site. `D-0211` fixed the READ half for `pyTypeName` by adding
+`pyTypeNameOf(container, key)`; `pyRepr` has no such form. So a document-derived `1.0` reaching a
+refusal detail prints `1` where CPython prints `1.0` -- measured against CPython 3.12.3 at, among
+others, `allow entry not a string:` (`renderer.ts`), `forbidden_allow_regex entry ... is not a valid
+regex:` (`renderer.ts`) and `persisted rule field ... must be a non-empty string, got` (`state.ts`),
+all of which are persisted in ledger refusal details. At several of them the container IS in scope,
+so the form exists to fix it. This is the same family as the `pyStr` residue already disclosed in
+`pysemantics.ts` and in this lane's parity ledger, and it is a READ-site gap rather than a
+rebuild-site one, so it is out of this entry's scope and is recorded rather than repaired in
+passing. **One correction to that disclosure belongs here**, because this audit falsified it: the
+`pyStr` note calls its residue "REDUCIBLE ... since the document's spelling is recoverable". At
+`renderer.ts`'s permission-mode call site it is NOT recoverable, because `pyIterate` has already
+dropped the record before `pyStr` is reached. Threading a container and a key through the six call
+sites, which is what that note proposes, would not close that one.
+
+**Alternatives.**
+
+- **Carry in `pyIterate` for uniformity (rejected).** The reordering hazard above; and a carry no
+  consumer reads is an unpinnable claim, which is the thing `D-0211` spent three rounds learning to
+  distrust.
+- **Say nothing, since nothing is broken (rejected).** The header states a CLOSED list ("the sites
+  in this port are"). A closed list that omits a site is false, and `D-0211`'s own finding is that a
+  normative record which overstates its coverage is worse than one that states a narrow claim,
+  because the reader who checks it stops looking. Two of the three previous undercounts were found
+  by someone reading that paragraph and trusting it.
+- **A lint rule forbidding uncarried rebuilds (rejected, again).** `D-0211` rejected the runtime
+  form; the static form fails for the same reason plus one more. Most rebuilds legitimately have
+  nothing to carry, so the rule needs the enumeration it was meant to replace -- and it would flag
+  `pyIterate`, where not carrying is the correct answer.
+
+**Falsified by.** `pysemantics` reaching the package surface, or an eighth `pyIterate` call site
+whose result reaches a serialiser or a type name. Both are pinned, so either falsification is a red
+suite rather than a silent one.
+
+---
+
+## D-0213 — The settings generator is ported on a transcribed `os.path`, and its thirteen rebuild branches are enumerated and pinned
+
+**Status.** accepted (2026-08-28)
+
+**Context.** PR 3 of the fencing + settings lane ports
+`src/claude_org_runtime/settings/generator.py` and the 106 cases of
+`tests/test_settings_generator.py`. The module renders a role template into the `settings.local.json`
+a worker actually runs under, and on the way it makes two decisions that are security-relevant in
+**opposite** directions:
+
+- **Layer 3 suppression** DROPS a `sandbox.filesystem.deny{Read,Write}` entry whose realpath escapes
+  the sandbox read roots. Dropping too much is a deny that stops covering a credential file.
+- **Symlink canonicalisation** REWRITES a deny path that crosses an absolute symlink to its realpath,
+  so bwrap can bind it. Dropping too little -- leaving an unbindable path in the file -- is worse
+  than it looks: bubblewrap aborts the launch, and Claude Code's documented response to a failed
+  launch is to retry the command with `dangerouslyDisableSandbox`. A kept-but-unbindable entry does
+  not fail closed; it turns the sandbox off for every command that follows.
+
+Both decisions are computed from paths, and both compose `os.path` primitives whose exact answers
+决定 the outcome. Three things followed from that, and each is a decision rather than an
+implementation detail.
+
+**Decision 1: `os.path` is transcribed, both namespaces, and checked against CPython.**
+`src/fencing/pypath.ts` already transcribed `posixpath.normpath` and `os.path.expanduser` for the
+fence (D-0200). It now carries `join`, `normpath`, `isabs`, `split`, `splitdrive`, `dirname`,
+`realpath`, `islink` and `readlink`, from **both** `posixpath` and `ntpath`, dispatched on
+`process.platform` at call time the way Python binds `os.path` at import time. Node's `path` module
+is not that function on either platform: `path.posix.normalize("a/b/")` keeps the trailing separator
+that `posixpath.normpath` drops, which is precisely the difference that makes the equality half of
+`_is_inside_root`'s boundary test stop firing.
+
+`parity/oracle/ospath-vector.json` is the check -- 63 paths x 6 functions x 2 namespaces plus 30
+join argument tuples, generated from CPython 3.12.3 by `scripts/oracle/dump_ospath.py`, asserted by
+`test/settings/ospath-oracle.test.ts` on **every** matrix cell. Both namespaces are dumped from one
+interpreter because `ntpath` is importable on Linux and its answers do not depend on the host; a
+Windows-only check would leave the half this port ships to Windows unverified on the cells where
+most runs happen. Result at the time of writing: 0 divergences.
+
+`realpath` is the exception and it is named rather than glossed. `ntpath.realpath` is written on
+`nt._getfinalpathname`, a Win32 API with no user-space equivalent, so the Windows half is an
+**adaptation**: CPython's non-strict walk-back structure reproduced around Node's
+`fs.realpathSync.native`, with the three things it does not reproduce (8.3 expansion of an
+unresolved tail, the `\\?\` prefix round-trip, case canonicalisation of a missing path) written at
+the function. The POSIX half is a straight transcription of `_joinrealpath`. Neither is in the
+vector, because a static vector cannot pin a function of the filesystem.
+
+**Decision 2: the module's THIRTEEN rebuild branches are enumerated and each is pinned.**
+D-0211 made carrying a JSON number's recorded Python spelling an obligation on every container
+rebuild, enforceable only by enumeration plus pins -- a rebuilt container starts with an empty
+record, the values are still numbers, every comparison still holds, and nothing goes red. This
+module is by far the largest concentration of them in the port: it rebuilds a document at every
+level it touches, and there are thirteen branches, listed in `src/settings/generator.ts`'s header
+and referenced from `src/fencing/pyjson.ts`'s.
+
+Three of the thirteen are not a plain wholesale `carryNumberSpellings`, and one of those is the
+reason this is a decision and not a checklist item:
+
+> **The KEPT deny list is a FILTERED copy, so a wholesale carry is not merely absent -- it is
+> WRONG.** The spelling record is keyed by index. Suppress the entry at index 0 and the number that
+> was at index 1 becomes index 0, where the carried record holds the *suppressed* entry's slot --
+> usually empty, so the number is classified by value and written `1` where CPython writes `1.0`;
+> and if the dropped neighbour happened to be a float, the surviving number inherits a spelling that
+> was never its own. It is carried per surviving element instead, re-keyed as the list is built.
+
+Each of the thirteen was probed by removing its carry and confirming the corresponding pin goes
+red **for its own stated reason** (`docs/test-translation-conventions.md` section 10). The first
+draft of the pin block had one non-discriminating case -- it believed it pinned the
+`permissions.deny` object rebuild while actually pinning the array carry one call inside it, because
+a spelling hangs on the container that IMMEDIATELY holds the number and the float had been nested a
+level too deep. The probe is what found that; the block now puts one float on a key of its own at
+every level, and the note is in the test file so the next reader does not have to rediscover it.
+
+**Decision 3: the CLI's `argparse` is a second, scoped transcription -- `hook.mjs`'s is not
+generalised.** `src/fencing/hook.mjs` carries a full transcription of CPython's two-pass parser,
+measured at 0 divergences over 5,332 argv vectors (D-0207). Generalising it to serve the settings
+CLI would put the fence's argv surface -- the surface whose single fail-open instance is what made
+D-0207 reject a waiver -- behind a helper written for a different caller's needs, which is
+`docs/test-translation-conventions.md` rule 11's shape exactly. `src/settings/argparse.ts` is the
+same two-pass STRUCTURE over the option set this CLI declares, and what it does not model
+(positionals other than the subcommand, `nargs` other than 0 and 1, short options taking an
+argument, negative-number option strings, mutually exclusive groups) is a `throw` wherever the
+parser could reach it, not a silent fallthrough.
+
+**Alternatives.**
+
+- **Use Node's `path` for `os.path` (rejected).** It is the substitution D-0200 already rejected for
+  `normpath`, arriving one subsystem later with more surface. The trailing-separator difference
+  alone changes a suppression decision, and on Windows the two disagree about `C:x` and about
+  whether a normalised path keeps its separators.
+- **Extend the existing `fnmatch-shlex` vector rather than adding a second one (rejected).** It would
+  work -- the vector regenerates byte-identically, so additions are a clean diff -- but the corpus,
+  the dump script and the oracle test all belong to the fencing lane, and a parallel lane is auditing
+  two of those files right now. A separate corpus/vector/script triple is zero-conflict and reads as
+  what it is.
+- **Skip the `os.path` oracle and rely on the 106 translated cases (rejected).** They exercise the
+  transcription only through the shapes interlock's fixtures happen to use. The rule that decides a
+  suppression is `normpath` composed with a separator test, and the inputs that separate a right
+  transcription from a nearly-right one -- `a/b/`, `//a`, `C:x`, a UNC root -- are inputs no
+  translated case constructs. That is 2d's argument, applied where the fence is not the subject.
+- **Port `sandbox_doctor` in the same PR (rejected, scope).** It is PR 4 of this lane, 77 further
+  source cases in `tests/test_sandbox_symlink_deny.py`. The canonicalisation helpers it shares with
+  the generator are ported here because `render_role_with_metadata` calls them unconditionally; their
+  own dedicated cases are not, and the ledger says so.
+
+**What the review gate found, and what it says about both repairs.** Two P2 findings, both real,
+both now repaired with the half they must not break pinned beside them.
+
+1. **`_kept_entry_string` asks `startswith("/")`, which is not "is this absolute" on Windows.**
+   `{anchor: 'absolute', path: 'C:\\secret'}` fell through to the empty-anchor branch and was
+   emitted as the original DICT -- the exact shape that function exists to stop emitting, since
+   Claude Code answers a dict in `denyRead` with "Expected string, but received object" and rejects
+   the file. Repaired to `osIsabs`, which is identical to the source on POSIX; the neighbouring
+   `_canonicalize_sandbox_deny` already spelled the same test `os.path.isabs` with a comment giving
+   this exact reason, so the source author saw it at one site and not the other. Recorded as an
+   intentional divergence in the ledger, along with the sibling site (`absolute_pattern`) that is
+   deliberately NOT changed, because its consequence is which entries get suppressed rather than the
+   shape of an emitted value.
+2. **The argparse `--` separator was consumed as an option's argument**, so `--worker-dir --` parsed
+   into a worker_dir of `"--"`. **The first fix for this was wrong, and the way it was wrong is the
+   point**: it assumed `_match_argument`'s `(-*A-*)` let an optional absorb the separator and take
+   the token after it. `_get_nargs_pattern` strips the `-` when the action is an optional, so
+   CPython rejects `--worker-dir -- /wd` too. Eight separator shapes were then MEASURED against
+   CPython 3.12.3 on this exact parser and are pinned as a table, byte-for-byte on the error text --
+   including the two that show the separator is never *removed* either (`unrecognized arguments:
+   --`, and `-- settings` reaching a subcommand choice as `invalid choice: '--'`). Reading the
+   source of `argparse` would have given the first answer; running it gave the right one.
+
+**What the gate found in round 2, and the one thing it changed about the first response.** Three
+more P2s, all measured against CPython before being believed. Two were argparse: a
+negative-number-shaped token (`--out -1`) was classified as an unknown option, so the preceding
+option failed -- the first draft of `argparse.ts` claimed `_negative_number_matcher` "has no
+subject", which mistook the matcher's subject (the ARGUMENT token) for the condition that gates it
+(`_has_negative_number_optionals`, decided by the declared option strings); and an unrecognized
+option ahead of a valid subcommand was collected into `extras` and then abandoned by the subparser
+path's early return, so `claude-org-runtime --bogus settings generate ...` GENERATED a settings file
+for a command line the parser did not understand. `parse_args` is now `parse_known_args` plus a
+root-level extras report, which is argparse's own structure and the reason CPython names the ROOT
+prog for an extra found on either side of the subcommand.
+
+The third changed the first response rather than adding to it. Round 1 repaired
+`_kept_entry_string`'s `startswith("/")` and recorded the two sibling sites as
+deliberately-not-changed, on the reasoning that their consequence is reachability rather than
+emitted shape. Round 2 raised one of them, and reading the three together showed the boundary was
+not a boundary: `startswith("/")` IS `posixpath.isabs`, so the repair is a no-op on the platform
+interlock runs on at ALL THREE sites, and the source is already inconsistent -- two neighbouring
+functions use `os.path.isabs`, one of them with a comment giving exactly this reason. All three are
+now repaired as one divergence. **The "keep the blast radius small" instinct produced a worse
+answer than making the module agree with itself**, and it is recorded because the instinct is
+usually right.
+
+Those three repairs are invisible on a POSIX cell by construction, which is not good enough for a
+repair (rule 11: a pin that cannot fail on the cell a reviewer runs is a pin nobody has seen fail).
+`pypath.ts` dispatches on `process.platform` at CALL time -- deliberately, because that is how
+Python binds `os.path` -- so three target-only cases patch that property for the length of one test
+and each revert was confirmed to turn its pin red on Linux.
+
+**Verified by.** `npm run verify` green: lint, knip, typecheck, native smoke, 1544 tests, parity.
+106/106 source cases mapped, 103 ported and 3 adapted, **no waivers and nothing not-ported**; the
+source file re-run at `65f36c5` on the porting host reports 106 passed. The `os.path` oracle agrees
+with CPython 3.12.3 at every position in both namespaces. Every one of the thirteen rebuild branches
+and the seam were probed red individually, and the eight `--` shapes agree with CPython on the exact
+error text.
+
+**Falsified by.** CPython changing `posixpath` or `ntpath` semantics -- the vector is 3.12.3 and the
+transcription is of that version. Also falsified if `os.path.realpath`'s Windows adaptation is ever
+handed a path where 8.3 expansion or the `\\?\` prefix round-trip decides a suppression, at which
+point the adaptation stops being a spelling difference and becomes a behavioural one; the settings
+suite's tmp-directory cases realpath their `worker_dir` up front precisely because that expansion is
+observable on the Windows cells.
 
 ---
 

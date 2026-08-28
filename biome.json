@@ -11,7 +11,8 @@
       "!package-lock.json",
       "!test/fixtures/labelled",
       "!parity/oracle",
-      "!src/fencing/roles.json"
+      "!src/fencing/roles.json",
+      "!src/settings/role_configs_schema.json"
     ]
   },
   "formatter": {
