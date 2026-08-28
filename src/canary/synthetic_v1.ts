@@ -292,6 +292,14 @@ export function canonicalJson(value: unknown): string {
     }
     return String(value);
   }
+  if (typeof value === "bigint") {
+    // Python's `int` is arbitrary precision and `json.dumps` writes it as its
+    // decimal digits; `BigInt.prototype.toString()` writes the same digits, so
+    // this is the encoding that matches the source rather than a departure from
+    // it. `audit.ts` reads SQLite INTEGERs as bigints precisely so that a
+    // 64-bit value wider than a double survives into the digest intact.
+    return value.toString();
+  }
   if (typeof value === "string") {
     return canonicalJsonString(value);
   }

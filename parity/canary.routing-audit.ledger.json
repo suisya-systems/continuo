@@ -93,9 +93,11 @@
       }
     ],
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "why": "None. Every collected test in this file is a translation of a source case."
+      "count": 1,
+      "ids": [
+        "test/canary/audit.test.ts::integer precision in the digest (target-only) > target-only -- two int64 values a double cannot tell apart digest differently"
+      ],
+      "why": "target-only -- two int64 values a double cannot tell apart digest differently: Carries no warrant from the source, because the source cannot have the defect: Python's `int` is arbitrary precision, so `canonical_sqlite_bytes` never loses a 64-bit value. This port could and did -- `.all()` returns JavaScript numbers, and 9007199254740992 and 9007199254740993 collapse onto one double, so two stores differing by one in that range produced identical bytes and a rollback that changed such a value would have been reported as touching nothing. That is a false negative in the one function the rollback comparison's evidence rests on. Raised as [P1]/[P2] by the review gate and repaired rather than disclosed (D-0023: the defect is port-introduced, so 'inherited' is not available as an answer): the row read now asks for `safeIntegers(true)` and `canonicalJson` renders a bigint as its decimal digits, which is byte-for-byte what `json.dumps` writes for a Python `int` -- so the repair moves the port TOWARDS the source's bytes, not away from them. Measured: with `safeIntegers(true)` removed, this case goes red and the 18 ported cases stay green, which is exactly why it exists."
     }
   },
   "totals": {

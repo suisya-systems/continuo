@@ -38,6 +38,7 @@
  *   compare them positionally because the source does.
  */
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -431,5 +432,55 @@ describe("the rollback comparison", () => {
     expect(comparison.decisionsAppendedOnly).toBe(false);
     expect(comparison.appendedDecisions).toEqual([]);
     expect(comparison.onlyTheRoutingDecisionChanged).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// integer precision in the digest (target-only)
+// ---------------------------------------------------------------------------
+
+describe("integer precision in the digest (target-only)", () => {
+  // Carries no warrant from the source: Python's `int` is arbitrary precision,
+  // so `canonical_sqlite_bytes` cannot lose a 64-bit value and interlock has no
+  // case for it. This port can, and did -- reading rows as JavaScript `number`s
+  // collapses every integer past 2**53 onto the nearest double, so two stores
+  // differing by one in that range digested identically and a rollback that
+  // changed such a value would have been reported as touching nothing. Raised
+  // by the review gate; the repair is `safeIntegers(true)` in
+  // `canonicalSqliteBytes`, and this is the case that holds it there (D-0023).
+  test("target-only -- two int64 values a double cannot tell apart digest differently", () => {
+    const root = caseRoot("cnry-adt");
+
+    // 2**53 and 2**53 + 1: distinct as SQLite INTEGERs, the same IEEE-754
+    // double. `9007199254740993` is not writable as a JavaScript number
+    // literal at all, so both are bound as bigints.
+    const digestOf = (value: bigint): string => {
+      const store = new Database(join(root, `wide-${value}.sqlite3`), { fileMustExist: false });
+      onTestFinished(() => {
+        store.close();
+      });
+      store.exec("CREATE TABLE wide (run_id TEXT PRIMARY KEY, measured INTEGER NOT NULL)");
+      store.prepare("INSERT INTO wide (run_id, measured) VALUES (?, ?)").run("run-1", value);
+      return createHash("sha256").update(canonicalSqliteBytes(store)).digest("hex");
+    };
+
+    const low = digestOf(9007199254740992n);
+    const high = digestOf(9007199254740993n);
+
+    expect(low).not.toBe(high);
+
+    // And the odd value reaches the bytes as its own digits, rather than as the
+    // even double it would have been rounded to. Asserted on the text because
+    // that is what the digest is taken over: a digest difference alone would
+    // also be satisfied by two values that were both wrong.
+    const store = new Database(join(root, "witness.sqlite3"), { fileMustExist: false });
+    onTestFinished(() => {
+      store.close();
+    });
+    store.exec("CREATE TABLE wide (run_id TEXT PRIMARY KEY, measured INTEGER NOT NULL)");
+    store
+      .prepare("INSERT INTO wide (run_id, measured) VALUES (?, ?)")
+      .run("run-1", 9007199254740993n);
+    expect(canonicalSqliteBytes(store).toString("utf-8")).toContain("9007199254740993");
   });
 });

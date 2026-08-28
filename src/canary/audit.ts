@@ -146,7 +146,20 @@ export function canonicalSqliteBytes(
     // SQLite cannot bind an identifier, and switching to any parameterised form
     // would silently change which tables are visited. The names come from
     // `sqlite_master`, not from a caller.
-    const rows = connection.prepare(`SELECT * FROM "${table}"`).all() as Record<string, unknown>[];
+    // `safeIntegers(true)`: SQLite's INTEGER is 64-bit and Python's `int` is
+    // arbitrary precision, so the source's digest never loses a value. Read as
+    // JavaScript `number`s, 9007199254740993 and 9007199254740992 collapse onto
+    // one double and serialise identically -- a rollback that changed such a
+    // value would be reported as leaving the store byte-identical, which is a
+    // false negative in the one function the comparison's evidence rests on.
+    // Every integer therefore arrives as a `bigint` and is rendered as its
+    // decimal digits, which is byte-for-byte what `json.dumps` writes for a
+    // Python `int`. Raised as [P1]/[P2] by the review gate; port-introduced, so
+    // repaired here rather than disclosed (D-0023).
+    const rows = connection.prepare(`SELECT * FROM "${table}"`).safeIntegers(true).all() as Record<
+      string,
+      unknown
+    >[];
     const encoded = rows.map((row) => {
       const canonical: Record<string, unknown> = {};
       for (const [column, value] of Object.entries(row)) {
@@ -218,23 +231,29 @@ function canonicalValue(value: unknown): unknown {
       $bytes: value.length,
     };
   }
-  if (value === null || typeof value === "string" || typeof value === "number") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "bigint"
+  ) {
+    // `bigint` is how every SQLite INTEGER arrives here, because the row read
+    // above asks for safe integers. `canonicalJson` renders it as its decimal
+    // digits, which is exactly what Python emits for the `int` the source sees.
     return value;
   }
   // Everything else takes the source's fallback, which in Python is reached
   // only through `default=`. Two kinds of value can arrive here, and both are
   // better loud than quiet:
   //
-  // - A `bigint`, from a connection opened with better-sqlite3's `safeIntegers`
-  //   (no opener in this package sets it). Rule 9: Python's `int` is arbitrary
-  //   precision and always serialisable, so the source has no branch for it at
-  //   all. Neither of the two things this port could do instead is honest --
-  //   `Number(value)` silently loses precision above 2^53, which is the only
-  //   reason `safeIntegers` exists, and any spelled-out encoding would be a
-  //   byte stream Python never produces and so a digest that no longer compares
-  //   with the source's.
-  // - Anything a future driver returns that is neither text, number, NULL nor
-  //   bytes -- the case the source's message is written for.
+  // Only one kind of value reaches here now: anything a future driver returns
+  // that is neither text, number, bigint, NULL nor bytes -- the case the
+  // source's message is written for. `bigint` used to be refused here on the
+  // reasoning that no encoding of it could match Python's bytes; that was wrong
+  // in the one direction that mattered, since `json.dumps` writes a Python
+  // `int` as its decimal digits and `BigInt.prototype.toString()` produces the
+  // same digits. Rendering it is therefore the faithful choice, and refusing it
+  // was the lossy one.
   throw new TypeError(`${typeNameOf(value)} is not canonically serialisable`);
 }
 
