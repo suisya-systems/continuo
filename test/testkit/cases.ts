@@ -9,7 +9,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
-import { onTestFinished } from "vitest";
+import { beforeAll, onTestFinished } from "vitest";
 
 import { createSuiteDir, createTempDir } from "../helpers/tmp.js";
 
@@ -221,10 +221,31 @@ export interface SuiteTemplate {
  *
  * Three properties are load-bearing:
  *
- * - **The build is lazy and happens once.** A file whose selected tests never
- *   copy pays nothing, and a file that copies 25 times still builds once. The
- *   outcome is memoized either way: if `build` throws, every later case reports
- *   that same failure rather than re-running a build that is known to fail.
+ * - **The build happens once, in the file's own `beforeAll`, not inside a
+ *   case.** It was lazy at first -- built inside whichever case copied first --
+ *   and that charged a *file-level* cost to an arbitrary *test*, where a
+ *   per-test timeout measures it. Under a shuffled order the case that pays is
+ *   a function of the seed, so a slow machine produced a red naming an innocent
+ *   case, and a different one at each seed. That is not hypothetical: on one
+ *   `windows-latest` cell `lease.test.ts` failed at
+ *   `a backward skewed renewal shortens rather than extends` after 66,325ms
+ *   against a 60,000ms cap, while the same commit at the cell's other seed was
+ *   green -- and at that seed, on a fast box, that case is the one carrying the
+ *   build (237ms against 33-43ms for its neighbours). Building in `beforeAll`
+ *   puts the cost where it belongs: attributed to the file, measured against
+ *   `hookTimeout`, and in the same place at every seed.
+ *
+ *   **What this gives up, stated rather than buried:** a file whose selected
+ *   tests never copy now pays for a build it does not use. That shows up under
+ *   `-t` filtering and `.only`, never in a full run, because every file that
+ *   takes a template copies from it. The trade is a bounded cost on a developer
+ *   convenience path against a seed-dependent red on the slowest CI cell, and
+ *   the second is worse: it spends a person's attention on the wrong case.
+ *
+ *   The **failure** semantics are unchanged. The outcome is memoized and
+ *   rethrown from `copyInto`, exactly as before, so a `build` that throws is
+ *   still reported by the case that asked for a copy rather than by the hook --
+ *   a file whose tests never copy is not failed by a build it never needed.
  * - **The template outlives the case that first asked for it.** That is the
  *   whole point. A template built in a {@link caseRoot} is removed when its
  *   first case finishes, and every later case fails with `ENOENT` -- the failure
@@ -241,29 +262,56 @@ export interface SuiteTemplate {
  * The copy is a plain file copy, so each case gets an independent database that
  * it may write to freely; the template itself is never opened after it is built.
  */
+type TemplateOutcome = { readonly ok: true } | { readonly ok: false; readonly error: unknown };
+
 export function suiteTemplate(filename: string, build: (path: string) => void): SuiteTemplate {
   const source = join(suiteRoot(filename), filename);
-  let outcome: { readonly ok: true } | { readonly ok: false; readonly error: unknown } | undefined;
+  let outcome: TemplateOutcome | undefined;
+
+  /**
+   * Build once, remember what happened, and never throw from here.
+   *
+   * Capturing the error rather than letting it out is what keeps the failure
+   * attributed to the case that wanted a copy even though the build now runs in
+   * a hook: `copyInto` rethrows it below.
+   */
+  function ensureBuilt(): TemplateOutcome {
+    if (outcome !== undefined) {
+      return outcome;
+    }
+    let resolved: TemplateOutcome;
+    try {
+      build(source);
+      if (!existsSync(source)) {
+        throw new Error(
+          `suiteTemplate(${JSON.stringify(filename)}) ran its build function, but no file ` +
+            `exists at ${source} afterwards. The build function must create the file at the ` +
+            `path it is given.`,
+        );
+      }
+      resolved = { ok: true };
+    } catch (error) {
+      resolved = { ok: false, error };
+    }
+    outcome = resolved;
+    return resolved;
+  }
+
+  // Registered here, which is the file's top level: `suiteRoot` above refuses a
+  // call from inside a test or a `describe`, so this hook is always the file's
+  // own and always runs before its first case.
+  beforeAll(() => {
+    ensureBuilt();
+  });
 
   return {
     copyInto(directory: string, as: string = filename): string {
-      if (outcome === undefined) {
-        try {
-          build(source);
-          if (!existsSync(source)) {
-            throw new Error(
-              `suiteTemplate(${JSON.stringify(filename)}) ran its build function, but no file ` +
-                `exists at ${source} afterwards. The build function must create the file at the ` +
-                `path it is given.`,
-            );
-          }
-          outcome = { ok: true };
-        } catch (error) {
-          outcome = { ok: false, error };
-        }
-      }
-      if (!outcome.ok) {
-        throw outcome.error;
+      // Still idempotent, and still correct if something reaches a copy before
+      // the hook has run -- another top-level helper, say. `beforeAll` moves
+      // *when* the cost is paid; it is not the only thing that may pay it.
+      const built = ensureBuilt();
+      if (!built.ok) {
+        throw built.error;
       }
 
       mkdirSync(directory, { recursive: true });

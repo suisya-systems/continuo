@@ -63,6 +63,7 @@ spaces distinct.
 | D-0030 | One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it | accepted |
 | D-0031 | The source inventory is complete and unconditional; porting intent is recorded separately | accepted |
 | D-0032 | Three not-porting proposals are ratified, and three belts start with D-ranges allocated | accepted |
+| D-0033 | A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test | accepted |
 | D-0401 | The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store | accepted |
 | D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
 | D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
@@ -6072,5 +6073,71 @@ receipt would then be a promise of a receipt, and item 8 would need re-arguing, 
 
 **Source.** Belt dispatched 2026-08-29, task `continuo-secretary-port`, Refs #37. The range
 allocation follows the gate D-0032 exercised for `session`, `canary` and `messagebus`.
+
+---
+
+## D-0033 -- A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test
+
+**Context.** D-0025 made an expensive, identical fixture a per-**file** artifact copied per case,
+because migrating a control plane costs about 87.5ms and copying one about 0.97ms. What it did not
+settle was *when* the build runs, and the helper it produced built lazily -- inside whichever case
+called `copyInto` first.
+
+That places a **file-level** cost inside an **arbitrary test**, where a per-test timeout measures
+it. Under `sequence.shuffle.tests` (D-0005) the case that pays is a function of the seed, so a slow
+machine produces a red that names an innocent case, and names a different one at each seed.
+
+This is not a hypothesis. On a `windows-latest, node 24` cell,
+`test/control_plane/lease.test.ts` failed at `a backward skewed renewal shortens rather than
+extends` after **66,325ms** against the 60,000ms cap, while the same commit at that cell's other
+seed was green. The case cannot take 66 seconds by its own logic: it is one fixture, three SQLite
+calls and two assertions, with no timer, no sleep and no loop. Reproduced on a fast Linux box, at
+the failing seed that case runs in **237ms** against 33-43ms for its neighbours, and at the passing
+seed a *different* case holds that slot at **135ms**. It is the build, and which case carries it is
+the seed's choice.
+
+D-0029 is the same subject one step earlier. It ruled that the CI cap is not the fix for this file
+being slow on Windows, and converted its fixtures onto the template. What it did not reach is that
+the template's own build is still timed as though it were a test.
+
+**Decision.** `suiteTemplate` registers a `beforeAll` at the point it is called -- which is the test
+file's top level, since `suiteRoot` already refuses a call from inside a test or a `describe` -- and
+builds there. The cost is then attributed to the file, measured against `hookTimeout`, and paid in
+the same place at every seed. Measured after the change, at both of that cell's seeds, the outlier
+is gone and `lease.test.ts`'s spread is flat at 66-85ms.
+
+**Failure semantics are deliberately unchanged.** The build runs through a memoising helper that
+never throws: the outcome is captured and rethrown from `copyInto`. So a `build` that throws is
+still reported by the case that asked for a copy, and a file whose selected tests never copy is
+still not failed by a build it never needed. The rejected alternative -- letting `beforeAll` throw
+directly -- would fail every test in the file, including the ones that never wanted the template,
+which is worse than what D-0025 shipped rather than better.
+
+**The trade, stated rather than buried.** D-0025's laziness bought something real: a file whose
+selected tests never copy pays nothing. That is now given up. It shows up under `-t` filtering and
+`.only`, and never in a full run, because every file that takes a template copies from it. A
+bounded cost on a developer convenience path is accepted in exchange for removing a seed-dependent
+red on the slowest CI cell, because the second costs a person's attention and spends it on the
+wrong case.
+
+This amends D-0025's mechanism and supersedes nothing: the decision that an expensive identical
+fixture is built once per file and copied per case is unchanged, and is what makes this entry's
+subject exist at all.
+
+**Falsifier.** If a file appears whose selected tests genuinely may not copy in a *full* run --
+a template taken behind a capability probe, say, where the guarded cases are the only consumers --
+then the build is being paid for nothing on every host that lacks the capability, and laziness was
+the right default after all. The narrower repair would then be a template that builds on first use
+but is *warmed* by an explicit call, rather than one that always builds. Equally: if a red is ever
+seen naming `hookTimeout` on a template build, the cost has not been removed, only relocated, and
+the file needs D-0029's answer -- a cheaper fixture -- rather than this one.
+
+**Source.** Task `continuo-session-port`, 2026-08-29, from a CI failure on PR #59 that was
+triaged to this helper rather than to the branch under review. Timings measured on the porting host
+(Node v22.17.0, Linux 6.18.33.2-microsoft-standard-WSL2) and on the `windows-latest, node 24` cell
+of run 33203831023. `test/testkit/` is frozen and a change to it is its own PR merged before the
+belts that need it rebase onto it (`docs/test-translation-conventions.md`); this decision and that
+PR are the same change. Decision id allocated by the window in the shared band
+(`D-0019`..`D-0099`).
 
 ---
