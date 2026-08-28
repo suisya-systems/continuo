@@ -1,0 +1,203 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "canary",
+      "collected": 70,
+      "inventory": "parity/source-inventory/canary.all.txt",
+      "note": "The item 10 routing rehearsal, interlock tests/canary, 6 files. One ledger per source file. Not to be confused with parity/measurement.canary.ledger.json, which ports tests/measurement/test_canary.py -- the measurement harness's view of a canary, not the canary's own store. The two names sit next to each other in parity/ and mean different things."
+    },
+    "file": {
+      "path": "tests/canary/test_routing.py",
+      "collected": 11,
+      "inventory": "parity/source-inventory/canary.test_routing.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 11 pass there (measured 2026-08-28 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/canary/ -p no:cacheprovider`: 70 passed, of which 11 are tests/canary/test_routing.py's)."
+    }
+  },
+  "target": {
+    "test_file": "test/canary/routing.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`pytest.raises(sqlite3.IntegrityError)`",
+        "to": "`expectSqliteError(action, { code: /^SQLITE_CONSTRAINT/ })`",
+        "why": "better-sqlite3 raises one SqliteError type for everything, so the Python exception CLASS has no counterpart; the result code is what carries the distinction the class carried (D-0016). The regex is the whole SQLITE_CONSTRAINT family because that is exactly the width of sqlite3.IntegrityError — narrowing it to the constraint that actually fires would assert more than the source does (rule 0). Matches the precedent already set in test/canary/ledger.test.ts.",
+        "affects": "the two ported cases 'a non ownership integrity failure passes through as itself' and 'an idempotent retry does not absorb a validation failure'"
+      },
+      {
+        "from": "`if \"UNIQUE constraint failed: run_owner.run_id\" not in str(error): raise`",
+        "to": "`sqliteCodeOf(error)` in {SQLITE_CONSTRAINT_PRIMARYKEY, SQLITE_CONSTRAINT_UNIQUE}, then confirmed by re-reading run_owner",
+        "why": "D-0402 / D-0016 ban message-substring classification: SQLite's message text is not a compatibility surface and its codes are. Measured here, the two do not even agree — the code is PRIMARYKEY, the message says UNIQUE. Not a weakening: the code test is followed by the same re-read the source does, so the classification is confirmed against the store rather than against a string.",
+        "affects": "src/canary/routing.ts `isAlreadyRoutedConflict`; the behaviour of every route_run_start conflict path"
+      },
+      {
+        "from": "`@dataclass(frozen=True)` built positionally as `RoutedRun(*row)` / `RoutingDecision(*row)`",
+        "to": "an exported `interface` plus `Object.freeze({...})` assembled by COLUMN NAME from a typed row shape",
+        "why": "TypeScript has no frozen dataclass; a readonly interface plus a frozen literal gives the same observable (structural equality under toEqual, no mutation). Reading by name rather than by position is the same mapping written down, and it cannot silently swap two same-typed fields if a SELECT list is ever reordered — the hazard the brief names. The SELECT column lists are kept in the source's order regardless.",
+        "affects": "RoutingDecision, RoutedRun, currentDecision, routedRun, routeNewRunsTo"
+      },
+      {
+        "from": "`with self._connection:` (a commit/rollback scope over sqlite3's implicit deferred transaction)",
+        "to": "`this.#connection.transaction(() => { ... })()`",
+        "why": "better-sqlite3 has no implicit transaction — a bare `.run()` autocommits — so 'every method is one transaction' would be lost without an explicit wrapper, and the `changes === 0` refusal would fire after the insert had already committed. Applied to routeNewRunsTo and routeRunStart only; currentDecision and routedRun stay untransacted, as in the source.",
+        "affects": "src/canary/routing.ts, both mutating methods"
+      },
+      {
+        "from": "`f\"{owning_system!r}\"` and `f\"...{OWNING_SYSTEMS}\"` (Python repr of a str, and of a 2-tuple)",
+        "to": "a private string-only `repr()` and a single precomputed `OWNING_SYSTEMS_REPR` constant",
+        "why": "D-0017 rule 3 (Python repr becomes hand-written quotes, never JSON.stringify — which would give [\"interlock\",\"synthetic_v1\"] and the wrong quote character) and rule 4 (one renderer for an interpolated tuple, not an inline join per call site). The repo's shared pythonRepr was deliberately NOT imported; see concerns for why and for the trade.",
+        "affects": "the UnknownOwningSystem, OwnerChangeRefused and UnroutedRun messages"
+      },
+      {
+        "from": "pytest fixtures `ledger` (yield + close) and `routing`",
+        "to": "a plain `routingFixture()` call returning both, with `onTestFinished` registering a close that tolerates an already-closed handle",
+        "why": "House pattern, copied from test/canary/ledger.test.ts. Function scope, per test, which is what pytest's function-scoped fixtures give; the tolerant close matches Python's close-a-closed-connection no-op.",
+        "affects": "every case in test/canary/routing.test.ts"
+      },
+      {
+        "from": "`routing.route_run_start(\"run-1\", now_ms=\"later\")  # type: ignore[arg-type]`",
+        "to": "`routing.routeRunStart(\"run-1\", { nowMs: \"later\" as unknown as number })`",
+        "why": "The case's whole subject is a value the declared parameter type excludes, so it has to be pushed past the type in both languages. `as unknown as number` is TypeScript's `# type: ignore[arg-type]`; there is no weaker cast that reaches the store.",
+        "affects": "'an idempotent retry does not absorb a validation failure'"
+      }
+    ],
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/canary/routing.test.ts::classification by result code, not message text (target-only) > target-only -- the duplicate run conflict carries a primary key code under a unique message",
+        "test/canary/routing.test.ts::classification by result code, not message text (target-only) > target-only -- a retry under a later decision naming the same owner returns the original row",
+        "test/canary/routing.test.ts::classification by result code, not message text (target-only) > target-only -- an unknown owning system is refused before anything is written"
+      ],
+      "why": "target-only -- the duplicate run conflict carries a primary key code under a unique message: Pins D-0402's factual basis. The two ported cases that would notice an OVER-broad classification only ever exercise CHECK, so nothing in the source's suite can notice a TOO-NARROW one, and nothing anywhere records WHY the accepted set has two members. This case issues route_run_start's own statement directly and asserts both halves of the disagreement: the code is SQLITE_CONSTRAINT_PRIMARYKEY, the message contains 'UNIQUE constraint failed: run_owner.run_id'. A future reader who trusts the source's substring and narrows the set to _UNIQUE gets a red test that says exactly what they got wrong. target-only -- a retry under a later decision naming the same owner returns the original row: The source's docstring states that decision_seq is deliberately NOT compared, but its idempotency case never flips the policy in between, so its suite cannot distinguish 'compares owningSystem' from 'compares the whole row'. Measured: adding an `existing.decisionSeq === decision.decisionSeq` conjunct leaves all 11 ported cases green and turns only this one red. It asserts the original decisionSeq (1) and routedAtMs (T0+1) survive a retry under decision 2. target-only -- an unknown owning system is refused before anything is written: The source's vocabulary case asserts only that UnknownOwningSystem is raised. 'Nothing was written' is RoutingRefused's documented base-class contract and the reason the membership test precedes the transaction, and the store's own CHECK would refuse a third system too — so without this case the API-layer refusal and the store-layer refusal are indistinguishable. It goes beside the faithful case rather than being folded into it (rule 0). Measured: disabling the membership check turns both this case and the ported one red, with 'got SqliteError: CHECK constraint failed: owning_system IN (...)'."
+    }
+  },
+  "totals": {
+    "source_cases": 11,
+    "ported": 9,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "`routeRunStart`'s post-conflict re-reads can themselves throw. If another connection deletes the run_owner row (or the whole routing policy) between the UNIQUE/PRIMARYKEY failure and the re-read, the caller sees `UnroutedRun` or `NoRoutingDecision` rather than a conflict-specific refusal.",
+      "why": "The source has exactly this shape (`existing = self.routed_run(run_id)` / `decision = self.current_decision()` both raise), and both are RoutingRefused subclasses so the base-class contract still holds. Reproduced rather than repaired: a repair here would be new code with no warrant (rule 11), and the store's delete triggers make the state unreachable through the module's own API anyway."
+    },
+    {
+      "behaviour": "`nowMs` is typed `number`, which admits NaN, Infinity and fractional values that Python's `int` excluded (rule 9). No guard was added.",
+      "why": "The store already refuses every one of them and refuses them as itself: a fractional or Infinity value binds as REAL and trips `CHECK (typeof(...) = 'integer')`; NaN binds as NULL and trips NOT NULL. So the wider type produces a refusal, never a silently-accepted bad row, and adding an API-layer guard would introduce a refusal type the source does not have and change which error the ninth ported case sees. Recorded here rather than fixed; flagging it for the integrator as the answer to rule 9's second question."
+    },
+    {
+      "behaviour": "`isAlreadyRoutedConflict` accepts a uniqueness code from the statement without checking WHICH constraint produced it.",
+      "why": "The source has the same reach through its substring, only narrower by accident of message text. It is sound on this DDL — `ROUTE_RUN_START_SQL` writes only `run_owner`, whose only uniqueness is `run_id` — and the code is not trusted alone: the caller confirms by re-reading the row, and an absent row surfaces as UnroutedRun rather than as a fabricated conflict."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_no_owner_is_assumed_before_a_decision_exists",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > no owner is assumed before a decision exists",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Both `pytest.raises(NoRoutingDecision)` halves kept, via expectRefusal (class assertion; the source has no match=, so none is added).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_the_baseline_is_itself_a_recorded_decision",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > the baseline is itself a recorded decision",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`decision.decision_seq == 1` -> toBe(1); Python frozen-dataclass `==` -> toEqual over all four fields. This case is also what pins Number(lastInsertRowid): a bigint left side would not toEqual the number the SELECT reads back.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_the_vocabulary_is_closed_at_the_api_too",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > the vocabulary is closed at the api too",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; keyword args become an options object per the CONTRACT signature.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_a_run_is_routed_under_the_newest_decision",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > a run is routed under the newest decision",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_a_policy_flip_does_not_move_a_started_run",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > a policy flip does not move a started run",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Dataclass `==` -> toEqual.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_re_routing_to_the_same_owner_is_an_idempotent_no_op",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > re routing to the same owner is an idempotent no op",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, source comment carried across.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_re_routing_under_a_flipped_policy_is_an_owner_change_and_refused",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > re routing under a flipped policy is an owner change and refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`pytest.raises(OwnerChangeRefused, match=\"mid-flight\")` -> expectRefusal(..., OwnerChangeRefused, /mid-flight/), both halves kept; the post-refusal row check is carried.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_a_non_ownership_integrity_failure_passes_through_as_itself",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > a non ownership integrity failure passes through as itself",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`pytest.raises(sqlite3.IntegrityError)` has no TS counterpart: better-sqlite3 raises one SqliteError type. Translated as expectSqliteError(..., { code: /^SQLITE_CONSTRAINT/ }) — the whole family, which is the width of the Python class (D-0016). No `match=` added, because the source has none. `fetchone() == (0,)` -> .pluck().get() toBe(0). Asserts neither more nor less than the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_an_idempotent_retry_does_not_absorb_a_validation_failure",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > an idempotent retry does not absorb a validation failure",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same IntegrityError -> result-code adaptation as above. Additionally, the source's `now_ms=\"later\"  # type: ignore[arg-type]` becomes `{ nowMs: \"later\" as unknown as number }` — the same deliberate push past the declared parameter type, in TypeScript's spelling.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_a_run_never_routed_reads_as_such",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > a run never routed reads as such",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_routing.py::test_rollback_is_route_new_runs_to_and_nothing_else",
+      "target_id": "test/canary/routing.test.ts::the run-start routing point's contract > rollback is route new runs to and nothing else",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`fetchall()` row-tuple comparison -> `.all()` object-row comparison with toEqual; the property (the rows are unchanged across the rollback) is identical and both sides are read the same way.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

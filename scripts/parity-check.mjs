@@ -84,6 +84,16 @@ const LEDGERS = [
   "parity/fencing.readback.ledger.json",
   "parity/settings.settings-generator.ledger.json",
   "parity/settings.sandbox-symlink-deny.ledger.json",
+  // lane D -- canary (the item 10 routing rehearsal). Every ledger here is
+  // prefixed `canary.`; `measurement.canary.ledger.json` above is a different
+  // subsystem -- the harness's view of a canary, not the canary's own store --
+  // and the two are deliberately never spelled the same way.
+  "parity/canary.routing-ledger.ledger.json",
+  "parity/canary.routing.ledger.json",
+  "parity/canary.routing-audit.ledger.json",
+  "parity/canary.synthetic-v1.ledger.json",
+  "parity/canary.structural.ledger.json",
+  "parity/canary.rehearsal.ledger.json",
 ];
 
 /**

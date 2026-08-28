@@ -1,0 +1,210 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "canary",
+      "collected": 70,
+      "inventory": "parity/source-inventory/canary.all.txt",
+      "note": "The item 10 routing rehearsal, interlock tests/canary, 6 files. One ledger per source file. Not to be confused with parity/measurement.canary.ledger.json, which ports tests/measurement/test_canary.py -- the measurement harness's view of a canary, not the canary's own store. The two names sit next to each other in parity/ and mean different things."
+    },
+    "file": {
+      "path": "tests/canary/test_synthetic_v1.py",
+      "collected": 8,
+      "inventory": "parity/source-inventory/canary.test_synthetic_v1.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 8 pass there (measured 2026-08-28 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/canary/ -p no:cacheprovider`: 70 passed, of which 8 are tests/canary/test_synthetic_v1.py's)."
+    }
+  },
+  "target": {
+    "test_file": "test/canary/synthetic-v1.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "json.dumps(record, sort_keys=True, separators=(\",\", \":\")) (ensure_ascii defaults True)",
+        "to": "exported canonicalJson() in src/canary/synthetic_v1.ts, plus a private canonicalJsonString() and a byCodePoint comparator",
+        "why": "JSON.stringify neither sorts keys, nor omits the spaces json.dumps would default to, nor escapes non-ASCII. Written inside the canary package rather than reusing src/fencing/pyjson.ts's complete pyJsonDumps because the canary package imports no other runtime module (the structural belt asserts it). Verified byte-for-byte against CPython including a surrogate pair.",
+        "affects": "every written line; audit.ts (LANE D) should import it"
+      },
+      {
+        "from": "str.splitlines()",
+        "to": "a private splitLines() scanner over the code-unit boundary set {LF, VT, FF, CR, FS, GS, RS, NEL, U+2028, U+2029} with CRLF as one boundary",
+        "why": "`\"\".split(\"\\n\")` is `[\"\"]` in JavaScript -- one bogus empty line that fails JSON.parse and turns a legitimately empty store into a refused one, which would break every other case in the belt. Written as a scan rather than a regex character class because biome's noControlCharactersInRegex (rightly) refuses \\x1c-\\x1e inside a literal. Behaviour compared against CPython on 8 shapes, all identical.",
+        "affects": "records() line splitting and line numbering"
+      },
+      {
+        "from": "json.JSONDecodeError's str() interpolated into the refusal message ('Expecting value: line 1 column 1 (char 0)')",
+        "to": "String(error) on the JS SyntaxError ('SyntaxError: Unexpected end of JSON input')",
+        "why": "There is no cross-runtime parser-error text. The message SHAPE is identical (`<path>:<line> is not a record: <error>; a broken store is refused, not read as empty`); only the parser's own wording differs, and no ported assertion looks at it (the source's match is `refused|not a record`).",
+        "affects": "the unparseable-line refusal message tail"
+      },
+      {
+        "from": "Path.is_file()",
+        "to": "statSync(path, { throwIfNoEntry: false })?.isFile()",
+        "why": "`existsSync` would accept a directory, and a plain `statSync` throws ENOENT instead of reaching the refusal. Python's is_file() answers false for both absent and non-file and follows symlinks; this does the same. (One residual gap: is_file() also swallows EACCES on a parent, which throwIfNoEntry:false does not.)",
+        "affects": "records()'s missing-store refusal"
+      },
+      {
+        "from": "os.close(os.open(target, O_CREAT | O_EXCL | O_WRONLY, 0o600)) / FileExistsError",
+        "to": "closeSync(openSync(path, \"wx\", 0o600)) / error.code === \"EEXIST\"",
+        "why": "The exclusive-create flag is the property under test, not the refusal: an existsSync-then-write port passes the ported case and reintroduces the race the source's comment says it closes. Classified by errno code, never by message text.",
+        "affects": "SyntheticV1RunStore.create"
+      },
+      {
+        "from": "keyword-only parameters (`*, now_ms: int`)",
+        "to": "an options object: `startRun(runId, { nowMs })`, `finishRun(runId, { nowMs })`",
+        "why": "TypeScript has no keyword-only parameters; the contract fixes this shape for the whole belt so call sites stay consistent. 1_700_000_000_000 < 2^53, so plain `number` -- no BigInt.",
+        "affects": "startRun / finishRun signatures and every call site"
+      },
+      {
+        "from": "the pytest `store` fixture (function-scoped)",
+        "to": "a `newStore()` function called inside each test",
+        "why": "Convention rule 8: function-scoped fixtures translate to a plain call, not beforeEach. The directory comes from caseRoot(\"cnry-syn\") -- a short nickname per D-0020, because the directory name is interpolated into every refusal message these cases `match` against as a search.",
+        "affects": "all 6 fixture-using cases"
+      },
+      {
+        "from": "self._path.read_text(encoding=\"utf-8\")",
+        "to": "new TextDecoder(\"utf-8\", { fatal: true }).decode(readFileSync(path))",
+        "why": "D-0015: readFileSync(p, \"utf-8\") substitutes U+FFFD, which would turn damaged bytes into plausible-looking records instead of an error. Python raises UnicodeDecodeError; this raises a TypeError, and in both the error propagates unwrapped rather than becoming a refusal.",
+        "affects": "records()"
+      },
+      {
+        "from": "`\"run_id\" not in record` on a dict",
+        "to": "Object.hasOwn(parsed, \"run_id\") with an explicit isRecord() guard",
+        "why": "Rule 9. JS `in` walks the prototype chain, so a record could appear to carry `constructor`/`toString`; and `typeof x === \"object\"` is true for null and arrays, which `isinstance(record, dict)` excludes.",
+        "affects": "records()'s keyless-record refusal"
+      },
+      {
+        "from": "sorted() over str (code-point order), returning a tuple",
+        "to": "[...set].sort(byCodePoint) returning readonly string[]",
+        "why": "JavaScript's default comparator sorts by UTF-16 code unit and disagrees with Python above the BMP. Immutability of the tuple maps to `readonly`, and the ported case compares with toEqual on an array so the ORDER stays part of the assertion.",
+        "affects": "runIds()"
+      },
+      {
+        "from": "f\"run {run_id!r} ...\" (Python repr quoting)",
+        "to": "hand-written single quotes: `run '${runId}' ...`",
+        "why": "D-0017: repr becomes hand-written quotes, never JSON.stringify.",
+        "affects": "the three write-path refusal messages"
+      },
+      {
+        "from": "`raise SyntheticStoreRefusal(...) from error`",
+        "to": "`new SyntheticStoreRefusal(message, { cause: error })`",
+        "why": "Same chain-preserving semantics; `name` plus `Object.setPrototypeOf` in the constructor so `instanceof` (and therefore expectRefusal's type half) holds.",
+        "affects": "SyntheticStoreRefusal, create(), records()"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    }
+  },
+  "totals": {
+    "source_cases": 8,
+    "ported": 8,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The store is single-writer: startRun/finishRun are a read (records()) followed by an append, so two concurrent writers can interleave and both append a start for the same run.",
+      "why": "The source says so explicitly and declines to fix it -- 'a stand-in that quietly did would be one more thing the rehearsal appeared to prove and had not'. Reproduced, and the module docstring carries the source's reasoning."
+    },
+    {
+      "behaviour": "startRun refuses any run id present in ANY record, so a store holding only a run_finished record for X refuses startRun(X) even though X was never started here.",
+      "why": "The source's guard is `if run_id in self.run_ids()`, not against the started set. Narrowing it would be a different function; the message ('was already started') is wider than it sounds and is kept verbatim."
+    },
+    {
+      "behaviour": "A blank line in the MIDDLE of the store refuses the whole store (json.loads('') raises), and a store ending in two newlines is likewise refused.",
+      "why": "Python's splitlines keeps interior empty lines and json.loads refuses them; reproduced deliberately, and confirmed identical to CPython on both shapes. NOTE: this contradicts CONTRACT.md, which says records() skips blank lines -- see concerns."
+    },
+    {
+      "behaviour": "#append reads the file to inspect the last byte, so appending to a store whose file has been deleted since construction raises ENOENT rather than a refusal.",
+      "why": "Python's `self._path.read_bytes()[-1:]` raises FileNotFoundError the same way; only reachable by deleting the file between calls, and the source does not guard it."
+    },
+    {
+      "behaviour": "A record whose run_id is not a string (a number, null, an object) is rendered with String() into the id set instead of raising.",
+      "why": "The source neither type-checks run_id nor could sort a mixed set -- Python's sorted() would raise TypeError there. Adding a refusal would be a guard the source does not have (rule 0 ceiling), so the wider behaviour is documented at the site (runIdOf) rather than fixed."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_creation_refuses_an_existing_path",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > creation refuses an existing path",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The source's unused `tmp_path` parameter is dropped (the `store` fixture already created the file); `pytest.raises(SyntheticStoreRefusal, match=\"already exists\")` becomes `expectRefusal(..., SyntheticStoreRefusal, /already exists/)`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_a_run_starts_once",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > a run starts once",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, including the second start's later timestamp (T0+1) that makes the refusal keyed on the id and not the clock. Asserts the substring, as the source does, not the whole message.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_finishing_appends_rather_than_edits",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > finishing appends rather than edits",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Both halves kept: raw-text `after.startsWith(before)` read straight off the file, and the record-type order `[\"run_started\", \"run_finished\"]` from `records()` in file order. `assert after.startswith(before)` maps to `expect(after.startsWith(before)).toBe(true)`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_a_finish_needs_a_start_and_happens_once",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > a finish needs a start and happens once",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "All three properties in one case, in the source's order: 'never started' against a ZERO-BYTE store (so `records()` must read an empty file as no records rather than as one bogus line), then a start+finish, then 'already finished'. The two refusal substrings are distinct and both are asserted.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_a_broken_store_is_refused_not_read_as_empty",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > a broken store is refused, not read as empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Both refusals kept, and the source's alternation `match=\"refused|not a record\"` is kept as an alternation regex rather than narrowed to one wording (a narrowed pattern would assert more than the source). Fixture bytes are byte-identical to the source's (valid line 1, `not json` line 2). The absent store is CONSTRUCTED OUTSIDE the refusal assertion, which only a lazy constructor survives. Title punctuation: the source name has no comma; the prose sentence reads 'a broken store is refused, not read as empty' — the comma is in the target title, so use the id exactly as listed.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_a_record_without_a_run_id_is_refused",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > a record without a run_id is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; same fixture line, same `match=\"run_id\"`. The implementation checks key PRESENCE (`Object.hasOwn`), not truthiness, so `\"run_id\": null` or `\"\"` is not refused by this branch — as in the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_an_append_does_not_fuse_onto_a_torn_tail",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > an append does not fuse onto a torn tail",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `read_text().rstrip(\"\\n\")` maps to `.replace(/\\n+$/u, \"\")` (strips every trailing newline, as rstrip does) and the rewrite is a truncating `writeFileSync`, not an append. Both assertions kept: `records()` has length 1 despite the torn tail, then the run ids in FILE order after the follow-on append (via `records()`, not `runIds()`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_synthetic_v1.py::test_run_ids_answer_the_audit_question",
+      "target_id": "test/canary/synthetic-v1.test.ts::the stand-in counterparty's store > run ids answer the audit question",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. Python's tuple `(\"run-a\", \"run-b\")` becomes `toEqual([\"run-a\", \"run-b\"])` on a `readonly string[]` — an ordered comparison, so the dedup AND the sort are both still asserted (the file order is run-b, run-a, run-b).",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

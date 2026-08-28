@@ -62,6 +62,10 @@ spaces distinct.
 | D-0030 | One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it | accepted |
 | D-0031 | The source inventory is complete and unconditional; porting intent is recorded separately | accepted |
 | D-0032 | Three not-porting proposals are ratified, and three belts start with D-ranges allocated | accepted |
+| D-0401 | The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store | accepted |
+| D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
+| D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
+| D-0404 | The ledger DDL is a shipped data file, and the belt asserts it reached `dist/` | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -5520,5 +5524,213 @@ burned -- ranges are permanent whether or not the belt completes.
 
 **Source.** Ratified by the user on 2026-08-28, task `continuo-belts-ratification`. Decision id
 allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to use this file").
+
+---
+
+## D-0401 -- The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store
+
+**Context.** The canary's routing ledger is a separate SQLite file whose whole point is that its
+guarantees are refused **in the store, not in the discipline of the writer** -- interlock's
+`tests/canary/test_ledger.py` says so in as many words, and it is why this subsystem was ratified
+into scope (D-0032). Continuo already has two openers: `src/control_plane/`'s, and the generic
+`openDatabase` in `src/sqlite/open.ts`. Reaching for either was the obvious move and is wrong in
+four separate ways.
+
+**Decision.** `src/canary/ledger.ts` carries its own `createRoutingLedger` / `openRoutingLedger` /
+`configureLedgerConnection`, sharing nothing with the control plane's but the shape of the idea.
+
+1. **`recursive_triggers = ON`, on every writable connection, beside `foreign_keys = ON`.** This is
+   the load-bearing one. `run_owner`'s immutability is enforced by `BEFORE UPDATE` and
+   `BEFORE DELETE` triggers -- but with `recursive_triggers` at SQLite's default (OFF, and
+   better-sqlite3's default too) `INSERT OR REPLACE` resolves a primary-key conflict with an
+   **implicit DELETE that fires no trigger at all**, and the re-insert then passes every remaining
+   guard. A run changes owning system mid-flight in one statement, which is precisely what gate
+   item 10 forbids. The pragma is per-connection, so it cannot live in the file; it lives in
+   `configureLedgerConnection`, which every connection this module hands out passes through.
+   Two ported cases (`or_replace_is_not_a_way_around_the_owner_trigger`, and the same for the
+   decision history) exist to catch this, and they catch it only because they route through the
+   module's own opener -- a test that opened a raw handle would pass over the hole.
+2. **No `journal_mode` pragma, ever.** The ledger stays on the rollback journal. `openDatabase` sets
+   WAL, and WAL is both a header write and a pair of `-wal` / `-shm` sidecar files -- which would
+   falsify, by construction, every assertion that a *refused* open left the file untouched. The
+   control plane made the same choice for its own reasons (D-0012); this is that choice again, on
+   different evidence.
+3. **Verification runs on the connection that is returned.** Verifying one handle and then opening a
+   second to hand back leaves a window in which the verified file is replaced -- or deleted, in
+   which case a plain open creates the empty database the function promises never to make.
+4. **Its own identity and its own fingerprint.** `application_id` is `0x494c4b43` (`ILKC`), distinct
+   from the spike's `0x494c4b35` (`ILK5`), so a ledger handed to the control-plane opener -- or the
+   reverse -- is refused as *some other database* rather than reported as one with missing tables.
+   The expected schema fingerprint is **derived** on every verification by building the DDL into a
+   `:memory:` database and hashing it, never pinned as a hex constant, so the schema and the value
+   it is checked against cannot drift apart.
+
+Creation claims its path with `openSync(path, "wx", 0o600)` and never `existsSync`-then-create: only
+the process that actually created the file can reach the unlink-on-failure cleanup, so the loser of
+a race cannot delete the winner's live store.
+
+**Alternatives.**
+
+- **Extend the control-plane opener with a `recursiveTriggers` option (rejected).** It would put a
+  flag on a shared opener whose other caller must never set it, and the failure mode of getting it
+  wrong is silent at both call sites. The two stores agree on almost nothing else -- application id,
+  fingerprint, table set, refusal vocabulary -- so the shared surface would have been the `new
+  Database` call and nothing more.
+- **Set the pragma at the call sites that use `INSERT OR REPLACE` (rejected).** There are no such
+  call sites in the port: `INSERT OR REPLACE` is what an *attacker* of the invariant writes, not the
+  module. The pragma has to be on before anyone else's statement arrives.
+- **Enforce immutability in TypeScript instead (rejected).** That is exactly the "discipline of the
+  writer" the source file's framing rejects, and it would not survive a second writer.
+
+**Falsifier.** If a future SQLite makes conflict-resolution DELETEs fire triggers unconditionally,
+point 1 becomes belt-and-braces rather than load-bearing -- the pragma stays, but the reasoning
+above stops being the reason. Measured on better-sqlite3 13.0.3 / SQLite 3.53.4: with
+`recursive_triggers` removed from `configureLedgerConnection`, the two `or replace` cases go red and
+nothing else does.
+
+---
+
+## D-0402 -- An already-routed run is recognised by result code and a re-read, never by message text
+
+**Context.** `route_run_start` has to tell three situations apart: a run being routed for the first
+time, a **retry** of a route that already happened (a router that crashed between the ledger write
+and the system start may legitimately retry), and an attempt to move a started run to a different
+owner. Interlock separates them by matching the SQLite exception's *text*:
+
+```python
+if "UNIQUE constraint failed: run_owner.run_id" not in str(error):
+    raise
+```
+
+D-0016 already established that SQLite's message text is not a compatibility surface and its result
+codes are. This is the case that makes the point sharpest, because the substring is doing real
+control-flow work: get it too wide and a `CHECK` violation is silently absorbed as an idempotent
+retry, and the run is reported as routed when nothing was written.
+
+**Decision.** The port classifies on `sqliteCodeOf(error)` and then **confirms by re-reading**.
+`SQLITE_CONSTRAINT_PRIMARYKEY` or `SQLITE_CONSTRAINT_UNIQUE` means "a row for this run already
+exists"; the existing `run_owner` row and the current decision are then read back, after the
+transaction has ended, and compared on `owningSystem` **only**. Equal is an idempotent no-op
+returning the original row unchanged -- the retry's `nowMs` is discarded and the original
+`decisionSeq` and `routedAtMs` are kept. Different is `OwnerChangeRefused`. Every other constraint
+code -- `SQLITE_CONSTRAINT_CHECK`, `_FOREIGNKEY`, `_TRIGGER` -- is rethrown **as itself**: an
+integrity failure that is not an ownership question is not one this method has an opinion about.
+
+**Measured, and the reason this entry exists at all.** On better-sqlite3 13.0.3, a duplicate
+`run_id` against `run_owner`'s `run_id TEXT PRIMARY KEY` returns code
+**`SQLITE_CONSTRAINT_PRIMARYKEY`** while its message reads **`UNIQUE constraint failed:
+run_owner.run_id`**. The code and the text disagree. A port that transcribed the source's substring
+into a code check of `SQLITE_CONSTRAINT_UNIQUE` alone -- the reading the message invites -- never
+reaches the idempotency path at all: three cases go red. Both codes are therefore accepted, and a
+target-only case pins the disagreement itself so that a future driver quietly changing one of the
+two is a red test rather than a behaviour change.
+
+Comparing `owningSystem` and never `decisionSeq` is also load-bearing in both directions: comparing
+the full row would turn a legitimate retry under a later decision naming the same owner into a
+refusal, and comparing nothing would let a genuine owner change through.
+
+**Alternatives.**
+
+- **Pre-check with a `SELECT` before inserting (rejected).** It reintroduces the lookup-then-insert
+  window the source's single-statement `INSERT .. SELECT` exists to close, against a rollback
+  committing on another connection -- which is the run-boundary property under rehearsal.
+- **Keep the substring match (rejected).** D-0016, and the measurement above: the text and the code
+  do not even agree with each other here.
+- **Accept any `SQLITE_CONSTRAINT*` (rejected).** That is the too-wide reading, and
+  `an_idempotent_retry_does_not_absorb_a_validation_failure` is the source's own case against it.
+
+**Falsifier.** If better-sqlite3 or SQLite changes which code a `TEXT PRIMARY KEY` conflict reports,
+the target-only case that pins the pairing goes red first, naming the change. Measured 2026-08-28 on
+better-sqlite3 13.0.3, SQLite 3.53.4.
+
+---
+
+## D-0403 -- The structural belt keeps its subject when the tree changes language
+
+**Context.** `tests/canary/test_structural.py` is the one file in this belt whose subject is not
+behaviour but **the source tree itself**: it walks each `canary/*.py` with Python's `ast` and asserts
+the package imports no other interlock module, then probes its own guard with a file containing the
+three ways around it (a relative sibling import, an import inside a function, one behind
+`TYPE_CHECKING`). Ported naively, "assert over the Python tree" has no meaning in a TypeScript repo,
+and the tempting repairs -- drop the case, or weaken it to a regex over filenames -- both turn the
+strongest structural claim in the belt into decoration.
+
+**Decision.** The case keeps its subject: the port asserts the same property over **its own** tree,
+parsed with the TypeScript compiler API rather than matched with a regex, for the reason the source
+prefers `ast` over a regex. The guard-probe case is ported too, against the port's own escape routes
+-- a deep relative import, an import inside a function body, a type-only import, and a dynamic
+`import()`.
+
+**One import is allowed, explicitly and narrowly: `src/sqlite/errors.ts`.** Interlock's routing layer
+imports only `sqlite3`, `dataclasses` and its own package, and that poverty is what the source case
+asserts. The port cannot match it exactly, because D-0402 forbids classifying SQLite failures by
+message text and the code-based replacement lives in `src/sqlite/errors.ts` -- a module Python has no
+counterpart for, since its `sqlite3` exception classes are built in. The allowance is written into
+the test as a single named exception with the reason beside it, and the three affected cases are
+recorded as `adapted` in `parity/canary.structural.ledger.json`. Nothing else outside `src/canary/`
+is permitted: not `control_plane`, not `session`, not any provider layer.
+
+`src/canary/routing.ts` therefore carries its own ~20-line private `repr()` rather than importing
+`src/control_plane/python_repr.ts`, which would widen the allowance to a second module for a
+cosmetic reason. The duplication is deliberate and is the smaller cost.
+
+The written record moves with the code: `docs/canary-routing-rehearsal.md` is ported from
+interlock's, with paths and identifiers rewritten to continuo's per D-0017 rule 1, every design claim
+kept, and one added paragraph disclosing the `src/sqlite/errors.ts` allowance -- because a durable
+artifact that still said "it imports no other module" would be a document asserting something the
+tree does not do. `Q-0005` stays explicitly open there; no numeric go/no-go criterion is stated.
+
+**Alternatives.**
+
+- **Copy the two needed predicates into `src/canary/` (rejected, and rejected by the window's human
+  gate on 2026-08-28).** It would buy literal import poverty at the price of a second SQLite error
+  classifier to keep in agreement with the first -- against D-0016's whole point, which is that the
+  mapping is written down **once**.
+- **Match imports with a regex (rejected).** The guard-probe case is precisely the case a regex
+  fails; the source wrote that case because it did not trust itself either.
+- **Drop the two tree-walking cases as unportable (rejected).** They are the belt's structural
+  claim. A `not-ported` row here would be the most misleading row in the ledger.
+
+**Falsifier.** If the canary ever genuinely needs a second module outside its package, this entry is
+superseded rather than edited, and the allowance list is not simply extended in passing -- the point
+of a one-item list is that adding to it is a decision.
+
+---
+
+## D-0404 -- The ledger DDL is a shipped data file, and the belt asserts it reached `dist/`
+
+**Context.** `routing_ledger.sql` is loaded at runtime from a path resolved against the module
+(`import.meta.url`), exactly as the spike schema is, so that an operator can read and diff the DDL
+without importing code -- and so that `loadLedgerSql`'s rehearsal-marking guard is checked against
+the artifact people actually read. `tsc` emits JavaScript and declarations; it does not copy data
+files. A build without a copy step therefore ships `dist/canary/ledger.js` beside no SQL at all, and
+because the path is only resolved when it is used, the failure appears at the first `create` **or**
+`open` -- a module that refuses everything.
+
+**Decision.** `scripts/copy-canary-schema.mjs` copies `src/canary/routing_ledger.sql` into
+`dist/canary/`, verifies the result **byte for byte**, and is wired into `npm run build` alongside
+the five copy steps already there. Byte-for-byte matters twice here: the schema fingerprint hashes
+this file's exact bytes, so a copy that normalised so much as a line ending would make a packaged
+build's fingerprint disagree with a database written from the source tree.
+
+The placement is **asserted by a target-only case**, not left to the build script's own check. The
+typical accident is a belt that is green in the source tree while `dist/` silently lacks the asset,
+and neither the suite nor the type-checker would notice -- the failure only shows up for whoever
+installed the package. The case carries no warrant from interlock, which packages data files by a
+different mechanism entirely, so it is target-only rather than a translation of anything.
+
+**Alternatives.**
+
+- **Inline the DDL as a TypeScript string (rejected).** It removes the copy step and the whole
+  reason the file exists: the marking guard would then check a string in the same module that
+  applies it, which is a check with nothing on the other side of it, and the operator-readable
+  artifact would be gone.
+- **Trust the copy script's own byte check and skip the test (rejected).** That verifies the copy
+  ran when it ran; it does not verify the build wired it in. Removing the `&&` from `package.json`
+  is the failure being guarded against, and only a test that reads `dist/` catches it.
+
+**Falsifier.** If the build moves to a bundler that carries assets natively, the copy step becomes
+redundant and this entry is superseded -- but the target-only placement case stays, because its
+subject is the built artifact, not the mechanism that filled it.
 
 ---

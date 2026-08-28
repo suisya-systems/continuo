@@ -1,0 +1,139 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "canary",
+      "collected": 70,
+      "inventory": "parity/source-inventory/canary.all.txt",
+      "note": "The item 10 routing rehearsal, interlock tests/canary, 6 files. One ledger per source file. Not to be confused with parity/measurement.canary.ledger.json, which ports tests/measurement/test_canary.py -- the measurement harness's view of a canary, not the canary's own store. The two names sit next to each other in parity/ and mean different things."
+    },
+    "file": {
+      "path": "tests/canary/test_structural.py",
+      "collected": 5,
+      "inventory": "parity/source-inventory/canary.test_structural.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 5 pass there (measured 2026-08-28 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/canary/ -p no:cacheprovider`: 70 passed, of which 5 are tests/canary/test_structural.py's)."
+    }
+  },
+  "target": {
+    "test_file": "test/canary/structural.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "Python `ast.parse` + `ast.walk` over each canary/*.py",
+        "to": "`ts.createSourceFile(..., setParentNodes=true)` + a recursive `ts.forEachChild` visitor over each src/canary/*.ts",
+        "why": "The source prefers ast over a regex because the escapes that matter (an import in a function body, one behind TYPE_CHECKING) are exactly what a line-oriented pattern gets wrong. The same is true in TS, plus two more routes a regex or a scan of built JS would miss: `import type` (erased at emit) and dynamic `import()`. typescript is already a devDependency and test/measurement/module-scan.ts sets the precedent.",
+        "affects": "cases 1 and 2"
+      },
+      {
+        "from": "Python relative-import resolution: level==1 -> \"claude_org_runtime.canary\"; level>=2 -> \"claude_org_runtime.\" + module; then a dotted string-prefix test",
+        "to": "resolve(dirname(importingFile), specifier) for relative specifiers, then path containment in src/canary/ (with a trailing separator); bare specifiers returned unchanged and always allowed",
+        "why": "TS has no package-dotted namespace. Resolving to an absolute path is what stops `../control_plane/schema.js` from being judged by its bare tail - the very slip the source's docstring says the resolution exists to prevent. Bare specifiers (node:*, better-sqlite3) are the stdlib/third-party imports the source's startswith filter allows; the package exports only \".\" (D-0002) so no bare specifier can name a sibling continuo module.",
+        "affects": "cases 1 and 2"
+      },
+      {
+        "from": "probe.py's three escape routes (relative sibling import, import in a function, import behind TYPE_CHECKING)",
+        "to": "probe.ts's four (type-only import, deep relative ../.. import, require() in a function body, dynamic import() in a function body)",
+        "why": "TypeScript splits the TYPE_CHECKING route in two - erased-at-emit (type-only) and deferred-to-runtime (dynamic import) - and both are ways out of the package that a scan of the built JavaScript or of top-level statements alone would miss. The probe file is written to a temp dir and parsed only, never loaded and never type-checked, which is what lets it name paths that do not exist; that is the source's property, kept.",
+        "affects": "case 2"
+      },
+      {
+        "from": "`PACKAGE_DIR.glob(\"*.py\")` (routing_ledger.sql excluded for free by the extension)",
+        "to": "a full directory listing, filtered to *.ts for scanning, with routing_ledger.sql on an explicit NON_MODULE_FILES allowlist and any other non-.ts file raising",
+        "why": "docs/test-translation-conventions.md section 10 instance 3: an extension-defined subject set silently stopped covering the fencing package's most security-relevant file the day it shipped as .mjs, and stayed green. Naming the exception makes the next added artifact a red test rather than a quiet narrowing.",
+        "affects": "case 1"
+      },
+      {
+        "from": "Python module docstring carrying the marking indented under `.. warning::`, hard-wrapped over four lines",
+        "to": "a JSDoc module header carrying the marking on one unwrapped line",
+        "why": "The source's collapse regex strips a leading `--`, `>` or `#` plus one space; Python's docstring indentation is plain whitespace, which the whitespace fold handles, but a JSDoc continuation line begins with `*`, which the regex does not strip. One long line in the writer beats loosening the reader for every artifact. Documented in src/canary/index.ts and measured (probe H).",
+        "affects": "case 3"
+      },
+      {
+        "from": "`assert x, \"message\"`",
+        "to": "`expect(value, \"message\").toEqual(...)` / `.toContain(...)` / `.toBe(true)`",
+        "why": "House style in test/measurement/known-holes.test.ts, which carries the same shape of structural assertion. Each probe assertion in case 2 additionally names which escape route it defends, so a regression identifies the route (measured in probes D and E).",
+        "affects": "all five cases"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    }
+  },
+  "totals": {
+    "source_cases": 5,
+    "ported": 2,
+    "adapted": 3,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "Case 5's \"remains open\" assertion is satisfied by the marking blockquote alone: deleting every prose statement of openness from the document still leaves \"Q-0005 REMAINS OPEN: ...\" in the quoted marking, and the case stays green (measured, probe F).",
+      "why": "Interlock's document and case have exactly the same property - its line 6 is inside the marking blockquote and satisfies the assertion on its own. The source's in-test comment already concedes the class of weakness (\"A textual assertion cannot prove absence of an invented number\"). Strengthening it (e.g. requiring an occurrence outside the marking) would be a stricter translation than the source's, which rule 0 forbids; it would belong beside the faithful case as a target-only one if anyone wants it."
+    },
+    {
+      "behaviour": "Case 1's foreignness test is containment-based and, like the source's string-prefix test, has an edge it does not cover: the source would let a sibling package literally named `claude_org_runtime.canarysomething` through; the port would let a sibling DIRECTORY named `src/canaryfoo/` through only if its resolved path string began with the canary dir path - it does not, because the containment compares against a path ending in a separator, so the port is marginally tighter here. No behaviour was widened; noted so the integrator knows the two are not bit-identical predicates.",
+      "why": "Path containment is the honest analogue of Python's dotted-prefix resolution, and the near-miss the source tolerates has no TS counterpart worth reproducing as a bug."
+    },
+    {
+      "behaviour": "The barrel omits `sqliteRunIds`, `collapsedLedgerSql`, `canonicalJson`, `configureLedgerConnection`, `ledgerSeams`, `expectedLedgerFingerprint`, `loadLedgerSql`, `LEDGER_APPLICATION_ID`, `LEDGER_REVISION`, `LEDGER_SCHEMA_PATH`, `LEDGER_TABLES` and the `SystemRun` / `RoutingDecisionRow` type aliases.",
+      "why": "The source's __all__ omits their counterparts (and Python has no counterpart for the aliases or the seams at all). The five ledger-identity names are how the opener decides whether a file IS this ledger; a caller that reached them could stamp the application id onto another database and hand it back. `export *` would leak every one of them, which is why the barrel is explicit named re-exports throughout."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/canary/test_structural.py::test_the_routing_layer_imports_no_other_interlock_module",
+      "target_id": "test/canary/structural.test.ts::structural assertions: independence and labelling > the routing layer imports no other continuo module",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same property, different tree and different parser. (a) Subject: the source walks PACKAGE_DIR.glob(\"*.py\") with ast; the port lists src/canary/ (directory listing, not a hand-written module list) and parses each *.ts with the TypeScript compiler API (ts.createSourceFile + a full ts.forEachChild walk) - a real parse, not a regex, for the same reason the source prefers ast. routing_ledger.sql is excluded the way *.py excluded it, but by an explicit NON_MODULE_FILES allowlist so a future .mjs/.json in the package FAILS the walk rather than silently leaving the guard (conventions rule 10 instance 3); measured, see failOnPurpose probe C. (b) Foreignness: Python's dotted-prefix test (startswith \"claude_org_runtime\" and not \"claude_org_runtime.canary\") becomes path containment - a relative specifier is resolved against the importing file's directory and is foreign if it lands under the repo root but outside src/canary/. Bare specifiers (node:fs, better-sqlite3, typescript) are allowed, which is the source's stdlib/third-party allowance. (c) THE REAL DIVERGENCE: the port's canary legitimately imports src/sqlite/errors.ts (isSqliteError in ledger.ts, sqliteCodeOf in routing.ts). Python has no counterpart because sqlite3's exception classes and result codes are built in; in TS the result codes are read through one shared helper module, and classifying by message text is forbidden (D-0016/D-0402). The allowance is exactly that one file, listed in ALLOWED_FOREIGN_MODULES, stated in the test's own comment and in docs/canary-routing-rehearsal.md. src/sqlite/open.ts is NOT allowed (the ledger must not use the WAL-setting opener) and neither is anything under src/control_plane/. Failure message keeps the source's sentence, with the file basename and the sorted foreign list rendered repo-relative.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_structural.py::test_the_import_guard_itself_catches_the_ways_around_it",
+      "target_id": "test/canary/structural.test.ts::structural assertions: independence and labelling > the import guard itself catches the ways around it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same probe, re-expressed in TypeScript's escape routes. The source's probe.py has three: a relative sibling import, an import inside a function, one behind TYPE_CHECKING. The port writes a probe.ts (into caseRoot(\"cnry-str\"); parsed only, never loaded and never type-checked, exactly as probe.py is never imported) carrying FOUR, because TS splits the third in two: a type-only `import type ... from \"../dispatcher/index.js\"` (TS's TYPE_CHECKING - erased at emit, so invisible to any scan of built JS), a deep relative `../../src/control_plane/schema.js` that climbs out of the directory, a `require(\"../session/index.js\")` inside a function body, and an `await import(\"../measurement/index.js\")` inside a function body. Assertions mirror the source's: each expected resolved path is IN the returned set; nothing is asserted about what else is in it (the source likewise never asserts \"typing\" absent). Each assertion carries a message naming which route it defends, so a regression says which one broke (see probes D and E).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_structural.py::test_every_artifact_carries_the_one_marking_sentence",
+      "target_id": "test/canary/structural.test.ts::structural assertions: independence and labelling > every artifact carries the one marking sentence",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port with the three artifact paths re-pointed: src/canary/routing_ledger.sql, src/canary/index.ts (the package barrel, standing in for __init__.py) and docs/canary-routing-rehearsal.md, resolved from import.meta.url (not process.cwd()). The collapse helper is the source's regex for regex - /^(?:--|>|#)+ ?/gmu then /\\s+/gu -> \" \" - deliberately NOT widened to strip `*`. Consequence, and it is a design choice recorded in src/canary/index.ts's own header: a JSDoc continuation line starts with `*`, which the collapser does not strip, so the barrel carries the marking on ONE physical line. Widening the reader was the alternative and was rejected: the reader is the source's, and loosening it loosens it for every artifact. The marking itself is imported from src/canary/marking.ts (one shared constant), never retyped. Failure message interpolates the full path, as the source's does. dist/ coverage of the DDL is NOT duplicated here: lane A's test/canary/ledger.test.ts already carries \"the DDL ships to dist (target-only)\".",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_structural.py::test_the_marking_makes_all_four_claims",
+      "target_id": "test/canary/structural.test.ts::structural assertions: independence and labelling > the marking makes all four claims",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "One case, one loop, four exact-case substring assertions against REHEARSAL_MARKING, with the four claim strings written out as literals in the test (not imported), so the case cannot become a tautology a rewritten marking satisfies. Deliberately NOT expanded into four it() blocks or parametrize(): that would change the collected node-id count for this file from 5.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_structural.py::test_the_written_record_leaves_q_0005_open",
+      "target_id": "test/canary/structural.test.ts::structural assertions: independence and labelling > the written record leaves Q-0005 open",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port against docs/canary-routing-rehearsal.md, which this lane authored: raw text contains \"Q-0005\", and collapsed(text).toLowerCase() contains \"remains open\" - collapsed first, lowercased second, in the source's order. The document keeps interlock's \"which **remains open**\" with the two words adjacent (\"remains **open**\" would break the collapse-then-contains, as the brief warns). The source's own self-aware comment about what a textual assertion cannot prove is carried over verbatim.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
