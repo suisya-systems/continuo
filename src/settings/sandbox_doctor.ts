@@ -70,7 +70,15 @@ import { tmpdir } from "node:os";
 import { join as nodeJoin, delimiter as pathDelimiter } from "node:path";
 
 import { pyJsonDumps, pyJsonLoads } from "../fencing/pyjson.js";
-import { expanduser, osIsabs, osNormpath, osRealpath, osSplit } from "../fencing/pypath.js";
+import {
+  expanduser,
+  osIsabs,
+  osJoin,
+  osNormcase,
+  osNormpath,
+  osRealpath,
+  osSplit,
+} from "../fencing/pypath.js";
 import {
   type PyNumberSpelling,
   pyNumberSpelling,
@@ -153,30 +161,74 @@ export const doctorSeams = {
 };
 
 /**
+ * `os.defpath`: what CPython searches when `PATH` is not set at all.
+ *
+ * CPython tries `os.confstr("CS_PATH")` first and falls back to `os.defpath`;
+ * Node exposes neither `confstr` nor a `defpath`, and the two agree on every
+ * platform this port runs on (`/bin:/usr/bin` measured on the porting host).
+ * The fallback is transcribed rather than the confstr call, because the value
+ * is what matters and the call is not reachable from here.
+ */
+const OS_DEFPATH = process.platform === "win32" ? ".;C:\\bin" : "/bin:/usr/bin";
+
+/**
  * `shutil.which`, narrowed to the one lookup this module makes.
  *
- * Only the PATH search is transcribed -- no `cwd` special case, no `PATHEXT`
- * expansion -- because the single caller asks for `bwrap`, which exists on
- * POSIX and not on Windows, and a Windows host answers `null` either way. The
- * narrowing is stated rather than left implicit: a second caller wanting a
- * `.exe` would need the rest, and rule 11 puts that on whoever adds it rather
- * than on a helper generalised in advance for a caller that does not exist.
+ * Only the PATH search is transcribed -- no Windows `curdir` prepend, no
+ * `PATHEXT` expansion -- because the single caller asks for `bwrap`, which
+ * exists on POSIX and not on Windows, and a Windows host answers `null` either
+ * way. The narrowing is stated rather than left implicit: a second caller
+ * wanting a `.exe` would need the rest, and rule 11 puts that on whoever adds it
+ * rather than on a helper generalised in advance for a caller that does not
+ * exist.
+ *
+ * **Three details of `shutil.which` that a plain `PATH.split()` loop drops, all
+ * of them in the same direction.** Every one of them makes the lookup answer
+ * `null` for a `bwrap` that is in fact reachable, and this module's answer to
+ * "not found" is `CANARY_SKIPPED` -- which, with no static findings, exits 0.
+ * A preflight that reports success without running its live check is exactly
+ * the silent pass the command exists to prevent.
+ *
+ * - **`PATH` unset is not `PATH` empty.** CPython falls back to the system
+ *   default path; only an explicitly EMPTY `PATH` means "search nowhere"
+ *   (`if not path: return None`, after the fallback).
+ * - **An empty component searches the current directory.** `os.path.join("",
+ *   "bwrap")` is `"bwrap"`, a cwd-relative path, so a `PATH` of `":/usr/bin"`
+ *   has three meanings and not two.
+ * - **Directories are deduplicated by their normcased form**, so a `PATH` that
+ *   repeats a directory stats it once. Behaviour-neutral for the answer, and
+ *   transcribed because it is the reason CPython's loop is not a plain `for`.
  *
  * `X_OK` is not testable without `access(2)`, so the file's existence stands in
  * -- the canary's answer to a present-but-unexecutable `bwrap` is then a FAIL
- * from the launch rather than a SKIP from the lookup, which is the safe side:
- * a skipped canary reports a preflight it did not run.
+ * from the launch rather than a SKIP from the lookup, which is the same safe
+ * side as the three above.
  */
 function whichOnPath(name: string): string | null {
-  const path = process.env["PATH"];
-  if (path === undefined || path === "") {
+  // `path = os.environ.get("PATH", None)`, then the defpath fallback, then
+  // `if not path: return None`. The order matters: an unset `PATH` gets the
+  // fallback and an empty one does not.
+  const fromEnv = process.env["PATH"];
+  const path = fromEnv === undefined ? OS_DEFPATH : fromEnv;
+  if (path === "") {
     return null;
   }
+  const seen = new Set<string>();
   for (const dir of path.split(pathDelimiter)) {
-    if (dir === "") {
+    const normdir = osNormcase(dir);
+    if (seen.has(normdir)) {
       continue;
     }
-    const candidate = nodeJoin(dir, name);
+    seen.add(normdir);
+    // `os.path.join(dir, cmd)`. Both this and `node:path`'s `join` turn an
+    // empty `dir` into the bare name -- MEASURED, because the empty-component
+    // case is what this line exists for and "the transcription is required
+    // here" would have been a claim with no probe behind it. They differ only
+    // in normalisation (`posixpath.join("/usr//bin", "x")` keeps the doubled
+    // separator that `path.join` collapses), which no `stat` can observe. The
+    // transcription is used anyway, because a lookup that agreed with CPython
+    // by coincidence is one the next reader has to re-derive.
+    const candidate = osJoin(dir, name);
     if (isFile(candidate)) {
       return candidate;
     }

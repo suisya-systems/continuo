@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter as pathDelimiter } from "node:path";
 
 import { describe, expect, onTestFinished, test } from "vitest";
 
@@ -1717,5 +1717,110 @@ describe("the two argparse actions this CLI needed (target-only, D-0214)", () =>
     ).toThrow(ArgparseExit);
     expect(message).toContain("the following arguments are required: --settings");
     expect(message).toContain("claude-org-runtime-sandbox-doctor");
+  });
+});
+
+describe("shutil.which, at the three places a PATH split loses it (target-only, D-0214)", () => {
+  /**
+   * `os.defpath`, measured from CPython 3.12.3 on the porting host
+   * (`/bin:/usr/bin`). Spelled here as well as in production deliberately: if
+   * the two drift, the `PATH`-unset row below finds `sh` in one list and not
+   * the other and goes red, which is what makes this a check rather than a
+   * restatement.
+   */
+  const DEFPATH = process.platform === "win32" ? [".", "C:\\bin"] : ["/bin", "/usr/bin"];
+
+  /** Run `body` with `PATH` set, or removed entirely when `value` is null. */
+  function withPath<T>(value: string | null, body: () => T): T {
+    const had = Object.hasOwn(process.env, "PATH");
+    const previous = process.env["PATH"];
+    if (value === null) {
+      delete process.env["PATH"];
+    } else {
+      process.env["PATH"] = value;
+    }
+    try {
+      return body();
+    } finally {
+      if (had) {
+        process.env["PATH"] = previous;
+      } else {
+        delete process.env["PATH"];
+      }
+    }
+  }
+
+  test("an unset PATH falls back to os.defpath; an EMPTY one searches nowhere (target-only)", () => {
+    // These are two different states and `process.env["PATH"]` reports both as
+    // falsy. CPython reads `os.environ.get("PATH", None)`, falls back to the
+    // system default path when that is `None`, and only THEN applies
+    // `if not path: return None` -- so an explicitly empty `PATH` means "search
+    // nowhere" and an absent one does not. Measured against CPython 3.12.3.
+    //
+    // The direction matters more than the semantics: this module answers a
+    // failed lookup with `CANARY_SKIPPED`, and a skipped canary with no static
+    // findings exits 0. Collapsing the two states reports a preflight that
+    // never ran as a preflight that passed.
+    const expected = DEFPATH.map((d) => osJoin(d, "sh")).find((p) => existsSync(p)) ?? null;
+    expect(withPath(null, () => doctorSeams.which("sh"))).toBe(expected);
+    expect(withPath("", () => doctorSeams.which("sh"))).toBeNull();
+    // On any POSIX host `sh` IS in defpath, so the first row above is a real
+    // lookup rather than two nulls agreeing. Asserted rather than assumed,
+    // because on a host where it is not, the row above is vacuous and a reader
+    // should be able to tell which they are looking at.
+    expect(
+      expected !== null,
+      "no `sh` under os.defpath: the unset-PATH row above is vacuous on this host",
+    ).toBe(process.platform !== "win32");
+  });
+
+  test("an empty PATH component searches the current directory (target-only)", () => {
+    // `os.path.join("", "bwrap")` is `"bwrap"` -- a cwd-relative path -- so a
+    // `PATH` of `":/usr/bin"` names two directories and the cwd. A loop that
+    // skips empty components (the obvious reading) misses a `bwrap` reachable
+    // that way and skips the canary. Measured against CPython 3.12.3: the
+    // answer is the BARE name, not an absolutised one.
+    //
+    // What this case does NOT pin, stated because the probe said so rather than
+    // the code: swapping `osJoin` for `node:path`'s `join` leaves it green.
+    // Both turn an empty first component into the bare name, and they differ
+    // only in normalisation -- `posixpath.join("/usr//bin", "x")` keeps the
+    // doubled separator `path.join` collapses -- which no `stat` can observe.
+    // The transcription is used regardless; this case pins the empty component
+    // being VISITED, which is the half that was missing.
+    const tmp = caseTree("which-empty-component");
+    const name = "continuo-which-probe";
+    writeFileSync(join(tmp, name), "", "utf8");
+    const cwd = process.cwd();
+    process.chdir(tmp);
+    onTestFinished(() => {
+      process.chdir(cwd);
+    });
+    expect(
+      withPath(`${pathDelimiter}${join(tmp, "nonexistent")}`, () => doctorSeams.which(name)),
+    ).toBe(name);
+  });
+
+  test("a directory repeated in PATH is searched once (target-only)", () => {
+    // `shutil.which` deduplicates by `os.path.normcase(dir)`. Behaviour-neutral
+    // for the ANSWER, which is why it is pinned by counting stats rather than by
+    // comparing results: a transcription that dropped the `seen` set would agree
+    // on every lookup and differ only in work done, and the reason CPython's
+    // loop is not a plain `for` would quietly stop being true.
+    const tmp = caseTree("which-dedupe");
+    const name = "continuo-which-absent";
+    const repeated = [tmp, tmp, tmp].join(pathDelimiter);
+    expect(withPath(repeated, () => doctorSeams.which(name))).toBeNull();
+    // The observable half: the first hit still wins, and it is the directory
+    // that appears first.
+    const first = join(tmp, "first");
+    const second = join(tmp, "second");
+    mkdirSync(first);
+    mkdirSync(second);
+    writeFileSync(join(first, name), "", "utf8");
+    writeFileSync(join(second, name), "", "utf8");
+    expect(withPath([first, second].join(pathDelimiter), () => doctorSeams.which(name))).toBe(
+      join(first, name),
+    );
   });
 });
