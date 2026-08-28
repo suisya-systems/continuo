@@ -901,6 +901,8 @@ export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
  * down in `docs/secretary-intake-boundary.md` (D-0701).
  */
 export { IntakeQueue, IntakeReceipt, IntakeRefused, SecretaryIntake } from "./secretary/index.js";
+
+/**
  * The session subsystem (S1, S2, S3).
  *
  * Re-exported through `src/session/index.ts` rather than from the four modules
