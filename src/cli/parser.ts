@@ -311,6 +311,24 @@ export class ArgumentParser {
       if (raw === undefined) {
         throw new UsageError(`${flag} expects a value`, this);
       }
+      if (inline === undefined && looksLikeAFlag(raw)) {
+        // argparse's rule, and it is not a nicety. A value omitted before
+        // another option makes the next option the value: `--fixture-commit
+        // --format json` records `--format` as the commit the labelled corpus
+        // came from and then renders in the default format, so the operator gets
+        // a plausible report whose provenance is false and whose rendering is
+        // not the one they asked for. Nothing downstream can catch it -- a
+        // commit is an opaque string, and `--format`'s default is valid.
+        //
+        // Only the next-token form is checked. `--flag=--literal` is the escape
+        // hatch for a value that really does start with a dash, which is the
+        // same escape hatch argparse offers.
+        throw new UsageError(
+          `${flag} expects a value, but the next argument is '${raw}'; ` +
+            `write ${flag}=${raw} if that is the value`,
+          this,
+        );
+      }
       if (seen.has(flag)) {
         // argparse silently keeps the last one. Refused here instead: a command
         // line that names one flag twice with two values is one whose author
@@ -364,6 +382,17 @@ function coerce(option: OptionSpec, raw: string, parser: ArgumentParser): string
     );
   }
   return option.type === "int" ? parseInteger(option.flag, raw, parser) : raw;
+}
+
+/**
+ * Does `token` read as a flag rather than as a value?
+ *
+ * A negative number does not, which is the exception argparse makes and the one
+ * this CLI depends on: `--grace-ms -1` is a command line a ported case runs, and
+ * it has to reach the window model's refusal rather than the parser's.
+ */
+function looksLikeAFlag(token: string): boolean {
+  return token.startsWith("-") && !/^-\d/.test(token);
 }
 
 function placeholderFor(option: OptionSpec): string {

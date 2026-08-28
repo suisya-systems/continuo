@@ -733,6 +733,51 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     },
   );
 
+  test("target-only -- a flag cannot be swallowed as another flag's missing value", () => {
+    // The failure this closes is not a rejected command line, it is an ACCEPTED
+    // one: `--fixture-commit --format json` recorded `--format` as the commit
+    // the labelled corpus came from and rendered in the default format, so the
+    // operator got a plausible report whose provenance was false and whose
+    // rendering was not the one they asked for. Nothing downstream can catch it
+    // -- a commit is an opaque string and the default format is valid.
+    const path = db();
+
+    const refused = captureStderr(() =>
+      measurementCli.main([...argvFor(path), "--fixture-commit", "--format", "json"]),
+    );
+
+    expect(refused.code).toBe(2);
+    expect(refused.text).toContain("--fixture-commit expects a value");
+    expect(refused.text).toContain("--format");
+
+    // ...and the escape hatch for a value that really does begin with a dash,
+    // which is the one argparse offers too. The parser takes it, so what refuses
+    // is the command, for the half-reference -- which is the proof that
+    // `--format` arrived as the commit rather than as a flag.
+    const inline = expectRefusal(
+      () => measurementCli.main([...argvFor(path), "--fixture-commit=--format"]),
+      ControlPlaneRefusal,
+    );
+    expect(inline.message).toContain("--fixture-corpus");
+    expect(inline.message).not.toContain("expects a value");
+  });
+
+  test("target-only -- a negative number is still a value, not a flag", () => {
+    // The exception argparse makes, and the one this CLI depends on: the ported
+    // case `a negative declared grace is refused by the command` runs
+    // `--grace-ms -1`, and it has to reach the window model's refusal rather
+    // than being turned back by the parser -- which would leave that case green
+    // for the wrong reason.
+    const path = db();
+
+    const refusal = expectRefusal(
+      () => measurementCli.main(argvFor(path, "--grace-ms", "-1")),
+      WindowRefusal,
+    );
+
+    expect(refusal.message).not.toContain("expects a value");
+  });
+
   test("target-only -- a required flag that is absent is refused by name", () => {
     const errors = captureStderr(() => measurementCli.main(["report", "--period-start-ms", "1"]));
 

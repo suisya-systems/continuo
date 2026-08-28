@@ -4075,7 +4075,7 @@ parser's own tokens, and the integer coercion. The last two are worth naming:
   accepted; the target-only case originally used `1.5` alone, which the surviving half refuses, so
   it could not tell the two guards apart.
 
-**And four things the review gate found that the sweep could not.** A mutation sweep asks whether the
+**And five things the review gate found that the sweep could not.** A mutation sweep asks whether the
 cases can see the behaviour the module *has*. It cannot ask whether that behaviour is the source's,
 and it cannot ask about a path no case takes. Three of the four are the first kind and were answered
 by reading Python; the fourth is the second kind and is the most serious defect this belt produced:
@@ -4109,6 +4109,16 @@ by reading Python; the fourth is the second kind and is the most serious defect 
   the first mutation written for it: resolving only the module's side of the comparison is
   **equivalent** to the fix in a checkout with no symlinks in its path, so that mutation survived and
   said nothing. The mutation that reproduces the defect is the one that leaves `argv[1]` unresolved.
+- **A flag was swallowed as another flag's missing value,** and this is the only one of the five
+  whose symptom is a *wrong* report rather than no report. `--fixture-commit --format json` recorded
+  `--format` as the commit the labelled corpus came from and then rendered in the default format:
+  the operator gets a plausible document whose provenance is false and whose rendering is not the one
+  they asked for, and nothing downstream can catch it, because a commit is an opaque string and
+  `--format`'s default is valid. argparse refuses a next-token value that reads as a flag, and so
+  does this now -- **with argparse's exception for a negative number**, because `--grace-ms -1` is a
+  command line a ported case runs and a guard written without the exception would leave that case
+  green for the parser's refusal instead of the window model's. `--flag=--literal` is the escape
+  hatch for a value that really does begin with a dash, which is argparse's escape hatch too.
 
 **Alternatives.**
 
