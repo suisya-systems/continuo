@@ -14,10 +14,12 @@
  * adapter, not of the exam.
  */
 
+import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-import { describe } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { caseRoot } from "../testkit/cases.js";
 import { parametrize } from "../testkit/parametrize.js";
@@ -221,6 +223,56 @@ describe("the conformance battery", () => {
 
   parametrize("the checkpoint vocabulary is the contract's", ADAPTERS, (adapter) => {
     conformance.checkVocabularyMatches(adapter);
+  });
+
+  test("target-only -- the spawn command passes an ESM specifier to --import, not a path", () => {
+    // TARGET-ONLY, and it exists because CI found what six review rounds and
+    // every local run did not: the belt was green on four ubuntu cells and
+    // failed on BOTH Windows cells with
+    // `ERR_UNSUPPORTED_ESM_URL_SCHEME: ... On Windows, absolute paths must be
+    // valid file:// URLs. Received protocol 'd:'`.
+    //
+    // `--import` takes an ESM SPECIFIER. A POSIX absolute path happens to be an
+    // acceptable one, so passing `fileURLToPath(...)` worked on every machine
+    // this belt was developed on; a Windows absolute path parses as a URL whose
+    // scheme is the DRIVE LETTER, and the loader refuses it. The source has no
+    // counterpart -- it spawns `python -m <dotted module>` and never crosses a
+    // path/URL boundary at all -- so this is a hazard the port invented and has
+    // to pin itself.
+    //
+    // The assertion is platform-independent, which is the point: a raw POSIX
+    // path makes `new URL` throw (no base), and a raw Windows path yields a
+    // one-letter protocol. Either way this fails, on any host, without needing
+    // a Windows runner to notice.
+    for (const [, adapter] of ADAPTERS) {
+      const { prefixArguments } = adapter.driverCommand();
+      const importIndex = prefixArguments.indexOf("--import");
+      expect(importIndex, "the spawn command no longer passes --import").toBeGreaterThanOrEqual(0);
+      const specifier = prefixArguments[importIndex + 1];
+      expect(specifier, "--import was given no value").toBeDefined();
+      expect(
+        () => new URL(specifier as string),
+        `--import was given ${JSON.stringify(specifier)}, which is not a URL at all -- a bare ` +
+          "POSIX path. Windows rejects the equivalent outright",
+      ).not.toThrow();
+      expect(
+        new URL(specifier as string).protocol,
+        `--import was given ${JSON.stringify(specifier)}, whose scheme is not file:. A Windows ` +
+          "absolute path parses with the drive letter as its scheme, which is exactly the " +
+          "ERR_UNSUPPORTED_ESM_URL_SCHEME this pins",
+      ).toBe("file:");
+      // The shim it names has to actually be there, or the child dies before
+      // `main()` with a message about a missing file rather than a missing hook.
+      expect(existsSync(fileURLToPath(specifier as string))).toBe(true);
+
+      // The entry script is the other half and is deliberately NOT a URL: that
+      // argument is argv rather than a specifier, Node resolves a filesystem
+      // path there on every platform, and the driver's own entrypoint guard
+      // compares it against `process.argv[1]`.
+      const entry = prefixArguments[prefixArguments.length - 1] as string;
+      expect(entry.startsWith("file:")).toBe(false);
+      expect(existsSync(entry)).toBe(true);
+    }
   });
 
   parametrize("the driver accepts the contract CLI", ADAPTERS, (adapter) => {

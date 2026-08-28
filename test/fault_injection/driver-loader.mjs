@@ -19,13 +19,19 @@
  */
 
 import { existsSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export async function resolve(specifier, context, nextResolve) {
   if ((specifier.startsWith("./") || specifier.startsWith("../")) && specifier.endsWith(".js")) {
-    const parentPath = context.parentURL ? fileURLToPath(context.parentURL) : undefined;
-    const base = parentPath ? pathToFileURL(parentPath) : undefined;
-    const candidate = new URL(`${specifier.slice(0, -3)}.ts`, base);
+    // `context.parentURL` is ALREADY a URL string, so it is used as the base
+    // directly. The previous round trip through `fileURLToPath` and back was
+    // not merely redundant: converting a URL to a Windows path and re-parsing
+    // it is exactly the kind of step that reintroduces a bare `d:\...`, which
+    // is what Node's loader refuses.
+    if (context.parentURL === undefined) {
+      return nextResolve(specifier, context);
+    }
+    const candidate = new URL(`${specifier.slice(0, -3)}.ts`, context.parentURL);
     if (existsSync(fileURLToPath(candidate))) {
       return { url: candidate.href, shortCircuit: true, format: "module-typescript" };
     }

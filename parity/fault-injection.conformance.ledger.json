@@ -69,9 +69,11 @@
       }
     ],
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "why": "None. Every collected test in this file is a translation of a source case."
+      "count": 1,
+      "ids": [
+        "test/fault_injection/conformance.test.ts::the conformance battery > target-only -- the spawn command passes an ESM specifier to --import, not a path"
+      ],
+      "why": "One, and CI found what it pins -- not a review round. The belt was green on all four ubuntu cells and failed on BOTH Windows cells of PR #62 with `ERR_UNSUPPORTED_ESM_URL_SCHEME: ... On Windows, absolute paths must be valid file:// URLs. Received protocol 'd:'`. `--import` takes an ESM SPECIFIER, and the adapter's spawn command was handing it `fileURLToPath(...)` -- a filesystem path. A POSIX absolute path happens to be an acceptable specifier, so this was invisible on every machine the belt was developed on; a Windows absolute path parses as a URL whose scheme is the DRIVE LETTER, and the loader refuses it before the driver reaches main(). The source has no counterpart at all -- it spawns `python -m <dotted module>` and never crosses a path/URL boundary -- so this is a hazard the PORT invented and has to pin itself. The assertion is deliberately platform-independent: a raw POSIX path makes `new URL` throw for want of a base, and a raw Windows path yields a one-letter protocol, so the case fails on any host without needing a Windows runner to notice. Verified by falsification -- reinstating the pre-fix expression turns it red on Linux with a message naming the Windows consequence. It also pins the other half: the ENTRY SCRIPT argument must stay a path, because that position is argv rather than a specifier and is what the driver's own entrypoint guard compares against."
     }
   },
   "inherited_limitations": [

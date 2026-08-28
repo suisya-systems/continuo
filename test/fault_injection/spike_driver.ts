@@ -57,7 +57,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as pathResolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -2190,10 +2190,22 @@ export class SpikeAdapter implements FullFaultAdapter {
    */
   driverCommand(): { executable: string; prefixArguments: readonly string[] } {
     const major = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
-    const register = fileURLToPath(new URL("./driver-register.mjs", import.meta.url));
+    // `--import` takes an ESM SPECIFIER, not a filesystem path, and a Windows
+    // absolute path is not a valid one: `d:\\...` parses as a URL with scheme
+    // `d:`, which Node's loader rejects outright --
+    // `ERR_UNSUPPORTED_ESM_URL_SCHEME: ... On Windows, absolute paths must be
+    // valid file:// URLs`. On POSIX the same string happens to be an acceptable
+    // relative-ish specifier, which is why passing a path worked everywhere the
+    // belt was developed and failed on both Windows cells in CI. The `href` is
+    // correct on every platform, so it is what is passed.
+    const register = new URL("./driver-register.mjs", import.meta.url).href;
     const flags = major < 23 ? ["--experimental-strip-types"] : [];
     return {
       executable: process.execPath,
+      // The entry script stays a PATH: that argument is argv, not a specifier,
+      // and Node resolves a filesystem path there on every platform. It is also
+      // what `process.argv[1]` is compared against by the driver's own
+      // entrypoint guard, and what the no-host-clock scan reads.
       prefixArguments: [...flags, "--import", register, DRIVER_SOURCE_PATH],
     };
   }
@@ -2750,8 +2762,33 @@ function stableStringify(value: unknown): string {
   });
 }
 
+/**
+ * Whether this process was STARTED as the driver, rather than importing it.
+ *
+ * Compared as resolved paths rather than as raw strings. Every test file imports
+ * this module for `SPIKE_ADAPTER`, so a guard that wrongly said "yes" would run
+ * a role script inside the test worker -- and one that wrongly said "no" would
+ * make the spawned child exit 0 having emitted no `hello`, which the controller
+ * can only report as a barrier timeout with nothing in the trace to explain it.
+ *
+ * A raw string comparison is fine on POSIX, where argv[1] is the path as passed.
+ * It is not obviously fine on Windows, where a path can differ in separator or
+ * in drive-letter case and still name the same file, and where this belt has no
+ * runner to find out on -- the CI failure that prompted this pass never reached
+ * `main()` at all, so the guard has never actually executed there. `resolve()`
+ * normalises both sides on every platform, which costs nothing and removes the
+ * question.
+ */
+function startedAsDriver(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) {
+    return false;
+  }
+  return pathResolve(invoked) === pathResolve(DRIVER_SOURCE_PATH);
+}
+
 // The process entrypoint. Guarded so importing this module for `SPIKE_ADAPTER`
 // -- which every test file does -- does not run a role script.
-if (process.argv[1] === DRIVER_SOURCE_PATH) {
+if (startedAsDriver()) {
   process.exitCode = main(process.argv.slice(2));
 }
