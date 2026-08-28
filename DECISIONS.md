@@ -63,14 +63,6 @@ spaces distinct.
 | D-0030 | One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it | accepted |
 | D-0031 | The source inventory is complete and unconditional; porting intent is recorded separately | accepted |
 | D-0032 | Three not-porting proposals are ratified, and three belts start with D-ranges allocated | accepted |
-| D-0401 | The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store | accepted |
-| D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
-| D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
-| D-0404 | The ledger DDL is a shipped data file, and the belt asserts it reached `dist/` | accepted |
-| D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
-| D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
-| D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
-| D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -115,6 +107,7 @@ spaces distinct.
 | D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
 | D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
 | D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
+| D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
 
 ---
 
