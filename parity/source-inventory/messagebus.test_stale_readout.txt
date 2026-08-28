@@ -1,0 +1,2 @@
+tests/messagebus/test_stale_readout.py::test_delivery_is_unchanged_when_the_sessions_child_is_gone
+tests/messagebus/test_stale_readout.py::test_delivery_is_unchanged_when_the_state_cannot_be_observed

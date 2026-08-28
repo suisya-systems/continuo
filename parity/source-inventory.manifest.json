@@ -1,0 +1,583 @@
+{
+  "$comment": "The index of parity/source-inventory/, and the reconciliation between the node ids it holds and interlock's suite baseline. The inventory files themselves carry node ids and nothing else -- no comments, no notes -- because scripts/parity-check.mjs reads every non-empty line as a node id. Everything that is ABOUT the inventory lives here instead. Porting intent is deliberately not here either: see the belts document below.",
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5715d5ff85736b1ae2ebfbb76fafb348b5",
+    "revision_short": "65f36c5",
+    "branch": "main"
+  },
+  "collection": {
+    "command": "PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider tests/",
+    "cwd": "the interlock checkout root",
+    "python": "3.12.3",
+    "pytest": "9.1.1",
+    "note": "The WHOLE suite is collected once and split by path afterwards. Collecting each subsystem in its own pytest run is not the same measurement: conftest hooks and import order differ between a whole-tree run and a single-directory one, so a per-subsystem run can collect a different set and nothing in the resulting files would say so. PYTHONDONTWRITEBYTECODE and -p no:cacheprovider keep the run from writing into the interlock checkout, which is read-only reference material here."
+  },
+  "suite_baseline": {
+    "collected": 2199,
+    "passed": 2190,
+    "skipped": 8,
+    "xfailed": 1,
+    "node_ids": 2194,
+    "collection_time_skipped_modules": 5,
+    "reconciliation": "2,194 node ids + 5 modules skipped at collection time = 2,199. pytest reports a module-level skip separately from the collected count, so the two numbers are not in disagreement -- they count different things. Five of the eight skips are those collection-time ones; the other three are ordinary skipped cases and DO have node ids, so they are in the inventory. 2,190 is the passed count, an outcome breakdown, and is not the denominator.",
+    "verified_at": "PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/ at 65f36c5 reports '2190 passed, 8 skipped, 1 xfailed'."
+  },
+  "collection_time_skips": {
+    "$comment": "Modules whose pytest.importorskip() runs at import time, so pytest collects NO node id from them. They are recorded here rather than as empty inventory files: an empty file cannot be told apart from a generation failure, and a fabricated node id would be a case that does not exist. Each is named with the reason its own source gives.",
+    "modules": [
+      {
+        "path": "tests/attention/test_broker_journal_contract.py",
+        "line": 21,
+        "requires": "claude_org_runtime.broker.server",
+        "reason": "Quarantined by interlock#39: the carried invariants in this file are kept verbatim, but they drive broker/server.py, which PORTING_LEDGER.md classes discard. Re-target onto the MessageBus rewrite (Q-0023)."
+      },
+      {
+        "path": "tests/broker/test_control_plane.py",
+        "line": 20,
+        "requires": "claude_org_runtime.broker.server",
+        "reason": "Quarantined by interlock#39: the carried invariants in this file are kept verbatim, but they drive broker/server.py, which PORTING_LEDGER.md classes discard. Re-target onto the MessageBus rewrite (Q-0023)."
+      },
+      {
+        "path": "tests/broker/test_delivery.py",
+        "line": 24,
+        "requires": "claude_org_runtime.broker.server",
+        "reason": "Quarantined by interlock#39: the carried invariants in this file are kept verbatim, but they drive broker/server.py, which PORTING_LEDGER.md classes discard. Re-target onto the MessageBus rewrite (Q-0023)."
+      },
+      {
+        "path": "tests/broker/test_notify.py",
+        "line": 20,
+        "requires": "claude_org_runtime.broker.server",
+        "reason": "Quarantined by interlock#39: the carried invariants in this file are kept verbatim, but they drive broker/server.py, which PORTING_LEDGER.md classes discard. Re-target onto the MessageBus rewrite (Q-0023)."
+      },
+      {
+        "path": "tests/broker/test_store.py",
+        "line": 15,
+        "requires": "claude_org_runtime.broker.server",
+        "reason": "Quarantined by interlock#39: the carried invariants in this file are kept verbatim, but they drive broker/server.py, which PORTING_LEDGER.md classes discard. Re-target onto the MessageBus rewrite (Q-0023)."
+      }
+    ]
+  },
+  "porting_intent": {
+    "$comment": "Inventorying a case is evidence, not a commitment to port it. Which subsystem belongs to which belt, and which is not being ported at all, is recorded separately and is a human gate.",
+    "document": "parity/source-inventory.belts.md"
+  },
+  "totals": {
+    "subsystems": 18,
+    "files": 77,
+    "node_ids": 2194
+  },
+  "subsystems": [
+    {
+      "name": "control_plane",
+      "collected": 585,
+      "inventory": "parity/source-inventory/control_plane.all.txt",
+      "files": [
+        {
+          "path": "tests/control_plane/test_ai_invocation.py",
+          "collected": 31,
+          "inventory": "parity/source-inventory/control_plane.test_ai_invocation.txt"
+        },
+        {
+          "path": "tests/control_plane/test_ci_ingest.py",
+          "collected": 25,
+          "inventory": "parity/source-inventory/control_plane.test_ci_ingest.txt"
+        },
+        {
+          "path": "tests/control_plane/test_events.py",
+          "collected": 57,
+          "inventory": "parity/source-inventory/control_plane.test_events.txt"
+        },
+        {
+          "path": "tests/control_plane/test_gates.py",
+          "collected": 46,
+          "inventory": "parity/source-inventory/control_plane.test_gates.txt"
+        },
+        {
+          "path": "tests/control_plane/test_lease.py",
+          "collected": 60,
+          "inventory": "parity/source-inventory/control_plane.test_lease.txt"
+        },
+        {
+          "path": "tests/control_plane/test_migrator.py",
+          "collected": 64,
+          "inventory": "parity/source-inventory/control_plane.test_migrator.txt"
+        },
+        {
+          "path": "tests/control_plane/test_outbox.py",
+          "collected": 74,
+          "inventory": "parity/source-inventory/control_plane.test_outbox.txt"
+        },
+        {
+          "path": "tests/control_plane/test_policy.py",
+          "collected": 34,
+          "inventory": "parity/source-inventory/control_plane.test_policy.txt"
+        },
+        {
+          "path": "tests/control_plane/test_policy_seed.py",
+          "collected": 35,
+          "inventory": "parity/source-inventory/control_plane.test_policy_seed.txt"
+        },
+        {
+          "path": "tests/control_plane/test_production_schema.py",
+          "collected": 44,
+          "inventory": "parity/source-inventory/control_plane.test_production_schema.txt"
+        },
+        {
+          "path": "tests/control_plane/test_repo_link.py",
+          "collected": 23,
+          "inventory": "parity/source-inventory/control_plane.test_repo_link.txt"
+        },
+        {
+          "path": "tests/control_plane/test_spike_schema.py",
+          "collected": 62,
+          "inventory": "parity/source-inventory/control_plane.test_spike_schema.txt"
+        },
+        {
+          "path": "tests/control_plane/test_watcher.py",
+          "collected": 30,
+          "inventory": "parity/source-inventory/control_plane.test_watcher.txt"
+        }
+      ]
+    },
+    {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "files": [
+        {
+          "path": "tests/measurement/test_ac9.py",
+          "collected": 23,
+          "inventory": "parity/source-inventory/measurement.test_ac9.txt"
+        },
+        {
+          "path": "tests/measurement/test_canary.py",
+          "collected": 21,
+          "inventory": "parity/source-inventory/measurement.test_canary.txt"
+        },
+        {
+          "path": "tests/measurement/test_cohort.py",
+          "collected": 23,
+          "inventory": "parity/source-inventory/measurement.test_cohort.txt"
+        },
+        {
+          "path": "tests/measurement/test_false_termination.py",
+          "collected": 20,
+          "inventory": "parity/source-inventory/measurement.test_false_termination.txt"
+        },
+        {
+          "path": "tests/measurement/test_fixtures.py",
+          "collected": 59,
+          "inventory": "parity/source-inventory/measurement.test_fixtures.txt"
+        },
+        {
+          "path": "tests/measurement/test_known_holes.py",
+          "collected": 19,
+          "inventory": "parity/source-inventory/measurement.test_known_holes.txt"
+        },
+        {
+          "path": "tests/measurement/test_latency.py",
+          "collected": 17,
+          "inventory": "parity/source-inventory/measurement.test_latency.txt"
+        },
+        {
+          "path": "tests/measurement/test_measurement_cli.py",
+          "collected": 25,
+          "inventory": "parity/source-inventory/measurement.test_measurement_cli.txt"
+        },
+        {
+          "path": "tests/measurement/test_provenance.py",
+          "collected": 61,
+          "inventory": "parity/source-inventory/measurement.test_provenance.txt"
+        },
+        {
+          "path": "tests/measurement/test_query_catalogue.py",
+          "collected": 8,
+          "inventory": "parity/source-inventory/measurement.test_query_catalogue.txt"
+        },
+        {
+          "path": "tests/measurement/test_reader.py",
+          "collected": 30,
+          "inventory": "parity/source-inventory/measurement.test_reader.txt"
+        },
+        {
+          "path": "tests/measurement/test_render.py",
+          "collected": 60,
+          "inventory": "parity/source-inventory/measurement.test_render.txt"
+        },
+        {
+          "path": "tests/measurement/test_shadow.py",
+          "collected": 37,
+          "inventory": "parity/source-inventory/measurement.test_shadow.txt"
+        },
+        {
+          "path": "tests/measurement/test_windows.py",
+          "collected": 22,
+          "inventory": "parity/source-inventory/measurement.test_windows.txt"
+        }
+      ]
+    },
+    {
+      "name": "fencing",
+      "collected": 124,
+      "inventory": "parity/source-inventory/fencing.all.txt",
+      "files": [
+        {
+          "path": "tests/fencing/test_battery_coverage.py",
+          "collected": 9,
+          "inventory": "parity/source-inventory/fencing.test_battery_coverage.txt"
+        },
+        {
+          "path": "tests/fencing/test_deny_hook.py",
+          "collected": 21,
+          "inventory": "parity/source-inventory/fencing.test_deny_hook.txt"
+        },
+        {
+          "path": "tests/fencing/test_readback.py",
+          "collected": 15,
+          "inventory": "parity/source-inventory/fencing.test_readback.txt"
+        },
+        {
+          "path": "tests/fencing/test_renderer.py",
+          "collected": 40,
+          "inventory": "parity/source-inventory/fencing.test_renderer.txt"
+        },
+        {
+          "path": "tests/fencing/test_restart_preserves_fence.py",
+          "collected": 21,
+          "inventory": "parity/source-inventory/fencing.test_restart_preserves_fence.txt"
+        },
+        {
+          "path": "tests/fencing/test_spawn_precondition.py",
+          "collected": 18,
+          "inventory": "parity/source-inventory/fencing.test_spawn_precondition.txt"
+        }
+      ]
+    },
+    {
+      "name": "settings",
+      "collected": 183,
+      "inventory": "parity/source-inventory/settings.all.txt",
+      "files": [
+        {
+          "path": "tests/test_settings_generator.py",
+          "collected": 106,
+          "inventory": "parity/source-inventory/settings.test_settings_generator.txt"
+        },
+        {
+          "path": "tests/test_sandbox_symlink_deny.py",
+          "collected": 77,
+          "inventory": "parity/source-inventory/settings.test_sandbox_symlink_deny.txt"
+        }
+      ]
+    },
+    {
+      "name": "attention",
+      "collected": 194,
+      "inventory": "parity/source-inventory/attention.all.txt",
+      "files": [
+        {
+          "path": "tests/attention/test_classifier.py",
+          "collected": 61,
+          "inventory": "parity/source-inventory/attention.test_classifier.txt"
+        },
+        {
+          "path": "tests/attention/test_cli.py",
+          "collected": 26,
+          "inventory": "parity/source-inventory/attention.test_cli.txt"
+        },
+        {
+          "path": "tests/attention/test_config.py",
+          "collected": 34,
+          "inventory": "parity/source-inventory/attention.test_config.txt"
+        },
+        {
+          "path": "tests/attention/test_dedup.py",
+          "collected": 10,
+          "inventory": "parity/source-inventory/attention.test_dedup.txt"
+        },
+        {
+          "path": "tests/attention/test_notify.py",
+          "collected": 34,
+          "inventory": "parity/source-inventory/attention.test_notify.txt"
+        },
+        {
+          "path": "tests/attention/test_readers.py",
+          "collected": 29,
+          "inventory": "parity/source-inventory/attention.test_readers.txt"
+        }
+      ]
+    },
+    {
+      "name": "broker",
+      "collected": 54,
+      "inventory": "parity/source-inventory/broker.all.txt",
+      "files": [
+        {
+          "path": "tests/broker/test_residents.py",
+          "collected": 54,
+          "inventory": "parity/source-inventory/broker.test_residents.txt"
+        }
+      ]
+    },
+    {
+      "name": "canary",
+      "collected": 70,
+      "inventory": "parity/source-inventory/canary.all.txt",
+      "files": [
+        {
+          "path": "tests/canary/test_audit.py",
+          "collected": 18,
+          "inventory": "parity/source-inventory/canary.test_audit.txt"
+        },
+        {
+          "path": "tests/canary/test_ledger.py",
+          "collected": 27,
+          "inventory": "parity/source-inventory/canary.test_ledger.txt"
+        },
+        {
+          "path": "tests/canary/test_rehearsal.py",
+          "collected": 1,
+          "inventory": "parity/source-inventory/canary.test_rehearsal.txt"
+        },
+        {
+          "path": "tests/canary/test_routing.py",
+          "collected": 11,
+          "inventory": "parity/source-inventory/canary.test_routing.txt"
+        },
+        {
+          "path": "tests/canary/test_structural.py",
+          "collected": 5,
+          "inventory": "parity/source-inventory/canary.test_structural.txt"
+        },
+        {
+          "path": "tests/canary/test_synthetic_v1.py",
+          "collected": 8,
+          "inventory": "parity/source-inventory/canary.test_synthetic_v1.txt"
+        }
+      ]
+    },
+    {
+      "name": "curator",
+      "collected": 71,
+      "inventory": "parity/source-inventory/curator.all.txt",
+      "files": [
+        {
+          "path": "tests/curator/test_candidate_digest.py",
+          "collected": 12,
+          "inventory": "parity/source-inventory/curator.test_candidate_digest.txt"
+        },
+        {
+          "path": "tests/curator/test_path_audit.py",
+          "collected": 25,
+          "inventory": "parity/source-inventory/curator.test_path_audit.txt"
+        },
+        {
+          "path": "tests/curator/test_promotion_gate.py",
+          "collected": 34,
+          "inventory": "parity/source-inventory/curator.test_promotion_gate.txt"
+        }
+      ]
+    },
+    {
+      "name": "fault_injection",
+      "collected": 98,
+      "inventory": "parity/source-inventory/fault_injection.all.txt",
+      "files": [
+        {
+          "path": "tests/fault_injection/test_cases.py",
+          "collected": 22,
+          "inventory": "parity/source-inventory/fault_injection.test_cases.txt"
+        },
+        {
+          "path": "tests/fault_injection/test_conformance.py",
+          "collected": 34,
+          "inventory": "parity/source-inventory/fault_injection.test_conformance.txt"
+        },
+        {
+          "path": "tests/fault_injection/test_import_graph.py",
+          "collected": 3,
+          "inventory": "parity/source-inventory/fault_injection.test_import_graph.txt"
+        },
+        {
+          "path": "tests/fault_injection/test_manifest.py",
+          "collected": 26,
+          "inventory": "parity/source-inventory/fault_injection.test_manifest.txt"
+        },
+        {
+          "path": "tests/fault_injection/test_protocol.py",
+          "collected": 13,
+          "inventory": "parity/source-inventory/fault_injection.test_protocol.txt"
+        }
+      ]
+    },
+    {
+      "name": "gate_item11",
+      "collected": 64,
+      "inventory": "parity/source-inventory/gate_item11.all.txt",
+      "files": [
+        {
+          "path": "tests/gate_item11/test_no_provider_detail_leaks.py",
+          "collected": 35,
+          "inventory": "parity/source-inventory/gate_item11.test_no_provider_detail_leaks.txt"
+        },
+        {
+          "path": "tests/gate_item11/test_registry_availability.py",
+          "collected": 4,
+          "inventory": "parity/source-inventory/gate_item11.test_registry_availability.txt"
+        },
+        {
+          "path": "tests/gate_item11/test_substitution_scenarios.py",
+          "collected": 12,
+          "inventory": "parity/source-inventory/gate_item11.test_substitution_scenarios.txt"
+        },
+        {
+          "path": "tests/gate_item11/test_suite_runs_unchanged.py",
+          "collected": 13,
+          "inventory": "parity/source-inventory/gate_item11.test_suite_runs_unchanged.txt"
+        }
+      ]
+    },
+    {
+      "name": "gate_item2",
+      "collected": 34,
+      "inventory": "parity/source-inventory/gate_item2.all.txt",
+      "files": [
+        {
+          "path": "tests/gate_item2/test_mediated_real_provider.py",
+          "collected": 5,
+          "inventory": "parity/source-inventory/gate_item2.test_mediated_real_provider.txt"
+        },
+        {
+          "path": "tests/gate_item2/test_orchestrator_walk.py",
+          "collected": 23,
+          "inventory": "parity/source-inventory/gate_item2.test_orchestrator_walk.txt"
+        },
+        {
+          "path": "tests/gate_item2/test_session_driver_harness.py",
+          "collected": 6,
+          "inventory": "parity/source-inventory/gate_item2.test_session_driver_harness.txt"
+        }
+      ]
+    },
+    {
+      "name": "gate_record",
+      "collected": 64,
+      "inventory": "parity/source-inventory/gate_record.all.txt",
+      "files": [
+        {
+          "path": "tests/gate_record/test_gate_record.py",
+          "collected": 64,
+          "inventory": "parity/source-inventory/gate_record.test_gate_record.txt"
+        }
+      ]
+    },
+    {
+      "name": "messagebus",
+      "collected": 43,
+      "inventory": "parity/source-inventory/messagebus.all.txt",
+      "files": [
+        {
+          "path": "tests/messagebus/test_carried_specifications.py",
+          "collected": 7,
+          "inventory": "parity/source-inventory/messagebus.test_carried_specifications.txt"
+        },
+        {
+          "path": "tests/messagebus/test_endpoint.py",
+          "collected": 8,
+          "inventory": "parity/source-inventory/messagebus.test_endpoint.txt"
+        },
+        {
+          "path": "tests/messagebus/test_import_graph.py",
+          "collected": 16,
+          "inventory": "parity/source-inventory/messagebus.test_import_graph.txt"
+        },
+        {
+          "path": "tests/messagebus/test_messagebus.py",
+          "collected": 10,
+          "inventory": "parity/source-inventory/messagebus.test_messagebus.txt"
+        },
+        {
+          "path": "tests/messagebus/test_stale_readout.py",
+          "collected": 2,
+          "inventory": "parity/source-inventory/messagebus.test_stale_readout.txt"
+        }
+      ]
+    },
+    {
+      "name": "scrub",
+      "collected": 20,
+      "inventory": "parity/source-inventory/scrub.all.txt",
+      "files": [
+        {
+          "path": "tests/scrub/test_scrub.py",
+          "collected": 20,
+          "inventory": "parity/source-inventory/scrub.test_scrub.txt"
+        }
+      ]
+    },
+    {
+      "name": "secretary",
+      "collected": 11,
+      "inventory": "parity/source-inventory/secretary.all.txt",
+      "files": [
+        {
+          "path": "tests/secretary/test_behaviour.py",
+          "collected": 6,
+          "inventory": "parity/source-inventory/secretary.test_behaviour.txt"
+        },
+        {
+          "path": "tests/secretary/test_structural.py",
+          "collected": 5,
+          "inventory": "parity/source-inventory/secretary.test_structural.txt"
+        }
+      ]
+    },
+    {
+      "name": "session",
+      "collected": 142,
+      "inventory": "parity/source-inventory/session.all.txt",
+      "files": [
+        {
+          "path": "tests/session/test_claude_cli_provider.py",
+          "collected": 65,
+          "inventory": "parity/source-inventory/session.test_claude_cli_provider.txt"
+        },
+        {
+          "path": "tests/session/test_provider_contract.py",
+          "collected": 34,
+          "inventory": "parity/source-inventory/session.test_provider_contract.txt"
+        },
+        {
+          "path": "tests/session/test_stub_provider.py",
+          "collected": 43,
+          "inventory": "parity/source-inventory/session.test_stub_provider.txt"
+        }
+      ]
+    },
+    {
+      "name": "migrate",
+      "collected": 11,
+      "inventory": "parity/source-inventory/migrate.all.txt",
+      "files": [
+        {
+          "path": "tests/test_migrate.py",
+          "collected": 11,
+          "inventory": "parity/source-inventory/migrate.test_migrate.txt"
+        }
+      ]
+    },
+    {
+      "name": "package_smoke",
+      "collected": 1,
+      "inventory": "parity/source-inventory/package_smoke.all.txt",
+      "files": [
+        {
+          "path": "tests/test_smoke.py",
+          "collected": 1,
+          "inventory": "parity/source-inventory/package_smoke.test_smoke.txt"
+        }
+      ]
+    }
+  ]
+}

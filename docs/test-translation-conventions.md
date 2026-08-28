@@ -547,12 +547,63 @@ Each of these seven has been observed failing; a check never seen red is not a c
 ### The source inventory
 
 `parity/source-inventory/` holds node id snapshots taken from interlock at the recorded revision, so
-the check runs without an interlock checkout. Regenerate with:
+the check runs without an interlock checkout. It is **complete**: every node id pytest collects from
+interlock at `65f36c5`, all 2,194, across all 18 subsystems -- not only the ones a belt has claimed.
+
+Collect the **whole suite once** and split the output by path afterwards:
 
 ```
 PYTHONPATH=<interlock>/src PYTHONDONTWRITEBYTECODE=1 \
-  python3 -m pytest tests/control_plane --collect-only -q -p no:cacheprovider
+  python3 -m pytest tests/ --collect-only -q -p no:cacheprovider
 ```
+
+Not once per subsystem. A single-directory run and a whole-tree run are different measurements --
+conftest hooks and import order differ between them, so the two can collect different sets and
+nothing in the resulting files would say which you got.
+
+Each file holds **node ids and nothing else**. No comments, no notes, no blank lines: the parity
+check reads every non-empty line as a node id, so a `# ...` line there is a source case that does
+not exist. Everything that is *about* the inventory goes in the manifest below instead.
+
+### The inventory manifest, and the two things it keeps apart
+
+`parity/source-inventory.manifest.json` is the inventory's index: the interlock revision, the exact
+collection command and the Python and pytest versions that produced it, every subsystem and file
+with its count, and the reconciliation with the suite baseline.
+
+It also records the **five modules pytest never collects**. Each has a module-level
+`pytest.importorskip("claude_org_runtime.broker.server")`, so it contributes no node id and cannot be
+inventoried. They are named in the manifest with the reason each file gives, rather than represented
+as empty inventory files -- an empty file cannot be told apart from a generation failure, and a
+fabricated node id would be a case that does not exist.
+
+What the manifest deliberately does **not** hold is porting intent. Being in the inventory is
+evidence that a case exists, not a commitment that it will be ported; if the inventory only held
+what someone had decided to port, the denominator would move with every decision and could never be
+reconciled against interlock. Which subsystem belongs to which belt, and which is proposed for no
+port at all, lives in `parity/source-inventory.belts.md` and is a human gate. See `D-0031`.
+
+### What the inventory check enforces
+
+`scripts/source-inventory-check.mjs`, run by `npm run inventory` and by the `parity` CI job. It
+exists because `parity-check.mjs` only reaches the inventories a **ledger** points at, which leaves
+every not-yet-ported subsystem checked by nothing:
+
+1. **stray** -- an inventory file the manifest does not name, or a named file that is absent.
+2. **shape** -- a line that is not a node id under the file's own source path. This is what keeps
+   the inventories comment-free.
+3. **count** -- a recorded count that disagrees with the lines, or totals that do not add up.
+4. **aggregate** -- a `.all.txt` that is not exactly the concatenation of its per-file inventories.
+5. **duplicate** -- one node id in two inventories, which is how a total reaches 2,194 while holding
+   fewer distinct cases.
+6. **baseline** -- node ids plus collection-time-skipped modules must be the collected total, and
+   the outcome breakdown must add up to it too.
+7. **fabricated** -- a node id from a module recorded as skipped at collection time.
+8. **unclassified** -- a subsystem the belts document does not name. It checks that a status was
+   *given*, never which one: the answer is a human's, and a check that enforced today's answer would
+   make changing it a fight with CI.
+
+Each of these eight has been observed failing; a check never seen red is not a check.
 
 ### The suite baseline
 

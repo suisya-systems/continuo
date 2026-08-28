@@ -48,10 +48,11 @@
     "attw": "attw --pack .",
     "check:package": "npm run build && npm run publint && npm run attw",
     "parity": "node scripts/parity-check.mjs",
+    "inventory": "node scripts/source-inventory-check.mjs",
     "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run lint && npm run knip && npm run typecheck && npm run smoke:native && npm run test && npm run parity"
+    "verify": "npm run lint && npm run knip && npm run typecheck && npm run smoke:native && npm run test && npm run parity && npm run inventory"
   },
   "dependencies": {
     "@types/better-sqlite3": "7.6.13",

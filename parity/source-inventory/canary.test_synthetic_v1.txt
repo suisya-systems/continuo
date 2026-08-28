@@ -1,0 +1,8 @@
+tests/canary/test_synthetic_v1.py::test_creation_refuses_an_existing_path
+tests/canary/test_synthetic_v1.py::test_a_run_starts_once
+tests/canary/test_synthetic_v1.py::test_finishing_appends_rather_than_edits
+tests/canary/test_synthetic_v1.py::test_a_finish_needs_a_start_and_happens_once
+tests/canary/test_synthetic_v1.py::test_a_broken_store_is_refused_not_read_as_empty
+tests/canary/test_synthetic_v1.py::test_a_record_without_a_run_id_is_refused
+tests/canary/test_synthetic_v1.py::test_an_append_does_not_fuse_onto_a_torn_tail
+tests/canary/test_synthetic_v1.py::test_run_ids_answer_the_audit_question

@@ -1,0 +1,5 @@
+tests/canary/test_structural.py::test_the_routing_layer_imports_no_other_interlock_module
+tests/canary/test_structural.py::test_the_import_guard_itself_catches_the_ways_around_it
+tests/canary/test_structural.py::test_every_artifact_carries_the_one_marking_sentence
+tests/canary/test_structural.py::test_the_marking_makes_all_four_claims
+tests/canary/test_structural.py::test_the_written_record_leaves_q_0005_open

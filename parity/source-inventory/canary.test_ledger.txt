@@ -1,0 +1,27 @@
+tests/canary/test_ledger.py::test_the_ddl_carries_the_rehearsal_marking_as_one_sentence
+tests/canary/test_ledger.py::test_the_ddl_is_refused_if_the_marking_is_removed
+tests/canary/test_ledger.py::test_a_run_never_changes_owning_system
+tests/canary/test_ledger.py::test_a_run_owner_row_admits_no_update_at_all
+tests/canary/test_ledger.py::test_a_run_owner_row_is_never_deleted
+tests/canary/test_ledger.py::test_or_replace_is_not_a_way_around_the_owner_trigger
+tests/canary/test_ledger.py::test_or_replace_is_not_a_way_around_the_decision_history
+tests/canary/test_ledger.py::test_a_run_owner_must_agree_with_the_decision_it_cites
+tests/canary/test_ledger.py::test_one_ledger_row_per_run
+tests/canary/test_ledger.py::test_a_routing_decision_is_never_edited
+tests/canary/test_ledger.py::test_a_routing_decision_is_never_deleted
+tests/canary/test_ledger.py::test_a_decision_cannot_be_back_filled_behind_the_newest
+tests/canary/test_ledger.py::test_the_owning_system_vocabulary_is_closed[INSERT INTO routing_decision (owning_system, decided_at_ms, reason) VALUES ('v1', ?, 'r')]
+tests/canary/test_ledger.py::test_the_owning_system_vocabulary_is_closed[INSERT INTO run_owner (run_id, owning_system, decision_seq, routed_at_ms) VALUES ('run-x', 'v1', 1, ?)]
+tests/canary/test_ledger.py::test_a_timestamp_that_is_not_an_integer_is_refused
+tests/canary/test_ledger.py::test_an_empty_reason_is_refused
+tests/canary/test_ledger.py::test_an_absent_ledger_is_not_an_empty_one
+tests/canary/test_ledger.py::test_creation_refuses_an_existing_path
+tests/canary/test_ledger.py::test_a_file_that_is_not_a_database_is_refused
+tests/canary/test_ledger.py::test_some_other_database_is_refused_by_application_id
+tests/canary/test_ledger.py::test_another_revision_is_refused_never_migrated
+tests/canary/test_ledger.py::test_a_ledger_that_lost_a_trigger_is_refused
+tests/canary/test_ledger.py::test_a_ledger_that_lost_a_table_is_missing_state_not_empty
+tests/canary/test_ledger.py::test_a_dangling_ledger_reference_is_refused
+tests/canary/test_ledger.py::test_a_directory_is_not_a_ledger
+tests/canary/test_ledger.py::test_a_verifiable_ledger_reopens_with_its_rows
+tests/canary/test_ledger.py::test_the_ledger_application_id_is_not_the_control_plane_s
