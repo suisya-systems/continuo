@@ -483,4 +483,33 @@ describe("integer precision in the digest (target-only)", () => {
       .run("run-1", 9007199254740993n);
     expect(canonicalSqliteBytes(store).toString("utf-8")).toContain("9007199254740993");
   });
+
+  // The same defect, in the other read. `snapshotStores` compares routing rows
+  // element by element rather than through the digest, so it needs the property
+  // separately -- and it was missed on the first pass, which is why it is
+  // pinned rather than argued.
+  test("target-only -- a routing timestamp past 2**53 survives into the snapshot", () => {
+    const { ledger, interlock, synthetic } = fixtures();
+
+    // Written with a raw INSERT because the routing point's `nowMs` is a
+    // `number` and the whole point is a value a number cannot carry. INSERT is
+    // the one write `routing_decision` allows -- it is append-only, not
+    // read-only -- so this builds real history rather than editing it.
+    ledger
+      .prepare(
+        "INSERT INTO routing_decision (owning_system, decided_at_ms, reason) VALUES (?, ?, 'baseline')",
+      )
+      .run(SYNTHETIC_V1, 9007199254740993n);
+
+    const snapshot = snapshotStores(ledger, interlock, synthetic);
+    const decidedAtMs = snapshot.routingDecisionRows[0]?.[2];
+
+    // The exact value, not the even double 9007199254740992 it would round to.
+    expect(decidedAtMs).toBe(9007199254740993n);
+    expect(Number(9007199254740992n) === Number(9007199254740993n)).toBe(true);
+
+    // And a history carrying it compares as append-only against itself, so the
+    // bigint has not merely become incomparable.
+    expect(compareAcrossRollback(snapshot, snapshot).decisionsAppendedOnly).toBe(true);
+  });
 });

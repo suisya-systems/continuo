@@ -476,9 +476,9 @@ export function writerAudit(
 
 /** One `routing_decision` row: `(decision_seq, owning_system, decided_at_ms, reason)`. */
 export type RoutingDecisionRow = readonly [
-  decisionSeq: number,
+  decisionSeq: number | bigint,
   owningSystem: string,
-  decidedAtMs: number,
+  decidedAtMs: number | bigint,
   reason: string,
 ];
 
@@ -519,12 +519,23 @@ export function snapshotStores(
             "  FROM routing_decision ORDER BY decision_seq",
         )
         .raw()
+        .safeIntegers(true)
         .all() as unknown[][]
     ).map(
       // `.raw()` gives each row as an array in the SELECT's column order, which
       // is Python's `tuple(row)`. Frozen because the snapshot is a value and one
       // ported case passes the same snapshot in as both `before` and `after`.
-      (row) => Object.freeze(row) as unknown as RoutingDecisionRow,
+      //
+      // `safeIntegers(true)` for the same reason `canonicalSqliteBytes` asks for
+      // it: Python's `int` is arbitrary precision, so the source's tuples cannot
+      // lose a 64-bit value, and `compareAcrossRollback` compares these rows
+      // element by element. Read as doubles, a `decided_at_ms` edited from
+      // 9007199254740992 to ...93 compares EQUAL, and a rewritten history is
+      // reported as append-only -- the false negative this comparison exists to
+      // rule out. Values inside the safe range are narrowed back to `number`, so
+      // the tuples a caller sees are unchanged for every timestamp a clock
+      // produces; only a value a double genuinely cannot hold stays a `bigint`.
+      (row) => Object.freeze(row.map(narrowInteger)) as unknown as RoutingDecisionRow,
     ),
   });
 }
@@ -595,6 +606,22 @@ export function compareAcrossRollback(
     onlyTheRoutingDecisionChanged:
       interlockIdentical && syntheticV1Identical && runLedgerIdentical && decisionsAppendedOnly,
   });
+}
+
+/**
+ * A `bigint` that a double holds exactly, as a `number`; anything else as it is.
+ *
+ * The rows are read with safe integers so that no value is silently rounded, but
+ * handing every timestamp back as a `bigint` would change the shape of a tuple
+ * the source spells with plain ints, for values where the two cannot differ.
+ * Narrowing where it is lossless keeps both properties.
+ */
+function narrowInteger(value: unknown): unknown {
+  if (typeof value !== "bigint") {
+    return value;
+  }
+  const asNumber = Number(value);
+  return Number.isSafeInteger(asNumber) ? asNumber : value;
 }
 
 /** Two routing rows, compared the way Python compares two tuples. */
