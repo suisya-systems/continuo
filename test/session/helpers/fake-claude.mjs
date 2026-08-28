@@ -184,6 +184,15 @@ function floatFromEnv(name, fallback) {
     errorOut(`fake-claude: ${name}=${JSON.stringify(raw)} is not a number`);
     process.exit(1);
   }
+  // `time.sleep`'s own refusal, which the finite check above does not cover: a
+  // negative is a perfectly good `float` and CPython raises on it, while
+  // `setTimeout(fn, -1000)` fires on the next turn. Same class as difference
+  // (5) and the same consequence -- a mistyped `FAKE_SLEEP=-1` would turn every
+  // hanging-child case into an exiting-child case, silently.
+  if (parsed < 0) {
+    errorOut(`fake-claude: ${name}=${JSON.stringify(raw)} is not a non-negative number`);
+    process.exit(1);
+  }
   return parsed;
 }
 

@@ -40,6 +40,7 @@ import {
   reopenedPipe,
   stopSessionsAtTeardown,
   stubRequest,
+  waitForState,
   waitUntilObserved,
 } from "./helpers/session-cases.js";
 import { repoSource } from "./helpers/source-text.js";
@@ -955,6 +956,73 @@ test("start routes both the probe and the child through the runtime seam (target
     [process.execPath, "-e", expect.stringContaining("process.versions.node")],
     [process.execPath, "-e", DEFAULT_CHILD_PROGRAM],
   ]);
+});
+
+test("an announce delay CPython could not sleep on exits the child (target-only)", async () => {
+  // Rule 9 in the child program. `announce_after` is caller-supplied opaque
+  // settings, and the source's child spells the delay
+  // `time.sleep(float(os.environ[...]))`, so every value below RAISES there and
+  // the caller observes a child that exited. `Number(...)` plus `setTimeout`
+  // is not that pair: `Number("")` is `0`, `Number("x")` is `NaN`, and
+  // `setTimeout` reads both -- and every negative -- as *fire immediately*, so
+  // each of these was a healthy live session announcing `working`.
+  //
+  // No source case can construct the difference, because CPython has no value
+  // that is both a float and not one; each entry is annotated with WHICH of
+  // the two calls refuses it, measured against CPython 3.12 rather than
+  // assumed.
+  const root = caseRoot("stub");
+  const provider = stubProvider(root);
+  const refused = [
+    "", // float("") raises: the empty string is not a number to Python at all
+    "x", // float("x") raises
+    "1_0_", // float() takes `1_0` and refuses a trailing separator
+    "-1", // float() takes it; time.sleep refuses a negative
+    "nan", // float() takes it; time.sleep raises ValueError on NaN
+    "inf", // float() takes it; time.sleep raises OverflowError
+  ];
+  for (const [index, announceAfter] of refused.entries()) {
+    const sessionId = `s-${String(index + 1)}`;
+    expect(
+      await provider.start(stubRequest(root, sessionId, { announce_after: announceAfter })),
+      announceAfter,
+    ).toBeInstanceOf(Ok);
+    // `exited-1`, exactly: an uncaught exception leaves a Node child with the
+    // same status CPython's uncaught `ValueError` leaves its own. A prefix
+    // comparison here would accept `exited-0`, which is the child announcing
+    // and then being closed -- the very outcome this case exists to forbid.
+    const readout = await waitForState(provider, sessionId, "exited-1");
+    expect(readout.providerState, announceAfter).toBe("exited-1");
+    // And nothing was announced on the way out: the state word is the child's
+    // and this child never had one to give.
+    expect(existsSync(provider.stateFileOf(sessionId) as string), announceAfter).toBe(false);
+  }
+});
+
+test("an announce delay past setTimeout's 32-bit ceiling still waits (target-only)", async () => {
+  // The same failure reached by arithmetic instead of by parsing, and the
+  // reason this is a second case rather than a line in the one above: the delay
+  // here is a perfectly ordinary number that both runtimes accept. `setTimeout`
+  // stores its delay in a signed 32-bit integer and FIRES IMMEDIATELY past
+  // 2**31-1 ms -- about 24.8 days -- with a warning and no error, where
+  // `time.sleep(3e6)` sleeps for 34 days. So the delay whose whole purpose is
+  // to hold the could-not-observe window open would slam it shut instead, and
+  // every case that leans on that window would be asserting a live child's
+  // silence while looking at an announced one.
+  const root = caseRoot("stub");
+  const provider = stubProvider(root);
+  expect(
+    await provider.start(stubRequest(root, "s-1", { announce_after: 3_000_000 })),
+  ).toBeInstanceOf(Ok);
+
+  // Several real macrotask turns: an immediate timer would have fired many
+  // times over by now.
+  for (let turn = 0; turn < 5; turn += 1) {
+    await pause(20);
+  }
+  const readout = okValue(await provider.readState("s-1"));
+  expect(readout.observation).toBe(Observation.COULD_NOT_OBSERVE);
+  expect(String(readout.couldNotObserveReason)).toContain("has not reported a state yet");
 });
 
 test("the five verbs are serialised per provider instance (target-only, D-0301)", async () => {

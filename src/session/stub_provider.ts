@@ -134,6 +134,40 @@ export const DEFAULT_CHILD_STATE = "working";
 export const CREATE_WORKSPACE = "create-workspace";
 
 /**
+ * The whitespace CPython's `float()` strips, as a regular-expression class.
+ *
+ * Neither `\s` nor `str.isspace()`, and both near misses are wrong. Measured by
+ * asking CPython 3.12 `float(chr(cp) + "1")` for every code point below
+ * U+11000: the set that succeeds is U+0009..U+000D, U+0020, U+0085, U+00A0,
+ * U+1680, U+2000..U+200A, U+2028, U+2029, U+202F, U+205F and U+3000 -- which is
+ * JavaScript's `\s` plus U+0085 and minus U+FEFF. It is *not* `str.isspace()`:
+ * that set also holds U+001C..U+001F, and a U+001C in front of a digit raises
+ * rather than converting -- because the conversion maps only NON-ASCII spaces
+ * to a blank and then parses what is left with C's ASCII `isspace`.
+ */
+const FLOAT_BLANK =
+  "[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
+
+/** A run of digits with CPython's `_` separators: `1`, `10`, `1_0`, never `1__0`. */
+const FLOAT_DIGITS = "[0-9](?:_?[0-9])*";
+
+/**
+ * The spellings CPython's `float()` accepts, minus the two it accepts and
+ * `time.sleep` then refuses.
+ *
+ * `inf`, `infinity` and `nan` are deliberately absent: `float()` takes them and
+ * `time.sleep` raises on all three, so a child that refuses them at the parse
+ * dies in the same place with the same effect on the caller. Written as a
+ * grammar rather than handed to `Number()`, because `Number` and `float` accept
+ * *different* strings in both directions -- `Number("0x10")` is 16 where
+ * `float("0x10")` raises, and `Number("1_0")` is `NaN` where `float("1_0")` is
+ * `10.0`.
+ */
+const FLOAT_LITERAL =
+  `^${FLOAT_BLANK}*[+-]?(?:${FLOAT_DIGITS}(?:\\.(?:${FLOAT_DIGITS})?)?|\\.${FLOAT_DIGITS})` +
+  `(?:[eE][+-]?${FLOAT_DIGITS})?${FLOAT_BLANK}*$`;
+
+/**
  * The default child: it announces itself and then stays up until its standard
  * input closes.
  *
@@ -152,10 +186,30 @@ export const CREATE_WORKSPACE = "create-workspace";
  *    `sys.stdin.read()`; the Node spelling has to be the `'end'` event plus a
  *    `resume()`, because a paused stream never reaches its end.
  *
- * The delay is read as `Number(...)` where the source reads `float(...)`. The
- * two differ on the empty string -- `float("")` raises, `Number("")` is `0` --
- * and the difference is unreachable: this provider is the only thing that sets
- * the variable, through {@link pyStr}, and it never sets it to an empty string.
+ * 3. **An announce delay the source cannot sleep on kills the child.** The
+ *    source spells the delay `time.sleep(float(os.environ[...]))`, and
+ *    `announce_after` is caller-supplied opaque settings, so the value can be
+ *    anything at all. `Number(...)` plus `setTimeout(...)` is not that pair and
+ *    fails in the one direction nothing would notice: `Number("")` is `0`,
+ *    `Number("x")` is `NaN`, `setTimeout` reads both -- and every negative --
+ *    as *fire immediately*, so a value CPython refuses outright became a
+ *    healthy live session announcing `working` rather than the child exit the
+ *    caller is owed. `float()` and `time.sleep()` are therefore reproduced,
+ *    measured against CPython 3.12 rather than assumed, and the child throws
+ *    (exit 1, nothing written) exactly where the Python one raises:
+ *    `float("")` and `float("x")` raise `ValueError`; `float("  1.5  ")` is
+ *    `1.5`; `float("1_0")` is `10.0`; `float("nan")` and `float("inf")` do NOT
+ *    raise, and `time.sleep` then rejects them separately -- `ValueError` for
+ *    NaN, `OverflowError` for either infinity -- as it rejects any negative.
+ *
+ * Two divergences left standing, both in the direction of a dead child rather
+ * than a live one, and both unreachable from any caller that means it:
+ * `float()` also accepts non-ASCII decimal digits (the Arabic-Indic pair for
+ * one and two converts to `12.0`, through
+ * `_PyUnicode_TransformDecimalAndSpaceToASCII`), which is not reproduced; and
+ * this child refuses `inf`/`nan` at the parse where CPython accepts them and
+ * refuses them one line later at the sleep. Neither changes what the caller
+ * observes, which in both cases is a child that exited.
  *
  * `require` rather than an `import`: `node -e` evaluates its argument as
  * CommonJS, where a top-level `import` is a syntax error.
@@ -163,13 +217,32 @@ export const CREATE_WORKSPACE = "create-workspace";
 export const DEFAULT_CHILD_PROGRAM = [
   'const fs = require("fs");',
   `const statePath = process.env[${JSON.stringify(STATE_FILE_ENV)}];`,
-  `const after = Number(process.env[${JSON.stringify(ANNOUNCE_AFTER_ENV)}] ?? "0");`,
-  "setTimeout(() => {",
+  `const raw = process.env[${JSON.stringify(ANNOUNCE_AFTER_ENV)}] ?? "0";`,
+  // `float(raw)`, which is a grammar and not a cast.
+  `if (!new RegExp(${JSON.stringify(FLOAT_LITERAL)}).test(raw)) {`,
+  '  throw new Error("could not convert string to float: " + JSON.stringify(raw));',
+  "}",
+  `const after = Number(raw.replace(new RegExp(${JSON.stringify(FLOAT_BLANK)}, "g"), "").replace(/_/g, ""));`,
+  // `time.sleep(after)`: its own two refusals, after the conversion succeeded.
+  "if (!Number.isFinite(after) || after < 0) {",
+  '  throw new Error("sleep length must be a non-negative finite float: " + String(after));',
+  "}",
+  "const announce = () => {",
   `  fs.writeFileSync(statePath + ".part", ${JSON.stringify(DEFAULT_CHILD_STATE)});`,
   '  fs.renameSync(statePath + ".part", statePath);',
   '  process.stdin.on("end", () => { process.exit(0); });',
   "  process.stdin.resume();",
-  "}, after * 1000);",
+  "};",
+  // A timer, re-armed, because `setTimeout` stores its delay in a signed 32-bit
+  // integer and *fires immediately* past 2**31-1 ms (about 24.8 days) with only
+  // a warning. That is the same "announces when it should not" failure as an
+  // unparsed delay, reached through arithmetic instead: `announce_after` is the
+  // caller's number, and `time.sleep(3e6)` sleeps for 34 days.
+  "const arm = (left) => {",
+  "  const step = Math.min(left, 2147483647);",
+  "  setTimeout(left > step ? () => arm(left - step) : announce, step);",
+  "};",
+  "arm(after * 1000);",
   "",
 ].join("\n");
 

@@ -516,6 +516,20 @@ function assertSignallablePgid(pgid: number): void {
  * list as *running*, so the naive version turns "unparseable stat" into "state
  * is the empty string, which is not Z, so running" by a different route and
  * hides that it ever happened.
+ *
+ * The whitespace *set* here is JavaScript's and not Python's, which everywhere
+ * else in this belt is a defect and here is not, so the reason is written down
+ * rather than left for the next audit to re-derive. `str.split()` splits per
+ * `str.isspace()`, which also matches U+001C..U+001F and U+0085 and does not
+ * match U+FEFF; `src/fencing/pysemantics.ts` carries that predicate, and this
+ * module deliberately does not import it. The one input this
+ * function ever sees is the tail of a `/proc/<pid>/stat` line after the comm's
+ * closing parenthesis, and everything after that parenthesis is written by the
+ * kernel as space-separated ASCII -- a process may name itself `a)b` and even
+ * embed a U+001C, but the LAST `)` on the line is still the kernel's, so no
+ * byte a process chose can reach this split. The two spellings therefore agree
+ * on every line `/proc` can produce, and no target-only case pins a difference
+ * that cannot be constructed.
  */
 function pySplitWhitespace(text: string): string[] {
   const trimmed = text.trim();
