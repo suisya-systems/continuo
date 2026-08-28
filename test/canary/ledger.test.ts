@@ -31,12 +31,15 @@
  *   Where the source has **no** `match=`, none is added: several of those cases
  *   are deliberately agnostic about which of two constraints fires first, and
  *   naming one would assert more than the source does (rule 0).
- * - **Every connection under test comes from this module's own opener.** That
- *   is not incidental to the two `INSERT OR REPLACE` cases: they are refused
- *   only because `configureLedgerConnection` sets `recursive_triggers = ON`, so
- *   a case that opened its own raw handle would pass for the wrong reason -- or
- *   rather, would fail, silently rewriting the row the trigger exists to
- *   protect.
+ * - **Every connection under test comes from this module's own opener**, as in
+ *   the source. That mattered most to the two `INSERT OR REPLACE` cases, which
+ *   in interlock are refused only because `configureLedgerConnection` sets
+ *   `recursive_triggers = ON`. Since D-0405 they are refused by a `BEFORE
+ *   INSERT` guard that holds on any connection, and both cases now match that
+ *   guard's sentence rather than the delete trigger's -- the belt's two
+ *   deliberate divergences, recorded in the parity ledger. A target-only case
+ *   below drives the same statements through a FOREIGN connection, which is
+ *   where the pragma is not on and the guard is the only thing standing there.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -267,6 +270,17 @@ describe("no mid-flight owner change, enforced by the store", () => {
     // and this test holds them to it.
     // Two decisions, so the replacement row agrees with the decision it
     // cites and only the delete trigger stands between it and the rewrite.
+    //
+    // DELIBERATE DIVERGENCE (D-0405, D-0406). interlock's `match=` is
+    // `"never deleted"` -- the BEFORE DELETE trigger's own sentence, because
+    // in interlock's DDL that trigger is all there is. continuo added
+    // `run_owner_is_never_replaced`, a BEFORE INSERT guard that fires ahead of
+    // conflict resolution and so refuses this statement on a connection with
+    // the pragma OFF as well, which is the whole point of it. It fires first,
+    // and its sentence is the one this case now matches. The property under
+    // test is unchanged and strictly stronger: the statement is refused and
+    // the standing row still reads `synthetic_v1`. Recorded in
+    // parity/canary.routing-ledger.ledger.json.
     const { ledger } = ledgerFixture();
     addDecision(ledger, { owningSystem: "synthetic_v1" });
     addDecision(ledger, { owningSystem: "interlock", reason: "canary" });
@@ -280,7 +294,7 @@ describe("no mid-flight owner change, enforced by the store", () => {
             "VALUES ('run-1', 'interlock', 2, ?)",
           T0 + 1,
         ),
-      { code: CONSTRAINT, message: /never deleted/ },
+      { code: CONSTRAINT, message: /never replaced/ },
     );
     expect(scalar(ledger, "SELECT owning_system FROM run_owner WHERE run_id = 'run-1'")).toBe(
       "synthetic_v1",
@@ -288,6 +302,13 @@ describe("no mid-flight owner change, enforced by the store", () => {
   });
 
   test("or replace is not a way around the decision history", () => {
+    // DELIBERATE DIVERGENCE (D-0405, D-0406), the same one as the case above
+    // and for the same reason: interlock matches `"never deleted"`, and
+    // continuo's `routing_decision_is_never_replaced` BEFORE INSERT guard
+    // fires ahead of the implicit conflict-resolution delete so that the
+    // history is protected on a connection this package did not configure
+    // too. Same property, refused one rung earlier, and its sentence is what
+    // this case matches now.
     const { ledger } = ledgerFixture();
     addDecision(ledger);
 
@@ -300,7 +321,7 @@ describe("no mid-flight owner change, enforced by the store", () => {
             "VALUES (1, 'interlock', ?, 'rewritten')",
           T0 + 1,
         ),
-      { code: CONSTRAINT, message: /never deleted/ },
+      { code: CONSTRAINT, message: /never replaced/ },
     );
   });
 
@@ -366,7 +387,11 @@ describe("the routing history is append-only, in order", () => {
     addDecision(ledger);
     addDecision(ledger, { owningSystem: "interlock", reason: "canary" });
 
-    // An occupied sequence number is a plain uniqueness refusal ...
+    // An occupied sequence number is refused before it can rewrite the row:
+    // by the primary key in interlock, and since D-0405 by the
+    // `routing_decision_is_never_replaced` guard, which reaches this statement
+    // first. The source asserts neither -- no `match=` -- so which of the two
+    // speaks is exactly what this case stays agnostic about ...
     expectSqliteError(
       () =>
         execute(
@@ -649,6 +674,12 @@ describe("store enforcement on every connection (target-only)", () => {
     // long-running process, which opens rather than creates, ran without the
     // guarantee. The pragma is per-connection; this asserts the open path
     // carries it too.
+    //
+    // Since D-0405 the refusal below would land even with the pragma off, so
+    // the pragma is asserted DIRECTLY here as well: the guard must not be
+    // allowed to quietly stand in for a property this case was written to
+    // pin. Both halves, because they are two different mechanisms and either
+    // one alone can regress.
     const { path, ledger } = ledgerFixture();
     addDecision(ledger, { owningSystem: "synthetic_v1" });
     addDecision(ledger, { owningSystem: "interlock", reason: "canary" });
@@ -656,6 +687,7 @@ describe("store enforcement on every connection (target-only)", () => {
     ledger.close();
 
     const reopened = closeAfterTest(openRoutingLedger(path));
+    expect(reopened.pragma("recursive_triggers", { simple: true })).toBe(1);
     expectSqliteError(
       () =>
         execute(
@@ -664,11 +696,116 @@ describe("store enforcement on every connection (target-only)", () => {
             "VALUES ('run-1', 'interlock', 2, ?)",
           T0 + 1,
         ),
-      { code: CONSTRAINT, message: /never deleted/ },
+      { code: CONSTRAINT, message: /never replaced/ },
     );
     expect(scalar(reopened, "SELECT owning_system FROM run_owner WHERE run_id = 'run-1'")).toBe(
       "synthetic_v1",
     );
+  });
+
+  test("target-only -- a foreign connection cannot move a started run's owner", () => {
+    // THE D-0405 MEASUREMENT, AS A CASE. `recursive_triggers` is a
+    // per-connection pragma, so an ordinary `new Database(path)` -- every
+    // caller that has not read ledger.ts -- had SQLite's default of OFF, and
+    // `INSERT OR REPLACE` there resolved the conflict with an implicit DELETE
+    // that fired no trigger. Measured before the repair: the owner moved from
+    // synthetic_v1 to interlock, and the tampered ledger then passed
+    // `openRoutingLedger` in full, because ownership is data and no
+    // verification rung reads it. `run_owner_is_never_replaced` fires ahead of
+    // conflict resolution and closes it on every connection.
+    //
+    // The pragma is asserted to be OFF first, so this cannot pass because the
+    // foreign handle happened to inherit the module's discipline: the point is
+    // precisely that it does not.
+    const { path, ledger } = ledgerFixture();
+    addDecision(ledger, { owningSystem: "synthetic_v1" });
+    addDecision(ledger, { owningSystem: "interlock", reason: "canary" });
+    addRun(ledger, { owningSystem: "synthetic_v1", seq: 1 });
+    ledger.close();
+
+    const foreign = rawConnection(path);
+    expect(foreign.pragma("recursive_triggers", { simple: true })).toBe(0);
+    expectSqliteError(
+      () =>
+        execute(
+          foreign,
+          "INSERT OR REPLACE INTO run_owner (run_id, owning_system, decision_seq, routed_at_ms) " +
+            "VALUES ('run-1', 'interlock', 2, ?)",
+          T0 + 1,
+        ),
+      { code: "SQLITE_CONSTRAINT_TRIGGER", message: /never replaced/ },
+    );
+    expect(scalar(foreign, "SELECT owning_system FROM run_owner WHERE run_id = 'run-1'")).toBe(
+      "synthetic_v1",
+    );
+    foreign.close();
+
+    // And the store the module hands back agrees, which is the half the
+    // measurement showed nothing checked: had the write landed, this open
+    // would have succeeded on a ledger whose ownership had been rewritten.
+    const reopened = closeAfterTest(openRoutingLedger(path));
+    expect(scalar(reopened, "SELECT owning_system FROM run_owner WHERE run_id = 'run-1'")).toBe(
+      "synthetic_v1",
+    );
+  });
+
+  test("target-only -- a foreign connection cannot rewrite the routing history", () => {
+    // The same hole one relation along, and the same repair. A rewritten
+    // decision is worse than a rewritten owner in one way: the rollback's own
+    // evidence is what `routing_decision` holds, so an edited row makes "what
+    // was the routing at the time?" unanswerable from the ledger -- and
+    // `compareAcrossRollback` would report the history as append-only because
+    // it compares what it is given.
+    const { path, ledger } = ledgerFixture();
+    addDecision(ledger, { owningSystem: "synthetic_v1" });
+    ledger.close();
+
+    const foreign = rawConnection(path);
+    expect(foreign.pragma("recursive_triggers", { simple: true })).toBe(0);
+    expectSqliteError(
+      () =>
+        execute(
+          foreign,
+          "INSERT OR REPLACE INTO routing_decision " +
+            "(decision_seq, owning_system, decided_at_ms, reason) " +
+            "VALUES (1, 'interlock', ?, 'rewritten')",
+          T0 + 1,
+        ),
+      { code: "SQLITE_CONSTRAINT_TRIGGER", message: /never replaced/ },
+    );
+    expect(
+      scalar(foreign, "SELECT owning_system FROM routing_decision WHERE decision_seq = 1"),
+    ).toBe("synthetic_v1");
+    expect(scalar(foreign, "SELECT reason FROM routing_decision WHERE decision_seq = 1")).toBe(
+      "baseline",
+    );
+  });
+
+  test("target-only -- the replacement guard defers to the row's own CHECKs", () => {
+    // Load-bearing for `routeRunStart`, not a curiosity. SQLite runs BEFORE
+    // INSERT triggers AHEAD of constraint checking, so a guard whose WHEN were
+    // just `EXISTS (...)` would answer a MALFORMED duplicate with "you may not
+    // replace this" and the CHECK that should have refused it would never run.
+    // The routing point classifies SQLITE_CONSTRAINT_TRIGGER as an
+    // already-routed conflict (D-0406), so that shadowing would turn a broken
+    // write into a silent idempotent success -- which is exactly what the
+    // ported case `an idempotent retry does not absorb a validation failure`
+    // exists to forbid. The guard's WHEN therefore restates the column CHECKs
+    // and stands aside for a row the table would reject anyway; this pins it.
+    const { ledger } = ledgerFixture();
+    addDecision(ledger, { owningSystem: "synthetic_v1" });
+    addRun(ledger, { owningSystem: "synthetic_v1", seq: 1 });
+
+    expectSqliteError(
+      () =>
+        execute(
+          ledger,
+          "INSERT OR REPLACE INTO run_owner (run_id, owning_system, decision_seq, routed_at_ms) " +
+            "VALUES ('run-1', 'synthetic_v1', 1, 'later')",
+        ),
+      { code: "SQLITE_CONSTRAINT_CHECK" },
+    );
+    expect(scalar(ledger, "SELECT routed_at_ms FROM run_owner WHERE run_id = 'run-1'")).toBe(T0);
   });
 
   test("target-only -- a trigger dropped by a foreign connection is caught at reopen", () => {

@@ -40,7 +40,13 @@
  *   back -- which is what makes {@link RoutingRefused}'s "nothing was written"
  *   true rather than merely intended.
  * - **The already-routed conflict is classified by result code, never by
- *   message text** (`D-0016`, `D-0402`). See {@link isAlreadyRoutedConflict}.
+ *   message text** (`D-0016`, `D-0402`), and since the store gained its
+ *   replacement guard the code that arrives is a trigger refusal, confirmed by
+ *   re-reading the row (`D-0405`, `D-0406`). See
+ *   {@link isAlreadyRoutedConflict}.
+ * - **INTEGER columns are read 64-bit wide** (`D-0407`): `safeIntegers(true)`
+ *   plus {@link narrowInteger}, so a value only an out-of-package writer can
+ *   put in the ledger is reported as it is stored rather than rounded.
  */
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -124,11 +130,23 @@ export class UnroutedRun extends RoutingRefused {
 // the two immutable values
 // --------------------------------------------------------------------------
 
+/**
+ * An INTEGER column of the ledger, as this module returns it.
+ *
+ * `number` for every value a double holds exactly, which is every value any
+ * continuo API can write; `bigint` only for one a double cannot, which only an
+ * out-of-package writer can put there (D-0407). Python's `int` is arbitrary
+ * precision and the source's dataclasses therefore never lose one, so reading
+ * these as plain doubles would have made the port report a `decision_seq` or a
+ * timestamp that disagrees with the stored row -- silently, and by one.
+ */
+export type LedgerInteger = number | bigint;
+
 /** One appended row of the routing policy. The newest is the routing. */
 export interface RoutingDecision {
-  readonly decisionSeq: number;
+  readonly decisionSeq: LedgerInteger;
   readonly owningSystem: string;
-  readonly decidedAtMs: number;
+  readonly decidedAtMs: LedgerInteger;
   readonly reason: string;
 }
 
@@ -139,8 +157,8 @@ export interface RoutingDecision {
 export interface RoutedRun {
   readonly runId: string;
   readonly owningSystem: string;
-  readonly decisionSeq: number;
-  readonly routedAtMs: number;
+  readonly decisionSeq: LedgerInteger;
+  readonly routedAtMs: LedgerInteger;
 }
 
 // --------------------------------------------------------------------------
@@ -199,6 +217,26 @@ function repr(value: string): string {
 }
 
 /**
+ * A 64-bit INTEGER read back as the narrowest JavaScript type that holds it
+ * exactly (`D-0407`).
+ *
+ * `src/canary/audit.ts` carries the same five lines privately, and this is
+ * deliberately not an import of it, for the reason {@link repr} is not an
+ * import of `control_plane/python_repr.ts`: this module's documented -- and
+ * structurally asserted -- property is that it imports nothing of this package
+ * beyond `./ledger.js`, and `audit.ts` does not export the helper. Widening the
+ * audit's surface, or this module's imports, to share five lines would cost
+ * more than the duplication does.
+ */
+function narrowInteger(value: LedgerInteger): LedgerInteger {
+  if (typeof value !== "bigint") {
+    return value;
+  }
+  const asNumber = Number(value);
+  return Number.isSafeInteger(asNumber) ? asNumber : value;
+}
+
+/**
  * `OWNING_SYSTEMS` as Python renders the 2-tuple it is:
  * `('interlock', 'synthetic_v1')`.
  *
@@ -240,11 +278,17 @@ const ROUTED_RUN_SQL =
   "SELECT run_id, owning_system, decision_seq, routed_at_ms " +
   "  FROM run_owner WHERE run_id = :run_id";
 
-/** The `routing_decision` row shape, in the SELECT's column order. */
+/**
+ * The `routing_decision` row shape, in the SELECT's column order.
+ *
+ * Every INTEGER arrives as a `bigint`, because the statements below are read
+ * with `safeIntegers(true)` (`D-0407`); {@link narrowInteger} puts the ordinary
+ * ones back.
+ */
 interface DecisionRow {
-  readonly decision_seq: number;
+  readonly decision_seq: bigint;
   readonly owning_system: string;
-  readonly decided_at_ms: number;
+  readonly decided_at_ms: bigint;
   readonly reason: string;
 }
 
@@ -252,8 +296,8 @@ interface DecisionRow {
 interface RunOwnerRow {
   readonly run_id: string;
   readonly owning_system: string;
-  readonly decision_seq: number;
-  readonly routed_at_ms: number;
+  readonly decision_seq: bigint;
+  readonly routed_at_ms: bigint;
 }
 
 /**
@@ -272,12 +316,31 @@ interface RunOwnerRow {
  * the table is ever declared `WITHOUT ROWID` or the uniqueness moves to an
  * index; the question either code answers is the same one.
  *
+ * **`SQLITE_CONSTRAINT_TRIGGER` joined the set when the D-0405 replacement
+ * guard landed (`D-0406`).** `run_owner_is_never_replaced` is a `BEFORE INSERT`
+ * trigger, and firing ahead of conflict resolution -- which is exactly what
+ * closes the `INSERT OR REPLACE` hole for a connection this package did not
+ * configure -- means it, and not the primary key, is now what a duplicate
+ * `run_id` meets first. So the duplicate that D-0402 measured as
+ * `SQLITE_CONSTRAINT_PRIMARYKEY` arrives as `SQLITE_CONSTRAINT_TRIGGER`
+ * instead. The two older codes are kept: they are what the same collision
+ * carries if the guard is ever removed, if the table is declared `WITHOUT
+ * ROWID`, or if the uniqueness moves to an index.
+ *
+ * `SQLITE_CONSTRAINT_TRIGGER` is **not** specific to the replacement guard,
+ * though -- the DDL raises it from four other triggers -- so unlike the two
+ * uniqueness codes it is not on its own an answer. It is a question the caller
+ * settles by re-reading `run_owner`: a row for the run means the guard fired,
+ * no row means some other trigger did and the error passes through as itself.
+ * See {@link RunStartRoutingPoint.routeRunStart}.
+ *
  * Every other constraint code passes through **as itself**:
- * `SQLITE_CONSTRAINT_CHECK` (an empty run id, a non-integer timestamp),
- * `SQLITE_CONSTRAINT_FOREIGNKEY` and `SQLITE_CONSTRAINT_TRIGGER` are integrity
- * failures, not ownership questions, and reading one as "already routed" would
- * turn a broken write into a silent success. Two ported cases point exactly
- * here.
+ * `SQLITE_CONSTRAINT_CHECK` (an empty run id, a non-integer timestamp) and
+ * `SQLITE_CONSTRAINT_FOREIGNKEY` are integrity failures, not ownership
+ * questions, and reading one as "already routed" would turn a broken write into
+ * a silent success. Two ported cases point exactly here, and they still land
+ * because the guard's `WHEN` clause defers to the row's own CHECKs rather than
+ * shadowing them -- a malformed retry is a `CHECK` failure, not a trigger one.
  *
  * Only `run_owner` is written by {@link ROUTE_RUN_START_SQL}, and its only
  * uniqueness is `run_id`, so a uniqueness code from that statement is
@@ -286,7 +349,20 @@ interface RunOwnerRow {
  */
 function isAlreadyRoutedConflict(error: unknown): boolean {
   const code = sqliteCodeOf(error);
-  return code === "SQLITE_CONSTRAINT_PRIMARYKEY" || code === "SQLITE_CONSTRAINT_UNIQUE";
+  return (
+    code === "SQLITE_CONSTRAINT_PRIMARYKEY" ||
+    code === "SQLITE_CONSTRAINT_UNIQUE" ||
+    code === "SQLITE_CONSTRAINT_TRIGGER"
+  );
+}
+
+/**
+ * True for the one accepted code that more than one constraint can produce, and
+ * which therefore only counts as an already-routed conflict once the row has
+ * been seen (`D-0406`).
+ */
+function needsRowToBeConfirmed(error: unknown): boolean {
+  return sqliteCodeOf(error) === "SQLITE_CONSTRAINT_TRIGGER";
 }
 
 // --------------------------------------------------------------------------
@@ -341,17 +417,22 @@ export class RunStartRoutingPoint {
     }
 
     // Captured inside the transaction, as the source captures `cursor.lastrowid`
-    // inside its `with`. `Number(...)` because better-sqlite3 returns
-    // `number | bigint` and a bigint never `===` the number a later SELECT reads
-    // back -- which is exactly what the ported "the baseline is itself a
-    // recorded decision" case compares. `decision_seq` is an INTEGER PRIMARY
+    // inside its `with`. `safeIntegers(true)` makes `lastInsertRowid` a bigint
+    // and `narrowInteger` puts it back to a `number` whenever a double holds it
+    // exactly -- which it does for every sequence any caller of this class can
+    // reach, so the ported "the baseline is itself a recorded decision" case
+    // still compares a number against the number a later SELECT reads back. A
+    // bare `Number(...)` was the port's own 64-bit hole (D-0407): a ledger
+    // carrying a `decision_seq` past 2**53 would have reported one that
+    // disagreed with the stored row by one. `decision_seq` is an INTEGER PRIMARY
     // KEY, so SQLite always assigns one; the source says so with an `assert`.
-    let decisionSeq = 0;
+    let decisionSeq: LedgerInteger = 0;
     this.#connection.transaction(() => {
       const result = this.#connection
         .prepare(APPEND_DECISION_SQL)
+        .safeIntegers(true)
         .run({ owning_system: owningSystem, now_ms: nowMs, reason });
-      decisionSeq = Number(result.lastInsertRowid);
+      decisionSeq = narrowInteger(result.lastInsertRowid);
     })();
 
     // Assembled from the arguments, not re-read. The asymmetry with
@@ -370,14 +451,16 @@ export class RunStartRoutingPoint {
    * @throws NoRoutingDecision if none has been taken.
    */
   currentDecision(): RoutingDecision {
-    const row = this.#connection.prepare(CURRENT_DECISION_SQL).get() as DecisionRow | undefined;
+    const row = this.#connection.prepare(CURRENT_DECISION_SQL).safeIntegers(true).get() as
+      | DecisionRow
+      | undefined;
     if (row === undefined) {
       throw new NoRoutingDecision(NO_DECISION_MESSAGE);
     }
     return Object.freeze({
-      decisionSeq: row.decision_seq,
+      decisionSeq: narrowInteger(row.decision_seq),
       owningSystem: row.owning_system,
-      decidedAtMs: row.decided_at_ms,
+      decidedAtMs: narrowInteger(row.decided_at_ms),
       reason: row.reason,
     });
   }
@@ -415,6 +498,18 @@ export class RunStartRoutingPoint {
       })();
     } catch (error) {
       if (!isAlreadyRoutedConflict(error)) {
+        throw error;
+      }
+      // `SQLITE_CONSTRAINT_TRIGGER` is the code the D-0405 replacement guard
+      // raises AND the code the DDL's four other triggers raise, so it is only
+      // an already-routed conflict if the row it collided with is actually
+      // there (D-0406). No row means another trigger fired, and the error goes
+      // on as itself -- the same disposition every non-ownership integrity
+      // failure has had since D-0402. The two uniqueness codes keep their
+      // original path: a uniqueness failure on this statement can only be
+      // `run_owner.run_id`, so absence there is the source's race and surfaces
+      // as `UnroutedRun` from the re-read below, exactly as before.
+      if (needsRowToBeConfirmed(error) && this.#runOwnerRow(runId) === undefined) {
         throw error;
       }
       // Both re-reads happen here, after the transaction has ended and rolled
@@ -455,9 +550,7 @@ export class RunStartRoutingPoint {
    * @throws UnroutedRun if the run was never routed through this point.
    */
   routedRun(runId: string): RoutedRun {
-    const row = this.#connection.prepare(ROUTED_RUN_SQL).get({ run_id: runId }) as
-      | RunOwnerRow
-      | undefined;
+    const row = this.#runOwnerRow(runId);
     if (row === undefined) {
       throw new UnroutedRun(`run ${repr(runId)} has no ledger row; it was never routed`);
     }
@@ -469,8 +562,20 @@ export class RunStartRoutingPoint {
     return Object.freeze({
       runId: row.run_id,
       owningSystem: row.owning_system,
-      decisionSeq: row.decision_seq,
-      routedAtMs: row.routed_at_ms,
+      decisionSeq: narrowInteger(row.decision_seq),
+      routedAtMs: narrowInteger(row.routed_at_ms),
     });
+  }
+
+  /**
+   * The raw `run_owner` row, or `undefined`. The read {@link routedRun} turns
+   * into a value, and the one {@link routeRunStart} uses to decide whether a
+   * `SQLITE_CONSTRAINT_TRIGGER` was the replacement guard or another trigger
+   * (`D-0406`) -- there, absence is not a refusal but an answer.
+   */
+  #runOwnerRow(runId: string): RunOwnerRow | undefined {
+    return this.#connection.prepare(ROUTED_RUN_SQL).safeIntegers(true).get({ run_id: runId }) as
+      | RunOwnerRow
+      | undefined;
   }
 }

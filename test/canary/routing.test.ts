@@ -29,7 +29,12 @@ import { join } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
-import { createRoutingLedger, INTERLOCK, SYNTHETIC_V1 } from "../../src/canary/ledger.js";
+import {
+  createRoutingLedger,
+  INTERLOCK,
+  openRoutingLedger,
+  SYNTHETIC_V1,
+} from "../../src/canary/ledger.js";
 import {
   NoRoutingDecision,
   OwnerChangeRefused,
@@ -37,7 +42,7 @@ import {
   UnknownOwningSystem,
   UnroutedRun,
 } from "../../src/canary/routing.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, rawConnection } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant -- the source's `T0`. */
@@ -61,18 +66,29 @@ const CONSTRAINT = /^SQLITE_CONSTRAINT/;
  * interpolate paths nowhere in *this* module -- but the convention is a
  * whole-belt one and a nickname costs nothing.
  */
-function routingFixture(): { ledger: SqliteDatabase; routing: RunStartRoutingPoint } {
+function routingFixture(): {
+  path: string;
+  ledger: SqliteDatabase;
+  routing: RunStartRoutingPoint;
+} {
   const path = join(caseRoot("cnry-rtg"), "routing-ledger.sqlite3");
-  const ledger = createRoutingLedger(path);
+  const ledger = closeAfterTest(createRoutingLedger(path));
+  // `path` is returned for the one target-only case that closes this handle and
+  // comes back at the file with a connection this package did not configure.
+  return { path, ledger, routing: new RunStartRoutingPoint(ledger) };
+}
+
+/** Close a connection when the test finishes, whatever the test does with it. */
+function closeAfterTest(connection: SqliteDatabase): SqliteDatabase {
   onTestFinished(() => {
     try {
-      ledger.close();
+      connection.close();
     } catch {
       // Already closed by the test. Closing twice is not an error worth failing
       // a passing test over.
     }
   });
-  return { ledger, routing: new RunStartRoutingPoint(ledger) };
+  return connection;
 }
 
 /** Every `run_owner` row, as objects -- the source's `SELECT * FROM run_owner`. */
@@ -236,7 +252,7 @@ describe("the run-start routing point's contract", () => {
  * message disagree on this DDL.
  */
 describe("classification by result code, not message text (target-only)", () => {
-  test("target-only -- the duplicate run conflict carries a primary key code under a unique message", () => {
+  test("target-only -- the duplicate run conflict is the replacement guard, not the primary key", () => {
     const { ledger, routing } = routingFixture();
     routing.routeNewRunsTo(SYNTHETIC_V1, { nowMs: T0, reason: "baseline" });
     routing.routeRunStart("run-1", { nowMs: T0 + 1 });
@@ -252,14 +268,53 @@ describe("classification by result code, not message text (target-only)", () => 
               "  FROM routing_decision ORDER BY decision_seq DESC LIMIT 1",
           )
           .run({ run_id: "run-1", now_ms: T0 + 2 }),
-      { code: "SQLITE_CONSTRAINT_PRIMARYKEY" },
+      { code: "SQLITE_CONSTRAINT_TRIGGER" },
     );
 
-    // The disagreement, pinned: the message says UNIQUE, the code says PRIMARY
-    // KEY. A port that matched the source's substring would work by accident and
-    // stop working when SQLite reworded it; a port that accepted only
-    // `SQLITE_CONSTRAINT_UNIQUE` would never reach the idempotency path at all.
-    expect(error.message).toContain("UNIQUE constraint failed: run_owner.run_id");
+    // D-0402 measured this collision as `SQLITE_CONSTRAINT_PRIMARYKEY` under a
+    // message reading `UNIQUE constraint failed: run_owner.run_id` -- the code
+    // and the text disagreeing, which was the whole reason that entry exists.
+    // The D-0405 guard fires ahead of conflict resolution, so it is what a
+    // duplicate meets first now and the primary key is never reached (D-0406).
+    // Pinned so that a future reader who removes the guard, or reads D-0402
+    // without D-0406, gets a red test naming the change rather than a routing
+    // point that silently stopped recognising its own retries.
+    expect(error.message).toContain("never replaced");
+    expect(error.message).not.toContain("UNIQUE constraint failed");
+  });
+
+  test("target-only -- a decision sequence past 2**53 survives the round trip", () => {
+    // D-0407. `routeNewRunsTo` narrowed `lastInsertRowid` with `Number(...)`
+    // and the two reads returned plain doubles, so a `decision_seq` the schema
+    // permits but a double cannot hold came back off by one -- silently, and
+    // reported as the store's own value. Python's `int` is arbitrary precision,
+    // so this was the port's, not interlock's. The writer that can reach it is
+    // the out-of-package one D-0405 is about; `rawConnection` is that writer.
+    const { path, ledger } = routingFixture();
+    ledger.close();
+
+    const beyondDouble = 9_007_199_254_740_993n; // 2**53 + 1, not a double
+    const foreign = rawConnection(path);
+    foreign
+      .prepare(
+        "INSERT INTO routing_decision (decision_seq, owning_system, decided_at_ms, reason) " +
+          "VALUES (?, ?, ?, ?)",
+      )
+      .run(beyondDouble, SYNTHETIC_V1, T0, "written out of band");
+    foreign.close();
+
+    const reopened = closeAfterTest(openRoutingLedger(path));
+    const decision = new RunStartRoutingPoint(reopened).currentDecision();
+
+    // A bigint, and the RIGHT one: `Number(...)` would have given
+    // 9007199254740992, which is a different decision.
+    expect(decision.decisionSeq).toBe(beyondDouble);
+
+    // Only a value a double genuinely cannot hold stays wide: every sequence
+    // this class can itself write is still a `number`, which is what the
+    // ported cases above compare with `toBe(1)` and `toBe(3)` -- assertions a
+    // bigint would fail. The narrowing is asserted there rather than restated
+    // here.
   });
 
   test("target-only -- a retry under a later decision naming the same owner returns the original row", () => {
