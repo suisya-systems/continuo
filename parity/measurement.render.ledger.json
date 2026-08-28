@@ -1,0 +1,795 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. render is the eleventh file of this lane; cli, known_holes and query_catalogue remain."
+    },
+    "file": {
+      "path": "tests/measurement/test_render.py",
+      "collected": 60,
+      "inventory": "parity/source-inventory/measurement.test_render.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 60 pass there (measured, 2026-08-28)."
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/render.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "frozen dataclass, tuple fields, MappingProxyType",
+        "to": "frozen class, frozenList and readOnlyMap (src/measurement/immutable.ts)",
+        "why": "The convention every module of this lane uses.",
+        "affects": "V1ShadowInput, ReportSection, MeasurementReport and every mapping they return"
+      },
+      {
+        "from": "json.dumps(mapping, indent=2, ensure_ascii=True)",
+        "to": "renderPythonJson, now exported from provenance.ts and shared by both renderers",
+        "why": "D-0017 rule 4: one renderer. JSON.stringify emits no ensure_ascii escaping and prints an integral float as an integer, and both differences are invisible to any assertion that parses the text. The header's renderer already had this function privately; a second copy in render.ts would be a second thing to keep in step with Python, which is the failure that rule exists to stop.",
+        "affects": "renderJson"
+      },
+      {
+        "from": "Python's int/float distinction in the report mapping and in json.loads",
+        "to": "PythonFloat (src/measurement/provenance.ts) in the mapping, and a JSON.parse reviver reading each number's source text in the test",
+        "why": "D-0104. `coverage.ratio`, the four figure values and the two prompt-half figures are floats in interlock and print as `1.0` and `300.0` in BOTH renderings; JavaScript has one number type. The test's JSON walker needs the same distinction or it compares `1` against the Markdown's `1.0`. Measured: with the wrapping removed, the headline equality case goes red.",
+        "affects": "sectionFromAc9, renderJson, and the test's walkJson"
+      },
+      {
+        "from": "monkeypatch.setattr(render_module.ac9_module, 'measure_ac9', ...) and monkeypatch.setattr(windows_module, 'require_grace_ms', ...)",
+        "to": "patchSeam on renderSeams.measureAc9 and on windowsSeams.requireGraceMs (test/testkit/seams.ts)",
+        "why": "D-0014. ESM bindings cannot be rebound from outside, so the call sites go through a seam record. windowsSeams is new in this belt and lives in windows.ts rather than render.ts on purpose: the source case is bound to the code -- it replaces the rule ON the window module and asserts the report follows it there -- so a seam local to render.ts would be satisfied by a second copy of the rule, which is exactly what that case exists to refuse. windows' own two call sites go through the record too, which is what Python's late binding does.",
+        "affects": "the grace-rule case and the two snapshot cases"
+      },
+      {
+        "from": "a `_HeaderStub` duck type passed where the annotation says ReportHeader",
+        "to": "the ReportHeaderLike interface, which is what the renderer actually requires",
+        "why": "Conventions rule 9 in the useful direction. Python does not check the annotation; TypeScript does, so the annotation is written as the requirement. Four source cases hand the report a stub rather than build a migrated database, and the alternative -- casting a stub through `unknown` -- asserts the same thing with nothing checking it. A target-only case pins that buildMeasurementReport still puts a real ReportHeader there.",
+        "affects": "MeasurementReport.header and the four stub cases"
+      },
+      {
+        "from": "pytest's `db` fixture (create_production_control_plane plus four writes, per test)",
+        "to": "suiteTemplate('production.sqlite3', ...) built once and copied per case (D-0025)",
+        "why": "Every case that takes `db` gets identical rows at a fixed clock, which is the shape the template is for: 87.5ms to migrate against 0.97ms to copy, over the 40-odd cases in this file. The Windows CI cells set the pace for this port (issue #37).",
+        "affects": "every case that takes `db`"
+      },
+      {
+        "from": "sqlite3.connect(path, isolation_level=None) for the writer, and timeout=0 for the racing one",
+        "to": "new Database(path, { fileMustExist: true }) and { timeout: 0 }",
+        "why": "better-sqlite3 is in autocommit unless a transaction is opened, which is what isolation_level=None buys in the source. The racing writer's timeout is passed the same way and for the same reason: a blocked write must answer immediately rather than sit on the busy handler.",
+        "affects": "the fixture writes and the mid-report writer"
+      },
+      {
+        "from": "str.replace(' ', '_') on a figure label",
+        "to": "replaceAll(' ', '_')",
+        "why": "Python's str.replace replaces EVERY occurrence and JavaScript's replaces the first. 'observed output-token reduction' has two spaces, so the naive mapping produces a different key in both renderings. Measured: the mutation is caught by the AC-9 section case.",
+        "affects": "sectionFromAc9"
+      },
+      {
+        "from": "the module constant `JSON`",
+        "to": "JSON_RENDERING, carrying the same value 'json'",
+        "why": "`JSON` is a JavaScript global. Importing a constant of that name shadows it for the whole importing module, and the first thing a consumer of a JSON rendering does is call JSON.parse -- so the faithful name would break the code that reads it, silently, at the point of use. `render(report, 'json')` is unchanged.",
+        "affects": "the barrel and the unknown-rendering case"
+      },
+      {
+        "from": "`NO_VERDICT_NOTE`, in the flat package barrel",
+        "to": "NO_VERDICT_NOTE from src/measurement/index.ts, re-exported as RENDER_NO_VERDICT_NOTE from src/index.ts",
+        "why": "canary.ts exports a constant of the same spelling for a different note about a different open question. Python namespaces them per module and a flat export surface cannot. The collision exists only in src/index.ts -- canary is not in the measurement barrel -- so it is resolved there and each module keeps the bare name under its own path.",
+        "affects": "the barrels only"
+      },
+      {
+        "from": "facts: Mapping[str, Any] on ReportSection",
+        "to": "facts: ReadonlyMap<string, ReportValue>",
+        "why": "The first spelling here took an iterable of pairs, which is wider than the source's Mapping in the direction conventions rule 9 warns about: a sequence can carry one key twice and readOnlyMap keeps the last, so the section would drop a measurement a caller supplied with no refusal and nothing in either rendering to say a fact went missing. Taking a mapping cannot express the duplicate at all, which removes the class rather than checking for it. Raised by the codex review gate; the value type is narrowed for the reason recorded beside ReportValue.",
+        "affects": "ReportSection and the three sections this module builds"
+      }
+    ],
+    "target_only_tests": {
+      "count": 11,
+      "ids": [
+        "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > every externally-supplied value in a full report is escaped",
+        "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > a hostile banner cannot inject a line above the table",
+        "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > a hostile fact key cannot forge a row or a block",
+        "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > a fenced value cannot close its own fence",
+        "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > an ordinary report's fences are exactly three backticks",
+        "test/measurement/render.test.ts::target-only -- properties the ported cases leave unguarded > a list renders as one comma-separated cell",
+        "test/measurement/render.test.ts::target-only -- properties the ported cases leave unguarded > the JSON keeps the mapping's order and carries the verdict note itself",
+        "test/measurement/render.test.ts::target-only -- properties the ported cases leave unguarded > a float is rendered as a float, and an int as an int",
+        "test/measurement/render.test.ts::target-only -- properties the ported cases leave unguarded > the grace and the fingerprint mode are refused before the snapshot opens",
+        "test/measurement/render.test.ts::target-only -- the public constructor cannot walk around the invariant > a shadow input that is neither observed nor absent is refused",
+        "test/measurement/render.test.ts::target-only -- the header is the real one > the report's header is a ReportHeader, not only something header-shaped"
+      ],
+      "why": "Eleven, in four groups. FIVE are the D-0109 / D-0111 escaping belt: this module renders caller- and database-supplied values, and the source's renderer prints them verbatim, so the divergence needs cases of its own -- the structural all-fields-hostile report, the banner, a hostile fact key, a value that would close its own fence, and the fence of an ordinary report, which pins that the widening costs nothing where it is not needed. FOUR close mutations that survived the 60 ported cases (see mutation_sweep); every one of them survived for the same structural reason, which is that the headline equality case renders BOTH sides through this module's own `cell` and therefore cannot see `cell` change. ONE pins the D-0108 repair to V1ShadowInput's public constructor. ONE pins that the real report carries a real ReportHeader, which the widened `ReportHeaderLike` annotation would otherwise leave unstated."
+    }
+  },
+  "totals": {
+    "source_cases": 60,
+    "ported": 58,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "JSON is exported as JSON_RENDERING and NO_VERDICT_NOTE as RENDER_NO_VERDICT_NOTE (from src/index.ts only).",
+      "why": "See the systematic mappings above. Both are name changes at the export surface with the values unchanged."
+    },
+    {
+      "what": "renderSeams is exported from src/measurement/render.ts and from neither barrel.",
+      "why": "A test seam (D-0014), like migratorSeams, schemaSeams and readerSeams. windowsSeams, added to windows.ts by this belt, is absent from the barrels for the same reason."
+    },
+    {
+      "what": "renderPythonJson changed from a module-private function of provenance.ts to an exported one.",
+      "why": "It is this port's `json.dumps(..., indent=2, ensure_ascii=True)`, and the report's renderer needs the same one the header's renderer uses (D-0017 rule 4). Not added to either barrel: it is an implementation shared by two renderers, not a rendering a consumer should reach for."
+    },
+    {
+      "what": "cell, flatten and render are generic-sounding names to find in a package barrel.",
+      "why": "The source's __all__ carries all three, and test_render.py builds one side of its Markdown/JSON equality assertion out of `cell` -- a consumer checking a rendered report against its JSON needs the same function rather than a second copy of it."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "A backtick inside a fact key, a query name or an exclusion reason breaks the Markdown code span the key is printed in.",
+      "matches_source": true,
+      "note": "ReportSection refuses a backtick in a SECTION name, and the message says why -- 'those are the Markdown rendering's own syntax'. Nothing refuses one in a key that comes from a map, and this port does not add a refusal there: the same hole is in the header's own renderer (renderHeaderMarkdown, landed under D-0109) and closing it in one of the two would make the two renderings of one document disagree about what a key looks like. The value cannot forge a row -- reportValue escapes the pipe and the newline -- so what is lost is the code span, not the table.",
+      "where_a_fix_belongs": "provenance.ts and render.ts together, in a pass that owns both renderings' key syntax."
+    },
+    {
+      "behaviour": "cell trims its rendered value, so ' q' and 'q' print as the same cell.",
+      "matches_source": true,
+      "note": "Reproduced. The KEY is deliberately not trimmed, in this module and in the header's renderer both, because a query name is only required to be non-empty and the catalogue's digest keeps ' q' and 'q' apart. The value's trim is the source's and is harmless where the value's own boundaries are not load-bearing."
+    },
+    {
+      "behaviour": "The report is assembled from three fixed sections and the observation window classifies no episode, so `censored` and `censored_left` are zero on every report this module can build.",
+      "matches_source": true,
+      "note": "Reproduced, and said out loud in the artefact: WINDOW_EPISODES_NOT_CLASSIFIED is a field of the report because a zero meaning 'nothing was censored' and a zero meaning 'no episode was classified' are different statements and section 3.5 makes the second load bearing.",
+      "where_a_fix_belongs": "the driver that produces episodes, which is not part of this branch."
+    },
+    {
+      "behaviour": "FINGERPRINT_TABLES names the five tables the report's FIGURES are read off, and not `schema_migration`, which buildHeader also reads to fill schema_migration_head.",
+      "matches_source": true,
+      "note": "Reproduced; the constant is interlock's, table for table. Raised by the codex review gate as a hole in section 6's 'hash every table read'. It is a real narrowing of the digest's scope and it is not left silent: the schema identity buildHeader reads that table FOR is carried as fields of the same header -- schema_migration_head.version, schema_migration_head.name and user_version -- so two reports over different schema heads differ visibly in the document rather than only in a digest. Widening the tuple here would move every digest continuo produces away from interlock's, which is the one number this port has measured as byte-identical across the two implementations, in exchange for a fact the header already states. Conventions section 11: a repair carries no warrant from the source, and this one would cost the parity surface it was meant to protect.",
+      "where_a_fix_belongs": "interlock's own FINGERPRINT_TABLES, or a decision in this port that accepts the digest divergence deliberately. Not a translation choice."
+    },
+    {
+      "behaviour": "ReportSection copies the facts mapping one level deep, so an array or a map a caller passes as a fact VALUE stays aliased to the caller's.",
+      "matches_source": true,
+      "note": "Reproduced, and it is the source's own depth: `ReportSection.as_mapping` does `dict(self.facts)`, which is a shallow copy of a mapping whose values are ordinary mutable Python lists and dicts. Raised by the codex review gate against the runtime-immutability promise in immutable.ts -- and that promise is about the gap between the two languages (D-0105: a `readonly` annotation vanishes for a JavaScript consumer where a frozen dataclass does not), which is not the gap here: both implementations alias a nested list identically. Every fact buildMeasurementReport puts in a section is already built from frozen values, so the exposure is a caller who assembles a section of their own and keeps a reference to a value they passed.",
+      "where_a_fix_belongs": "immutable.ts, as a deep variant of readOnlyMap used by every module of this lane at once. Adding it in one module would make two report objects immutable to different depths, which is worse than one shallow depth stated here."
+    },
+    {
+      "behaviour": "A fact key containing a dot produces a flattened Markdown key indistinguishable from a nested path: `{'a.b': 1}` and `{'a': {'b': 2}}` both render as `...facts.a.b`.",
+      "matches_source": true,
+      "note": "Reproduced, and the source has written down why it matters: ReportSection refuses a dot in a SECTION name with exactly this reasoning -- 'a key that collides with it renders as a different key than the JSON carries' -- and then leaves fact keys unchecked. Raised by the codex review gate. It is not repairable by refusing dots or by escaping them, because the report's OWN keys are dotted: `query_catalogue_exemptions` is keyed by `reader.measurement_snapshot`, `policy.effective_revision_id` and seven more, so either repair would refuse or re-render a report interlock produces correctly. No collision is reachable in any report either implementation builds -- a collision needs both a dotted leaf and a nesting of the same path under one mapping -- and where one did occur the Markdown would carry a duplicate row, which the test file's own parser asserts against rather than accepting.",
+      "where_a_fix_belongs": "the flattening's key syntax, in a pass that can change both implementations' rendered keys at once. Not available to a parity port."
+    },
+    {
+      "behaviour": "A mapping nested inside an ARRAY renders structurally in the JSON and as a single opaque cell in the Markdown.",
+      "matches_source": true,
+      "note": "Reproduced in a different spelling: `flatten` treats a list as a leaf by design -- the docstring says why, two reports with the same ids in a different order must not look different in one rendering and equal in the other -- and `cell` then renders the list's elements with `str`, which gives Python `\"{'a': 1}\"` and JavaScript `[object Object]`. Both disagree with the JSON; only the spelling of the disagreement differs. Raised by the codex review gate. No value in any report either implementation builds is an array of mappings, and the type that permits it is `HeaderValue`, which this module shares with the header's renderer under `ReportValue`.",
+      "where_a_fix_belongs": "HeaderValue in provenance.ts, narrowed so an array element is a scalar, in a pass that owns both renderers. Narrowing it in one of the two would make the report's value type and the header's disagree about what a header may hold, while the header is embedded in the report."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_the_two_renderings_carry_the_same_facts",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > the two renderings carry the same facts",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_fact_dropped_from_the_markdown_is_caught",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > a fact dropped from the Markdown is caught",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.period_start_ms]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.period_start_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.period_end_ms]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.period_end_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.generated_at_ms]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.generated_at_ms]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.tool_version]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.tool_version]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.db_path]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.db_path]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.application_id]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.application_id]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.user_version]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.user_version]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.schema_migration_head.version]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.schema_migration_head.version]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.schema_migration_head.name]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.schema_migration_head.name]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.db_fingerprint]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.db_fingerprint]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.fingerprint_mode]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.fingerprint_mode]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.policy_revision_id]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.policy_revision_id]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.detector_versions]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.detector_versions]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.adapter_versions]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.adapter_versions]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.query_definitions_sha256]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.query_definitions_sha256]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.fixture_suite_ref.commit]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.fixture_suite_ref.commit]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.fixture_suite_ref.positive]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.fixture_suite_ref.positive]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.fixture_suite_ref.negative]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.fixture_suite_ref.negative]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.imputation_rule.bounded]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.imputation_rule.bounded]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.imputation_rule.sensitivity]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.imputation_rule.sensitivity]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.imputation_rule.unbounded_missing]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.imputation_rule.unbounded_missing]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.coverage.covered]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.coverage.covered]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.coverage.total]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.coverage.total]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.censored]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.censored]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.censored_left]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.censored_left]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.unmatched]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.unmatched]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_every_section_6_header_field_is_in_both_renderings[header.banner]",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > every section 6 header field is in both renderings[header.banner]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_the_narrative_survives_as_a_block_rather_than_a_collapsed_cell",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > the narrative survives as a block rather than a collapsed cell",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_pipe_in_a_value_does_not_shift_the_columns",
+      "target_id": "test/measurement/render.test.ts::the headline claim -- one report, two renderings > a pipe in a value does not shift the columns",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_aggregate_mode_is_stamped_as_the_weaker_one_in_both_renderings",
+      "target_id": "test/measurement/render.test.ts::the fingerprint mode, stamped in both renderings > aggregate mode is stamped as the weaker one in both renderings",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_an_unknown_fingerprint_mode_is_refused_before_the_cohort_scan",
+      "target_id": "test/measurement/render.test.ts::the fingerprint mode, stamped in both renderings > an unknown fingerprint mode is refused before the cohort scan",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_no_verdict_word_appears_in_either_rendering[render_markdown]",
+      "target_id": "test/measurement/render.test.ts::no verdict > no verdict word appears in either rendering[render_markdown]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_no_verdict_word_appears_in_either_rendering[render_json]",
+      "target_id": "test/measurement/render.test.ts::no verdict > no verdict word appears in either rendering[render_json]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_both_renderings_encode_to_ascii_and_to_cp932[render_markdown]",
+      "target_id": "test/measurement/render.test.ts::no verdict > both renderings encode to ascii and to cp932[render_markdown]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts ASCII twice: `text.isascii()` and `text.encode(\"cp932\")`. The second is the one that reproduces the Japanese-console crash a UTF-8 pytest capture never sees. JavaScript has no cp932 encoder and adding one for a test would be a second implementation to be wrong in; ASCII is a strict SUBSET of cp932, so `isAscii` implies both source assertions and neither is lost. Recorded as adapted rather than ported because two assertions become one, which is a change a reviewer should see. (The same collapse is recorded as `adapted` in parity/measurement.fixtures.ledger.json and as `ported` in parity/measurement.provenance.ledger.json; the conservative label is used here.)",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_both_renderings_encode_to_ascii_and_to_cp932[render_json]",
+      "target_id": "test/measurement/render.test.ts::no verdict > both renderings encode to ascii and to cp932[render_json]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts ASCII twice: `text.isascii()` and `text.encode(\"cp932\")`. The second is the one that reproduces the Japanese-console crash a UTF-8 pytest capture never sees. JavaScript has no cp932 encoder and adding one for a test would be a second implementation to be wrong in; ASCII is a strict SUBSET of cp932, so `isAscii` implies both source assertions and neither is lost. Recorded as adapted rather than ported because two assertions become one, which is a change a reviewer should see. (The same collapse is recorded as `adapted` in parity/measurement.fixtures.ledger.json and as `ported` in parity/measurement.provenance.ledger.json; the conservative label is used here.)",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_grace_from_the_revision_is_stamped_as_derived_and_a_declared_one_is_not",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > grace from the revision is stamped as derived and a declared one is not",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_negative_declared_grace_is_refused_before_the_cohort_scan",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > a negative declared grace is refused before the cohort scan",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_the_grace_rule_the_report_enforces_is_the_window_model_s_own",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > the grace rule the report enforces is the window model's own",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_negative_grace_is_refused_by_the_section_builder_too",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > a negative grace is refused by the section builder too",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_the_zero_censoring_counts_say_why_they_are_zero",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > the zero censoring counts say why they are zero",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_an_absent_shadow_input_is_stated_rather_than_shown_as_an_empty_bucket",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > an absent shadow input is stated rather than shown as an empty bucket",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_shadow_input_excludes_its_runs_and_names_its_source",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > a shadow input excludes its runs and names its source",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_shadow_input_with_no_source_and_no_reason_is_refused",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > a shadow input with no source and no reason is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_the_query_catalogue_limitation_travels_with_the_report",
+      "target_id": "test/measurement/render.test.ts::the declared inputs > the query catalogue limitation travels with the report",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_report_with_no_section_is_refused",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a report with no section is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_two_sections_under_one_name_are_refused",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > two sections under one name are refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_section_name_that_collides_with_the_key_syntax_is_refused[]",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a section name that collides with the key syntax is refused[]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_section_name_that_collides_with_the_key_syntax_is_refused[  ]",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a section name that collides with the key syntax is refused[  ]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_section_name_that_collides_with_the_key_syntax_is_refused[a.b]",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a section name that collides with the key syntax is refused[a.b]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_section_name_that_collides_with_the_key_syntax_is_refused[a b]",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a section name that collides with the key syntax is refused[a b]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_section_name_that_collides_with_the_key_syntax_is_refused[a|b]",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a section name that collides with the key syntax is refused[a|b]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_section_name_that_collides_with_the_key_syntax_is_refused[a`b]",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a section name that collides with the key syntax is refused[a`b]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_section_without_a_title_is_refused",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > a section without a title is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_asking_for_a_section_the_report_does_not_carry_is_refused",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > asking for a section the report does not carry is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_an_unknown_rendering_is_refused",
+      "target_id": "test/measurement/render.test.ts::the report's own refusals > an unknown rendering is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_the_ac9_section_reports_the_numbers_the_measurement_made",
+      "target_id": "test/measurement/render.test.ts::the AC-9 section binds to the measurement > the ac9 section reports the numbers the measurement made",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_a_writer_committing_mid_report_cannot_move_the_database_under_it",
+      "target_id": "test/measurement/render.test.ts::the report is measured over one state of the database > a writer committing mid-report cannot move the database under it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_render.py::test_the_report_is_built_inside_a_held_read_transaction",
+      "target_id": "test/measurement/render.test.ts::the report is measured over one state of the database > the report is built inside a held read transaction",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "15 mutations of render.ts, one per property the ported cases claim to pin, plus the 4-site escaping sweep in scripts/escaping-coverage.mjs, 2026-08-28",
+    "caught": 15,
+    "escaping_sites": "4 of 4 (banner line, dotted key, table cell, block line). The repository total moves 33/35 -> 37/39.",
+    "survivors": [],
+    "note": "Ten of the fifteen were caught by the ported cases on the first pass. The five that survived were all closed with target-only cases and the sweep was re-run to 15 of 15; they are listed below because what they have in common is the finding, not the individual holes.",
+    "closed_survivors": [
+      {
+        "mutation": "a list joins with a comma and no space",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The equality case renders both sides through this module's own `cell`, so a change to `cell` moves the two sides together and the comparison stays equal. The JSON carries a list structurally, so only the Markdown changes -- and only a reader would have noticed."
+      },
+      {
+        "mutation": "the JSON rendering sorts its keys",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "render_json does not sort precisely so the verdict note and the banner are on the first screen, and the docstring says so; both parsers in the source's file are order-insensitive, so nothing held it."
+      },
+      {
+        "mutation": "the verdict note is dropped from the report mapping",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "The ported no-verdict case greps the rendering for 'Q-0005', and the AC-9 narrative says 'Q-0005' too -- so the report's own field could go missing behind another module's prose and the case would still pass. Reproduced against interlock's own rendering, where the narrative carries the same string."
+      },
+      {
+        "mutation": "the AC-9 coverage ratio is put in the mapping as a bare number",
+        "verdict": "port-specific blind spot, closed with a target-only test",
+        "note": "Python has a float there and prints 1.0 in both renderings; JavaScript has one number type, so the port carries the distinction in PythonFloat. Losing it changes every rendered report -- interlock#74 AC3 compares these documents -- while the equality case stays green, because it renders both sides through `cell`. This one is not in the source at all: it exists only because the port has to reconstruct a distinction the source gets from its runtime."
+      },
+      {
+        "mutation": "the grace and the fingerprint mode are not checked before the snapshot opens",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "Two source cases are named 'refused before the cohort scan' and neither asserts the ordering; both pass on a build that checks only inside the report, which is the check the source duplicates the rule to avoid. Made observable by passing an ordinary writable connection, which measurementSnapshot refuses: a refusal about the ARGUMENT then proves the argument was checked first, and a third assertion proves the connection really would have been refused."
+      }
+    ]
+  },
+  "divergences": [
+    {
+      "decision": "D-0109",
+      "behaviour": "Every externally-supplied value and every dotted key the Markdown rendering prints goes through reportValue, and so does each line of a fenced block. interlock's render_markdown interpolates all of them raw.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "D-0109 applied to the report's own renderer, which is the last one in this harness to get it. The values are the database's and the caller's: a db path, a v1 shadow source, a run id, a baseline description, a detector version in the banner, and a fact key a caller chose. Two failures follow -- a character outside cp932 turns the report into a UnicodeEncodeError on the console it is read from, and a newline injects a line a reader cannot tell from one the harness wrote. The BLOCK half was found by measurement, not by reading: the first version of this module left fenced blocks verbatim on the argument that only this package's own constants reach one, and the structural case showed a v1 shadow source with a newline in it becoming a block and carrying its non-ASCII straight through. A block is escaped line by line rather than whole, because reportValue over the whole value would turn the newlines into escapes and collapse the block back into the single line it exists to avoid.",
+      "parity_cost": "None on any report whose external values are printable ASCII, which is every report the fixture corpus produces: continuo's two renderings were diffed against interlock's for the same database and are byte-identical apart from tool_version and the D-0107 header field (measured 2026-08-28, interlock at 65f36c5). Where a value is NOT printable ASCII the two implementations differ, and continuo is the reference: interlock's rendering of that report crashes a cp932 console or carries a forged line.",
+      "evidence": "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > every externally-supplied value in a full report is escaped, and the three cases beside it. Measured by scripts/escaping-coverage.mjs: 4 of 4 sites covered."
+    },
+    {
+      "decision": "D-0111",
+      "behaviour": "A fenced block's fence is widened past the longest run of backticks its value holds. interlock always opens with exactly three.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "A fenced block is closed by a line of backticks at least as long as the one that opened it, so a value carrying a line of three backticks ends the block early and everything after it -- the rest of that value, and every later block -- is read as report structure. It is the same injection D-0109 closed for table cells, one delimiter along, and the escape cannot close this one: what reaches a block includes another renderer's finished output, and escaping the backtick would need a rule reportValue does not have. Widening is the repair that changes nothing else.",
+      "parity_cost": "None on a value with no backticks, which is every value an ordinary report carries -- pinned by a target-only case asserting an ordinary report's fences are exactly ```. A report whose values do carry a fence renders differently from interlock's, which is the point: interlock's is truncated.",
+      "evidence": "test/measurement/render.test.ts::target-only -- a hostile value cannot forge a report > a fenced value cannot close its own fence, and 'an ordinary report's fences are exactly three backticks'. Made to fail on purpose: with the widening removed the block parses back as 'before' and the case goes red naming the truncation."
+    },
+    {
+      "decision": "D-0108",
+      "behaviour": "V1ShadowInput's constructor refuses an input that states neither its source nor its absence, that states both, or that carries run ids alongside a reason for having none. interlock states the invariant only in the two classmethods and leaves the dataclass constructor public beside them.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Raised by the codex review gate on this belt, and it is exactly the shape D-0108 already rules on: an invariant a public constructor can walk around is repaired, not disclosed. The class exists because an empty v1_owned bucket rendered without saying where it came from reads as 'v1 owned no run in this period', which the report is in no position to assert. `V1ShadowInput(source=None, run_ids=('run-9',), absent_reason=None)` builds exactly that in interlock: buildMeasurementReport excludes those runs from the cohort and the report shows an empty bucket with no source and no reason beside it. The two factories keep their own messages by raising them from the constructor, so a caller gets the same explanation through either door.",
+      "parity_cost": "None on any report either implementation can build through `observed` or `absent`, which is every report the CLI produces. A caller reaching the constructor with an incoherent combination gets a refusal here and a rendered report in interlock; continuo is the reference.",
+      "evidence": "test/measurement/render.test.ts::target-only -- the public constructor cannot walk around the invariant > a shadow input that is neither observed nor absent is refused"
+    },
+    {
+      "decision": "D-0107",
+      "behaviour": "The rendered report carries header.imputation_rule.unconfirmed_response_count, which interlock's does not, and header.imputation_rule.supports_acceptance_claim can differ from interlock's for a period containing an unfinished invocation.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "Not this belt's divergence: it is D-0107, landed with the AC-9 belt, becoming visible in the document that prints the header. Recorded here because this is the ledger of the file that renders it, and because it is one of exactly two fields by which continuo's report differs from interlock's on the shared fixture.",
+      "parity_cost": "See parity/measurement.ac9.ledger.json, which owns this divergence.",
+      "evidence": "parity/measurement.ac9.ledger.json"
+    }
+  ]
+}

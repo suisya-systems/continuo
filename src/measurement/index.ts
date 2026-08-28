@@ -272,6 +272,63 @@ export {
   ReadOnlyCapabilityRefused,
 } from "./reader.js";
 /**
+ * Section 6's two renderings of one computed report, and the pieces a caller
+ * assembles a report from.
+ *
+ * `cell`, `flatten` and `render` are generic-sounding names for a package
+ * barrel, and they are exported anyway because the source's `__all__` carries
+ * them: `test_render.py` builds one side of its Markdown/JSON equality
+ * assertion out of `cell`, so a consumer checking a rendered report against its
+ * JSON needs the same function rather than a second copy of it.
+ *
+ * `renderSeams` is deliberately absent, for the reason `readerSeams` is: it is a
+ * test seam (D-0014), not package API.
+ *
+ * One name is not the source's. `JSON` is a JavaScript global, and importing a
+ * constant of that name shadows it for the whole importing module -- so the
+ * rendering is exported as `JSON_RENDERING`, carrying the same value. See its
+ * docstring in {@link ./render.js}.
+ *
+ * `NO_VERDICT_NOTE` is bare here and qualified in `src/index.ts`. It collides
+ * with {@link ./canary.js}'s note of the same spelling -- two different notes
+ * about two different open questions -- but canary is not in this barrel, so
+ * the collision exists only one level up and is resolved there, where it is.
+ */
+export {
+  BLOCK_LANGUAGE,
+  buildMeasurementReport,
+  cell,
+  DuplicateSectionRefused,
+  EMPTY_BLOCK,
+  FINGERPRINT_TABLES,
+  flatten,
+  JSON_RENDERING,
+  MARKDOWN,
+  MeasurementReport,
+  NO_VERDICT_NOTE,
+  QUERY_CATALOGUE_LIMITATION,
+  RENDERINGS,
+  REPORT_KIND,
+  REPORT_QUERY_SOURCES,
+  RenderRefusal,
+  type ReportHeaderLike,
+  ReportSection,
+  type ReportValue,
+  render,
+  renderJson,
+  renderMarkdown,
+  reportQueryDefinitions,
+  SectionNameRefused,
+  SectionsRequired,
+  sectionFromAc9,
+  sectionFromWindowDeclaration,
+  UNATTESTED_STATEMENTS,
+  UnknownRendering,
+  V1ShadowInput,
+  V1ShadowInputRefused,
+  WINDOW_EPISODES_NOT_CLASSIFIED,
+} from "./render.js";
+/**
  * Section 3.3's shadow reconciliation: four correlation keys, five buckets.
  *
  * The bucket names are exported because a consumer has to be able to iterate
