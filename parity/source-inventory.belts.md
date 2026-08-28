@@ -347,5 +347,6 @@ decision gets made by nobody.
 
 D-ranges are allocated per belt (`DECISIONS.md`, the index table's note). The 2026-08-28
 ratification (D-0032) allocated `D-03xx` to `session`, `D-04xx` to `canary` and `D-05xx` to
-`messagebus`; `D-0601` allocated `D-06xx` to `fault_injection`. No range is allocated to any belt
-still proposed here; that allocation is part of the same human gate as the statuses.
+`messagebus`; `D-0601` allocated `D-06xx` to `fault_injection` and `D-0701` allocated `D-07xx`
+to `secretary`. No range is allocated to any belt still proposed here; that allocation is part of
+the same human gate as the statuses.
