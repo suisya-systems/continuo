@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join, delimiter as pathDelimiter } from "node:path";
 
 import { describe, expect, onTestFinished, test } from "vitest";
-
+import { ArgparseExit } from "../../src/cli/parser.js";
+import { buildParser as buildContinuoParser } from "../../src/cli.js";
 import { osJoin, osRealpath } from "../../src/fencing/pypath.js";
 import { PyValueError } from "../../src/fencing/pysemantics.js";
 import { isAscii } from "../../src/measurement/format.js";
-import { ArgparseExit } from "../../src/settings/argparse.js";
-import { buildDoctorParser, buildRuntimeParser, defaultStreams } from "../../src/settings/cli.js";
+import { buildDoctorParser, defaultStreams } from "../../src/settings/cli.js";
 import {
   absoluteSymlinkInChain,
   canonicalizePermissionDeny,
@@ -1060,7 +1060,7 @@ describe("gate robustness", () => {
   symlinkTest("unified cli wires sandbox doctor", () => {
     const { tmp } = escapingHome("gate-unified");
     const path = writeSettings(tmp, settingsWithDeny(["Read(~/.aws/*)"]));
-    const parser = buildRuntimeParser();
+    const parser = buildContinuoParser();
     const args = parser.parseArgs(
       ["sandbox", "doctor", "--settings", path, "--no-probe-bwrap", "--no-merge-scopes"],
       defaultStreams(),

@@ -9,6 +9,29 @@
  * (DECISIONS.md D-0001..D-0042, docs/parity-audit.md).
  */
 
+/**
+ * The settings generator (D-0213), and the parser the whole CLI now shares.
+ *
+ * The parser moved to `src/cli/parser.ts` with `D-0030` -- it is one parser for
+ * the unified CLI rather than the settings CLI's own -- but it is re-exported
+ * from here, where it already was, rather than from a new place: it is the same
+ * surface under a new path, and the ported cases that reach `ArgparseExit`
+ * reach it by that name.
+ *
+ * `src/cli.ts` itself stays absent, as it was: it is the `continuo` bin, not
+ * library surface.
+ *
+ * `generatorSeams` is deliberately absent: it is a seam for this module's own
+ * tests, not public API, exactly as `spawnSeams` is.
+ */
+export {
+  ArgparseExit,
+  type ArgparseStreams,
+  ArgumentParser,
+  type ArgumentSpec,
+  type Namespace,
+  type Subparsers,
+} from "./cli/parser.js";
 export {
   AiInvocationRefused,
   AiInvocationUsageError,
@@ -813,26 +836,14 @@ export {
   WORKER_ESCALATION_EPISODES_QUERY,
 } from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
-/**
- * The settings generator (D-0213).
- *
- * `generatorSeams` is deliberately absent: it is a seam for this module's own
- * tests, not public API, exactly as `spawnSeams` is.
- */
-export {
-  ArgparseExit,
-  type ArgparseStreams,
-  ArgumentParser,
-  type ArgumentSpec,
-  type Namespace,
-} from "./settings/argparse.js";
 export {
   addArguments,
   addDoctorArguments,
+  addSandboxSubparsers,
+  addSettingsSubparsers,
   addShowArguments,
   buildDoctorParser,
   buildParser,
-  buildRuntimeParser,
   defaultStreams,
   main as settingsMain,
 } from "./settings/cli.js";
