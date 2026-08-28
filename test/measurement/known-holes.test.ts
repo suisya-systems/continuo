@@ -144,6 +144,56 @@ const FORBIDDEN_NAME =
  */
 const DESCRIBES_A_DECLARED_RULE = /(_kind|Kind)$/;
 
+/**
+ * SQLite's introspection pragmas: read whatever argument they are given.
+ *
+ * A pragma with an argument is a SETTER in general -- `PRAGMA user_version(1)`
+ * sets the version exactly as `PRAGMA user_version = 1` does (measured against
+ * better-sqlite3 13.0.3: `pragma("user_version(7)")` then `pragma("user_version",
+ * { simple: true })` reads back 7). The source classifies a pragma by whether
+ * its text contains `=`, which the parenthesised spelling walks straight past.
+ * So the test is inverted: an argument makes a pragma a setter UNLESS it is one
+ * of these, which take an argument in order to say what to describe.
+ *
+ * A closed list, and it is SQLite's rather than this package's: a pragma missing
+ * from it is reported rather than skipped, so the list cannot rot into a
+ * licence. Raised by the review gate.
+ */
+const READ_ONLY_ARGUMENT_PRAGMAS = new Set([
+  "collation_list",
+  "database_list",
+  "foreign_key_check",
+  "foreign_key_list",
+  "function_list",
+  "index_info",
+  "index_list",
+  "index_xinfo",
+  "integrity_check",
+  "module_list",
+  "pragma_list",
+  "quick_check",
+  "table_info",
+  "table_list",
+  "table_xinfo",
+]);
+
+/**
+ * Does this `PRAGMA ...` text change the database?
+ *
+ * Both of SQLite's setter spellings, `= value` and `(value)`, and neither is
+ * read off the presence of a character alone: the name is taken first, so
+ * `PRAGMA table_info("run")` is a read and `PRAGMA journal_mode(WAL)` is not.
+ */
+function pragmaSets(text: string): boolean {
+  const body = text.trim().replace(/^PRAGMA\s+/i, "");
+  const name = (body.match(/^[A-Za-z_][A-Za-z0-9_]*/)?.[0] ?? "").toLowerCase();
+  const rest = body.slice(name.length).trim();
+  if (rest === "") {
+    return false;
+  }
+  return !READ_ONLY_ARGUMENT_PRAGMAS.has(name);
+}
+
 /** Statement verbs that change the database. */
 const WRITE_VERBS = new Set([
   "INSERT",
@@ -567,7 +617,7 @@ describe("hole 5 -- the harness never writes, and ai_invocation least of all", (
         continue;
       }
       if (statement.verb === "PRAGMA") {
-        if (statement.text.includes("=") && !exempt) {
+        if (pragmaSets(statement.text) && !exempt) {
           offending.push(`${where}: sets a pragma (${pythonRepr(statement.text.trim())})`);
         }
         continue;

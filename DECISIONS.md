@@ -4696,6 +4696,36 @@ therefore records the outermost enclosing function rather than the nearest -- a 
 closure is attributed to the named function that holds it, which is what the exemptions are written
 against.
 
+**Three more places where part of a statement was read and the rest treated as absent**, all
+raised by the review gate's second round and all closed the same way -- by refusing rather than by
+guessing.
+
+- **A template resolves whole, or not at all.** The source's resolver returns the first non-blank
+  literal fragment, which is enough to name a verb and not enough to see a statement:
+  `exec(`SELECT 1; ${suffix}`)` classified as `SELECT` and the suffix was never looked at. The whole
+  text is resolved now. Where it cannot be, the fragment rule survives behind a precondition that
+  makes it sound: the call must compile a **single** statement -- measured, `prepare("INSERT ...;
+  INSERT ...")` throws `The supplied SQL string contains more than one statement` -- and the
+  fragment's verb must not be `WITH`, because a CTE puts its write after the head. A **numeric**
+  interpolation is admitted without being computed: its string form is digits, a sign, a dot, `e`,
+  `Infinity` or `NaN`, none of which can hold a separator, a keyword or a quote. That is not a
+  convenience; it is the one interpolation `reader.ts` writes into an `exec`, and refusing it would
+  report the read-only probe itself as uninspectable.
+- **An ambiguous name resolves to nothing.** The source keys its bindings by name over a walk of the
+  whole tree, so a `const statement = "INSERT ..."` in one function resolves to another function's
+  `"SELECT ..."`. A scope chain is the complete answer and is more machinery than the property
+  needs; a name declared more than once resolves to nothing instead, and its statement is reported
+  uninspectable. Fail-closed is the direction an ambiguity has to fail in a scan whose subject is a
+  hidden write. Measured: no name used as a statement argument in this package is declared twice in
+  its module.
+- **A pragma has two setter spellings, and `=` is one of them.** SQLite accepts
+  `PRAGMA user_version(1)` as well as `PRAGMA user_version = 1`, and the source tests only for the
+  character. Measured against better-sqlite3 13.0.3: `pragma("user_version(7)")` then
+  `pragma("user_version", { simple: true })` reads back **7**. The test is inverted -- an argument
+  makes a pragma a setter **unless** its name is one of SQLite's introspection pragmas, because
+  parentheses alone do not separate the two (`PRAGMA table_info("run")` is a read). That list is the
+  engine's, not this package's, and a pragma missing from it is reported rather than skipped.
+
 **What was measured.** 42 statements found across the fourteen modules, every one statically
 resolved, none unclassified, and none reported by the hidden-write sweep. Six mutations, each red
 for its own reason: an `INSERT` added to `cohort.ts` reports `cohort.selectCohort: INSERT`;
@@ -4705,7 +4735,12 @@ the scan is not working`, which is the source's own guard against a vacuous pass
 `exec("SELECT 1; INSERT INTO ai_invocation ...")` reports `INSERT behind a leading SELECT`;
 `WITH doomed AS (...) DELETE FROM run ...` reports `DELETE behind a leading WITH`; and a statement
 carrying `replace(...)`, a literal `'DELETE'` and a `-- INSERT INTO run` comment reports **nothing**,
-which is the direction the blanking exists for.
+which is the direction the blanking exists for. Six more for the second round:
+`exec(`SELECT 1; ${unresolvable}`)` and `prepare(`WITH x AS (SELECT 1) ${tail}`)` report `statement
+not statically inspectable`; `exec(`SELECT 1; ${aWriteConstant}`)` reports `INSERT behind a leading
+SELECT`; a second `const statement` in `false-termination.ts` reports its own function
+uninspectable; `pragma("user_version(1)")` reports `sets a pragma`; and `pragma('table_info("run")')`
+reports **nothing**.
 
 **Status.** accepted
 

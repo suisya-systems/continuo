@@ -330,10 +330,28 @@ class Sources {
   private readonly names = new Map<string, ts.Expression>();
   private readonly mappings = new Map<string, Map<string, ts.Expression>>();
   private readonly fieldTexts: string[] = [];
+  /**
+   * Names declared more than once in the module.
+   *
+   * The source keys its bindings by name over a walk of the whole tree, so a
+   * later declaration silently overwrites an earlier one and a name declared in
+   * two functions resolves to whichever came last -- a `const statement =
+   * "INSERT ..."` in one function read as the `"SELECT ..."` of another. Rather
+   * than build a scope chain, a name with more than one declaration resolves to
+   * NOTHING here, which reports the statement as uninspectable: fail-closed,
+   * and the direction an ambiguity has to fail in a scan whose subject is a
+   * hidden write. Measured: no name used as a statement argument in this
+   * package is declared twice in its module, so nothing is lost today. Raised
+   * by the review gate.
+   */
+  private readonly ambiguous = new Set<string>();
 
   constructor(source: ts.SourceFile) {
     const visit = (node: ts.Node): void => {
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+        if (this.names.has(node.name.text)) {
+          this.ambiguous.add(node.name.text);
+        }
         this.names.set(node.name.text, node.initializer);
         const entries = mappingEntries(node.initializer);
         if (entries !== null) {
@@ -376,7 +394,7 @@ class Sources {
       return null;
     }
     if (ts.isIdentifier(node)) {
-      const bound = this.names.get(node.text);
+      const bound = this.ambiguous.has(node.text) ? undefined : this.names.get(node.text);
       return bound === undefined ? null : this.textOf(bound, depth + 1);
     }
     if (ts.isElementAccessExpression(node)) {
@@ -414,15 +432,119 @@ class Sources {
     return entry === undefined ? null : this.textOf(entry, depth + 1);
   }
 
-  /** Every text this argument can evaluate to, or `null` if unknown. */
-  textsForArgument(node: ts.Expression): readonly string[] | null {
+  /**
+   * The WHOLE text an expression evaluates to, interpolations included, or
+   * `null` when any part of it cannot be read statically.
+   *
+   * `textOf` above is the source's resolver and returns the first non-blank
+   * literal fragment of a template, which is enough to read a leading verb.
+   * That is not enough to read a text for hidden statements: in
+   * `exec(`SELECT 1; ${suffix}`)` the fragment is `SELECT 1; ` and the
+   * suffix -- which is where an `INSERT` would be -- is never looked at. So the
+   * classifier resolves the whole text where it can, and where it cannot the
+   * fallback carries a precondition (see {@link textsForArgument}).
+   */
+  wholeTextOf(node: ts.Node, depth: number): string | null {
+    if (depth > 4) {
+      return null;
+    }
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      return node.text;
+    }
+    if (ts.isTemplateExpression(node)) {
+      let text = node.head.text;
+      for (const span of node.templateSpans) {
+        const interpolated = this.interpolationText(span.expression, depth);
+        if (interpolated === null) {
+          return null;
+        }
+        text += interpolated + span.literal.text;
+      }
+      return text;
+    }
+    if (ts.isIdentifier(node)) {
+      const bound = this.ambiguous.has(node.text) ? undefined : this.names.get(node.text);
+      return bound === undefined ? null : this.wholeTextOf(bound, depth + 1);
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = this.wholeTextOf(node.left, depth + 1);
+      const right = this.wholeTextOf(node.right, depth + 1);
+      return left === null || right === null ? null : left + right;
+    }
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      // `QUERY.replace("{placeholders}", ...)` substitutes a bind-parameter list
+      // into a template. The template's own text is what is classified: the
+      // substitution is a run of `?` separated by commas, which can hold neither
+      // a statement separator nor a verb.
+      if (node.expression.name.text === "replace") {
+        return this.wholeTextOf(node.expression.expression, depth + 1);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * What an interpolation contributes to the text, or `null` if unknown.
+   *
+   * A **number** is admitted without being computed. `${Number(userVersion)}`
+   * cannot produce a semicolon, a keyword or a quote whatever the value is --
+   * its string form is digits, a sign, a dot, `e`, `Infinity` or `NaN` -- so it
+   * cannot smuggle a statement past the classifier, and a zero stands in for it.
+   * That is not a convenience: it is the one interpolation `reader.ts` writes
+   * into an `exec`, and refusing it would report the read-only probe itself as
+   * uninspectable.
+   */
+  private interpolationText(node: ts.Expression, depth: number): string | null {
+    if (ts.isNumericLiteral(node)) {
+      return node.text;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "Number"
+    ) {
+      return "0";
+    }
+    return this.wholeTextOf(node, depth + 1);
+  }
+
+  /**
+   * Every text this argument can evaluate to, or `null` if unknown.
+   *
+   * `runsEveryStatement` is true for `exec`, which runs every statement in the
+   * string, and false for `prepare` and `pragma`, which compile exactly one --
+   * measured: `prepare("INSERT ...; INSERT ...")` throws "The supplied SQL
+   * string contains more than one statement".
+   *
+   * The whole text is resolved first. Where it cannot be, the source's rule --
+   * the first non-blank literal fragment names the verb -- is used, but only
+   * when it is sound to do so: the call must compile a single statement, so an
+   * interpolation cannot append one, AND the fragment's verb must not be `WITH`,
+   * because a CTE puts its write AFTER the fragment a template's head holds.
+   * Anything else is reported as uninspectable, which is the source's own
+   * fail-closed branch.
+   */
+  textsForArgument(
+    node: ts.Expression,
+    options: { readonly runsEveryStatement: boolean },
+  ): readonly string[] | null {
     if (ts.isPropertyAccessExpression(node) && node.name.text === "sql") {
       // `recordClass.sql` over a declared set of record classes: each declared
       // sql is executed, so each is classified.
       return this.fieldTexts.length > 0 ? [...this.fieldTexts] : null;
     }
-    const text = this.textOf(node, 0);
-    return text === null ? null : [text];
+    const whole = this.wholeTextOf(node, 0);
+    if (whole !== null) {
+      return [whole];
+    }
+    if (options.runsEveryStatement) {
+      return null;
+    }
+    const fragment = this.textOf(node, 0);
+    if (fragment === null || leadingVerb(fragment) === "WITH") {
+      return null;
+    }
+    return [fragment];
   }
 }
 
@@ -624,7 +746,7 @@ export function statementsExecuted(): readonly ExecutedStatement[] {
       }
       const argument = node.arguments[0] as ts.Expression;
       const functionOf = enclosing.get(node) ?? "<module>";
-      const texts = sources.textsForArgument(argument);
+      const texts = sources.textsForArgument(argument, { runsEveryStatement: method === "exec" });
       if (texts === null) {
         found.push({
           module: short,
