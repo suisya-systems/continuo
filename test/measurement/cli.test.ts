@@ -43,6 +43,7 @@ import { createProductionControlPlane } from "../../src/control_plane/migrator.j
 import * as measurementCli from "../../src/measurement/cli.js";
 import { FINGERPRINT_AGGREGATE } from "../../src/measurement/provenance.js";
 import { ControlPlaneRefusal } from "../../src/measurement/reader.js";
+import { cell } from "../../src/measurement/render.js";
 import { WindowRefusal } from "../../src/measurement/windows.js";
 import { caseRoot, rawConnection, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
@@ -165,7 +166,14 @@ describe("end to end", () => {
 
     expect(code).toBe(0);
     const facts = parseMarkdown(out);
-    expect(facts.get("header.db_path")).toBe(path);
+    // Through `cell`, not against the raw path. `D-0109` escapes every value
+    // this report prints, and a Windows path is made of backslashes, so the
+    // report carries `C:\\Users\\...` where the raw string has one backslash
+    // each. The raw comparison passed on Linux -- where a temp path has nothing
+    // to escape -- and failed on both Windows cells. `cell` is the renderer's
+    // own spelling of a value, so this asks what the report prints rather than
+    // restating the escaping rule here.
+    expect(facts.get("header.db_path")).toBe(cell(path));
     expect(facts.get("header.period_start_ms")).toBe(String(PERIOD_START));
     expect(facts.get("header.generated_at_ms")).toBe(String(GENERATED_AT));
     expect(facts.get("sections.ac9.facts.cohort.denominator")).toBe("1");
@@ -385,7 +393,7 @@ describe("the per-report declarations", () => {
     );
 
     const facts = parseMarkdown(out);
-    expect(facts.get("sections.inputs.facts.v1_shadow.source")).toBe(shadow);
+    expect(facts.get("sections.inputs.facts.v1_shadow.source")).toBe(cell(shadow));
     expect(facts.get("sections.inputs.facts.v1_shadow.run_ids")).toBe("run-9");
     expect(facts.get("header.coverage.excluded.v1_owned")).toBe("1");
   });
@@ -703,7 +711,7 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
 
     expect(code).toBe(0);
     const facts = parseMarkdown(out);
-    expect(facts.get("header.db_path")).toBe(path);
+    expect(facts.get("header.db_path")).toBe(cell(path));
     expect(facts.get("header.period_start_ms")).toBe(String(PERIOD_START));
     expect(facts.get("header.fixture_suite_ref.commit")).toBe("c0f=fee");
   });
@@ -818,6 +826,47 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
       expect(refused.text).toContain(`--period-start-ms takes an integer, got '${spelling}'`);
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    "target-only -- a db path that needs escaping is printed escaped",
+    () => {
+      // This is the Windows failure, made visible on the machines the belt is
+      // developed on. `D-0109` escapes every value the report prints, and a
+      // Windows path is made of backslashes -- so `header.db_path` carries
+      // `C:\\Users\\...` there while a Linux temp path has nothing to escape and
+      // comes back byte for byte. Three cases compared against the raw path,
+      // passed on every Linux cell, and failed on both Windows cells.
+      //
+      // A backslash is legal in a POSIX directory name and illegal on Windows,
+      // so the reproduction runs only here -- which is the same asymmetry the
+      // other way round, and the reason this case is skipped on the platform
+      // whose paths it is about. Approved in the ledger.
+      const root = join(caseRoot("escape"), "a\\b");
+      const path = productionTemplate.copyInto(root);
+
+      const { out } = captured(() =>
+        measurementCli.main([
+          "report",
+          "--db",
+          path,
+          "--period-start-ms",
+          String(PERIOD_START),
+          "--period-end-ms",
+          String(PERIOD_END),
+          "--now-ms",
+          String(GENERATED_AT),
+        ]),
+      );
+
+      const printed = parseMarkdown(out).get("header.db_path");
+      expect(printed).toBe(cell(path));
+      // Both halves, because the equality above is satisfied by a `cell` that
+      // escapes nothing -- which is exactly the state this case exists to
+      // detect, and the state every Linux cell is in for an ordinary temp path.
+      expect(cell(path), "the path under test escapes nothing").not.toBe(path);
+      expect(printed).toContain("\\\\");
+    },
+  );
 
   test("target-only -- a required flag that is absent is refused by name", () => {
     const errors = captureStderr(() => measurementCli.main(["report", "--period-start-ms", "1"]));

@@ -69,7 +69,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 19,
+      "count": 20,
       "ids": [
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the help walk reaches the mounted subcommand's own flags",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- --help after a subcommand is the subcommand's help",
@@ -85,29 +85,30 @@
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a negative number is still a value, not a flag",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a value handed to the version flag is refused, not ignored",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a non-ASCII decimal digit is refused, not decoded",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a db path that needs escaping is printed escaped",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a required flag that is absent is refused by name",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a value outside a flag's choices is refused by name",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a flag given twice is refused rather than silently last-wins",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- half a corpus reference is refused for being half",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the top-level CLI reports the build's version"
       ],
-      "why": "Nineteen, all of them about `src/cli/parser.ts`, `src/cli.ts` and the one repair in `src/measurement/cli.ts` -- code this port had to write because Node has no argparse, and which therefore carries no warrant from interlock (rule 11). Five of the thirteen exist because something could not see the property it named. Two came from the mutation sweep: `the help walk reaches the mounted subcommand's own flags` closes the hazard that both cp932 cases are a loop over helpStrings and a walk returning nothing makes both vacuously green, and `half a corpus reference is refused for being half` closes an inherited blind spot -- the ported case (and its source) point --fixture-corpus at a directory that does not exist, so loadCorpus refuses with a FixtureRefusal, which IS a ControlPlaneRefusal, and the case stays green with the half-reference guard deleted (measured). Nine came from the review gate, in four rounds. Round 1: Python's `int()` accepts underscores between digits so the source's parser takes `--period-start-ms 1_700_000_000_000` and the port's first parser refused it; a nested command's refusal named the root parser above a usage line naming the child; and a missing or malformed shadow file escaped as a raw filesystem error or SyntaxError rather than as the refusal the function documents. Round 2 found the two the port had that argparse does not: `--flag=value` is argparse's other spelling of `--flag value` and this parser took only one of them, and the entry-point guard compared `process.argv[1]` unresolved -- which is the symlink npm publishes a `bin` as, so the installed command exited 0 having run nothing and printed nothing while `node dist/cli.js` worked. Round 3 found the one accepted command line that produces a wrong report rather than no report: with a value omitted, `--fixture-commit --format json` took `--format` as the commit the labelled corpus came from and rendered in the default format, so the operator gets a plausible report whose provenance is false -- and nothing downstream can catch it, because a commit is an opaque string and the default format is valid. argparse refuses this and now so does the port, with `--flag=--literal` as the escape hatch and a negative number still a value, which `--grace-ms -1` depends on. Round 4 raised no P1 and two P2s: `--version=x` printed the version and exited 0 while argparse refuses a value handed to a zero-argument action, now matched including argparse's wording; and Python's `int()` accepts any Unicode decimal digit, which this parser refuses -- a divergence taken deliberately rather than closed, and pinned as one (see divergences). The remaining eight pin the parser's own refusals: a required flag, a value outside a flag's choices, a flag given twice, three spellings of a non-integer millisecond value, --help routed to the subcommand rather than the root, and the version flag."
+      "why": "Twenty, all of them about `src/cli/parser.ts`, `src/cli.ts` and the one repair in `src/measurement/cli.ts` -- code this port had to write because Node has no argparse, and which therefore carries no warrant from interlock (rule 11). Five of the thirteen exist because something could not see the property it named. Two came from the mutation sweep: `the help walk reaches the mounted subcommand's own flags` closes the hazard that both cp932 cases are a loop over helpStrings and a walk returning nothing makes both vacuously green, and `half a corpus reference is refused for being half` closes an inherited blind spot -- the ported case (and its source) point --fixture-corpus at a directory that does not exist, so loadCorpus refuses with a FixtureRefusal, which IS a ControlPlaneRefusal, and the case stays green with the half-reference guard deleted (measured). Nine came from the review gate, in four rounds. Round 1: Python's `int()` accepts underscores between digits so the source's parser takes `--period-start-ms 1_700_000_000_000` and the port's first parser refused it; a nested command's refusal named the root parser above a usage line naming the child; and a missing or malformed shadow file escaped as a raw filesystem error or SyntaxError rather than as the refusal the function documents. Round 2 found the two the port had that argparse does not: `--flag=value` is argparse's other spelling of `--flag value` and this parser took only one of them, and the entry-point guard compared `process.argv[1]` unresolved -- which is the symlink npm publishes a `bin` as, so the installed command exited 0 having run nothing and printed nothing while `node dist/cli.js` worked. Round 3 found the one accepted command line that produces a wrong report rather than no report: with a value omitted, `--fixture-commit --format json` took `--format` as the commit the labelled corpus came from and rendered in the default format, so the operator gets a plausible report whose provenance is false -- and nothing downstream can catch it, because a commit is an opaque string and the default format is valid. argparse refuses this and now so does the port, with `--flag=--literal` as the escape hatch and a negative number still a value, which `--grace-ms -1` depends on. Round 4 raised no P1 and two P2s: `--version=x` printed the version and exited 0 while argparse refuses a value handed to a zero-argument action, now matched including argparse's wording; and Python's `int()` accepts any Unicode decimal digit, which this parser refuses -- a divergence taken deliberately rather than closed, and pinned as one (see divergences). One more came from the Windows CI cells rather than from the review gate -- see the D-0109 note in `entries` below -- and reproduces on POSIX the escaping the Windows paths made visible. The remaining eight pin the parser's own refusals: a required flag, a value outside a flag's choices, a flag given twice, three spellings of a non-integer millisecond value, --help routed to the subcommand rather than the root, and the version flag."
     },
     "approved_non_running": [
       {
         "file": "test/measurement/cli.test.ts",
-        "reason": "Target-only, and skipped where the hazard does not exist. `the CLI runs when it is invoked through a bin symlink` drives the built CLI through a symlink, which is how npm publishes a `bin` on Unix: `node_modules/.bin/continuo` is a link, Node sets process.argv[1] to it, and an entry-point guard that does not resolve it is false for every installed user. On Windows npm writes a `.cmd` shim that invokes node with the real path, so argv[1] is already resolved and there is nothing for this case to catch; creating a file symlink there also needs a privilege the CI cells are not guaranteed to hold. The property itself is not left unguarded on Windows -- there is nothing there to guard.",
+        "reason": "Target-only, and each skipped where the hazard does not exist. (1) `the CLI runs when it is invoked through a bin symlink` drives the built CLI through a symlink, which is how npm publishes a `bin` on Unix: `node_modules/.bin/continuo` is a link, Node sets process.argv[1] to it, and an entry-point guard that does not resolve it is false for every installed user. On Windows npm writes a `.cmd` shim that invokes node with the real path, so argv[1] is already resolved and there is nothing to catch; creating a file symlink there also needs a privilege the CI cells are not guaranteed to hold. (2) `a db path that needs escaping is printed escaped` puts a backslash in a directory name, which is legal on POSIX and illegal on Windows. It exists to make the Windows failure visible on the machines this belt is developed on, so running it on Windows is neither possible nor the point. In both cases the property is not left unguarded on the skipped platform -- there is nothing there to guard.",
         "approved_by": "worker, 2026-08-28, on the codex review gate's P1",
         "constructs": {
-          "skipIf": 1
+          "skipIf": 2
         }
       }
     ]
   },
   "totals": {
     "source_cases": 25,
-    "ported": 20,
-    "adapted": 5,
+    "ported": 18,
+    "adapted": 7,
     "not_ported": 0,
     "waivers": 0
   },
@@ -145,10 +146,10 @@
     {
       "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_subcommand_runs_end_to_end_and_renders_markdown",
       "target_id": "test/measurement/cli.test.ts::end to end > the subcommand runs end to end and renders Markdown",
-      "disposition": "ported",
+      "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": "",
+      "reason": "ADAPTED at the assertion, not at the behaviour. The source compares `facts['header.db_path']` against the raw path; `D-0109` escapes every value this report prints, so on Windows the report carries `C:\\\\\\\\Users\\\\\\\\...` where the raw string has one backslash each and the raw comparison is false. The port compares against `cell(path)` -- the renderer's own spelling of a value -- which asks the same question the source asks (does the report name the database it was pointed at) through the escaping this port adds. Found by the Windows CI cells after the review gate was clean: a POSIX temp path has nothing to escape, so every Linux cell and every local run was green over it. A target-only case now reproduces it on POSIX with a backslash in a directory name.",
       "source_revision": "65f36c5"
     },
     {
@@ -262,10 +263,10 @@
     {
       "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_shadow_input_file_is_read_and_named",
       "target_id": "test/measurement/cli.test.ts::the per-report declarations > a shadow input file is read and named",
-      "disposition": "ported",
+      "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": "",
+      "reason": "ADAPTED at the assertion, not at the behaviour. The source compares `facts['header.db_path']` against the raw path; `D-0109` escapes every value this report prints, so on Windows the report carries `C:\\\\\\\\Users\\\\\\\\...` where the raw string has one backslash each and the raw comparison is false. The port compares against `cell(path)` -- the renderer's own spelling of a value -- which asks the same question the source asks (does the report name the database it was pointed at) through the escaping this port adds. Found by the Windows CI cells after the review gate was clean: a POSIX temp path has nothing to escape, so every Linux cell and every local run was green over it. A target-only case now reproduces it on POSIX with a backslash in a directory name.",
       "source_revision": "65f36c5"
     },
     {
@@ -369,8 +370,8 @@
     }
   ],
   "mutation_sweep": {
-    "ran": "34 mutations, one per property the cases in this file claim to pin, across src/measurement/cli.ts, src/cli/parser.ts, src/cli.ts and the one line of src/measurement/reader.ts the read-only claim rests on. Harness kept at .sweep/ and not committed; it is 23 mutations of the belt as first written plus 11 covering the eight repairs and the one recorded divergence the review gate produced.",
-    "caught": 34,
+    "ran": "35 mutations, one per property the cases in this file claim to pin, across src/measurement/cli.ts, src/cli/parser.ts, src/cli.ts and the one line of src/measurement/reader.ts the read-only claim rests on. Harness kept at .sweep/ and not committed; it is 23 mutations of the belt as first written plus 12 covering the eight repairs and one recorded divergence the review gate produced, and the escaping the Windows cells found.",
+    "caught": 35,
     "survivors": [],
     "note": "The FIRST run of this sweep reported 21 of 21 caught, and eight of those verdicts were worthless: six mutations were `if (false)`, which TypeScript refuses, so the build failed and the harness read a failed run as a caught mutation, and two more had their JSON report mis-sliced because vitest prints its pretty failure output to the same stream. That is section 10's own hazard -- red for a reason other than the one being tested -- reached from inside the tool built to check for it. The harness now reports INCONCLUSIVE for a build that refuses a mutation and writes its report to a file rather than to stdout, and every always-false condition is written to survive the type-checker.",
     "closed_survivors": [
@@ -413,6 +414,11 @@
         "mutation": "(review gate, not the sweep) the version flag ignores a value attached to it",
         "verdict": "a divergence from argparse, repaired with a target-only case",
         "note": "`--version=x` printed the version and exited 0. argparse refuses a value handed to a zero-argument action, and silently dropping it reads to the operator as though the value was understood. Matched, argparse's wording included."
+      },
+      {
+        "mutation": "(Windows CI, not the sweep and not the review gate) a db path is compared raw rather than as the report prints it",
+        "verdict": "a defect in three of this file's assertions, closed and made visible on POSIX",
+        "note": "`D-0109` escapes every printed value and a Windows path is made of backslashes, so `header.db_path` and `v1_shadow.source` carry doubled ones there. A POSIX temp path has nothing to escape, so the raw comparison was green on every Linux cell, through four review rounds, and failed on both Windows cells. The assertions now go through `cell`, and a target-only case puts a backslash in a POSIX directory name so the property is testable where the belt is developed. It asserts both halves -- the equality AND that the path under test actually escapes to something different -- because the equality alone is satisfied by an escaper that does nothing."
       }
     ]
   },
@@ -453,6 +459,13 @@
       "matches_source": false,
       "deliberate": true,
       "note": "Taken deliberately rather than closed. The value is an epoch millisecond the report prints in its header, so decoding '１２' produces a document saying '12' that the operator cannot reproduce from what they typed; and decoding correctly needs a Unicode digit-value table (NFKD folds the full-width forms and not the Devanagari ones) whose failure mode is a silently wrong number rather than an error, which is the class rule 11 names. The refusal is fail-visible and quotes what it got -- the right answer on the Japanese console D-0113 is about, where an IME left in full-width mode is the likely cause. Pinned by a target-only case so it stays deliberate."
+    },
+    {
+      "decision": "D-0109",
+      "behaviour": "`header.db_path` and `v1_shadow.source` are printed escaped, so on Windows they carry doubled backslashes where interlock prints the path verbatim.",
+      "matches_source": false,
+      "deliberate": true,
+      "note": "A consequence of D-0109 rather than a decision taken here, recorded because it is what makes two ported cases adapted."
     }
   ]
 }
