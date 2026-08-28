@@ -9,18 +9,19 @@ decided to port could never be reconciled against interlock's suite baseline, be
 denominator would move every time a decision changed; and it would answer "is anything missing?"
 with "nothing we chose to look at." So the inventory takes everything, unconditionally. **Being in
 the inventory is evidence that a case exists, not a commitment that it will be ported.** This
-document is where the second question is answered, and every answer below is a *proposal*. None of
-them is settled here.
+document is where the second question is answered. When it was first written, every answer below
+was a *proposal* and none was settled here; statuses that have since passed the human gate are
+marked **ratified** with a date, and only those are settled. Unmarked statuses remain proposals.
 
 The status vocabulary:
 
 | status | meaning |
 |---|---|
-| `in-scope` | named by interlock#74's acceptance criteria; a belt is porting it now or has |
+| `in-scope` | a belt is porting it now or has -- either named by interlock#74's acceptance criteria, or ratified into scope at the human gate |
 | `candidate-lane` | a coherent belt of its own; the cases would port largely as they stand |
 | `retarget` | the invariants carry, but they are written against a mechanism continuo does not have, so a port has to re-point them first |
 | `decision-pending` | whether continuo carries this surface at all is undecided upstream; porting the tests presupposes the answer |
-| `not-porting` | proposed for no port, with a reason |
+| `not-porting` | no port, with a reason -- a proposal until marked ratified |
 
 Where interlock's own `PORTING_LEDGER.md` has already classed a file, that class is cited: it is the
 stronger evidence, because it was written by the people deciding what v2 keeps. Where it has not --
@@ -42,7 +43,9 @@ That is 1,317 of the 2,194 -- the inventory as it stood before this document exi
 
 ## The remaining 877
 
-### `session` -- `candidate-lane` -- 142 cases
+### `session` -- `in-scope` (ratified 2026-08-28) -- 142 cases
+
+Ratified into scope at the human gate; belt started 2026-08-28, D-range `D-03xx`.
 
 `tests/session/` drives `claude_org_runtime/session/`: the provider contract, a
 stub provider, and the Claude CLI provider. A provider/process-lifecycle belt is the natural unit,
@@ -77,7 +80,9 @@ up merged into that directory rather than given a directory of its own. The Issu
 injection specifically, which is the argument for a belt; the counter-argument is that a conformance
 battery with one adapter in it is a battery for a build continuo does not yet have.
 
-### `canary` -- `candidate-lane` -- 70 cases
+### `canary` -- `in-scope` (ratified 2026-08-28) -- 70 cases
+
+Ratified into scope at the human gate; belt started 2026-08-28, D-range `D-04xx`.
 
 A canary/rollout belt. Drives `claude_org_runtime/canary/`: a routing ledger with
 database-enforced guarantees, an audit, synthetic v1 fixtures.
@@ -103,7 +108,10 @@ If the answer is yes, `test_promotion_gate.py` is high-value: every negative ass
 decision was a refusal *and* that nothing landed on disk, which is the two-sided shape that catches
 a gate that refuses in name only.
 
-### `gate_record` -- `not-porting` -- 64 cases
+### `gate_record` -- `not-porting` (ratified 2026-08-28) -- 64 cases
+
+Ratified at the human gate on 2026-08-28: continuo does not port this subsystem, on the grounds
+below.
 
 `tests/gate_record/test_gate_record.py` makes structural checks on
 **interlock's own `docs/gate-record.md`**: that eleven items are present and distinct, that the
@@ -153,7 +161,9 @@ inventory and nothing may be invented.
 Whatever continuo decides about them, it decides after interlock does. They are `retarget` upstream
 first.
 
-### `messagebus` -- `candidate-lane` -- 43 cases
+### `messagebus` -- `in-scope` (ratified 2026-08-28) -- 43 cases
+
+Ratified into scope at the human gate; belt started 2026-08-28, D-range `D-05xx`.
 
 A durable-messaging belt, and the destination the five quarantined broker modules
 above are pointed at. `tests/messagebus/` drives `claude_org_runtime/messagebus/`: the bus, an
@@ -161,14 +171,17 @@ endpoint, carried specifications, a stale-readout case, and an import-graph guar
 and will not stay small, which is an argument for porting it early rather than late -- continuo's
 `control_plane/outbox.ts` is already the at-most-once half of the same problem.
 
-### `scrub` -- `not-porting` -- 20 cases
+### `scrub` -- `not-porting` (ratified 2026-08-28) -- 20 cases
+
+Ratified at the human gate on 2026-08-28: continuo does not port this subsystem, on the grounds
+below.
 
 `tests/scrub/test_scrub.py` verifies `tests/scrub/scrub_fixture.py`, a
 deterministic PII/secret scrubber used to promote real `.state/` snapshots into publishable
 fixtures. `PORTING_LEDGER.md` classes both `carry`, and rightly: it is the pipeline that makes
 accident-derived fixtures publishable at all.
 
-The proposal to not port is about *where*, not *whether*. It is developer tooling that runs over
+The decision to not port is about *where*, not *whether*. It is developer tooling that runs over
 interlock's own captured state, in the repository that captures it. A TypeScript re-implementation
 would be a second scrubber to keep in agreement with the first, over the same policy
 (`docs/scrub-policy.md`), and a disagreement between two scrubbers is a leak. Better that continuo
@@ -191,9 +204,12 @@ call `pytest.importorskip("jsonschema")` inside the test body rather than at mod
 the broker five they *are* collected and *are* in the inventory; they will skip on a host without
 `jsonschema` and continuo will need a decision about the equivalent dependency.
 
-### `package_smoke` -- `not-porting` -- 1 case
+### `package_smoke` -- `not-porting` (ratified 2026-08-28) -- 1 case
 
-Proposed on the grounds that the property is already held. `tests/test_smoke.py` is
+Ratified at the human gate on 2026-08-28: continuo does not port this subsystem, on the grounds
+below.
+
+On the grounds that the property is already held. `tests/test_smoke.py` is
 a five-line import check asserting `claude_org_runtime.__version__ == "0.1.42"` --
 `PORTING_LEDGER.md` classes it `rewrite` for exactly that reason: it is package plumbing, re-created
 for the new package rather than carried.
@@ -209,12 +225,17 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings` | 1,317 |
-| `candidate-lane` | `session`, `fault_injection`, `canary`, `gate_item2`, `messagebus`, `secretary` | 398 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `session` (ratified 2026-08-28), `canary` (ratified 2026-08-28), `messagebus` (ratified 2026-08-28) | 1,572 |
+| `candidate-lane` | `fault_injection`, `gate_item2`, `secretary` | 143 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |
-| `not-porting` (proposed) | `gate_record`, `scrub`, `package_smoke` | 85 |
+| `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
 | | **18** | **2,194** |
+
+With the 85 `not-porting` cases ratified out, continuo's effective porting target is
+**2,194 − 85 = 2,109** node ids -- the pool of cases not declined, not a commitment to port all of
+it: within that pool, every status not marked ratified remains a proposal. The inventory itself
+stays at 2,194: the evidence set is unconditional and does not shrink with the decision.
 
 Plus the 5 modules skipped at collection time, which have no cases: 2,194 + 5 = 2,199, interlock's
 suite baseline at `65f36c5`.
@@ -225,5 +246,7 @@ human's call, and a check that enforced the current answer would make changing i
 What it does prevent is a subsystem being inventoried and then never classified, which is how a
 decision gets made by nobody.
 
-D-ranges are allocated per belt (`DECISIONS.md`, the index table's note). No range is allocated to
-any belt proposed here; that allocation is part of the same human gate as the statuses.
+D-ranges are allocated per belt (`DECISIONS.md`, the index table's note). The 2026-08-28
+ratification (D-0032) allocated `D-03xx` to `session`, `D-04xx` to `canary` and `D-05xx` to
+`messagebus`. No range is allocated to any belt still proposed here; that allocation is part of
+the same human gate as the statuses.
