@@ -66,6 +66,29 @@ export interface ArgumentSpec {
   readonly dest: string;
   /** `action="store_true"` when true; `action="store"` otherwise. */
   readonly storeTrue?: boolean;
+  /**
+   * `action="store_false"`.
+   *
+   * Its own flag, not `storeTrue` with an inverted constant, because the two
+   * differ in their DEFAULT as well as in what they store: argparse's
+   * `_StoreFalseAction` defaults to `True`. Collapsing them would leave
+   * `--no-probe-bwrap` defaulting to `false` -- the live bwrap canary silently
+   * off for every run that did not ask to turn it off, which is the direction
+   * that reports a clean preflight it never performed.
+   */
+  readonly storeFalse?: boolean;
+  /**
+   * `action="append"`.
+   *
+   * `_AppendAction` starts from `_copy_items(None) == []`, so an unpassed
+   * appending option is `None` and a passed one is a list -- never a bare
+   * string. `--settings` is `required=True`, so the `None` case cannot reach
+   * `run`; the shape is still modelled rather than flattened, because `run`
+   * itself accepts both (the source's own `if not isinstance(requested, list)`)
+   * and a parser that could only ever produce one of them would make that
+   * branch untestable through the parser.
+   */
+  readonly append?: boolean;
   readonly required?: boolean;
   readonly choices?: readonly string[];
   /** `default=`. `undefined` means the argparse default of `None`. */
@@ -103,6 +126,19 @@ interface ClassifiedToken {
  * and `hook.mjs` carries for the identical reason.
  */
 const NEGATIVE_NUMBER = /^-\p{Nd}+$|^-\p{Nd}*\.\p{Nd}+$/u;
+
+/**
+ * Whether the action consumes a following token.
+ *
+ * `store_true` and `store_false` are both `nargs=0`. Asking this question in
+ * one place is what keeps the usage line, the help body and the consumption
+ * loop from disagreeing -- an earlier draft answered it three times and a
+ * `store_false` flag rendered as `--no-probe-bwrap PROBE_BWRAP` in `--help`
+ * while parsing correctly, so nothing went red.
+ */
+function takesNoArgument(spec: ArgumentSpec): boolean {
+  return spec.storeTrue === true || spec.storeFalse === true;
+}
 
 const HELP_SPEC: ArgumentSpec = {
   optionStrings: ["-h", "--help"],
@@ -159,7 +195,7 @@ export class ArgumentParser {
     const parts: string[] = [];
     for (const spec of this.#specs) {
       const flag = spec.optionStrings[0] as string;
-      const body = spec.storeTrue === true ? flag : `${flag} ${this.#metavar(spec)}`;
+      const body = takesNoArgument(spec) ? flag : `${flag} ${this.#metavar(spec)}`;
       parts.push(spec.required === true ? body : `[${body}]`);
     }
     if (this.#subparsers !== null) {
@@ -173,7 +209,7 @@ export class ArgumentParser {
     const lines = [this.usage(), "", `${this.description}`, "", "options:"];
     for (const spec of this.#specs) {
       const flag = spec.optionStrings.join(", ");
-      const body = spec.storeTrue === true ? flag : `${flag} ${this.#metavar(spec)}`;
+      const body = takesNoArgument(spec) ? flag : `${flag} ${this.#metavar(spec)}`;
       lines.push(`  ${body}`, `      ${spec.help}`);
     }
     if (this.#subparsers !== null) {
@@ -331,7 +367,16 @@ export class ArgumentParser {
       if (spec === HELP_SPEC) {
         continue;
       }
-      namespace[spec.dest] = spec.storeTrue === true ? false : (spec.defaultValue ?? null);
+      if (spec.storeTrue === true) {
+        namespace[spec.dest] = false;
+      } else if (spec.storeFalse === true) {
+        // `_StoreFalseAction`'s default is `True`; the source spells it out at
+        // both call sites, and so does this, so a spec that forgets it is a
+        // missing `defaultValue` rather than a silent `null`.
+        namespace[spec.dest] = spec.defaultValue ?? true;
+      } else {
+        namespace[spec.dest] = spec.defaultValue ?? null;
+      }
     }
 
     // Pass 1: classify every token before any of them is acted on.
@@ -401,11 +446,11 @@ export class ArgumentParser {
         streams.stdout(this.help());
         throw new ArgparseExit(0, "help");
       }
-      if (spec.storeTrue === true) {
+      if (takesNoArgument(spec)) {
         if (option.explicit !== null) {
           this.#error(streams, `argument ${option.optionString}: ignored explicit argument`);
         }
-        namespace[spec.dest] = true;
+        namespace[spec.dest] = spec.storeTrue === true;
         seen.add(spec.dest);
         index += 1;
         continue;
@@ -448,7 +493,15 @@ export class ArgumentParser {
           `argument ${option.optionString}: invalid choice: '${value}' (choose from ${names})`,
         );
       }
-      namespace[spec.dest] = value;
+      if (spec.append === true) {
+        // `_AppendAction`: `_copy_items(getattr(namespace, dest, None))` then
+        // `append`. `_copy_items(None)` is `[]`, and the copy is why repeated
+        // parses with one shared spec object cannot accumulate into each other.
+        const existing = namespace[spec.dest];
+        namespace[spec.dest] = [...(Array.isArray(existing) ? existing : []), value];
+      } else {
+        namespace[spec.dest] = value;
+      }
       seen.add(spec.dest);
     }
 

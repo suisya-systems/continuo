@@ -4,5 +4,6 @@
   "project": ["src/**/*.ts", "scripts/**/*.mjs", "test/**/*.ts"],
   "ignoreExportsUsedInFile": true,
   "tags": ["-parityonly"],
-  "vitest": false
+  "vitest": false,
+  "ignoreBinaries": ["bwrap"]
 }

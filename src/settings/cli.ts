@@ -8,14 +8,13 @@
  * Six of the 106 ported cases go through the first and five through the second,
  * so both exist here rather than one standing in for the other.
  *
- * **Scope, stated rather than implied.** interlock's unified parser also
- * carries `sandbox doctor` and `state migrate`. Neither is ported here:
- * `sandbox_doctor` is PR 4 of this lane and the state migrator belongs to
- * another. `buildRuntimeParser` therefore declares the `settings` subcommand
- * and nothing else, and a future PR adds its own next to it. That is a smaller
- * parser than interlock's, not a different one -- no ported case reaches the
- * missing subcommands, and the parity ledger records which cases each parser
- * carries.
+ * **Scope, stated rather than implied.** interlock's unified parser carries
+ * `settings`, `sandbox doctor` and `state migrate`. The first two are here; the
+ * state migrator belongs to another lane and is not. `buildRuntimeParser`
+ * therefore declares two subcommands where interlock declares three, and a
+ * future PR adds the third next to them. That is a smaller parser than
+ * interlock's, not a different one -- no ported case reaches the missing
+ * subcommand, and the parity ledger records which cases each parser carries.
  */
 
 import { type ArgparseStreams, ArgumentParser, type Namespace } from "./argparse.js";
@@ -27,6 +26,7 @@ import {
   type SettingsArgs,
   VALID_PATTERNS,
 } from "./generator.js";
+import { type DoctorArgs, run as runDoctor } from "./sandbox_doctor.js";
 
 /** `sys.stdout` / `sys.stderr`, read through the seam so a test can capture. */
 export function defaultStreams(): ArgparseStreams {
@@ -179,6 +179,79 @@ export function buildRuntimeParser(): ArgumentParser {
   );
   addShowArguments(show);
   show.setDefaults({ func: (args: Namespace) => runShow(args as unknown as SettingsArgs) });
+
+  const sandbox = sub.addParser("sandbox", "Sandbox preflight for a rendered settings.local.json");
+  const sandboxSub = sandbox.addSubparsers("cmd");
+  const doctor = sandboxSub.addParser(
+    "doctor",
+    "Check that a worker's sandbox deny paths can actually be mounted by bubblewrap.",
+  );
+  addDoctorArguments(doctor);
+  doctor.setDefaults({ func: (args: Namespace) => runDoctor(args as unknown as DoctorArgs) });
+  return parser;
+}
+
+/** `sandbox_doctor.add_arguments`: attach `sandbox doctor` flags to an existing parser. */
+export function addDoctorArguments(parser: ArgumentParser): void {
+  parser.addArgument({
+    optionStrings: ["--settings"],
+    dest: "settings",
+    append: true,
+    required: true,
+    metavar: "PATH",
+    help:
+      "settings file to check; repeat to add more scopes. Their deny " +
+      "sets are merged the way Claude Code merges them.",
+  });
+  parser.addArgument({
+    optionStrings: ["--no-merge-scopes"],
+    dest: "merge_scopes",
+    storeFalse: true,
+    defaultValue: true,
+    help:
+      "check only the files given with --settings. By default the " +
+      "user settings (~/.claude/settings.json) and managed settings " +
+      "are merged in too, because a deny path in any scope aborts " +
+      "the sandbox launch.",
+  });
+  parser.addArgument({
+    optionStrings: ["--json"],
+    dest: "json",
+    storeTrue: true,
+    help: "emit machine-readable JSON instead of the human-readable report",
+  });
+  parser.addArgument({
+    optionStrings: ["--verbose"],
+    dest: "verbose",
+    storeTrue: true,
+    help: "list every deny target, not just the failing ones",
+  });
+  parser.addArgument({
+    optionStrings: ["--no-probe-bwrap"],
+    dest: "probe_bwrap",
+    storeFalse: true,
+    defaultValue: true,
+    help:
+      "skip the live bwrap canary and run only the static path " +
+      "analysis (useful where bwrap is unavailable or in CI)",
+  });
+}
+
+/**
+ * `sandbox_doctor.build_parser`: the standalone `sandbox doctor` CLI.
+ *
+ * Its own parser, as the source has its own, so `--help` names
+ * `claude-org-runtime-sandbox-doctor` rather than the unified prog. One ported
+ * case reads that help text, through the ASCII policy check.
+ */
+export function buildDoctorParser(): ArgumentParser {
+  const parser = new ArgumentParser(
+    "claude-org-runtime-sandbox-doctor",
+    "Check that a worker's sandbox deny paths can actually be " +
+      "mounted by bubblewrap, so a failed sandbox launch cannot go " +
+      "unnoticed.",
+  );
+  addDoctorArguments(parser);
   return parser;
 }
 

@@ -1,0 +1,797 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "settings",
+      "collected": 183,
+      "inventory": "parity/source-inventory/settings.all.txt",
+      "note": "The settings subsystem is two source files: tests/test_settings_generator.py (106, parity/settings.settings-generator.ledger.json) and tests/test_sandbox_symlink_deny.py (77, this ledger). With this file the subsystem is complete: 183 of 183."
+    },
+    "file": {
+      "path": "tests/test_sandbox_symlink_deny.py",
+      "collected": 77,
+      "inventory": "parity/source-inventory/settings.test_sandbox_symlink_deny.txt",
+      "status": "77 passed, re-run at 65f36c5 on the porting host with `PYTHONPATH=src python3 -m pytest tests/test_sandbox_symlink_deny.py -q`. The two `@requires_bwrap` cases RAN there and run here: bubblewrap 0.11.0 is present on the porting host and starts."
+    }
+  },
+  "target": {
+    "test_file": "test/settings/sandbox-symlink-deny.test.ts",
+    "target_only_tests": {
+      "count": 14,
+      "ids": [
+        "test/settings/sandbox-symlink-deny.test.ts::the malformed-filesystem repair (target-only, D-0215) > a truthy non-mapping filesystem is refused, not emptied (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the malformed-filesystem repair (target-only, D-0215) > the readback is what the repair protects, and it is measured (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the malformed-filesystem repair (target-only, D-0215) > every FALSY filesystem keeps the source's behaviour (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the malformed-filesystem repair (target-only, D-0215) > a DISABLED sandbox with a malformed filesystem is still not refused (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the case-sensitivity repair (target-only, D-0216) > a Windows drive-letter case difference is not an escape (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the case-sensitivity repair (target-only, D-0216) > the reported read roots keep the operator's own spelling (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the case-sensitivity repair (target-only, D-0216) > POSIX identity stays case-SENSITIVE (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the number-spelling carry (target-only, D-0211) > a non-string deny entry keeps its Python spelling through --json (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the number-spelling carry (target-only, D-0211) > a Layer 3 non-string entry carries its spelling too (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the doctor's seams are live (target-only, rule 5) > every seam is read by production rather than only by tests (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the two argparse actions this CLI needed (target-only, D-0214) > --settings appends, and repeats accumulate (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the two argparse actions this CLI needed (target-only, D-0214) > --no-probe-bwrap and --no-merge-scopes default to true (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the two argparse actions this CLI needed (target-only, D-0214) > a store_false flag takes no argument in usage and in help (target-only)",
+        "test/settings/sandbox-symlink-deny.test.ts::the two argparse actions this CLI needed (target-only, D-0214) > --settings is required, and the error names this parser (target-only)"
+      ],
+      "note": "Four groups, none counted as ported coverage. (1) Seven pin the two inherited defects REPAIRED in this pass under D-0023 -- the malformed-`filesystem` coercion (D-0215) and the case-sensitive `_is_inside_root` (D-0216) -- each with the half it must not break beside it: every falsy `filesystem` still renders as the source renders it, a disabled sandbox is still not refused, the reported read roots still carry the operator's spelling, and POSIX identity stays case-SENSITIVE. Both repairs were MEASURED before and after rather than reasoned about; the numbers are in `intentional_divergences`. (2) Two pin D-0211's number-spelling obligation at this module's one container rebuild, `findingToJsonable`, which moves a number from a deny array's numeric index onto the key `source` -- so the wholesale `carryNumberSpellings` matches nothing and silently does nothing. A spelling cannot be written in TypeScript, so both build the document as TEXT, read it back through the production path and assert on the serialiser's output. (3) One is rule 5's seam-liveness obligation for `doctorSeams`, covering all five keys. (4) Four pin the two argparse actions this CLI needed and `src/settings/argparse.ts` did not have (`append`, `store_false`). Each of the fourteen was probed by reverting the code it pins and confirming it goes red for its own stated reason (`docs/test-translation-conventions.md` section 10). That probe is what corrected one of them: the store_false-default case does NOT fire when `defaultValue: true` is deleted from the spec in `cli.ts`, because `spec.defaultValue ?? true` supplies it -- which is CPython's own redundancy, and is now written into the case rather than assumed."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/settings/sandbox-symlink-deny.test.ts",
+        "constructs": {
+          "skipIf": 2
+        },
+        "reason": "The source's two capability gates, `@requires_symlinks` and `@requires_bwrap`, each spelled as ONE `skipIf` bound to a module-level constant and reused by every case that needs it -- 42 and 2 cases respectively -- rather than as one `skipIf` per case. Both conditions are PROBED at module load (collection time, as pytest's `skipif` is) rather than inferred from `process.platform`, and the source says why for each: Windows creates symlinks under Developer Mode or elevation, so a blanket `skipif(win32)` would give up coverage on hosts that can run these; and bwrap's presence is not its ability to start, because Ubuntu 24.04 and many containers block the unprivileged user namespaces it needs. Both ran on the porting host and both run on this repository's Ubuntu cells. The `escaping_home` fixture's own `pytest.skip` is the first of the two, reached through the same constant."
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 77,
+    "ported": 74,
+    "adapted": 3,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_detects_link_in_ancestor",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain detects link in ancestor",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_detects_link_above_target",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain detects link above target",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_ignores_clean_path",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain ignores clean path",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_ignores_relative_symlink",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain ignores relative symlink",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_ignores_relative_path",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain ignores relative path",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_survives_parent_traversal",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain survives parent traversal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_tolerates_redundant_separators",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain tolerates redundant separators",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_reached_through_relative_link",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink reached through relative link",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_purely_relative_chain_stays_clean",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > purely relative chain stays clean",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_bounds_symlink_loops",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain bounds symlink loops",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absolute_symlink_in_chain_walks_windows_drive_paths",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::_absolute_symlink_in_chain > absolute symlink in chain walks windows drive paths",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source simulates ntpath by `monkeypatch.setattr(generator.os, 'path', ntpath)` plus `os.sep` and `os.altsep`. This port has no `os` module object to patch: `src/fencing/pypath.ts` transcribes both namespaces and dispatches on `process.platform` at CALL time (D-0200, D-0213), so the same simulation is a `process.platform` of `\"win32\"` for the length of the case, installed with `Object.defineProperty` because `platform` is a getter and a silently ignored assignment would leave the case running on POSIX and passing for the wrong reason. Same three answers changed, same injected `islink_fn` / `readlink_fn`, and every assertion is the source's -- including the two that name the drive-relative bug's signature.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_detector_agrees_with_real_bwrap",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::the bwrap oracle > detector agrees with real bwrap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_shadowing_mount_hides_the_symlink_failure",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::the bwrap oracle > shadowing mount hides the symlink failure",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canary_does_not_shadow_probed_paths",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::the bwrap oracle > canary does not shadow probed paths",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`subprocess.CompletedProcess` has no counterpart here, so the injected runner returns the four-field `CompletedProcess` interface `run_bwrap_canary` reads, and the `DenyTarget` is built with its two port-only fields (`sourceFile`, `sourceSpelling`) at their absent values. The argv the runner captures and both assertions on it -- no `--dev`, no `--proc` -- are the source's unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_report_explains_static_fail_with_canary_pass",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::the bwrap oracle > report explains static fail with canary pass",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_permission_deny_handles_write_rules",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::the bwrap oracle > canonicalize permission deny handles write rules",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_split_permission_rule[Read(~/.aws/*)-expected0]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_split_permission_rule[Read(~/.aws/*)-expected0]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_split_permission_rule[Edit(//abs/path)-expected1]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_split_permission_rule[Edit(//abs/path)-expected1]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_split_permission_rule[Bash(git push *)-expected2]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_split_permission_rule[Bash(git push *)-expected2]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_split_permission_rule[not-a-rule-None]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_split_permission_rule[not-a-rule-None]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_split_permission_rule[(missing-tool)-None]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_split_permission_rule[(missing-tool)-None]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_split_permission_rule[123-None]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_split_permission_rule[123-None]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_permission_rule_host_path_anchored_forms",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > permission rule host path anchored forms",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_permission_rule_host_path_unanchored_is_none[.env]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_permission_rule_host_path_unanchored_is_none[.env]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_permission_rule_host_path_unanchored_is_none[**/credentials*]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_permission_rule_host_path_unanchored_is_none[**/credentials*]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_permission_rule_host_path_unanchored_is_none[/project/rel]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::permission rule parsing > test_permission_rule_host_path_unanchored_is_none[/project/rel]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_permission_deny_rewrites_escaping_rule",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 2 canonicalization > canonicalize permission deny rewrites escaping rule",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_permission_deny_preserves_glob_tail",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 2 canonicalization > canonicalize permission deny preserves glob tail",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_permission_deny_noop_without_symlink",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 2 canonicalization > canonicalize permission deny noop without symlink",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_permission_deny_ignores_non_path_tools",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 2 canonicalization > canonicalize permission deny ignores non path tools",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_sandbox_deny_rewrites_kept_entry",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 3 canonicalization > canonicalize sandbox deny rewrites kept entry",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_sandbox_deny_expands_tilde_entries",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 3 canonicalization > canonicalize sandbox deny expands tilde entries",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_layer3_canonicalized_regardless_of_enabled[True]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 3 canonicalization > test_layer3_canonicalized_regardless_of_enabled[True]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_layer3_canonicalized_regardless_of_enabled[False]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 3 canonicalization > test_layer3_canonicalized_regardless_of_enabled[False]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canonicalize_sandbox_deny_leaves_structured_entries",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::Layer 3 canonicalization > canonicalize sandbox deny leaves structured entries",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_render_rewrites_layer2_deny_and_reports_metadata",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::renderer integration > render rewrites layer2 deny and reports metadata",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_render_leaves_clean_deny_untouched_and_emits_no_comment",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::renderer integration > render leaves clean deny untouched and emits no comment",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_render_metadata_jsonable_includes_rewrites",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::renderer integration > render metadata jsonable includes rewrites",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_settings_show_explain_surfaces_rewrites",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::renderer integration > settings show explain surfaces rewrites",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_collect_deny_targets_spans_both_layers",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > collect deny targets spans both layers",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_collect_deny_targets_expands_tilde_in_layer3",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > collect deny targets expands tilde in layer3",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_analyze_targets_flags_symlink_escape",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > analyze targets flags symlink escape",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_diagnose_reports_not_ok_on_escape",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > diagnose reports not ok on escape",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_diagnose_ok_on_clean_settings",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > diagnose ok on clean settings",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canary_failure_marks_report_not_ok",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > canary failure marks report not ok",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canary_pass",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > canary pass",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_canary_skipped_when_bwrap_missing",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > canary skipped when bwrap missing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_format_report_names_the_silent_fallback",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > format report names the silent fallback",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_format_report_ascii_only",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::sandbox doctor > format report ascii only",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts the ASCII policy by encoding to cp932 and letting `UnicodeEncodeError` fail the case. JavaScript has no cp932 encoder and needs none: ASCII is a strict subset of cp932, so `isAscii` implies the source's assertion rather than weakening it. Both of the source's two subjects are checked -- the verbose report and the parser's help text -- and the help text is `buildDoctorParser().help()`, this port's `build_parser().format_help()`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_doctor_cli_exit_1_on_escape",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::doctor CLI > doctor cli exit 1 on escape",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_doctor_cli_exit_0_on_clean",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::doctor CLI > doctor cli exit 0 on clean",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_doctor_cli_json_output",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::doctor CLI > doctor cli json output",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_doctor_cli_missing_file",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::doctor CLI > doctor cli missing file",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_doctor_cli_invalid_json",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::doctor CLI > doctor cli invalid json",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_doctor_cli_non_object_root",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::doctor CLI > doctor cli non object root",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_disabled_sandbox_passes_the_gate_but_still_reports",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > disabled sandbox passes the gate but still reports",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_absent_sandbox_key_still_gates",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > absent sandbox key still gates",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_validate_settings_rejects_bad_shapes[settings0-permissions.deny]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > test_validate_settings_rejects_bad_shapes[settings0-permissions.deny]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_validate_settings_rejects_bad_shapes[settings1-permissions]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > test_validate_settings_rejects_bad_shapes[settings1-permissions]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_validate_settings_rejects_bad_shapes[settings2-sandbox]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > test_validate_settings_rejects_bad_shapes[settings2-sandbox]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_validate_settings_rejects_bad_shapes[settings3-sandbox.filesystem]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > test_validate_settings_rejects_bad_shapes[settings3-sandbox.filesystem]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_validate_settings_rejects_bad_shapes[settings4-sandbox.filesystem.denyRead]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > test_validate_settings_rejects_bad_shapes[settings4-sandbox.filesystem.denyRead]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_validate_settings_rejects_bad_shapes[settings5-settings root]",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > test_validate_settings_rejects_bad_shapes[settings5-settings root]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_validate_settings_accepts_good_shape",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > validate settings accepts good shape",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_deny_as_bare_string_exits_2_not_0",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > deny as bare string exits 2 not 0",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_non_string_deny_entry_is_flagged_not_skipped",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > non string deny entry is flagged not skipped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_unified_cli_wires_sandbox_doctor",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::gate robustness > unified cli wires sandbox doctor",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_merged_scopes_catch_a_clean_file_with_a_dirty_user_scope",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > merged scopes catch a clean file with a dirty user scope",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_findings_name_the_contributing_file",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > findings name the contributing file",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_any_scope_enabling_the_sandbox_keeps_the_gate",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > any scope enabling the sandbox keeps the gate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_discover_merged_scopes_only_returns_existing_files",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > discover merged scopes only returns existing files",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_discover_merged_scopes_adds_the_sibling_project_scope",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > discover merged scopes adds the sibling project scope",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_discover_merged_scopes_does_not_duplicate_the_input",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > discover merged scopes does not duplicate the input",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_sibling_project_scope_breaks_the_gate",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > sibling project scope breaks the gate",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_cli_merges_extra_scopes_and_reports_the_source",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > cli merges extra scopes and reports the source",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_cli_no_merge_scopes_skips_discovery",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > cli no merge scopes skips discovery",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/test_sandbox_symlink_deny.py::test_cli_reports_which_scope_is_malformed",
+      "target_id": "test/settings/sandbox-symlink-deny.test.ts::multi-scope merge > cli reports which scope is malformed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "intentional_divergences": [
+    {
+      "topic": "An enabled sandbox whose `filesystem` is a truthy NON-mapping is REFUSED rather than coerced to `{}` (D-0215).",
+      "decision": "D-0215",
+      "source_behaviour": "`settings/generator.py` `_evaluate_sandbox_suppressions` is `fs = sandbox.get('filesystem') or {}` followed by `if not isinstance(fs, dict): fs = {}`. Measured on this port before the repair: a role declaring `sandbox: {enabled: true, filesystem: \"invalid\"}` renders `{\"enabled\":true,\"filesystem\":{\"denyRead\":[],\"denyWrite\":[]}}` -- a malformed security configuration silently becoming a valid, less restrictive one.",
+      "port_behaviour": "`PyValueError: sandbox.filesystem must be an object, got str: 'invalid'`, which `run` turns into `error: ...` and rc 2. Only a TRUTHY non-mapping raises: `pyOr` has already replaced an absent, `null`, `{}`, `[]`, `0` or `\"\"` `filesystem` with `{}` before the check, so every document interlock accepts is still accepted (pinned, six rows). The refusal sits after the `enabled` gate, exactly where the coercion sat, so a disabled sandbox is unaffected (pinned).",
+      "why_here": "This one was escalated to PR 4 by PR #43's review gate specifically because the READBACK is what observes it, and PR 4 owns the readback. Measured: `sandbox doctor`, handed the pre-repair render, reports `deny targets: 0 (0 unusable by bwrap)` and `RESULT: sandbox deny paths are usable by bwrap.` A clean bill of health for a file whose author's `filesystem` key was thrown away -- and a preflight that gates a launch, per its own module note, `must not pass by accident`. The warrant for the repair is that interlock ALREADY refuses this shape one module over: `sandbox_doctor.validate_settings` answers a non-mapping `sandbox.filesystem` with `sandbox.filesystem must be an object` and exits 2. The generator writing the file and the doctor checking it disagreed about the same shape; the message here is the doctor's own sentence so that they no longer do, and that agreement is asserted rather than left as a resemblance.",
+      "platforms": "EVERY platform, unlike D-0213's `os.path.isabs` repair -- interlock renders `denyRead: []` for this input on Linux too. That difference is why the disclosure said this one needed a decision id of its own."
+    },
+    {
+      "topic": "`_is_inside_root` compares normcased paths, so a Windows drive-letter case difference is not a sandbox escape (D-0216).",
+      "decision": "D-0216",
+      "source_behaviour": "`settings/generator.py` `_is_inside_root` compares with `==` and `startswith`, both case-SENSITIVE, and applies `os.path.normcase` on neither side. Measured on this port before the repair, under a simulated ntpath: a `worker_dir` authored `c:\\Users\\Foo\\worker` against a realpath returned as `C:\\Users\\Foo\\worker\\secret` renders `denyRead: []` with one suppression whose reason is `realpath escapes sandbox read roots`. The two paths name the same directory, and the dropped entry is an in-root deny -- the kind that covers a credential file inside the worker directory.",
+      "port_behaviour": "The COMPARISON is normcased and nothing else. `osNormcase` is CPython's `ntpath.normcase` / `posixpath.normcase` pair, added to `src/fencing/pypath.ts` and checked against CPython 3.12.3 by `parity/oracle/ospath-vector.json` as a seventh function, on every matrix cell. After the repair the same input keeps the entry and suppresses nothing.",
+      "why_here": "The disclosure said this one needed a DESIGN call rather than a substitution, and named it: whether `sandbox_read_roots` REPORTS the normcased form or the operator's. Answered by scoping the fold to the comparison. `metadata.sandboxReadRoots` is what `settings show --explain` prints and what the launcher's /sandbox status displays, and an operator has to recognise the path they wrote; normcasing the stored roots would have folded a display value to answer a comparison question. Both halves are pinned, and the display half would stay green under the wrong answer to the other, which is why it is its own case.",
+      "platforms": "Windows only. `posixpath.normcase` is the identity, so this is a no-op on the platform interlock runs on -- but unlike D-0213's `isabs` repair that is a property of the PLATFORM rather than of the substitution, so it is recorded as a deliberate divergence and pinned in the direction that would break: two paths differing only in case are two different files on POSIX, and an entry under one must still not be judged in-root by the other."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "what": "`collect_deny_targets` reads `permissions.deny` and the two Layer 3 arrays but not `permissions.ask`, and not the `additionalDirectories` that widen the sandbox rather than narrowing it. A scope that contributes an unbindable path through a key this list does not name is not audited, and the report says `deny targets: N` without saying which keys N was drawn from.",
+      "matches_source": true,
+      "source": "settings/sandbox_doctor.py `collect_deny_targets` -- the two layers are transcribed verbatim, including the docstring's reason for collecting both.",
+      "where_a_fix_belongs": "Upstream, and only with evidence. The two layers are the ones Claude Code's sandboxing documentation names as merging into the bwrap deny set; adding a third on the strength of a reading would widen a security check by guess, which is rule 11's shape. The live canary is the compensating control: it binds what was collected and reports whether the sandbox actually comes up."
+    },
+    {
+      "what": "The bwrap canary binds only paths that already exist (`os.path.lexists`), so a deny path naming a file that has not been created yet is skipped by the live half and judged by the static half alone. A path that would be unbindable for a reason other than a symlink goes unreported until the file exists.",
+      "matches_source": true,
+      "source": "settings/sandbox_doctor.py `run_bwrap_canary`: `if literal is None or not os.path.lexists(literal): continue` -- transcribed verbatim.",
+      "where_a_fix_belongs": "Neither side. Binding a non-existent source is what bwrap itself refuses, so probing one would report a failure of the probe rather than of the settings -- the canary would fail every run that denied a not-yet-created credential file, and an operator who learned to ignore it would be ignoring the real ones too. The residual is disclosed rather than fixed because the alternative is a check nobody reads."
+    },
+    {
+      "what": "`discover_merged_scopes` names `~/.claude/settings.json` and two managed-settings paths, and derives project scopes from each input's directory. Claude Code's enterprise and policy scopes on other platforms -- and any scope an operator adds by configuration -- are not discovered, so `--no-merge-scopes` and the default differ by a fixed list rather than by what the client will actually merge.",
+      "matches_source": true,
+      "source": "settings/sandbox_doctor.py `USER_SETTINGS_PATH`, `MANAGED_SETTINGS_PATHS`, `PROJECT_SCOPE_FILENAMES` and `discover_merged_scopes` -- transcribed verbatim, list included.",
+      "where_a_fix_belongs": "Upstream, tracked against the client's documented scope list. The port keeps the list rather than extending it: a scope added here and not there would make the two implementations disagree about what a clean preflight means, and the command's whole value is that its answer matches the launch."
+    }
+  ]
+}

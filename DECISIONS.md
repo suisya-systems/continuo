@@ -82,6 +82,9 @@ spaces distinct.
 | D-0211 | Every container rebuild carries the number record, and the sites are enumerated and pinned | accepted |
 | D-0212 | The rebuild-site enumeration is audited mechanically, and the one site that does not carry states a proof | accepted |
 | D-0213 | The settings generator is ported on a transcribed `os.path`, and its thirteen rebuild branches are enumerated and pinned | accepted |
+| D-0214 | `sandbox doctor` and the readback complete the settings subsystem, and the argparse surface grows two actions rather than one helper | accepted |
+| D-0215 | A truthy non-mapping `sandbox.filesystem` is refused, not coerced to the empty mapping | accepted |
+| D-0216 | `_is_inside_root` compares normcased paths, so Windows path identity is not a sandbox escape | accepted |
 
 ---
 
@@ -4192,8 +4195,11 @@ is not that function on either platform: `path.posix.normalize("a/b/")` keeps th
 that `posixpath.normpath` drops, which is precisely the difference that makes the equality half of
 `_is_inside_root`'s boundary test stop firing.
 
-`parity/oracle/ospath-vector.json` is the check -- 63 paths x 6 functions x 2 namespaces plus 30
-join argument tuples, generated from CPython 3.12.3 by `scripts/oracle/dump_ospath.py`, asserted by
+`parity/oracle/ospath-vector.json` is the check -- at the time of writing 63 paths x 6 functions x 2
+namespaces plus 30 join argument tuples; **67 paths x 7 functions** since `D-0216` added `normcase` and
+the four non-ASCII-case paths that make it non-vacuous. The counts are restated rather than left stale,
+because a number in prose that no test reads is the first thing a port outgrows. Generated from CPython
+3.12.3 by `scripts/oracle/dump_ospath.py`, asserted by
 `test/settings/ospath-oracle.test.ts` on **every** matrix cell. Both namespaces are dumped from one
 interpreter because `ntpath` is importable on Linux and its answers do not depend on the host; a
 Windows-only check would leave the half this port ships to Windows unverified on the cells where
@@ -4333,6 +4339,196 @@ observable on the Windows cells.
 
 ---
 
----
+## D-0214 — `sandbox doctor` and the readback complete the settings subsystem, and the argparse surface grows two actions rather than one helper
+
+**Status.** accepted (2026-08-28)
+
+**Context.** PR 4 of the fencing + settings lane, and the last planned item of continuo issue #37's
+fencing + settings section. It ports two source files at once because they are the two halves of one
+question -- what a rendered configuration actually does when something reads it back:
+
+- `src/claude_org_runtime/settings/sandbox_doctor.py` and the 77 cases of
+  `tests/test_sandbox_symlink_deny.py`. This is the **detection** half of the symlink-deny fix
+  `D-0213` ported the **repair** half of. The generator canonicalises the deny paths it renders
+  itself; a worker's effective deny set is the merge of several settings scopes, and only some of
+  them come from this runtime.
+- `src/claude_org_runtime/fencing/readback.py` and the 15 cases of
+  `tests/fencing/test_readback.py`. The `system/init` event is the one public surface that reports
+  the effective `permissionMode` and `tools`, and it reports **no hooks and no sandbox key** -- which
+  is why `D-0023`'s weakening of item 3 is narrowed rather than removed.
+
+With them the settings subsystem is complete: 183 of 183 collected cases, 106 in
+`parity/settings.settings-generator.ledger.json` and 77 here, no waivers and nothing not-ported. The
+fencing subsystem's `test_readback.py` closes at 124 of 124.
+
+**Decision 1: `argparse.ts` grows `append` and `store_false`, transcribed, rather than the CLI being
+bent to the parser it has.** `sandbox doctor` declares `--settings` as `action="append"` and two
+`action="store_false"` flags, and `src/settings/argparse.ts` -- written for `settings generate` in
+`D-0213` -- had neither. The two alternatives were both worse in the same direction. Spelling
+`--settings` as a plain store would silently audit only the **last** scope named, in a command whose
+entire premise is that a deny path in *any* scope aborts the launch. Spelling `store_false` as
+`store_true` with an inverted constant would take the *default* with it: `_StoreFalseAction` defaults
+to `True`, and the collapsed form defaults to `false` -- the live bwrap canary off for every run that
+did not ask to turn it off, reporting a preflight it never performed.
+
+Both are transcribed from CPython's actions rather than approximated, and one thing that fell out of
+writing them is recorded because nothing went red for it: an earlier draft answered "does this action
+consume a following token" **three times** -- in `usage()`, in `help()` and in the parse loop -- and
+`--no-probe-bwrap` rendered as `--no-probe-bwrap PROBE_BWRAP` in `--help` while parsing correctly.
+The question is now asked in one place, and the pin that catches it reads a store_false flag's help.
+
+**Decision 2: four private generator helpers become exports, and the privacy moves to
+`src/index.ts`.** `sandbox_doctor.py` imports `_absolute_symlink_in_chain`, `_literal_path_prefix`,
+`_permission_rule_host_path`, `_split_permission_rule` and `_PERMISSION_PATH_TOOLS` from the
+generator -- underscore-private names, imported anyway, because the doctor's job is to answer the
+same question the generator answers over scopes the generator did not render, and a second
+implementation would be a second thing to keep in step. TypeScript has no underscore convention that
+`import` ignores, so the privacy the source expresses by naming is expressed here by these staying
+**off the package surface**. `canonicalizePermissionDeny` and `canonicalizeSandboxDeny` join them for
+the narrower reason that six ported cases call them directly and reaching them only through
+`renderRoleWithMetadata` would assert less than the source does.
+
+**Decision 3: `analyzeTargets` calls `absoluteSymlinkInChain` directly, NOT through
+`generatorSeams`.** This looks like an inconsistency with `D-0213`, and it is the source's own
+binding rule. Python's `from .generator import _absolute_symlink_in_chain` binds at **import** time,
+so the generator suite's autouse "keep these unit tests off the host filesystem" fixture never
+reached `sandbox_doctor` -- and must not, because the doctor's cases build **real symlinks on disk**
+and assert on what the filesystem says. Reading it through the seam would make those cases answer
+from a fixture another file installed.
+
+**Decision 4: the two capability gates are probed, and spelled as two `skipIf` sites.** The source
+probes rather than inferring, and says why for each: Windows creates symlinks under Developer Mode or
+elevation, so a blanket `skipif(win32)` would give up coverage on hosts that can run these; and
+bwrap's *presence* is not its ability to start, because Ubuntu 24.04 and many containers block the
+unprivileged user namespaces it needs. Both conditions are evaluated at module load -- collection
+time, as pytest's are -- and each is **one** `skipIf` bound to a constant and reused by the 42 and 2
+cases that need it, so the ledger approves a count of 2 rather than 44. Both gates were open on the
+porting host: bubblewrap is present and starts, and the two oracle cases ran against the real binary
+rather than skipping.
+
+**One adapted case worth naming.** `test_the_readback_carries_no_hooks_and_no_sandbox` asserts
+`not hasattr(readback, "hooks")` on a frozen dataclass. `InitReadback` is a TypeScript interface and
+is **erased**, so there is no object to interrogate about a field it never received, and
+`"hooks" in readback` would be green for any object nobody set the key on -- including one produced
+by a `parseInitEvent` that had grown a `hooks` field and left it `undefined`, which is the change the
+source's assertion exists to catch. It is translated as the assertion over the readback's own keys,
+listed exhaustively, which is strictly **stronger**: it fails for `hooks`, for `sandbox`, and for any
+third field a future `parseInitEvent` starts reporting.
+
+**Consequences.** The unified parser now declares two subcommands where interlock declares three;
+`state migrate` belongs to another lane and its absence is stated in `cli.ts` rather than implied.
+`knip.json` declares `bwrap` as an external binary, because the oracle cases spawn it. Two inherited
+defects routed to this pass by PR #43's review gate are repaired here rather than carried, under
+`D-0023`; they are `D-0215` and `D-0216`, and each has its own decision because each changes
+behaviour interlock exhibits.
 
 ---
+
+## D-0215 — A truthy non-mapping `sandbox.filesystem` is refused, not coerced to the empty mapping
+
+**Status.** accepted (2026-08-28)
+
+**Context.** An inherited defect, disclosed by PR #43's review gate at its round limit and routed to
+this pass because `sandbox doctor` -- ported here -- owns the half that observes it.
+`_evaluate_sandbox_suppressions` reads
+
+```python
+fs = sandbox.get("filesystem") or {}
+if not isinstance(fs, dict):
+    fs = {}
+```
+
+so an enabled sandbox whose `filesystem` is a **truthy non-mapping** is silently coerced to the empty
+mapping. Measured on this port before the repair, a role declaring
+`sandbox: {enabled: true, filesystem: "invalid"}` renders
+
+```json
+{"enabled": true, "filesystem": {"denyRead": [], "denyWrite": []}}
+```
+
+A malformed security configuration becomes a valid, less restrictive one, and nothing says so.
+
+**What makes it worth a repair rather than a disclosure is the readback.** Handed that render,
+`sandbox doctor` reports `deny targets: 0 (0 unusable by bwrap)` and
+`RESULT: sandbox deny paths are usable by bwrap.` -- a clean bill of health for a file whose author's
+`filesystem` key was thrown away. The doctor's own module note says a preflight that gates a launch
+"must not pass by accident", and this is the accident.
+
+**Decision.** The coercion becomes a refusal: `PyValueError`, which `run` turns into `error: ...` and
+rc 2.
+
+**The warrant is not invented here, which matters because `docs/test-translation-conventions.md`
+section 11 says a repair carries none from the source.** interlock **already refuses this shape**,
+one module over: `sandbox_doctor.validate_settings` answers a non-mapping `sandbox.filesystem` with
+`sandbox.filesystem must be an object` and the CLI exits 2. The half that WRITES the file and the
+half that CHECKS it disagreed about the same shape. The message here is the doctor's own sentence so
+that they no longer do, and that agreement is **asserted** rather than left as a resemblance.
+
+**Scope, pinned in both directions.** Only a truthy non-mapping raises. `x or {}` has already
+replaced an absent, `null`, `{}`, `[]`, `0` or `""` `filesystem` with `{}` before the type test, so
+every document interlock accepts is still accepted -- six rows pin that, because getting it wrong
+would reject documents interlock renders. The refusal also sits **after** the `enabled` gate, exactly
+where the coercion sat, so a disabled sandbox with junk under `filesystem` renders as it always did;
+moving the check one line earlier would look like a tidy-up and would start rejecting documents on a
+path the defect never touched.
+
+**Consequences.** This is a deliberate divergence on **every** platform, unlike `D-0213`'s
+`os.path.isabs` repair -- interlock renders `denyRead: []` for this input on Linux too. That is
+exactly why the disclosure said it needed a decision id of its own rather than riding along.
+Recorded in `parity/settings.sandbox-symlink-deny.ledger.json`, and the entry it replaces is removed
+from `parity/settings.settings-generator.ledger.json`'s `inherited_limitations`.
+
+---
+
+## D-0216 — `_is_inside_root` compares normcased paths, so Windows path identity is not a sandbox escape
+
+**Status.** accepted (2026-08-28)
+
+**Context.** The second inherited defect routed here. `_is_inside_root` decides whether a Layer 3
+deny entry escaped the sandbox read roots by composing `normpath` with an `os.sep` boundary test, and
+compares with `==` and `startswith` -- both case-**sensitive**, with `os.path.normcase` applied on
+neither side. Windows path identity is case-**insensitive**.
+
+Measured on this port before the repair, under a simulated `ntpath`: a `worker_dir` authored
+`c:\Users\Foo\worker` against a realpath the OS returns as `C:\Users\Foo\worker\secret`
+renders `denyRead: []` with one suppression whose reason is `realpath escapes sandbox read roots`.
+The two paths name the same directory, and the entry that was dropped is an **in-root** deny -- the
+kind that covers a credential file inside the worker directory. Dropping a deny is the direction that
+stops covering something.
+
+**Decision.** The **comparison** is normcased, and nothing else.
+
+`src/fencing/pypath.ts` gains `normcase` from both namespaces -- `ntpath.normcase` is
+`s.replace("/", "\\").lower()` and `posixpath.normcase` is the identity -- dispatched on
+`process.platform` at call time like the rest of the transcription. It joins
+`parity/oracle/ospath-vector.json` as a **seventh** function, so it is checked against CPython 3.12.3
+on every matrix cell rather than argued from two specifications.
+
+**The corpus had to grow for that check to mean anything, and the first version of it did not.** The
+new assertion was green on the first run, and so was a deliberately broken `ntNormcase` that lowered
+only `[A-Z]` -- because all 63 existing paths were ASCII, so the identity stood in for the Unicode
+fold with nothing to say so. `str.lower()` is a FULL Unicode lowering, and that is the half a reading
+of the two specifications is least likely to get right. Four paths were added -- a plain accented
+capital, the Turkish dotted capital I (which lowers to `i` + U+0307 and CHANGES LENGTH), the capital
+sharp S, and one combining them with a `..` component -- and the ASCII-only probe now fails on the
+first of them. The vacuity guard gained the two assertions that keep it that way: the namespaces must
+disagree on `normcase` somewhere, and the POSIX column must be exactly the corpus. This is
+`docs/test-translation-conventions.md` section 10 doing its job on a check that had just been
+written: green proved nothing until the probe ran.
+
+**Scoping the fold to the comparison is what answers the design question the disclosure left open,
+and it was a real question rather than a spelling one.** `normcase` has to be applied consistently,
+and the open half was whether `sandbox_read_roots` REPORTS the normcased form or the operator's.
+`metadata.sandboxReadRoots` is what `settings show --explain` prints and what the launcher's
+`/sandbox` status displays, and an operator has to recognise the path they wrote. Normcasing the
+stored roots would have folded a **display** value to answer a **comparison** question. Both halves
+are pinned separately, because the display half would stay green under the wrong answer to the other.
+
+**Consequences.** Windows only. `posixpath.normcase` is the identity, so this is a no-op on the
+platform interlock runs on -- but unlike `D-0213`'s `isabs` repair, that is a property of the
+**platform** rather than of the substitution, so it is a deliberate divergence and is pinned in the
+direction that would break: two paths differing only in case are two different files on POSIX, and an
+entry under one must still not be judged in-root by the other. All three pins were confirmed to go
+red with the repair reverted. Recorded in `parity/settings.sandbox-symlink-deny.ledger.json`, and the
+entry it replaces is removed from `parity/settings.settings-generator.ledger.json`'s
+`inherited_limitations`.

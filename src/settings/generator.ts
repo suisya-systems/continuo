@@ -84,6 +84,7 @@ import {
   osIsabs,
   osIslink,
   osJoin,
+  osNormcase,
   osNormpath,
   osReadlink,
   osRealpath,
@@ -140,6 +141,18 @@ const VALID_ANCHORS: readonly string[] = [
 const VALID_PATTERNS: readonly string[] = ["A", "B", "C"];
 
 /**
+ * `_PERMISSION_PATH_TOOLS`.
+ *
+ * -- EXPORTED FOR `sandbox_doctor.ts` -- along with `literalPathPrefix`,
+ * `splitPermissionRule` and `permissionRuleHostPath`. All four are underscore-
+ * private in the source and all four are imported by
+ * `settings/sandbox_doctor.py` anyway: the doctor's whole job is to answer the
+ * same question the generator answers, over settings scopes the generator did
+ * not render, and an answer computed by a second implementation would be a
+ * second thing to keep in step. TypeScript has no underscore convention that
+ * `import` ignores, so the privacy the source expresses by naming is expressed
+ * here by these four staying off `src/index.ts`.
+ *
  * Layer 2 tools whose argument is a filesystem path.
  *
  * `Read` / `Edit` are the pair Claude Code's sandbox docs name as contributing
@@ -148,7 +161,7 @@ const VALID_PATTERNS: readonly string[] = ["A", "B", "C"];
  * not to reach bwrap is harmless -- the realpath form denies the same files --
  * whereas omitting one that does reach it leaves the launch failure in place.
  */
-const PERMISSION_PATH_TOOLS: readonly string[] = ["Read", "Edit", "Write"];
+export const PERMISSION_PATH_TOOLS: readonly string[] = ["Read", "Edit", "Write"];
 
 const ROLE_KIND_TO_SCHEMA_KEY: ReadonlyMap<string, string> = new Map([
   ["worker", "worker_roles"],
@@ -365,7 +378,7 @@ export function detectWsl(probePaths: readonly string[] = DEFAULT_WSL_PROBE_PATH
  * Split on `/` on every platform, because that is what the source does: these
  * are pattern strings from a JSON document, not host paths.
  */
-function literalPathPrefix(pattern: string): string | null {
+export function literalPathPrefix(pattern: string): string | null {
   const globChars = ["*", "?", "["];
   const parts = pattern.split("/");
   if (parts.length === 0) {
@@ -413,18 +426,49 @@ function normalizeRoot(root: string): string {
  * to native separators.
  */
 function isInsideRoot(target: string, roots: readonly string[]): boolean {
-  const targetNorm = osNormpath(target);
+  // -- INHERITED DEFECT, REPAIRED IN PASS (D-0023, D-0216) --
+  // The source compares with `==` and `startswith`, both case-SENSITIVE, and
+  // applies no `os.path.normcase` on either side. Windows path identity is
+  // case-INSENSITIVE, so a `worker_dir` the operator authored as
+  // `c:\Users\Foo\worker` against a realpath the OS hands back as
+  // `C:\Users\Foo\worker\secret` reads as an ESCAPE -- and an in-root deny
+  // entry, the kind that covers a credential file inside the worker directory,
+  // is suppressed. Dropping a deny is the direction that stops covering
+  // something.
+  //
+  // Measured on this port before the repair, under a simulated ntpath: that
+  // exact pair renders `denyRead: []` with one suppression whose reason is
+  // "realpath escapes sandbox read roots", against read roots
+  // `["c:\Users\Foo\worker"]`. The paths name the same directory.
+  //
+  // The repair normcases the COMPARISON and nothing else, which is what settles
+  // the contract question the disclosure left open: `metadata.sandboxReadRoots`
+  // -- what `settings show --explain` prints and what the launcher's /sandbox
+  // status displays -- keeps the operator's own spelling, because the operator
+  // has to recognise it. Normcasing the STORED roots would have folded a
+  // display value to answer a comparison question, and the two are not the same
+  // question. `osNormcase` is CPython's `ntpath.normcase` / `posixpath.normcase`
+  // pair, checked against 3.12.3 by `parity/oracle/ospath-vector.json`.
+  //
+  // POSIX is unchanged: `posixpath.normcase` is the identity, so this is a
+  // no-op on the platform interlock runs on -- but unlike D-0213's `isabs`
+  // repair that is a property of the platform rather than of the substitution,
+  // so it is a deliberate divergence on Windows and is recorded as one.
+  const targetNorm = osNormcase(osNormpath(target));
   const sepChar = osSep();
   for (const r of roots) {
     if (!pyTruthy(r)) {
       continue;
     }
     const normalized = normalizeRoot(r);
-    if (targetNorm === normalized) {
+    const cased = osNormcase(normalized);
+    if (targetNorm === cased) {
       return true;
     }
-    const boundary =
-      normalized.endsWith("/") || normalized.endsWith(sepChar) ? normalized : normalized + sepChar;
+    // Both separator tests are kept, as the source keeps them. `ntNormcase`
+    // rewrites `/` to `\`, so the first is dead on Windows and live on POSIX;
+    // dropping it would be right for one platform and wrong for the other.
+    const boundary = cased.endsWith("/") || cased.endsWith(sepChar) ? cased : cased + sepChar;
     if (targetNorm.startsWith(boundary)) {
       return true;
     }
@@ -666,7 +710,7 @@ export function absoluteSymlinkInChain(
 }
 
 /** `_split_permission_rule`: `'Read(~/.aws/*)'` -> `['Read', '~/.aws/*']`. */
-function splitPermissionRule(rule: unknown): [tool: string, spec: string] | null {
+export function splitPermissionRule(rule: unknown): [tool: string, spec: string] | null {
   if (typeof rule !== "string" || !rule.endsWith(")")) {
     return null;
   }
@@ -692,7 +736,7 @@ function splitPermissionRule(rule: unknown): [tool: string, spec: string] | null
  * yields a mixed spelling, which is deliberate -- the value is a
  * permission-rule path, whose grammar separates with `/`.
  */
-function permissionRuleHostPath(spec: string): string | null {
+export function permissionRuleHostPath(spec: string): string | null {
   if (spec.startsWith("~/")) {
     return expanduser("~") + spec.slice(1);
   }
@@ -759,12 +803,19 @@ function canonicalizeEscapingPath(
 /**
  * `_canonicalize_permission_deny`: Layer 2 `Read` / `Edit` / `Write` rules.
  *
+ * Exported for the same reason as the four helpers above: six of
+ * `test_sandbox_symlink_deny.py`'s cases call it and its Layer 3 sibling
+ * directly, and a translation that reached them only through
+ * `renderRoleWithMetadata` would assert less than the source does -- the
+ * rewrite list is the thing under test, and the renderer folds it into a
+ * `$comment`.
+ *
  * Layer 2 is not merely a tool-level guard: Claude Code folds these rules into
  * the bwrap deny set, so a `Read(~/.aws/*)` mirror kept as a compensating
  * control for a suppressed Layer 3 entry is exactly what re-injects the
  * unbindable path and takes the whole sandbox down.
  */
-function canonicalizePermissionDeny(
+export function canonicalizePermissionDeny(
   deny: readonly unknown[],
   seams: FilesystemSeams,
 ): [out: unknown[], rewrites: SandboxPathRewrite[]] {
@@ -820,7 +871,7 @@ function canonicalizePermissionDeny(
  * an escaping absolute path even though the authored string does not start
  * with `/`.
  */
-function canonicalizeSandboxDeny(
+export function canonicalizeSandboxDeny(
   entries: readonly unknown[],
   layer: string,
   seams: FilesystemSeams,
@@ -1001,7 +1052,41 @@ function evaluateSandboxSuppressions(
   }
   metadata.enabled = true;
   const fsCandidate = pyOr(getOwn(sandbox, "filesystem"), {});
-  const fs: Record<string, unknown> = isPlainObject(fsCandidate) ? fsCandidate : {};
+  // -- INHERITED DEFECT, REPAIRED IN PASS (D-0023, D-0215) --
+  // The source is `fs = sandbox.get('filesystem') or {}` followed by `if not
+  // isinstance(fs, dict): fs = {}`, so a TRUTHY non-mapping -- `"filesystem":
+  // "invalid"` -- is silently coerced to the empty mapping. The render then
+  // emits `denyRead: []` and `denyWrite: []`, and a malformed security
+  // configuration becomes a valid, less restrictive one with nothing to say so.
+  //
+  // Measured on this port before the repair: a role declaring `sandbox:
+  // {enabled: true, filesystem: "invalid"}` renders
+  // `{"enabled":true,"filesystem":{"denyRead":[],"denyWrite":[]}}`, and
+  // `sandbox doctor` -- the readback half, which is the only thing that
+  // observes the emptied arrays -- reports `deny targets: 0 (0 unusable by
+  // bwrap)` and `RESULT: sandbox deny paths are usable by bwrap.` A clean bill
+  // of health for a file whose author's `filesystem` key was thrown away.
+  //
+  // The repair is a refusal, and its warrant is that interlock ALREADY refuses
+  // this shape -- one module over. `sandbox_doctor.validate_settings` answers a
+  // non-mapping `sandbox.filesystem` with "sandbox.filesystem must be an
+  // object" and the CLI exits 2, deliberately, "because a preflight that gates
+  // a launch must not pass by accident". The generator writing the file and the
+  // doctor checking it disagreed about the same shape; the message here is the
+  // doctor's sentence so that they no longer do.
+  //
+  // This is a deliberate divergence on EVERY platform, unlike the `os.path.isabs`
+  // repair of D-0213 -- interlock renders `denyRead: []` for this input on Linux
+  // too. Recorded in `parity/settings.settings-generator.ledger.json`, and the
+  // falsy cases are untouched: an absent, `null`, `{}`, `0`, `""` or `[]`
+  // `filesystem` is falsy, so `pyOr` has already replaced it with `{}` above and
+  // never reaches this check. Only a truthy non-mapping does.
+  if (!isPlainObject(fsCandidate)) {
+    throw new PyValueError(
+      `sandbox.filesystem must be an object, got ${pyTypeName(fsCandidate)}: ${pyRepr(fsCandidate)}`,
+    );
+  }
+  const fs: Record<string, unknown> = fsCandidate;
   const mapping = buildSubstitutionMapping(ctx);
   const additionalRaw = pyList(pyOr(getOwn(fs, "additionalDirectories"), []));
   const additional = carryNumberSpellings(
