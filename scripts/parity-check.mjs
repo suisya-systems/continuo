@@ -274,6 +274,49 @@ function stripComments(source) {
 const collected = collectTargetTests();
 const claimedTargets = new Map();
 const approvedNonRunning = new Map();
+/**
+ * Every `conditionally_collected` declaration, from every ledger.
+ *
+ * Global, because the sweep that consults it is global. `claimedTargets`
+ * accumulates across ledgers, so the "does this target exist?" question is
+ * asked about every ledger's claims at once; holding the declarations
+ * per-ledger meant that question was answered against whichever ledger
+ * happened to be in hand, and a claim declared conditional by one ledger read
+ * as missing while any other ledger was loaded.
+ *
+ * It stayed invisible while `settings.sandbox-symlink-deny.ledger.json` -- the
+ * only ledger with conditional declarations -- was LAST in LEDGERS: there was
+ * no later iteration to get it wrong. Appending the canary ledgers after it
+ * made the sweep run six more times, and on a host without bubblewrap the two
+ * bwrap-probed tests were reported missing once per canary ledger: twelve
+ * failures, every one of them naming a ledger that has nothing to do with
+ * those tests.
+ */
+const conditionallyCollected = new Map();
+
+/**
+ * Absent from THIS host's collection, but declared in its file and approved.
+ *
+ * The declaring ledger's own `test_file` is what the title is looked for in --
+ * not the ledger being swept -- which is the other half of making this global.
+ */
+function absentButDeclared(id) {
+  if (collected.includes(id)) {
+    return false;
+  }
+  const declaration = conditionallyCollected.get(id);
+  if (declaration === undefined) {
+    return false;
+  }
+  if (!declaresTitle(declaration.testFile, leafTitle(id))) {
+    fail(
+      "missing",
+      `${declaration.ledgerPath}: ${id} is declared conditionally_collected but its title is not in ${declaration.testFile}; a skipped test is still written down, a deleted one is not`,
+    );
+    return false;
+  }
+  return true;
+}
 
 for (const ledgerPath of LEDGERS) {
   const ledger = JSON.parse(readFileSync(join(ROOT, ledgerPath), "utf8"));
@@ -303,10 +346,13 @@ for (const ledgerPath of LEDGERS) {
       if (previous !== undefined) {
         fail(
           "duplicate",
-          `${ledgerPath}: target test claimed by two source cases: ${entry.target_id} (${previous} and ${entry.source_nodeid})`,
+          `${ledgerPath}: target test claimed by two source cases: ${entry.target_id} (${previous.source} and ${entry.source_nodeid})`,
         );
       }
-      claimedTargets.set(entry.target_id, entry.source_nodeid);
+      claimedTargets.set(entry.target_id, {
+        source: entry.source_nodeid,
+        ledgerPath,
+      });
     }
 
     if (entry.disposition !== "ported" && (entry.reason ?? "") === "") {
@@ -387,6 +433,12 @@ for (const ledgerPath of LEDGERS) {
   const conditional = new Map(
     (ledger.target.conditionally_collected ?? []).map((row) => [row.id, row]),
   );
+  // Also recorded globally: the existence sweep below runs over EVERY ledger's
+  // claims, so a declaration made here has to still be in scope when a ledger
+  // that loads later is the one driving the sweep.
+  for (const [id, row] of conditional) {
+    conditionallyCollected.set(id, { row, testFile: ledger.target.test_file, ledgerPath });
+  }
   for (const [id, row] of conditional) {
     if (!row.reason) {
       fail("unexplained", `${ledgerPath}: conditionally_collected entry has no reason: ${id}`);
@@ -399,37 +451,27 @@ for (const ledgerPath of LEDGERS) {
     }
   }
 
-  /** Absent from THIS host's collection, but declared in the file and approved. */
-  const absentButDeclared = (id) => {
-    if (collected.includes(id)) {
-      return false;
-    }
-    if (!conditional.has(id)) {
-      return false;
-    }
-    if (!declaresTitle(ledger.target.test_file, leafTitle(id))) {
-      fail(
-        "missing",
-        `${ledgerPath}: ${id} is declared conditionally_collected but its title is not in ${ledger.target.test_file}; a skipped test is still written down, a deleted one is not`,
-      );
-      return false;
-    }
-    return true;
-  };
-
   for (const id of targetOnly) {
     if (!collected.includes(id) && !absentButDeclared(id)) {
       fail("missing", `${ledgerPath}: declared target-only test does not exist: ${id}`);
     }
   }
-  for (const [id, source] of claimedTargets) {
-    if (!collected.includes(id) && !absentButDeclared(id)) {
-      fail("missing", `${ledgerPath}: ${source} maps to a target test that does not exist: ${id}`);
-    }
-  }
 
   for (const approval of ledger.target.approved_non_running ?? []) {
     approvedNonRunning.set(approval.file, approval);
+  }
+}
+
+// (1, continued): every claimed target has to exist. Swept ONCE, after every
+// ledger has been read, rather than once per ledger: `claimedTargets` is global
+// and so are the conditional declarations that excuse an absence, so running it
+// inside the loop asked a global question with only part of the answer loaded.
+for (const [id, claim] of claimedTargets) {
+  if (!collected.includes(id) && !absentButDeclared(id)) {
+    fail(
+      "missing",
+      `${claim.ledgerPath}: ${claim.source} maps to a target test that does not exist: ${id}`,
+    );
   }
 }
 
