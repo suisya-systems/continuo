@@ -1,0 +1,450 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "session",
+      "collected": 142,
+      "inventory": "parity/source-inventory/session.all.txt",
+      "note": "The session subsystem is three source files: tests/session/test_provider_contract.py (34, parity/session.provider-contract.ledger.json), tests/session/test_stub_provider.py (43, this ledger) and tests/session/test_claude_cli_provider.py (65, parity/source-inventory/session.test_claude_cli_provider.txt). This is the belt's second file: 34 + 43 = 77 of 142."
+    },
+    "file": {
+      "path": "tests/session/test_stub_provider.py",
+      "collected": 43,
+      "inventory": "parity/source-inventory/session.test_stub_provider.txt",
+      "status": "43 passed, re-run at 65f36c5 on the porting host with `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/session/test_stub_provider.py -q -p no:cacheprovider` (0.86s). `source_status` is `passed` for all 43. The file carries NO capability gate: grepping tests/session/test_stub_provider.py at 65f36c5 for `skipif`, `xfail`, `pytest.skip` and `pytest.mark` returns exactly two lines, both `@pytest.mark.parametrize` (lines 331 and 553), so there is nothing here to translate into a `skipIf` and nothing among interlock's 8 skipped or 1 xfailed. Those two parametrize markers are where ten of the 43 node ids come from -- seven session ids and three command shapes -- leaving 33 plain functions; `grep -c '^def test_'` is 35, and 33 + 7 + 3 = 43. The file drives REAL child processes throughout, which is why it needed a runtime adapter where the belt's first file needed only two file reads."
+    }
+  },
+  "target": {
+    "test_file": "test/session/stub-provider.test.ts",
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/session/stub-provider.test.ts::start routes both the probe and the child through the runtime seam (target-only)",
+        "test/session/stub-provider.test.ts::the five verbs are serialised per provider instance (target-only, D-0301)",
+        "test/session/stub-provider.test.ts::every read of a child's exit status is preceded by a macrotask settle (target-only, D-0301)"
+      ],
+      "note": "Three cases, none counted as ported coverage; each pins something no source case can construct, and each was added because a mutation proved the property was otherwise unprotected (rule 10). (1) `start routes both the probe and the child through the runtime seam` is D-0014's liveness requirement for the two seam members the ported cases substitute, and the direction of the hole is what makes it necessary: `test_an_unusable_command_never_reaches_a_spawn` and `test_the_windows_spawn_failure_no_longer_changes_the_answer` both assert that something is ABSENT from a recorded log, which an unreachable seam satisfies for free -- production could stop routing through `spawn` and `runProbe` entirely and both cases would stay green while exercising the real thing the whole time. It pins both members and their ORDER in one read: the D-0010 probe argv first, then the default child program. (2) `the five verbs are serialised per provider instance` is D-0301 part 3. Python has one thread, so `list_sessions` cannot run while `_start_session` is mid-spawn; the port has to BUILD that exclusion, and no source case can construct the interleaving, so deleting the queue would leave all 43 ported cases green. The case holds `spawn` open behind a gate, lets five real macrotask turns pass, requires `start` and `listSessions` to have settled neither, then releases and requires FIFO order. (3) `every read of a child's exit status is preceded by a macrotask settle` is D-0301 part 4, the routing half. Measured: all three `settleExits` call sites in this module can be deleted without one of the 43 ported cases noticing, because every path that reads an exit status is also reached through an awaited `waitForExit` or a polling helper and both supply the turn incidentally. What is lost is not an answer but its TIMING -- a readout taken straight after a state change silently becomes the previous one, in the 'already exited but still reads as running' direction, which under D-0005's shuffled order arrives as someone else's flake. The complementary half of that decision, that `settleExits` must be a macrotask yield rather than `await Promise.resolve()`, belongs to the shared runtime and is asserted once in test/session/claude-cli-provider.test.ts rather than twice."
+    },
+    "approved_non_running": [],
+    "conditionally_collected": [],
+    "notes": [
+      "`approved_non_running` is empty because the file uses no non-running construct. Checked directly against scripts/parity-check.mjs's own NON_RUNNING patterns -- `(test|it|describe).skip`, `(test|it|describe).todo`, `(test|it).fails`, `skipIf(` and `xfail(` -- over test/session/stub-provider.test.ts with comments and string literals INCLUDED, which is stricter than the sweep: no match. That is expected rather than lucky. The source has no capability gate to carry, and the port added none: every case here runs a real child process on every platform the suite runs on, and the two platform-specific behaviours the source cares about (an empty argv refused in the language on POSIX and by `CreateProcess` on Windows) are INJECTED through the runtime seam rather than skipped, which is what lets `test_the_windows_spawn_failure_no_longer_changes_the_answer` run on Linux. `conditionally_collected` is empty for the same reason: nothing here is absent from a host's collection, and all 43 mapped ids plus the three target-only ones were present in `vitest list --json` when this ledger was written (46 collected from this file, 46 passed).",
+      "Every target id is the source function name verbatim, both parametrize expansions included, and no case sits inside a `describe`. The ten expansion ids carry pytest's own rendering through test/testkit/parametrize.ts rather than a re-derivation, which matters twice here: `[back\\\\slash]` is pytest's ESCAPED rendering of a value holding one backslash and `[nul\\x00id]` of a value holding an actual NUL, so the port's table pairs the escaped id with the real string; and `[command2]` is a pytest artefact -- pytest cannot render a dict, so it falls back to the argument name plus the parameter set's index -- and is hard-coded because it is a node id and not a description.",
+      "THE ADAPTATION COUNT DISAGREES WITH THE PORTED FILE'S OWN HEADER, and this ledger is the disagreement rather than a transcription of it. The header of test/session/stub-provider.test.ts says '40 are ported and three are adapted' and names three: the `__abstractmethods__` registry, the `node ` version prefix, and the `os.pipe()` substitute. All three are real and are recorded as adapted here. Re-reading the 43 cases against the code found a FOURTH, `test_no_claude_cli_and_no_network`, which the header does not name: the source derives the file it scans from `LocalProcessSessionProvider.__module__` and scans exactly one module, while the port names two files literally, because ESM has no `__module__` and because this port split the source's one module into `stub_provider.ts` plus `runtime.ts`. Both halves are runtime differences that made a straight translation impossible, and the second one WIDENS what is scanned relative to a naive translation while leaving the port with a hand-maintained file list where the source has an interpreter-derived one. That is the same class of thing parity/session.provider-contract.ledger.json records as adapted for `test_file_marks_itself_provisional_and_names_what_promotes_it` (a `__doc__` read re-pointed at source text) and for `test_no_fact_state_vocabulary_appears_anywhere_in_s1` (the oracle it reads moved), so recording it as `ported` here would make two ledgers in one belt classify the same situation two different ways. The totals below are 39 ported and 4 adapted. The file header's sentence is now stale by one and should be corrected in the same pass that lands this ledger; the header is not editable from here.",
+      "TWO CASES WERE EXAMINED FOR A FIFTH ADAPTATION AND KEPT `ported`, with the reasoning written down so a reviewer can overrule it rather than having to rediscover the question. The line drawn is: a Python-faithful primitive UNDERNEATH a case leaves it ported, while a change to what the case itself reads or asserts makes it adapted. (a) `test_no_verb_writes_to_a_child` replaces `dir(cls)` with `publicSurfaceOf`, because Python has one namespace for methods, `property` objects and class-level data while JavaScript splits it three ways -- prototype methods, accessors and `static` members -- and a walk that kept only function-valued prototype entries was blind to two of the three (a real floor gap, found and fixed in the review pass; a `get sendPrompt()` and a `static sendTimeout` both went undetected before it). The helper now collects NAMES ONLY from both chains, stopping before `Object.prototype` and `Function.prototype`, and drops `constructor`/`length`/`name`/`prototype` at every level as the JavaScript counterpart of the source's `_`-prefix filter, since those are the language's own machinery that Python spells under dunder names. The SET walked is the counterpart set and the assertion is unchanged, so this is `dir()` reconstructed rather than a different question. (b) `test_reading_an_exited_session_releases_its_child_pipe` reads `ChildHandle.stdinClosed()` where the source reads `provider._sessions[\"s-1\"].process.stdin.closed`. The accessor itself is only D-0101's spelling for a private field. The substantive point is that `stdinClosed()` reports the runtime adapter's own closed-by-us flag rather than the stream's state, and that is what PRESERVES the source's meaning rather than departing from it: Python does not close the parent's write end when a child dies, Node destroys the stdio streams when it does, so a literal translation reading Node's `.closed` would be satisfied for free by the child's exit and the case would prove nothing. The adapter is where that difference is absorbed, which is exactly what D-0014 asks a single runtime adapter to be for; the case reads the same fact the source reads. `test_a_state_word_that_is_not_utf8_is_could_not_observe` uses the sibling accessor `stateFileOf` and needs no such argument, because `state_file.exists()` and `existsSync` mean the same thing -- which is the evidence that the `@internal` accessors alone are not what would make a case adapted.",
+      "Two further differences are recorded here because they are visible in the diff and are NOT adaptations, so a reader who spots them can stop looking. (1) The caller-supplied child programs are Node rather than Python (`process.execPath -e ...` in place of `sys.executable -c ...`), which is the Node-not-Python child rippling into the three inline programs and the default one; no assertion changes, so those cases stay ported. (2) In `test_a_state_word_that_is_not_utf8_is_could_not_observe` the child writes the two bytes to `<state>.part` and renames it onto the state file, where the source writes the file directly. A direct write is perfectly possible in Node, so this is not a case of a translation being impossible -- it removes a race the source has too and that both the source and the port poll into: the poll waits for the file to EXIST, and a direct write leaves a window in which it exists and is empty, in which the provider correctly reports 'has not reported a state yet' and the assertion fails for a reason that has nothing to do with UTF-8. The rename is the idiom the source's own default child uses, for the source's own stated reason. No assertion changes.",
+      "The seam substitution boundary, since it is the thing rule 5 and D-0014 make reviewable. Twenty-odd cases here drive a REAL child process, because the guarantees this file exists to prove -- that a spawn failure is classified as one, that a child's own state word survives the round trip, that closing a pipe is what ends the default child -- are guarantees about processes, and a fully mocked version of this file would assert none of them. The only two ported cases that patch `sessionRuntime` are the two whose SOURCE monkeypatches `subprocess.Popen`, and both patches delegate to the real thing. In `test_an_unusable_command_never_reaches_a_spawn` the recorder is installed over BOTH `spawn` and `runProbe`, and that is load-bearing rather than tidy: the source's docstring says a spawn IS performed during a refused start, because the D-0010 probe runs first, so 'nothing was spawned' is the wrong assertion and 'the caller's argv was never the thing spawned' is the right one. The port's probe and child go through two different seam members, so a recorder on `spawn` alone would see an empty log during a refused start and the case would be asking a weaker question than its source."
+    ]
+  },
+  "totals": {
+    "source_cases": 43,
+    "ported": 39,
+    "adapted": 4,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_the_stub_satisfies_the_s1_contract",
+      "target_id": "test/session/stub-provider.test.ts::test_the_stub_satisfies_the_s1_contract",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`__abstractmethods__` has no runtime form in TypeScript. `ABCMeta` computes that frozenset from the class's own members and `abstract` is erased before anything runs, so `assert not LocalProcessSessionProvider.__abstractmethods__` cannot be spelled. The port reads the `ABSTRACT_METHODS` registry `SessionProvider`'s constructor already consults, and filters it to the names that either do not resolve to a function on the leaf or still resolve to the base's own placeholder -- the JavaScript stand-in for a member that is still `__isabstractmethod__` -- then requires that list to be empty. The other two assertions port DIRECTLY and are unchanged: `isinstance(instance, s1.SessionProvider)` is `toBeInstanceOf(SessionProvider)`, and `getattr(cls, gate) is s1.SessionProvider.__dict__[gate]` for `start` and `require_spawnable` is `===` between the functions the two prototype chains resolve (`requireSpawnable` under D-0201's camelCase rule). The property is at least as strongly pinned only because the registry does not stand alone: a hand-maintained registry can drift where `ABCMeta`'s cannot, and a drifted registry satisfies every assertion made about it, so `ABSTRACT_METHODS` carries its own liveness case in the S1 battery (`ABSTRACT_METHODS is consulted, not merely declared`, target-only in parity/session.provider-contract.ledger.json), which instantiates a subclass omitting `stop` and requires the constructor to refuse and name it. Without that case this entry would be a waiver rather than an adaptation, because nothing here would notice the registry describing a class it no longer matches.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_no_claude_cli_and_no_network",
+      "target_id": "test/session/stub-provider.test.ts::test_no_claude_cli_and_no_network",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The lint's five substrings and its second half are unchanged; WHAT it reads had to change twice, and the second change is a widening this ledger states plainly rather than leaving to the diff. (1) `sys.modules[LocalProcessSessionProvider.__module__].__file__` has no ESM form: a class does not know its defining file, and `import.meta` belongs to the reader rather than to the read. The derivation is replaced by a literal path plus a compensating assertion -- the text read must contain `class LocalProcessSessionProvider extends` -- so a class that moves fails loudly here instead of leaving the scan quietly following a stale file name (rule 10). It must be the `.ts` file and not `dist/`, because half of what this lint reads lives in comments a build strips; `repoSource` refuses a `dist/` path for that reason. (2) The source's ONE module holds the verbs, the capability probe and every `subprocess` call. This port splits that module in two: the spawn, probe and signal primitives are `src/session/runtime.ts` (D-0014's single runtime adapter). Scanning only `stub_provider.ts` would therefore scan the half of the source's module that was never going to open a socket, and a network call added on the path the stub actually takes to the operating system would go unnoticed -- so both files are read, joined, and lowercased. That is the source's one module and no more than it: `grep -ciE` for all five substrings over `runtime.ts` answers 0 today. WHERE THIS IS WEAKER THAN THE SOURCE, stated rather than hidden: the source's file list is derived by the interpreter and is always exactly the defining module, while the port's is two hand-written paths. A future third file split out of either one is scanned by nothing, and no case here would go red; the `class ... extends` assertion catches the class moving, not a helper moving. The last two lines port straight -- start the child, read `provider_detail[\"command\"][0]` -- with `sys.executable` becoming `process.execPath`, the Node-not-Python child substitution the module header records.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_no_verb_writes_to_a_child",
+      "target_id": "test/session/stub-provider.test.ts::test_no_verb_writes_to_a_child",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_the_probe_reports_a_build_and_every_required_capability",
+      "target_id": "test/session/stub-provider.test.ts::test_the_probe_reports_a_build_and_every_required_capability",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "One assertion's literal changes: `report.provider_version.startswith(\"python \")` becomes `startsWith(\"node \")`. The stub's local child is a Node process in this port rather than a Python one, so the build this probe reports is Node's and the prefix follows it. The rejected alternative was keeping a real `python3` child, which would add an interpreter dependency to a TypeScript package's test suite and is not guaranteed on the Windows cell. The other three assertions are unchanged and in the same order: the probe is an `Ok`, the report is `compatible`, and `missing` is empty (`assert not report.missing` on a frozenset becomes `missing.size === 0`). The property -- the probe answers with a build string naming the runtime it will actually spawn, and reports every required capability present -- is pinned exactly as strongly; only the runtime named is different, and it is different because the child is.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_an_unusable_interpreter_fails_the_probe_and_refuses_the_spawn",
+      "target_id": "test/session/stub-provider.test.ts::test_an_unusable_interpreter_fails_the_probe_and_refuses_the_spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_started_session_reports_the_childs_own_state_word",
+      "target_id": "test/session/stub-provider.test.ts::test_a_started_session_reports_the_childs_own_state_word",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_child_that_has_not_reported_yet_is_could_not_observe",
+      "target_id": "test/session/stub-provider.test.ts::test_a_child_that_has_not_reported_yet_is_could_not_observe",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_no_sessions_is_an_empty_success_not_a_failure",
+      "target_id": "test/session/stub-provider.test.ts::test_no_sessions_is_an_empty_success_not_a_failure",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_list_sessions_carries_one_readout_per_started_session",
+      "target_id": "test/session/stub-provider.test.ts::test_list_sessions_carries_one_readout_per_started_session",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_reused_session_id_is_refused",
+      "target_id": "test/session/stub-provider.test.ts::test_a_reused_session_id_is_refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_reading_an_unknown_session_is_a_failure_not_an_empty_readout",
+      "target_id": "test/session/stub-provider.test.ts::test_reading_an_unknown_session_is_a_failure_not_an_empty_readout",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_child_that_cannot_be_spawned_is_a_failure",
+      "target_id": "test/session/stub-provider.test.ts::test_a_child_that_cannot_be_spawned_is_a_failure",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_stop_reports_the_state_after_the_child_is_gone",
+      "target_id": "test/session/stub-provider.test.ts::test_stop_reports_the_state_after_the_child_is_gone",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_stopping_an_unknown_session_is_a_failure",
+      "target_id": "test/session/stub-provider.test.ts::test_stopping_an_unknown_session_is_a_failure",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_resuming_a_live_session_returns_its_current_readout",
+      "target_id": "test/session/stub-provider.test.ts::test_resuming_a_live_session_returns_its_current_readout",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_resuming_an_exited_session_is_refused_with_a_reason",
+      "target_id": "test/session/stub-provider.test.ts::test_resuming_an_exited_session_is_refused_with_a_reason",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_resuming_an_unknown_session_is_a_failure",
+      "target_id": "test/session/stub-provider.test.ts::test_resuming_an_unknown_session_is_a_failure",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_creating_a_workspace_is_announced_before_it_is_made",
+      "target_id": "test/session/stub-provider.test.ts::test_creating_a_workspace_is_announced_before_it_is_made",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_vetoed_workspace_is_neither_created_nor_started",
+      "target_id": "test/session/stub-provider.test.ts::test_a_vetoed_workspace_is_neither_created_nor_started",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_an_existing_workspace_announces_nothing",
+      "target_id": "test/session/stub-provider.test.ts::test_an_existing_workspace_announces_nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_caller_supplied_child_is_read_through_the_same_readout",
+      "target_id": "test/session/stub-provider.test.ts::test_a_caller_supplied_child_is_read_through_the_same_readout",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_the_announce_delay_is_passed_to_the_child_by_environment",
+      "target_id": "test/session/stub-provider.test.ts::test_the_announce_delay_is_passed_to_the_child_by_environment",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_session_id_that_is_not_one_file_name_is_refused[../escape]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_session_id_that_is_not_one_file_name_is_refused[../escape]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_session_id_that_is_not_one_file_name_is_refused[/absolute]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_session_id_that_is_not_one_file_name_is_refused[/absolute]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_session_id_that_is_not_one_file_name_is_refused[nested/id]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_session_id_that_is_not_one_file_name_is_refused[nested/id]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_session_id_that_is_not_one_file_name_is_refused[..]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_session_id_that_is_not_one_file_name_is_refused[..]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_session_id_that_is_not_one_file_name_is_refused[back\\\\slash]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_session_id_that_is_not_one_file_name_is_refused[back\\\\slash]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_session_id_that_is_not_one_file_name_is_refused[C:escape]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_session_id_that_is_not_one_file_name_is_refused[C:escape]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_session_id_that_is_not_one_file_name_is_refused[nul\\x00id]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_session_id_that_is_not_one_file_name_is_refused[nul\\x00id]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_relative_state_root_still_observes_its_children",
+      "target_id": "test/session/stub-provider.test.ts::test_a_relative_state_root_still_observes_its_children",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_an_unusable_state_root_is_a_failure_not_an_exception",
+      "target_id": "test/session/stub-provider.test.ts::test_an_unusable_state_root_is_a_failure_not_an_exception",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_reading_an_exited_session_releases_its_child_pipe",
+      "target_id": "test/session/stub-provider.test.ts::test_reading_an_exited_session_releases_its_child_pipe",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_an_unusable_child_command_is_a_failure_not_an_exception",
+      "target_id": "test/session/stub-provider.test.ts::test_an_unusable_child_command_is_a_failure_not_an_exception",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_an_unusable_command_never_reaches_a_spawn",
+      "target_id": "test/session/stub-provider.test.ts::test_an_unusable_command_never_reaches_a_spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_the_windows_spawn_failure_no_longer_changes_the_answer",
+      "target_id": "test/session/stub-provider.test.ts::test_the_windows_spawn_failure_no_longer_changes_the_answer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_well_formed_command_that_cannot_be_spawned_is_still_unreachable",
+      "target_id": "test/session/stub-provider.test.ts::test_a_well_formed_command_that_cannot_be_spawned_is_still_unreachable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_the_refused_command_is_reported_back_with_the_refusal",
+      "target_id": "test/session/stub-provider.test.ts::test_the_refused_command_is_reported_back_with_the_refusal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_state_word_that_is_not_utf8_is_could_not_observe",
+      "target_id": "test/session/stub-provider.test.ts::test_a_state_word_that_is_not_utf8_is_could_not_observe",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_an_unusable_workspace_path_is_a_failure_not_an_exception",
+      "target_id": "test/session/stub-provider.test.ts::test_an_unusable_workspace_path_is_a_failure_not_an_exception",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_child_command_that_is_not_a_list_is_refused[1]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_child_command_that_is_not_a_list_is_refused[1]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_child_command_that_is_not_a_list_is_refused[a-bare-string]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_child_command_that_is_not_a_list_is_refused[a-bare-string]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_child_command_that_is_not_a_list_is_refused[command2]",
+      "target_id": "test/session/stub-provider.test.ts::test_a_child_command_that_is_not_a_list_is_refused[command2]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_stub_provider.py::test_a_refused_resume_releases_the_exited_childs_pipe",
+      "target_id": "test/session/stub-provider.test.ts::test_a_refused_resume_releases_the_exited_childs_pipe",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`os.pipe()` has no Node 22 equivalent, so the source's `_reopened_pipe` helper -- which opens a real pipe, closes the read end and hands back the write end as a file object -- cannot be translated. The substitute (`reopenedPipe()` in test/session/helpers/session-cases.ts) is an in-memory `PassThrough`, destroyed at teardown. What the replacement is FOR is unchanged and is the whole point of the case: `stop` has already closed the real pipe by the time `resume` refuses, so without substituting an open one the closing assertion is satisfied by the previous verb and proves nothing about `resume`. The port's `replaceStdin` resets the closed-by-us flag for the same reason, so the substitute cannot read as already closed and make the case vacuous a second way. Both assertions are unchanged: the resume is a `Failure`, and the child's standard input is closed afterwards. Where Python's `_reopened_pipe` also proves a real descriptor was released, the substitute proves only that the provider closed what it was handed -- but the source's own assertion is `Popen.stdin.closed`, a flag and not a descriptor count, so nothing the source asserts is lost. The source's `provider._sessions[\"s-1\"].process.stdin = ...` assignment is a plain attribute write in Python and needs `@internal` members here (`childOf`, `ChildHandle.replaceStdin`) under D-0101.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "topic": "A child killed by a signal reports the state word `exited--15`, with two hyphens.",
+      "status": "reproduced deliberately, disclosed",
+      "detail": "The source builds the word as `f\"exited-{returncode}\"` and Python's `Popen.returncode` is the NEGATED signal number for a child killed by one, so a SIGTERM'd child's state word is `exited--15`. The port reproduces it exactly -- `` `exited-${String(returncode)}` `` over a return code the runtime adapter makes Python's -- rather than normalising the spelling, because the word crosses the S1 boundary into `provider_state` and a control plane reading it would see two different vocabularies on the two sides of the port. No case pins the digits: `test_stop_reports_the_state_after_the_child_is_gone` asserts the `exited-` PREFIX only, which is what the source asserts, and pinning `exited--15` here would assert more than the source does (rule 0's ceiling). A fix belongs upstream, or in a change that moves both sides together."
+    }
+  ]
+}
