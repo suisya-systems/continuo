@@ -73,6 +73,8 @@ spaces distinct.
 | D-0113 | The cp932 help-text guarantee is asserted as ASCII, and on the bytes | accepted |
 | D-0114 | The package walk is `import.meta.glob`, and the renderer the port adds is bound, not exempted | accepted |
 | D-0115 | The write scan names better-sqlite3's whole SQL surface, and restores the pragma keyword | accepted |
+| D-0116 | The statement trace names its issuer from the V8 call site, and folds the two languages' spellings | accepted |
+| D-0117 | The catalogue's no-copy property is read off the syntax, because JavaScript has no string identity | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -4998,4 +5000,160 @@ written against the source's node shapes sees a node the source could not produc
 better-sqlite3 gaining another method that takes SQL text (the set would have to grow with it), or
 this package reaching a statement form the resolver cannot follow -- which fails loudly rather than
 silently, and is a reason to widen the resolver, not the exemptions.
+
+---
+
+## D-0116 -- The statement trace names its issuer from the V8 call site, and folds the two languages' spellings
+
+**Context.** `tests/measurement/test_query_catalogue.py` keeps section 6's catalogue complete by
+running a real report through a connection that records every statement, and then asserting each
+recorded statement is either in the header's catalogue or named, with a reason, in
+`render.UNATTESTED_STATEMENTS`. The point of it is a module **this file has never heard of**: a new
+module reaching the report path fails the case without anyone editing the case. That only works if
+the recorder can name the code that issued the statement, and the source names it by reading the
+caller off the stack -- `sys._getframe(1)`, rendered as `<file stem>.<function name>`.
+
+**Nothing is passed in, deliberately.** A recorder told who its caller is can only be told by callers
+that were edited to tell it, which is the hand-written list the design refuses.
+
+**Decision, part one: read the call site, do not parse the stack string.** `Error.captureStackTrace`
+with `Error.prepareStackTrace` returning the call-site array hands back objects with `getFileName()`
+and `getFunctionName()`. `error.stack` is a **rendered string with no format contract**; a regex over
+it would be a second parser of a format V8 is free to change, and it would fail by returning a
+plausible wrong name rather than by throwing. `prepareStackTrace` is saved and restored around the
+capture, because it is global and Vitest installs its own.
+
+The recorder itself is a `Proxy` rather than the source's forwarding class. better-sqlite3's
+`Database` keeps its state on the native handle and its methods are not bound, so a hand-written
+wrapper would have to enumerate the surface and would silently stop forwarding whatever it had not
+heard of -- and this file's every assertion is about the report that connection produced. The
+non-recorded methods are returned bound to the real connection, because `this` would otherwise be
+the proxy. A target-only case pins the whole of it: the report built through the recorder renders
+byte-identically to one built without it.
+
+**Compiling and running are one call in the source's driver and two in this one.** `execute`
+compiles and runs; better-sqlite3's `prepare` returns a `Statement` that runs only when `run` /
+`get` / `all` / `iterate` is called on it. Recording at `prepare` alone would report a statement the
+report **compiled and then skipped** as one the report ran -- and `every catalogued query was one the
+report ran` is the case whose entire subject is that a catalogued query really was executed, so the
+mismatch is fail-open in precisely the worst place. `prepare` therefore records the text and wraps
+the statement it returns; the flag is set when an execution method fires, and the chaining modifiers
+(`raw`, `pluck`, `expand`, `bind`, `safeIntegers`) hand back the wrapper so a chain is still watched.
+`exec` and `pragma` run immediately and are recorded executed. **The four ported cases read the
+executed set**, which is the source's set exactly; a target-only case reads the two sets apart, so a
+stuck flag fails as a recorder fault rather than as a catalogue fault. Raised by the review gate.
+
+**Decision, part two: fold the two spellings rather than tabulate them.** `UNATTESTED_STATEMENTS` is
+keyed by the **source's** function names -- `reader._require_query_only`, `provenance._columns_of` --
+and `render.ts` records why: the report is what a parity comparison of the two implementations is
+made from, so renaming the keys would make the two reports differ on a field whose subject is
+identical. The trace, though, observes this port's names: `reader.requireQueryOnly`,
+`provenance.columnsOf`. One function, two conventions.
+
+Both sides are folded to a form neither convention can move -- lower case, underscores removed --
+and the comparison is made on the folded form.
+
+- **Rejected: a hand-written table from one spelling to the other.** It is exactly the "keep this
+  list current" note the source's own docstring says does not survive a new module: the table would
+  be correct for the nine exemptions that exist and silent about the tenth.
+- **Rejected: rekeying `UNATTESTED_STATEMENTS` to the port's names.** It would move a field of the
+  published report for the convenience of a test.
+- The fold discards information, and discarding too much is how it fails: two exemptions that folded
+  together would let an entry written for one function excuse a statement issued by another, and
+  every case in the file would stay green over a hole in the catalogue. A target-only case asserts
+  the fold stays one-to-one over `UNATTESTED_STATEMENTS`.
+
+**What was measured.** The trace records 32 statements over the populated fixture, from nine
+functions, all executed, and every one of the nine matches its exemption through the fold.
+Mutations, each red for its own reason and for no other: an uncatalogued statement added to
+`cohort.ts` is reported by name and turns the trace case red; an exemption for a function nothing
+calls turns `no declared exemption is stale` red and nothing else; a second exemption spelled
+`provenance.columns_of` beside `provenance._columns_of` turns the fold's target-only case red while
+the eight ported cases stay green; a recorder made to return a wrong `user_version` turns the
+forwarding case red alone; a `prepare` of a catalogued query added and never run turns the
+compile-versus-run case red alone; and the same mutation **with the flag forced back to counting a
+prepare as a run** leaves `every catalogued query was one the report ran` GREEN over a catalogued
+query the report never executed, which is the fail-open the flag closes.
+
+**Status.** accepted
+
+**Source.** Measured 2026-08-28 on Node 22.17.0 / V8, vitest 4.1.11, better-sqlite3 13.0.3, against
+interlock `65f36c5`. Falsified by: V8 withdrawing the structured stack-trace API (there is no second
+way to name an unknown caller, and the trace half would have to be redesigned rather than reparsed);
+by the port and the source converging on one spelling of these function names, which would retire
+the fold; or by better-sqlite3 gaining another way to run a prepared statement, which the execution
+set would have to grow with -- it fails toward reporting a statement as unrun, which is red rather
+than green.
+
+---
+
+## D-0117 -- The catalogue's no-copy property is read off the syntax, because JavaScript has no string identity
+
+**Context.** `test_a_catalogued_module_executes_the_constant_and_not_a_copy` is the case that makes
+the query catalogue worth having. Its docstring states the property exactly: "Equality of text is not
+the property; identity of object is." A statement inlined at its call site as a copy of the
+catalogued text passes the *other* case on the day it is written, and stops passing it only once the
+two have already disagreed -- which is one report too late, because the disagreeing report is the
+artefact. So the source asserts `any(text is constant for constant in constants)`: the catalogue must
+hold **the same string object** the module executes.
+
+**`is` has no counterpart for a JavaScript string.** Strings are primitives; `===` compares by value,
+and there is no operator, no `Object.is`, and no reflective API that can tell a constant apart from a
+copy of it. A literal translation -- `constants.includes(text)` -- is `==` where the source wrote
+`is`, and it is **weaker in precisely the direction the case exists to cover**: a pasted copy passes
+it. `docs/test-translation-conventions.md` rule 0 makes that a defect, not a simplification, and it
+is one no failing test would have found.
+
+**Decision.** The property is asserted on the **syntax**, in three parts, and all three must hold:
+
+1. the module's `QUERY_DEFINITIONS` entry for the name is an **identifier**, not a literal -- so what
+   the catalogue is built from is the constant, and there is one string with no copy to drift;
+2. some module-level string constant of that module holds that text at run time -- the source's
+   `vars(module)` half, kept because part 1 alone says nothing about the value;
+3. every statement call in the module hands the driver a name, a member access or an index -- never a
+   literal and never a composed expression -- which is the source's `_execute_arguments` check,
+   translated node kind for node kind, with `.replace("{placeholders}", ...)` unwrapped where the
+   source unwraps `.format(...)`.
+
+Parts 1 and 3 stand on the two ends the object identity joined: the catalogue is built from the
+constant, and the call site executes the constant. Together they are what `is` asserted, reached
+through the only surface that can observe it.
+
+**They are also exactly as wide as `is` was, hole included.** Neither the source nor this reads the
+two ends against *each other*: a module holding two byte-identical constants, one named by the
+catalogue and the other executed at the call site, satisfies both. That is the source's shape and
+not a weakening introduced here -- measured: CPython folds two equal module-level string literals to
+one object, so `is` cannot separate the twins either. Closing it means comparing the two identifiers,
+which asserts more than the source does, so it lives in a pair of target-only cases beside the
+faithful translation rather than in its slot (rule 0). Raised by the review gate.
+
+**`vars(module)` includes private names; an ESM namespace does not.** Reading part 2 off the module
+namespace alone would fail a module-private constant that Python's `vars` would find -- **stricter**
+than the source, which rule 0 makes wrong in the same way as weaker. So the namespace's string values
+are unioned with the module-level `const NAME = <string literal>` declarations read off the source,
+and a constant that stops being exported is still found. Measured both ways.
+
+- **Rejected: assert value equality and note the gap in the ledger.** The ledger would then describe
+  coverage the suite does not have, over the one case whose whole subject is the difference between
+  a copy and the original.
+- **Rejected: give the queries an opaque wrapper object so identity becomes observable.** It buys the
+  assertion by changing the module under test into something the source does not have, and the
+  catalogue's texts are published in the report as strings.
+
+**What was measured.** Five mutations, each red for its own reason and for no other: the catalogue
+entry replaced by a **byte-identical** string literal turns this case red and no other -- the case
+the literal translation could not fail; the call site replaced by a byte-identical literal likewise;
+the entry's text edited so it drifts from the constant turns four cases red, this one among them; the
+constant made module-private leaves all 13 green, which is the `vars(module)` half being the source's
+width rather than the namespace's; and a byte-identical twin constant executed at the call site while
+the catalogue keeps naming the original leaves the eight ported cases green and turns only the
+target-only pair red, which is the hole being the source's and the repair being declared as one.
+
+**Status.** accepted
+
+**Source.** Measured 2026-08-28 on Node 22.17.0, TypeScript compiler API, vitest 4.1.11, against
+interlock `65f36c5`. Falsified by: JavaScript gaining an observable identity for primitive strings,
+which would make the source's assertion directly translatable; or this package building a catalogue
+some way other than a literal array of `[name, CONSTANT]` pairs, which the syntax read would have to
+follow.
 

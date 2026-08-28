@@ -53,15 +53,9 @@
 
 import { join } from "node:path";
 
-import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
 import { describe, expect, test } from "vitest";
 
-import {
-  completeInvocation,
-  ProviderUsage,
-  startInvocation,
-} from "../../src/control_plane/ai_invocation.js";
 import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
 import { effectiveRevisionId } from "../../src/control_plane/policy.js";
 import { MeasuredBaseline, measureAc9, V1_MEASURED_BASELINE } from "../../src/measurement/ac9.js";
@@ -109,6 +103,13 @@ import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { parametrize } from "../testkit/parametrize.js";
 import { patchSeam } from "../testkit/seams.js";
+import {
+  addIncident,
+  addInvocation,
+  addRun,
+  reportFixtureTemplate,
+  withWriter,
+} from "./report-fixture.js";
 import {
   parseMarkdown,
   parseReportJson,
@@ -161,19 +162,14 @@ const SECTION_6_HEADER_FACTS: readonly string[] = [
 /**
  * The source's `db` fixture, built once per file and copied per case.
  *
- * Every case that takes `db` gets the same rows written by the same writers at
- * the same fixed clock, so there is nothing per-case for the build to depend on
- * -- which is exactly the shape `suiteTemplate` exists for (`D-0025`). The copy
- * is the case's own writable file; nothing is shared at runtime.
+ * The template and the writers that fill it live in `report-fixture.ts`, a
+ * module the runner does not collect, because the query-catalogue belt builds a
+ * report over the same rows and cannot import them from this file without
+ * collecting the render belt's cases a second time.
  */
-const fixtureTemplate = suiteTemplate("production.sqlite3", (path) => {
-  createProductionControlPlane(path, { nowMs: T0 }).close();
-  withWriter(path, (cp) => {
-    addRun(cp, "run-1");
-    addIncident(cp, { incidentId: "inc-1", runId: "run-1", detectorVersion: "detector/1" });
-    addInvocation(cp, { invocationId: "inv-1", adapterVersion: "adapter/1", runId: "run-1" });
-  });
-});
+function productionDb(): string {
+  return reportFixtureTemplate.copyInto(caseRoot("render"));
+}
 
 /**
  * A migrated control plane with no rows, for the cases that need to write
@@ -186,90 +182,8 @@ const bareTemplate = suiteTemplate("bare.sqlite3", (path) => {
   createProductionControlPlane(path, { nowMs: T0 }).close();
 });
 
-function productionDb(): string {
-  return fixtureTemplate.copyInto(caseRoot("render"));
-}
-
 function bareDb(directory = caseRoot("render")): string {
   return bareTemplate.copyInto(directory, "production.sqlite3");
-}
-
-/**
- * An ordinary writable connection, deliberately separate from the harness's.
- *
- * The measurement handle cannot write, which is the point of it; every row these
- * tests need therefore arrives through a second connection that can.
- */
-function withWriter<T>(path: string, body: (connection: SqliteDatabase) => T): T {
-  const connection = new Database(path, { fileMustExist: true });
-  try {
-    return body(connection);
-  } finally {
-    connection.close();
-  }
-}
-
-function addRun(cp: SqliteDatabase, runId: string): void {
-  cp.pragma("foreign_keys = ON");
-  cp.prepare(
-    "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms) VALUES (?, 'completed', ?, ?)",
-  ).run(runId, PERIOD_START + 1_000, PERIOD_START + 2_000);
-}
-
-function addIncident(
-  cp: SqliteDatabase,
-  options: {
-    readonly incidentId: string;
-    readonly runId: string;
-    readonly detectorVersion: string;
-  },
-): void {
-  cp.prepare(
-    `
-        INSERT INTO incident (incident_id, run_id, session_id, fact_state,
-                              detector_version, dedup_key, created_at_ms,
-                              updated_at_ms)
-        VALUES (?, ?, NULL, 'stalled', ?, ?, ?, ?)
-        `,
-  ).run(
-    options.incidentId,
-    options.runId,
-    options.detectorVersion,
-    `dedup/${options.incidentId}`,
-    PERIOD_START + 1_500,
-    PERIOD_START + 1_500,
-  );
-}
-
-function addInvocation(
-  cp: SqliteDatabase,
-  options: {
-    readonly invocationId: string;
-    readonly adapterVersion: string;
-    readonly runId: string;
-  },
-): void {
-  startInvocation(cp, {
-    invocationId: options.invocationId,
-    provider: "anthropic",
-    model: "a-model",
-    adapterVersion: options.adapterVersion,
-    startedAtMs: PERIOD_START + 1_600,
-    incidentId: "inc-1",
-    runId: options.runId,
-    maxOutputTokens: 4_096,
-  });
-  completeInvocation(cp, {
-    invocationId: options.invocationId,
-    usage: ProviderUsage.reported({
-      adapterVersion: options.adapterVersion,
-      outputTokens: 512,
-      inputTokens: 2_048,
-      cacheReadTokens: 9_000,
-    }),
-    modelResponseCount: 3,
-    finishedAtMs: PERIOD_START + 1_900,
-  });
 }
 
 function reportOver(
