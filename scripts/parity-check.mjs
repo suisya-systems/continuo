@@ -94,6 +94,10 @@ const LEDGERS = [
   "parity/canary.synthetic-v1.ledger.json",
   "parity/canary.structural.ledger.json",
   "parity/canary.rehearsal.ledger.json",
+  // lane F -- secretary (gate item 8's rehearsal). Two files, and the smallest
+  // belt in the inventory; the D-range is `D-07xx` (D-0701).
+  "parity/secretary.behaviour.ledger.json",
+  "parity/secretary.structural.ledger.json",
 ];
 
 /**

@@ -883,6 +883,24 @@ export {
   WORKER_ESCALATION_EPISODES_QUERY,
 } from "./measurement/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
+/**
+ * The item 8 rehearsal (interlock Issue `#21`, interlock D-0022): the stub
+ * Secretary intake and its explicit queue boundary.
+ *
+ * Re-exported through `src/secretary/index.ts` rather than from `intake.ts`
+ * directly, because the barrel *is* the surface: it lists the four names of the
+ * boundary contract and omits the status vocabulary (`ACCEPTED`,
+ * `REFUSED_QUEUE_FULL`) and the item type that crosses the boundary, which the
+ * source keeps private. Naming the module here would quietly hand back what the
+ * barrel withheld.
+ *
+ * The package exports only `.` (D-0002), so this block is what makes the
+ * rehearsal reachable by an installed consumer at all -- and a throwaway
+ * (interlock D-0026) whose non-blocking claim cannot be inspected from outside
+ * is not a rehearsal anyone can audit. The boundary contract itself is written
+ * down in `docs/secretary-intake-boundary.md` (D-0701).
+ */
+export { IntakeQueue, IntakeReceipt, IntakeRefused, SecretaryIntake } from "./secretary/index.js";
 export {
   addArguments,
   addDoctorArguments,
