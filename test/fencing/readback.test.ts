@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 
+import { PyTypeError } from "../../src/fencing/pysemantics.js";
+
 import {
   allServersConnected,
   compareReadbacks,
@@ -289,5 +291,68 @@ describe("dict.get is presence, not truthiness or nullishness (target-only, D-02
     });
     expect(readback.mcpServers).toStrictEqual([["s", "connected"]]);
     expect(allServersConnected(readback)).toBe(true);
+  });
+});
+
+describe("a malformed mcp_servers cannot become a vacuous all-connected (target-only, D-0214)", () => {
+  test("a truthy non-iterable mcp_servers raises, as the source's `for` does (target-only)", () => {
+    // `for entry in payload.get("mcp_servers") or ():` raises `TypeError` on a
+    // truthy non-iterable. Coercing it to "no servers" instead is the one shape
+    // that turns this module's refusal OFF, and it does so silently -- see the
+    // case below for what that buys.
+    for (const bad of [1, "servers", true, { name: "s" }]) {
+      expect(
+        () =>
+          parseInitEvent({
+            type: "system",
+            subtype: "init",
+            permissionMode: "auto",
+            tools: [],
+            mcp_servers: bad,
+          }),
+        `mcp_servers: ${JSON.stringify(bad)}`,
+      ).toThrow(PyTypeError);
+    }
+    // ...and every FALSY value is still the empty tuple, which is the source's
+    // `or ()` and must not start raising.
+    for (const ok of [undefined, null, [], 0, ""]) {
+      const payload: Record<string, unknown> = {
+        type: "system",
+        subtype: "init",
+        permissionMode: "auto",
+        tools: [],
+      };
+      if (ok !== undefined) {
+        payload["mcp_servers"] = ok;
+      }
+      expect(
+        parseInitEvent(payload).mcpServers,
+        `mcp_servers: ${JSON.stringify(ok)}`,
+      ).toStrictEqual([]);
+    }
+  });
+
+  test("what the coercion would have bought: a vacuous all-connected (target-only)", () => {
+    // The consequence, asserted rather than described, because it is the reason
+    // the raise above is not pedantry. `all(...)` over an EMPTY list is `true`,
+    // so a readback whose `mcp_servers` could not be read would report every
+    // server connected -- and `requireConnected: true`, whose entire job is to
+    // refuse when a server is still `pending`, would compare the full tools
+    // snapshot and call the restart sound.
+    //
+    // Pinned on a hand-built readback, which is the only way to reach the state
+    // now that `parseInitEvent` refuses to produce it. That is the point: the
+    // vacuity is a property of `all([])` and cannot be fixed downstream, so the
+    // parser is the only place to stop it.
+    const emptyServers: InitReadback = {
+      sessionId: null,
+      permissionMode: "auto",
+      tools: ["Bash"],
+      mcpServers: [],
+    };
+    expect(allServersConnected(emptyServers)).toBe(true);
+    expect(() =>
+      compareReadbacks(emptyServers, emptyServers, { requireConnected: true }),
+    ).not.toThrow();
   });
 });

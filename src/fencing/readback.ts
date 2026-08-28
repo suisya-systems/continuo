@@ -38,7 +38,7 @@
  */
 
 import { pyRepr } from "./pyrepr.js";
-import { pyStr } from "./pysemantics.js";
+import { PyTypeError, pyStr, pyTruthy, pyTypeName } from "./pysemantics.js";
 
 /** `MCP_TOOL_PREFIX`. */
 export const MCP_TOOL_PREFIX = "mcp__";
@@ -145,10 +145,27 @@ export function parseInitEvent(payload: Record<string, unknown>): InitReadback {
 
   const servers: [string, string][] = [];
   const rawServers = payload["mcp_servers"];
-  // `payload.get("mcp_servers") or ()`: a falsy value (absent, `null`, `[]`)
-  // yields the empty tuple, and a non-iterable truthy value would raise in the
-  // source. Only an array can be walked here, which is the same set of
-  // payloads reaching the loop for every input the source's suite constructs.
+  // `for entry in payload.get("mcp_servers") or ():`
+  //
+  // A FALSY value -- absent, `null`, `[]` -- yields the empty tuple and the
+  // loop does not run. A TRUTHY non-iterable raises `TypeError` at the `for`,
+  // and that raise is load-bearing rather than incidental: skipping it leaves
+  // `mcpServers` empty, and `allServersConnected` on an empty list is `true`
+  // **vacuously** -- so `compareReadbacks(..., {requireConnected: true})` would
+  // accept a tools snapshot as fully connected on the strength of a field it
+  // could not read. This module's whole premise is that it refuses rather than
+  // returning a verdict it cannot support; an empty-list coercion here is the
+  // one shape that turns the refusal off.
+  //
+  // `PyTypeError` and not `ReadbackUnsound`, because the source raises
+  // `TypeError` at exactly this point and a caller catching `ReadbackUnsound`
+  // means "the readback is unsound", not "the payload was not a JSON document".
+  // Both are fail-closed; this one is also the source's. @see D-0017.
+  if (pyTruthy(rawServers) && !Array.isArray(rawServers)) {
+    throw new PyTypeError(
+      `mcp_servers is not iterable: got ${pyTypeName(rawServers)} (${pyRepr(rawServers)})`,
+    );
+  }
   if (Array.isArray(rawServers)) {
     for (const entry of rawServers) {
       if (isMapping(entry)) {
