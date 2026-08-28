@@ -4393,7 +4393,7 @@ parser's own tokens, and the integer coercion. The last two are worth naming:
   accepted; the target-only case originally used `1.5` alone, which the surviving half refuses, so
   it could not tell the two guards apart.
 
-**And five things the review gate found that the sweep could not.** A mutation sweep asks whether the
+**And seven things the review gate found that the sweep could not.** A mutation sweep asks whether the
 cases can see the behaviour the module *has*. It cannot ask whether that behaviour is the source's,
 and it cannot ask about a path no case takes. Three of the four are the first kind and were answered
 by reading Python; the fourth is the second kind and is the most serious defect this belt produced:
@@ -4437,6 +4437,28 @@ by reading Python; the fourth is the second kind and is the most serious defect 
   command line a ported case runs and a guard written without the exception would leave that case
   green for the parser's refusal instead of the window model's. `--flag=--literal` is the escape
   hatch for a value that really does begin with a dash, which is argparse's escape hatch too.
+- **`--version=x` printed the version and exited 0.** argparse refuses a value handed to a
+  zero-argument action, and dropping it silently reads to the operator as though the value was
+  understood. Matched, argparse's wording included.
+
+**One of the gate's findings was not adopted, and that is a decision rather than an omission.**
+Python's `int()` accepts **any Unicode decimal digit** -- `int("１２")` is `12`, and so is
+`int("१२")` -- so the source's parser takes a full-width timestamp and this one refuses it. The
+review asked for it to be decoded. It is refused instead, for three reasons that point the same way:
+
+- The value is an epoch millisecond **the report prints in its header**. Decoding `１２` produces a
+  document saying `12`, which the operator cannot get back by copying what they typed.
+- Decoding it correctly needs a Unicode digit-value table. NFKD folds the full-width forms and not
+  the Devanagari ones, so there is no normalization shortcut -- and a table written here is new code
+  with no source to underwrite it whose failure mode is a **silently wrong number** rather than an
+  error. That is exactly the class rule 11 names, and the wrong number is worse than the refusal.
+- The refusal is fail-visible and quotes what it got. On the Japanese console `D-0113` is about, an
+  IME left in full-width mode is the likely cause, and `--period-start-ms takes an integer, got
+  '１２'` is the message that fixes it.
+
+So `\d` in the coercion is ASCII on purpose. It is a divergence, it is recorded as one in
+`parity/measurement.cli.ledger.json`, and a target-only case pins it so that it stays deliberate
+rather than decaying into an accident nobody chose.
 
 **Alternatives.**
 

@@ -778,6 +778,47 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     expect(refusal.message).not.toContain("expects a value");
   });
 
+  test("target-only -- a value handed to the version flag is refused, not ignored", () => {
+    // argparse's own behaviour, and its own wording. Ignoring the value would
+    // make `--version=json` print the version and exit 0, which reads to the
+    // operator as though the value was understood.
+    const refused = captureStderr(() => topLevelCli.main(["--version=x"]));
+
+    expect(refused.code).toBe(2);
+    expect(refused.text).toContain("argument --version: ignored explicit argument 'x'");
+  });
+
+  test("target-only -- a non-ASCII decimal digit is refused, not decoded", () => {
+    // A DIVERGENCE, pinned so that it is deliberate rather than incidental
+    // (`D-0112`). Python's `int()` accepts any Unicode decimal digit: a
+    // full-width "12" is 12 there, and so is a Devanagari one. The value is an
+    // epoch millisecond the report prints in its header, so decoding one would
+    // produce a document the operator cannot reproduce from what they typed, and
+    // decoding correctly needs a digit-value table whose failure mode is a
+    // silently wrong number rather than an error.
+    //
+    // Written as escapes, not as characters: this repository's ASCII-output
+    // contract forbids a non-ASCII byte in this file, which is the same policy
+    // these digits are being refused under.
+    const path = db();
+
+    for (const spelling of ["\uFF11\uFF12", "\u0967\u0968", "1\uFF12"]) {
+      const refused = captureStderr(() =>
+        measurementCli.main([
+          "report",
+          "--db",
+          path,
+          "--period-start-ms",
+          spelling,
+          "--period-end-ms",
+          String(PERIOD_END),
+        ]),
+      );
+      expect(refused.code, spelling).toBe(2);
+      expect(refused.text).toContain(`--period-start-ms takes an integer, got '${spelling}'`);
+    }
+  });
+
   test("target-only -- a required flag that is absent is refused by name", () => {
     const errors = captureStderr(() => measurementCli.main(["report", "--period-start-ms", "1"]));
 

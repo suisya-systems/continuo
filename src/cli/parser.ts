@@ -146,7 +146,27 @@ function parseInteger(flag: string, text: string, parser: ArgumentParser): numbe
   // refused because the source's parser accepts it -- `int("1_0")` is 10 -- and
   // a port that refused a command line interlock runs would be wrong in the
   // direction that is hardest to notice: it only fails for the operator who
-  // spelled a long timestamp readably.
+  // spelled a long timestamp readably. Leading and trailing whitespace is
+  // accepted for the same reason: `int(" 12 ")` is 12.
+  //
+  // **`\d` here is ASCII, deliberately, and this is a divergence** (`D-0112`).
+  // Python's `int()` accepts any Unicode decimal digit: a full-width "12"
+  // (U+FF11 U+FF12) is 12 there, and so is a Devanagari one (U+0967 U+0968). So
+  // the source's parser takes a full-width timestamp and this one refuses it.
+  // Refused rather than decoded because the value is an epoch millisecond that
+  // the report prints in its header, and a full-width `--period-start-ms` would
+  // produce a document saying `12` that the operator cannot get back by copying
+  // what they typed. Decoding it correctly needs a Unicode digit-value table --
+  // NFKD folds the full-width forms and not the Devanagari ones -- and a table
+  // written here would be new code with no source to underwrite it, whose
+  // failure mode is a silently wrong number rather than an error (rule 11). The
+  // refusal is fail-visible and quotes what it got, which is the right answer on
+  // the Japanese console `D-0113` is about, where an IME left in full-width mode
+  // is the likely cause.
+  //
+  // The digits are named by code point rather than written here because this
+  // repository's own ASCII-output contract forbids a non-ASCII byte in this
+  // file -- which is the same policy, one layer down.
   if (!/^[+-]?\d(?:_?\d)*$/.test(bare)) {
     throw new UsageError(`${flag} takes an integer, got '${text}'`, parser);
   }
@@ -305,6 +325,13 @@ export class ArgumentParser {
         throw new UsageError(`unrecognized argument: ${flag}`, this);
       }
       if (option.kind === "version") {
+        if (inline !== undefined) {
+          // argparse's own wording for a value handed to a zero-argument action.
+          // Silently ignoring it would make `--version=json` print the version
+          // and exit 0, which reads to the operator as though the value was
+          // understood.
+          throw new UsageError(`argument ${flag}: ignored explicit argument '${inline}'`, this);
+        }
         throw new VersionRequested(`${option.version ?? ""}\n`);
       }
       const raw = inline ?? argv[index + 1];
