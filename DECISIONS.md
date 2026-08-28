@@ -80,6 +80,7 @@ spaces distinct.
 | D-0209 | `npm test` builds first, because the deny hook's dependencies come from `dist/` | accepted |
 | D-0210 | A JSON number's Python spelling is recorded on its container slot, never inside the value | accepted |
 | D-0211 | Every container rebuild carries the number record, and the sites are enumerated and pinned | accepted |
+| D-0212 | The rebuild-site enumeration is audited mechanically, and the one site that does not carry states a proof | accepted |
 
 ---
 
@@ -4012,3 +4013,145 @@ D-0028's four are.
 
 **Source.** Task `continuo-spike-schema-template`, 2026-08-28, after the PR 41 CI failure. Decision id
 allocated by the window; scope extension approved by the user through the window.
+
+---
+
+---
+
+## D-0212 — The rebuild-site enumeration is audited mechanically, and the one site that does not carry states a proof
+
+**Status.** accepted (2026-08-28)
+
+**Context.** `D-0211` closed six rebuild sites and then a seventh, one per review round, every one
+the same shape: a container rebuilt without the number record `D-0210` hangs on its slots. Six
+defects of one type, found one at a time, leaves a question the last fix cannot answer -- *is the
+class exhausted, or is the enumeration simply as far as anyone has read?* Each round had found its
+site by reading the previous round's list and asking what it missed, which is a method that cannot
+terminate: it can only ever find what a reader thinks to look for.
+
+So this entry did not read the list. It swept `src/fencing` mechanically for every construct that
+builds a container (`{...x}`, `[...x]`, `Object.fromEntries`, `Object.assign`, `.map`, `.filter`,
+`.sort`, `Array.from`), traced the three points where a spelling-bearing container can enter the
+subsystem at all -- `loadDocument` (`renderer.ts`), `FenceLedger.events` (`spawn.ts`) and
+`readFence` (`state.ts`), the only three `pyJsonLoads` call sites -- and classified every construct
+reachable from them.
+
+**Finding: no eighth defect, and two errors in the enumeration itself.**
+
+1. **The header of `src/fencing/pyjson.ts` named six branches and omitted `FenceLedger.append`.**
+   `D-0211`'s own body counts it as the seventh and its case comment calls it "the seventh branch
+   this decision enumerates", and it is byte-pinned. Only the normative comment -- the one the
+   header itself says is the enforcement -- was stale, because `append` was repaired in the last
+   commit of that lane and the paragraph above it was not re-read. Corrected here.
+
+2. **One rebuild branch had never been named at all: `pyIterate`'s array branch.** It returns
+   `[...value]`, which drops the index-keyed record exactly as every other rebuild does. Measured:
+   `pyJsonDumps` of the copy of `[1.0, 9007199254740993]` is `[1, 9007199254740992.0]`. CPython's
+   `json.dumps(list(x))` is `[1.0, 9007199254740993]` and cannot be otherwise, because there the
+   spelling lives in the VALUE and `list()` has nothing to lose. `pyIterate` is the transcription of
+   Python's iteration, so it is precisely the site where the port's container-side representation
+   parts company with Python's value-side one -- and it had been invisible for seven rounds because
+   it does not look like a rebuild. It looks like a loop.
+
+**Decision.** `pyIterate` keeps the drop, and the enumeration gains it with a proof rather than a
+carry. Both halves matter and they are separate claims.
+
+*Why it is not a defect today.* `pysemantics` is deliberately absent from the package surface
+(`src/index.ts` states this, with its reasons), so its consumers are exactly the seven call sites in
+this subsystem and that set is closed. Five end in `pyRepr`, `pyStr` or set membership; two are
+`pyDict`'s own, which read each spelling off `items[index]` -- the ORIGINAL element, never the copy
+-- because this exact drop is what `D-0211`'s sixth site was about. No result of any of the seven
+reaches `pyJsonDumps` or `pyTypeNameOf`, so no artefact's bytes and no persisted type name depend on
+the record `pyIterate` discards. This is the difference between `pyIterate` and `pyDict`, which
+`D-0211` had to repair even though `FencedSpawner` never reaches its pair branch: `Fence`,
+`fenceToJson` and `writeFence` ARE exported, and no call-site enumeration bounds a caller outside
+this repository.
+
+*Why carrying would be worse than not carrying.* `carryNumberSpellings` transfers an index-keyed
+record wholesale, and an index-keyed record does not survive REORDERING. `renderer.ts` sorts a
+`pyIterate` result (`pyIterate(allowed).map(pyStr).sort()`). Carrying there would hand element 0's
+spelling to whatever sorted into position 0 -- the stale-record trap `carryNumberSpellings` warns
+about, currently unreachable, and adding the carry is what would arm it. A carry is correct for a
+rebuild that preserves its slots, and `pyIterate` exists to hand callers an array they may rearrange.
+
+*What replaces the carry.* Three target-only cases, because a proof nothing checks is a sentence.
+The first MEASURES the drop, so a future carry is a deliberate change and not a silent one. The
+second and third pin the proof's two premises, and review moved both of them from checking a
+SPELLING to checking the PROPERTY -- which is the same lesson as the enumeration itself, one level
+down:
+
+- *The consumer set.* Counted per file, over the directory WALKED RECURSIVELY at run time rather
+  than over a list of file names, and over every REFERENCE to the identifier rather than over
+  occurrences of the text `pyIterate(` -- because `const it = pyIterate; it(v)` and
+  `xs.map(pyIterate)` are consumers that a call-spelling scan never sees, and a `src/fencing/helpers/`
+  that does not exist today is one directory away from a consumer a flat scan never reads. Comments
+  are stripped first, so a typo fix in prose cannot fire a case that would then be turned off rather
+  than read.
+- *The package surface.* Asserted by IDENTITY against the entry module's actual exported values, not
+  by grepping `src/index.ts` for a `from` string: a re-export through some other barrel, or under a
+  renamed binding, reaches a caller just as well and mentions nothing. Whatever route it takes it
+  arrives as the same function object. Collected one level THROUGH namespace objects, because
+  `export * as semantics from "./fencing/pysemantics.js"` puts one object on the surface and every
+  function behind it. The manifest's `exports` map is asserted WHOLE rather than by its keys, since a
+  new condition under the existing `"."` publishes a second target without adding a subpath.
+
+*What these two cases are, and are not.* They are TRIPWIRES on the premises, not a decision
+procedure for reachability. A source scan cannot be exhaustive -- `eval`, a dynamic `import()`, a
+build step that emits a new entry point, all pass it -- and an entry-point identity check sees the
+surface as it is built today. What they are for is making the premises LOUD: the realistic ways this
+proof stops holding are someone adding a call site or exporting the module, and both now turn a
+suite red rather than passing unnoticed. Stated here because the alternative reading -- that these
+cases prove unreachability -- is exactly the overstated-coverage failure `D-0211` was written about,
+and it would be an odd entry that repeated it while correcting it. Three review rounds, each naming
+a different escape route (an unlisted file, an aliased reference, a nested directory, a renamed
+re-export, a namespace re-export, an export condition), are the evidence for the modesty rather than
+against it: the guards got stronger each round and the class of escapes did not close.
+
+Each case was confirmed to fail, alone and for its stated reason, with its premise broken. Adding
+the carry fails the first and NOTHING ELSE, which is itself the corroboration that the drop is
+unobservable. Three vectors fail the second: a reference in a file the sweep had not named, an
+aliased reference carrying no call spelling, and a reference under a nested directory. Three fail
+the third: a barrel re-export under a new name, an `export * as` namespace re-export, and a
+`package.json` export target -- both a new subpath and a new condition under the existing one.
+
+**What this entry can and cannot claim.** It can claim the sweep was mechanical and its scope
+closed: `src/fencing` imports nothing outside itself and only `src/index.ts` re-exports it, and that
+re-export is pure, so no `pyJsonLoads` container can reach `control_plane` or `measurement` at all.
+It cannot claim there will never be a tenth branch -- it can only claim that the ninth was found by
+grep rather than by reading, and that the list it produced is falsifiable in the way the previous
+three were not.
+
+**An adjacent class this audit did NOT close, named so it is not mistaken for covered.** `pyRepr`
+never consults a spelling, at any call site. `D-0211` fixed the READ half for `pyTypeName` by adding
+`pyTypeNameOf(container, key)`; `pyRepr` has no such form. So a document-derived `1.0` reaching a
+refusal detail prints `1` where CPython prints `1.0` -- measured against CPython 3.12.3 at, among
+others, `allow entry not a string:` (`renderer.ts`), `forbidden_allow_regex entry ... is not a valid
+regex:` (`renderer.ts`) and `persisted rule field ... must be a non-empty string, got` (`state.ts`),
+all of which are persisted in ledger refusal details. At several of them the container IS in scope,
+so the form exists to fix it. This is the same family as the `pyStr` residue already disclosed in
+`pysemantics.ts` and in this lane's parity ledger, and it is a READ-site gap rather than a
+rebuild-site one, so it is out of this entry's scope and is recorded rather than repaired in
+passing. **One correction to that disclosure belongs here**, because this audit falsified it: the
+`pyStr` note calls its residue "REDUCIBLE ... since the document's spelling is recoverable". At
+`renderer.ts`'s permission-mode call site it is NOT recoverable, because `pyIterate` has already
+dropped the record before `pyStr` is reached. Threading a container and a key through the six call
+sites, which is what that note proposes, would not close that one.
+
+**Alternatives.**
+
+- **Carry in `pyIterate` for uniformity (rejected).** The reordering hazard above; and a carry no
+  consumer reads is an unpinnable claim, which is the thing `D-0211` spent three rounds learning to
+  distrust.
+- **Say nothing, since nothing is broken (rejected).** The header states a CLOSED list ("the sites
+  in this port are"). A closed list that omits a site is false, and `D-0211`'s own finding is that a
+  normative record which overstates its coverage is worse than one that states a narrow claim,
+  because the reader who checks it stops looking. Two of the three previous undercounts were found
+  by someone reading that paragraph and trusting it.
+- **A lint rule forbidding uncarried rebuilds (rejected, again).** `D-0211` rejected the runtime
+  form; the static form fails for the same reason plus one more. Most rebuilds legitimately have
+  nothing to carry, so the rule needs the enumeration it was meant to replace -- and it would flag
+  `pyIterate`, where not carrying is the correct answer.
+
+**Falsified by.** `pysemantics` reaching the package surface, or an eighth `pyIterate` call site
+whose result reaches a serialiser or a type name. Both are pinned, so either falsification is a red
+suite rather than a silent one.

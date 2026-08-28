@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -10,7 +10,8 @@ import {
   runBattery,
 } from "../../src/fencing/battery.js";
 import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
-import { pyDict, pyTypeName, pyTypeNameOf } from "../../src/fencing/pysemantics.js";
+import * as semantics from "../../src/fencing/pysemantics.js";
+import { pyDict, pyIterate, pyTypeName, pyTypeNameOf } from "../../src/fencing/pysemantics.js";
 import {
   type FenceContext,
   loadDocument,
@@ -27,6 +28,7 @@ import {
   type SpawnOutcome,
   spawnSeams,
 } from "../../src/fencing/spawn.js";
+import * as api from "../../src/index.js";
 import { patchSeam } from "../testkit/seams.js";
 import {
   fenceCaseRoot,
@@ -831,6 +833,164 @@ describe("a document's number spelling reaches settings.local.json (target-only,
     expect(readFileSync(clocked.path, "utf8")).toBe(
       '{"at": 0.0, "big": 9007199254740993, "event": "candidate"}\n',
     );
+  });
+});
+
+/**
+ * The two halves of the one rebuild branch that deliberately does NOT carry.
+ *
+ * D-0211 enumerated the rebuild sites and made every one of them carry the
+ * number record. D-0212 swept `src/fencing` mechanically instead of reading
+ * that enumeration, and found one more: `pyIterate`'s array branch returns
+ * `[...value]`, which drops the index-keyed record like any other rebuild.
+ *
+ * It is left uncarried ON PURPOSE, so what stands in for the carry is a proof,
+ * and a proof that nothing checks is a sentence. These are the checks. The
+ * first measures the drop, so a future carry is a deliberate change rather than
+ * a silent one; the second and third are the proof's two premises, each of
+ * which fails loudly when it stops holding.
+ */
+describe("pyIterate's array branch drops the record, provably harmlessly (target-only, D-0212)", () => {
+  test("the drop is real, and would be a divergence if a result were ever dumped", () => {
+    // The measurement behind the enumeration entry, kept executable so the
+    // entry cannot quietly become false. CPython's `json.dumps(list(x))` is
+    // `[1.0, 9007199254740993]` -- there the spelling lives in the VALUE, so
+    // `list()` cannot lose it. Here it lives on the container, so a copy starts
+    // empty. Confirmed against CPython 3.12.3.
+    const source = pyJsonLoads("[1.0, 9007199254740993]") as unknown[];
+    expect(pyJsonDumps(source)).toBe("[1.0, 9007199254740993]");
+    expect(pyJsonDumps(pyIterate(source))).toBe("[1, 9007199254740992.0]");
+  });
+
+  test("no consumer of a pyIterate result can reach a serialiser: the call sites are these", () => {
+    // The first premise. `pyIterate` is safe because its consumer set is small
+    // enough to have been checked one by one, not because copying is harmless
+    // -- the case above shows it is not. So the SET is what has to hold, and a
+    // new call site has to be classified before it can be added.
+    //
+    // The DIRECTORY is read rather than a list of file names being checked,
+    // and that is the difference between a check and a decoration. An
+    // allowlist only ever sees the files somebody thought to name, so a call
+    // site added to a file that is not on it -- or to a file that did not
+    // exist when the list was written -- passes silently, which is the exact
+    // failure mode this case exists to catch, reproduced inside the case.
+    //
+    // Every REFERENCE to the identifier is counted, not every occurrence of the
+    // text `pyIterate(`. The two differ exactly where it matters: `const it =
+    // pyIterate; it(value)` and `values.map(pyIterate)` are consumers that the
+    // call spelling never sees, and a consumer this case cannot see is a
+    // consumer nobody classified. Counting references makes both of them move a
+    // number.
+    //
+    // Comments are stripped first. They mention the name freely -- this
+    // subsystem explains itself at length -- and a case that fired when someone
+    // fixed a typo in a comment would be turned off rather than read.
+    //
+    // Counted per file rather than per line so that moving code within a file
+    // does not fire this, and so that what fires is the thing that matters: a
+    // reference nobody has traced to its consumer.
+    // Walked RECURSIVELY. The directory is flat today, and a proof that holds
+    // only while it stays flat is one `src/fencing/helpers/` away from being
+    // false with nothing going red.
+    const root = join(import.meta.dirname, "..", "..", "src", "fencing");
+    const counts: [string, number][] = [];
+    const walk = (dir: string, prefix: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+      )) {
+        const name = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+        if (entry.isDirectory()) {
+          walk(join(dir, entry.name), name);
+          continue;
+        }
+        // `.mjs` too: the deny hook is JavaScript and is shipped from this
+        // directory, so a reference there would be as real as any other.
+        if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".mjs")) {
+          continue;
+        }
+        const code = readFileSync(join(dir, entry.name), "utf8")
+          .replace(/\/\*[\s\S]*?\*\//g, " ")
+          .replace(/\/\/[^\n]*/g, " ");
+        const references = (code.match(/\bpyIterate\b/g) ?? []).length;
+        if (references > 0) {
+          counts.push([name, references]);
+        }
+      }
+    };
+    walk(root, "");
+    counts.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    // `renderer.ts` 5 = one import specifier + four calls: the permission-mode
+    // list, `forbidden_allow_exact`, `forbidden_allow_regex` and a hook group,
+    // all ending in `pyRepr`, `pyStr` or set membership. `state.ts` 2 = one
+    // import specifier + the persisted rule list, whose elements become
+    // all-string `FenceRule`s. `pysemantics.ts` 3 = the declaration + `pyDict`'s
+    // own two, which read each spelling off `items[index]` -- the ORIGINAL
+    // element, never the copy -- which is exactly this drop, already handled.
+    //
+    // A new FILE referencing the name adds a row here, and a new reference in
+    // one of these three changes its count; either way the enumeration in
+    // `pyjson.ts`'s header has to be re-read before the suite goes green.
+    expect(counts).toStrictEqual([
+      ["pysemantics.ts", 3],
+      ["renderer.ts", 5],
+      ["state.ts", 2],
+    ]);
+  });
+
+  test("pysemantics is not on the package surface, so those call sites are all of them", () => {
+    // The second premise, and the one that separates `pyIterate` from `pyDict`.
+    // `pyDict` had to be repaired by D-0211 even though `FencedSpawner` never
+    // reaches its pair branch, because `Fence`, `fenceToJson` and `writeFence`
+    // ARE exported -- so a caller outside this repository can reach it and the
+    // call-site enumeration above would not bound anything.
+    //
+    // `pysemantics` is deliberately absent from the package surface
+    // (`src/index.ts` says so, with its reasons). Export it, and the proof
+    // above stops being a proof on the same day -- so the absence is asserted
+    // here rather than left as a property of a file nobody diffs against this
+    // one.
+    //
+    // Asserted by IDENTITY against the entry module's actual exports, not by
+    // grepping `src/index.ts` for a `from` string. A grep answers "is this
+    // module named here", and the premise needs "can a caller outside this
+    // repository reach these functions" -- which a re-export through some other
+    // barrel, or a renamed binding, satisfies without the name ever appearing.
+    // Comparing the exported VALUES catches every spelling of a re-export,
+    // because whatever route it takes it arrives as the same function object.
+    //
+    // Collected THROUGH namespace objects, because `export * as semantics from
+    // "./fencing/pysemantics.js"` puts one object on the surface and every
+    // function behind it -- and a scan of the top level alone sees only the
+    // object. One level of nesting is the whole of what an entry module can
+    // produce this way.
+    const surface = new Set<unknown>();
+    for (const value of Object.values(api)) {
+      surface.add(value);
+      if (typeof value === "object" && value !== null) {
+        for (const nested of Object.values(value as Record<string, unknown>)) {
+          surface.add(nested);
+        }
+      }
+    }
+    for (const [name, value] of Object.entries(semantics)) {
+      expect(
+        surface.has(value),
+        `the package entry point exposes pysemantics.${name}; D-0212's proof for pyIterate assumed it could not`,
+      ).toBe(false);
+    }
+    // The other route to the same reachability: `package.json` pointing at the
+    // module directly, which needs no line in `src/index.ts` at all. The whole
+    // map is asserted rather than its keys, because a new CONDITION under the
+    // existing `"."` -- or a repointed `"./package.json"` -- publishes a second
+    // target without adding a subpath. The package deliberately publishes one
+    // entry point and its manifest.
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+    ) as { exports: unknown };
+    expect(manifest.exports).toStrictEqual({
+      ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+      "./package.json": "./package.json",
+    });
   });
 });
 
