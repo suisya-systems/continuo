@@ -55,6 +55,8 @@ spaces distinct.
 | D-0025 | An expensive, identical fixture is built once per test file and copied per case | accepted |
 | D-0026 | A gate relay targets the stage the gate is about to enter | accepted |
 | D-0027 | A converted control-plane fixture opens the template copy through the public entry point | accepted |
+| D-0028 | The spike-schema template stops short of the cases whose subject is creation | accepted |
+| D-0029 | The remaining two spike-schema files convert whole, and the CI cap is not the fix | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -3815,6 +3817,204 @@ colour).
 
 **Falsified by.** interlock adopting the same widening, or the block rendering being replaced by one
 with no delimiter a value can spell.
+
+## D-0028 -- The spike-schema template stops short of the cases whose subject is creation
+
+**Context.** D-0027 converted the nine control_plane files that build a *production* control plane
+and left `spike-schema.test.ts` explicitly out of scope: it is the one file in the lane that uses the
+spike `createControlPlane`, so it needed a template of its own rather than a tenth copy of that
+recipe. This is that template.
+
+The file qualifies more cleanly than any of the nine did. `createControlPlane` takes a path and
+nothing else -- no clock, no `migrationsDir`, no options at all -- so D-0027's first three properties
+("one create call, every case on `T0`, no override") are not merely satisfied here, they are
+unfalsifiable: every one of the 50 fixture calls in the file was already asking for a byte-identical
+database. What is left to judge is only D-0027's fourth property, the one about a template handing
+out a database that exists.
+
+**Decision.** 46 of the 50 fixture call sites take a copy of one `suiteTemplate`, opened with
+`openControlPlane`. Four keep calling `createControlPlane`, through a second fixture
+(`createdControlPlane()`) that exists to be named at those call sites.
+
+The four are not the ones D-0027's rule would have caught. No case in this file asserts that the
+database is *absent* while also taking the fixture -- the three that assert absence (`an absent
+database is refused and not created`, `the ddl is refused if the marking is removed`, `a creation
+that cannot connect leaves no file behind`) build their own paths and never touched the fixture to
+begin with. The four that
+must keep creating split into two kinds, and only the first kind is what D-0027 meant by "creation
+itself is what it tests":
+
+- **`createControlPlane` is the act under test.** `creating over an existing path is refused` and
+  `a creation that loses a race does not delete the winners database`. Both call `createControlPlane`
+  as the statement being asserted about, and both need the database it refuses over to be one a
+  creation put there. A copy would still make them pass, which is the problem: they would be passing
+  about a situation their prose does not describe.
+- **The assertion is one `openControlPlane` already makes.** `a created database is stamped so it can
+  be recognised` asserts `application_id` and `user_version`; `the expected fingerprint is derived
+  from the ddl not pinned beside it` asserts `schemaFingerprint(cp) == expectedSchemaFingerprint()`.
+  `openControlPlane` verifies all three on the way in. Over a copy neither case could fail on its own
+  assertion -- the fixture would have refused first -- so each would be reduced to a second report of
+  a failure every other case in the file was already reporting.
+
+That second kind is new. D-0027 did not meet it because `openProductionControlPlane` verifies a
+*ledger head*, which no production case asserts directly; `openControlPlane` verifies the *stamps and
+the schema shape*, which two spike cases assert exactly. It is the shape section 10 of
+`docs/test-translation-conventions.md` is about, arriving from the fixture rather than from the
+subject: green would still have been green, and red would still have been red, but the case would no
+longer have been the thing deciding which.
+
+Measured rather than argued. With the `application_id` stamp deleted from `createControlPlane`,
+`a created database is stamped so it can be recognised` fails on its own assertion
+(`expected +0 to be 1229736757`) rather than on the fixture -- which is the property the exclusion
+buys, and it is only observable while the case still creates its own database.
+
+**Decision, second half.** The template is opened with `openControlPlane` for D-0027's reason
+unchanged: a template that built something that is not this schema becomes a typed refusal at the
+first case rather than a case running against the wrong database. Both entry points end at
+`configureConnection`, so the handle a converted case gets carries the same two pragmas it always
+did.
+
+**Measurement.** N=30 on this worker's Linux box, on the pinned prebuilt better-sqlite3 (D-0009):
+**97.5ms to create a spike control plane, 2.70ms to copy one and open it, 0.33ms to copy it alone.**
+
+The 97.5ms is worth recording because it is not where one would look for it. It is not the DDL: the
+same schema against an in-memory database is 0.5ms, and the same creation with `synchronous = OFF` is
+2.68ms. It is fsyncs -- the DDL runs at SQLite's own default of `synchronous = FULL`, before
+`configureConnection` is reached -- so what the template removes is one durable commit per case, of a
+file no case needs to be durable. That is also why `openControlPlane` is affordable here despite
+doing strictly more work than `createControlPlane`: it opens four connections and builds the DDL
+twice in memory to verify, and all of that together is 2.4ms against one fsync's 95ms.
+
+**Alternatives.**
+
+- **Convert all 50 (rejected).** It is faster by four creations, roughly 0.4s, and it costs the two
+  pins above. The four exclusions are 8% of the file's fixture calls and the whole of its evidence
+  that creation stamps what it claims to stamp.
+- **Keep one fixture and pass a flag (rejected).** `controlPlane({ create: true })` reads as a
+  performance switch at the call site. A separately named `createdControlPlane()` makes the call site
+  say which property it depends on, which is the thing a later reader has to get right.
+- **Give the two `openControlPlane`-verifies-it cases a `rawConnection` over the copy (rejected).**
+  It would restore their ability to fail without a creation, but by asserting against a connection
+  with none of the module's discipline -- so a stamp written by `createControlPlane` and a stamp
+  written by nothing would look the same to them if the template were ever built another way.
+
+**Consequences.**
+
+- 46 fixture call sites are served by one template build; four creations remain, plus the eleven
+  cases that build their own paths, or no database at all, and never used the fixture. The file's case count is unchanged at 65,
+  and the suite's at 1363.
+- The file's measured test time falls from **7.18s to 1.38s** on an idle box. The pair is
+  load-sensitive -- re-measured while the other lanes were running, the same comparison is 6.0s to
+  2.2s -- so the ratio is worth less than the per-case figures above; both halves of each pair were
+  measured together.
+- No ledger changes: nothing about what is ported changed, only what the fixture copies.
+- The template's lazy build now runs inside whichever case copies first, which under a shuffled order
+  is not a fixed case. That is sound here only because no case in this file patches a `schemaSeams`
+  entry before taking its fixture -- every seam case takes its control plane first and patches
+  afterwards -- so the template is never built through a replaced seam. Recorded at the declaration,
+  because a new case that patched first would build the template through the patch and the failure
+  would appear in a different case.
+
+**Falsifier.** A spike-schema case that needs a database which does not exist yet, or that patches a
+`schemaSeams` entry before taking its fixture. Either puts that case back on `createdControlPlane()`
+rather than bending the template to cover it.
+
+**Status.** accepted
+
+**Source.** Task `continuo-spike-schema-template`, 2026-08-28. Decision id allocated by the window;
+scope and exclusion from continuo issue 37.
+
+
+## D-0029 -- The remaining two spike-schema files convert whole, and the CI cap is not the fix
+
+**Context.** D-0028 migrated `spike-schema.test.ts` on the strength of issue 37's sentence that it
+"uses the spike `createControlPlane` and would want a template of its own". That sentence turned out
+to undercount. `spike-schema.test.ts` is not the only file building a *spike* control plane -- it is
+one of three. `lease.test.ts` (40 fixture calls) and `outbox.test.ts` (50) build one exactly the same
+way, and were invisible to issue 37's survey because that survey went looking for
+`createProductionControlPlane` call sites and these files do not have any.
+
+What forced the question was CI rather than the survey. PR 41 failed on the `windows-latest, node 22`
+cell with a per-test timeout of 60s inside `lease.test.ts`, on a run where that one file took **401
+seconds for 61 cases**. The failure is not a defect in D-0028's migration, and the evidence is
+positive rather than an absence: the immediately preceding run of `main` alone failed the same way,
+with the timeout landing on **`spike-schema.test.ts` itself** -- the file D-0028 had not yet
+converted. The slow Windows cell blows the per-test cap on whichever control_plane file it happens to
+be grinding through, which is the pace problem issue 37 records under "The Windows CI cells set the
+pace". D-0028 moved that cell from 20m04s to 12m56s and relocated the timeout to the next-heaviest
+file rather than removing it.
+
+**Decision.** Both remaining files convert, and **every one of their 90 fixture call sites converts** --
+there are no exclusions in either file. That is not an oversight of D-0028's two exclusion kinds; it
+is that neither kind is present:
+
+- **Nothing here has creation as its subject.** Each file contains exactly one `createControlPlane`
+  call, in its own fixture. No case calls it as the act under test, so D-0028's first kind cannot
+  arise.
+- **Nothing here asserts what `openControlPlane` verifies.** Neither file mentions `application_id`,
+  `user_version`, `SCHEMA_REVISION` or a schema fingerprint anywhere, so D-0028's second kind -- the
+  assertion the opener would make vacuous -- has nothing to catch.
+- **Nothing here patches `schemaSeams`.** D-0028's falsifier is a case that replaces a connect seam
+  before taking its fixture, because the template's lazy build runs inside whichever case copies
+  first. The three `patchSeam` calls across the two files replace `leaseSeams.uuid4Hex`,
+  `outboxSeams.uuid4Hex` and `destinationSeams.uuid4Hex`. None is on the path the template builds
+  through.
+
+**The one assertion that looks like a disqualifier and is not.** `outbox.test.ts` contains
+`expect(existsSync(dbPath)).toBe(false)`, which is exactly the shape D-0027's fourth property
+excludes -- a case asserting the database is absent. Read in place, it sits on the line after that
+case's own `unlinkSync(dbPath)`: it asserts *the deletion the case just performed*, on the way to
+showing that the destination's dedup evidence survives the database being destroyed. It is an
+assertion about absence, not an assertion that nothing was created, and the two are opposite in what
+they require of a fixture. A grep for the exclusion rule finds it; reading it does not. Recorded
+because the rule is applied by search, and this is the false positive that search produces.
+
+**Measurement.** Per case, unchanged from D-0028 and re-confirmed: 97.5ms to create a spike control
+plane against 2.70ms to copy and open one. Per file, on this Linux box: `lease.test.ts` **4.77s to
+1.11s**, `outbox.test.ts` **6.39s to 1.80s**. The Linux figures understate what the change is for --
+the cost removed is one fsync per case, and it is the Windows cells that pay for fsyncs.
+
+Verified the same way D-0028 was, by making the template's build throw and reading which cases go
+red: exactly **40 of 61** in `lease.test.ts` and exactly **50 of 76** in `outbox.test.ts`, matching
+the fixture-call counts exactly. Wall-clock improvement alone would not have shown which call sites
+actually moved.
+
+**Alternatives.**
+
+- **Re-run CI and hope (rejected).** It might have passed -- an earlier run of this same branch did.
+  But the failure is a threshold effect on a cell that is already the slowest thing in the matrix, so
+  a green re-run buys one PR and hands the same coin-flip to the next. Issue 37 states the position
+  this decision is following: "The cap is not the fix -- the testkit template is."
+- **Raise the per-test timeout above 60s (rejected).** It converts a failing signal into a slower
+  passing one, and the number it would have to clear is unknown, because 401 seconds for 61 cases is
+  a symptom whose magnitude depends on how loaded the runner is that morning.
+- **Do the two files as a separate task (rejected by the window, and correctly).** It would have left
+  PR 41 red, or green only by a re-run, while the change that makes it green sat in a queue behind it.
+- **Put each file's seed rows in its template (rejected, D-0027's rule kept).** `lease.test.ts` seeds
+  one run and `outbox.test.ts` a run and a lease. Those stay per-case, so all three spike files'
+  template declarations are the same four lines and can be compared by eye.
+
+**Consequences.**
+
+- All three spike-schema files are now on the template: 46/50, 40/40 and 50/50 fixture call sites, for
+  136 of 140. The four exceptions are D-0028's, and all four are in `spike-schema.test.ts`.
+- Case counts are unchanged file by file -- 65, 61, 76 -- and `control_plane` stays at 605.
+- No ledger changes. Nothing about what is ported changed, only what the fixture copies.
+- The scope of PR 41 grew after review. The migration is the same recipe applied twice more with no
+  exclusions, and the review that matters is the exclusion judgement, which is recorded above in full
+  rather than left to the diff.
+
+**Falsifier.** A case in either file that comes to need a database which does not exist yet, that
+asserts a stamp or fingerprint `openControlPlane` already checks, or that patches a `schemaSeams`
+entry before taking its fixture. Any of the three puts that case back on `createControlPlane`, the way
+D-0028's four are.
+
+**Status.** accepted
+
+**Source.** Task `continuo-spike-schema-template`, 2026-08-28, after the PR 41 CI failure. Decision id
+allocated by the window; scope extension approved by the user through the window.
+
+---
 
 ---
 
