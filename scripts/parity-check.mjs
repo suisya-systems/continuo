@@ -94,6 +94,10 @@ const LEDGERS = [
   "parity/canary.synthetic-v1.ledger.json",
   "parity/canary.structural.ledger.json",
   "parity/canary.rehearsal.ledger.json",
+  // lane E -- session. Lettered `E` rather than `D` because the canary belt
+  // above took `D` first: the three belts started together and appended here
+  // concurrently, and a shared letter would make two blocks read as one.
+  "parity/session.provider-contract.ledger.json",
   // lane F -- secretary (gate item 8's rehearsal). Two files, and the smallest
   // belt in the inventory; the D-range is `D-07xx` (D-0701).
   "parity/secretary.behaviour.ledger.json",
