@@ -2456,6 +2456,37 @@ function helpText(): string {
  * a hard error: the controller composes this command line, so an option it does
  * not recognise means the two have drifted.
  */
+/**
+ * One CLI integer, parsed the way `argparse(type=int)` parses it.
+ *
+ * The same class of defect the review gate found twice elsewhere in this belt
+ * (the suite seed, and an armed anchor's occurrence index), swept here rather
+ * than left for a third round to find one at a time. `argparse` with `type=int`
+ * rejects the whole argument if any of it is not a whole number;
+ * `Number.parseInt` accepts a prefix (`"12x"` -> 12) and yields `NaN` for
+ * nonsense, and `NaN` then flows into the clock, the message count or the
+ * generation without ever comparing unequal to anything.
+ *
+ * These options are composed by the controller rather than typed by a person,
+ * so a malformed one is a harness bug -- which is exactly why it must be loud:
+ * a silently truncated `--clock-base-ms` or `--suite-seed` corrupts the injected
+ * clock or the per-case digest while every assertion still passes, and the
+ * identical-trace property the battery checks would be quietly untrue.
+ *
+ * A leading `-` is accepted because `--clock-offset-ms` is genuinely negative
+ * for a backward skew (design 7).
+ */
+function requireInteger(option: string, raw: string): number {
+  if (!/^-?\d+$/.test(raw)) {
+    throw new ContractViolation(`${option} expects a whole number, got ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new ContractViolation(`${option} is past the exactly-representable range: ${raw}`);
+  }
+  return parsed;
+}
+
 function parseArguments(argv: readonly string[]): ParsedArguments {
   const parsed: ParsedArguments = {
     role: "",
@@ -2507,25 +2538,25 @@ function parseArguments(argv: readonly string[]): ParsedArguments {
         parsed.caseId = next();
         break;
       case "--suite-seed":
-        parsed.suiteSeed = Number.parseInt(next(), 10);
+        parsed.suiteSeed = requireInteger(option, next());
         break;
       case "--armed":
         parsed.armed = next();
         break;
       case "--clock-base-ms":
-        parsed.clockBaseMs = Number.parseInt(next(), 10);
+        parsed.clockBaseMs = requireInteger(option, next());
         break;
       case "--clock-offset-ms":
-        parsed.clockOffsetMs = Number.parseInt(next(), 10);
+        parsed.clockOffsetMs = requireInteger(option, next());
         break;
       case "--restart-generation":
-        parsed.restartGeneration = Number.parseInt(next(), 10);
+        parsed.restartGeneration = requireInteger(option, next());
         break;
       case "--control-fd":
-        parsed.controlFd = Number.parseInt(next(), 10);
+        parsed.controlFd = requireInteger(option, next());
         break;
       case "--event-fd":
-        parsed.eventFd = Number.parseInt(next(), 10);
+        parsed.eventFd = requireInteger(option, next());
         break;
       case "--resource":
         parsed.resource = next();
@@ -2540,13 +2571,13 @@ function parseArguments(argv: readonly string[]): ParsedArguments {
         parsed.workdir = next();
         break;
       case "--ttl-ms":
-        parsed.ttlMs = Number.parseInt(next(), 10);
+        parsed.ttlMs = requireInteger(option, next());
         break;
       case "--messages":
-        parsed.messages = Number.parseInt(next(), 10);
+        parsed.messages = requireInteger(option, next());
         break;
       case "--manifest-version":
-        parsed.manifestVersion = Number.parseInt(next(), 10);
+        parsed.manifestVersion = requireInteger(option, next());
         break;
       case "--behaviour": {
         const behaviour = next();
@@ -2579,7 +2610,7 @@ function parseArguments(argv: readonly string[]): ParsedArguments {
         parsed.incidentDedupKey = next();
         break;
       case "--incident-repeats":
-        parsed.incidentRepeats = Number.parseInt(next(), 10);
+        parsed.incidentRepeats = requireInteger(option, next());
         break;
       case "--incident-collapse": {
         const rule = next();
@@ -2590,13 +2621,13 @@ function parseArguments(argv: readonly string[]): ParsedArguments {
         break;
       }
       case "--incident-renotify-window-ms":
-        parsed.incidentRenotifyWindowMs = Number.parseInt(next(), 10);
+        parsed.incidentRenotifyWindowMs = requireInteger(option, next());
         break;
       case "--incident-reconcile-interval-ms":
-        parsed.incidentReconcileIntervalMs = Number.parseInt(next(), 10);
+        parsed.incidentReconcileIntervalMs = requireInteger(option, next());
         break;
       case "--unavailable-attempts":
-        parsed.unavailableAttempts = Number.parseInt(next(), 10);
+        parsed.unavailableAttempts = requireInteger(option, next());
         break;
       default:
         throw new ContractViolation(`unknown option ${JSON.stringify(option)}`);

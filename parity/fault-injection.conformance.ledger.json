@@ -54,6 +54,12 @@
         "to": "`ts.createSourceFile` over `adapter.driverSourcePath`",
         "why": "The adapter exposes its own source path rather than the scan importing the module and asking where it came from -- the driver is an executable entry point, and importing it to find its file is a heavier side effect than reading a path the adapter already knows.",
         "affects": "case 27"
+      },
+      {
+        "from": "`argparse` with `type=int` on every numeric driver option",
+        "to": "a single `requireInteger(option, raw)` in the driver's hand-rolled parser, applied to all 13 numeric options",
+        "why": "SWEPT AS A CLASS rather than one at a time. The review gate found this same shape twice in successive rounds -- once on the suite seed (`policy.suiteSeed`) and once on an armed anchor's occurrence index (`ArmedAnchor.parse`) -- and both were the same underlying fact: Python's `int` and argparse's `type=int` reject the whole argument if any of it is not a whole number, while `Number.parseInt` accepts a PREFIX (`\"12x\"` -> 12) and yields `NaN` for nonsense, which then compares unequal to nothing and flows on. Rather than wait for a third round to surface the third instance, every numeric option in the driver's CLI was moved onto one strict parser. These options are composed by the controller rather than typed by a person, which is exactly why silence is the wrong failure mode: a truncated `--clock-base-ms` or `--suite-seed` corrupts the injected clock or the per-case digest while every assertion still passes, and the identical-trace property the battery checks would be quietly untrue. A leading `-` is accepted because `--clock-offset-ms` is genuinely negative for a backward skew (design 7). Verified by driving the real driver with `--ttl-ms 30000x`, which now refuses by name.",
+        "affects": "case 30 (the driver CLI) and, through the clock, every case that spawns a process"
       }
     ],
     "target_only_tests": {
