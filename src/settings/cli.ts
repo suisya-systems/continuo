@@ -1,23 +1,38 @@
 /**
- * The settings generator's command line.
+ * The settings generator's command line, and the two subtrees it mounts.
  *
- * Two parsers, because interlock has two: `generator.build_parser()` is the
+ * Two shapes, because interlock has two: `generator.build_parser()` is the
  * standalone module CLI (`claude-org-runtime-settings`), and
  * `claude_org_runtime.cli.build_parser()` is the unified entry point whose
- * `settings generate` / `settings show` subcommands attach the same arguments.
- * Six of the 106 ported cases go through the first and five through the second,
- * so both exist here rather than one standing in for the other.
+ * `settings generate` / `settings show` and `sandbox doctor` subcommands attach
+ * the same arguments. Six of the 106 ported cases go through the first and five
+ * through the second, so both exist here rather than one standing in for the
+ * other.
+ *
+ * **Where the unified entry point lives changed with `D-0030`.** It used to be
+ * `buildRuntimeParser()` here -- a second unified parser, prog
+ * `claude-org-runtime`, reachable from no bin, beside the `continuo` one in
+ * `src/cli.ts`. There is now one, in `src/cli.ts`, and this module contributes
+ * to it through {@link addSettingsSubparsers} and {@link addSandboxSubparsers}:
+ * the subtree's own module owns its flags and the entry point only mounts them,
+ * which is the same shape `measurement/cli.ts` is mounted with.
  *
  * **Scope, stated rather than implied.** interlock's unified parser carries
  * `settings`, `sandbox doctor` and `state migrate`. The first two are here; the
- * state migrator belongs to another lane and is not. `buildRuntimeParser`
- * therefore declares two subcommands where interlock declares three, and a
- * future PR adds the third next to them. That is a smaller parser than
- * interlock's, not a different one -- no ported case reaches the missing
- * subcommand, and the parity ledger records which cases each parser carries.
+ * state migrator belongs to another lane and is not. The unified parser
+ * therefore mounts two of this module's three subcommands where interlock
+ * mounts three, and a future PR adds the third next to them. That is a smaller
+ * parser than interlock's, not a different one -- no ported case reaches the
+ * missing subcommand, and the parity ledger records which cases each parser
+ * carries.
  */
 
-import { type ArgparseStreams, ArgumentParser, type Namespace } from "./argparse.js";
+import {
+  type ArgparseStreams,
+  ArgumentParser,
+  type Namespace,
+  type Subparsers,
+} from "../cli/parser.js";
 import {
   generatorSeams,
   ROLE_KIND_TO_SCHEMA_KEY,
@@ -157,14 +172,17 @@ export function buildParser(): ArgumentParser {
   return parser;
 }
 
-/** `claude_org_runtime.cli.build_parser`, restricted to `settings`. */
-export function buildRuntimeParser(): ArgumentParser {
-  const parser = new ArgumentParser(
-    "claude-org-runtime",
-    "claude-org runtime: fencing, control plane, measurement harness, " +
-      "settings generator, state-schema migrate.",
-  );
-  const sub = parser.addSubparsers("command");
+/**
+ * `claude_org_runtime.cli.build_parser`'s `settings` subtree, mounted on a
+ * caller's subcommand table.
+ *
+ * A function over a table rather than a parser of its own (`D-0030`): the
+ * unified CLI lives in `src/cli.ts` and mounts this without knowing a flag of
+ * it, which is the shape that keeps the two from drifting. Before the
+ * consolidation this module built a whole second unified parser
+ * (`buildRuntimeParser`, prog `claude-org-runtime`) that no bin reached.
+ */
+export function addSettingsSubparsers(sub: Subparsers): void {
   const settings = sub.addParser("settings", "Worker settings.local.json generator");
   const settingsSub = settings.addSubparsers("cmd");
   const generate = settingsSub.addParser(
@@ -179,7 +197,17 @@ export function buildRuntimeParser(): ArgumentParser {
   );
   addShowArguments(show);
   show.setDefaults({ func: (args: Namespace) => runShow(args as unknown as SettingsArgs) });
+}
 
+/**
+ * `claude_org_runtime.cli.build_parser`'s `sandbox` subtree.
+ *
+ * Mounted here rather than declared a second time in `src/cli.ts`, because the
+ * flags are a security-relevant surface: `--settings`, `--no-merge-scopes` and
+ * `--no-probe-bwrap` each decide what the preflight actually checks, and a
+ * second declaration of them is a second thing to keep in step.
+ */
+export function addSandboxSubparsers(sub: Subparsers): void {
   const sandbox = sub.addParser("sandbox", "Sandbox preflight for a rendered settings.local.json");
   const sandboxSub = sandbox.addSubparsers("cmd");
   const doctor = sandboxSub.addParser(
@@ -188,7 +216,6 @@ export function buildRuntimeParser(): ArgumentParser {
   );
   addDoctorArguments(doctor);
   doctor.setDefaults({ func: (args: Namespace) => runDoctor(args as unknown as DoctorArgs) });
-  return parser;
 }
 
 /** `sandbox_doctor.add_arguments`: attach `sandbox doctor` flags to an existing parser. */

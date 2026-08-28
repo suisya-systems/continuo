@@ -58,7 +58,13 @@
  */
 
 import { readFileSync } from "node:fs";
-import { ArgumentParser, dispatch, type Namespace, type Subparsers } from "../cli/parser.js";
+import {
+  type ArgparseStreams,
+  ArgumentParser,
+  dispatch,
+  type Namespace,
+  type Subparsers,
+} from "../cli/parser.js";
 import { loadCorpus } from "./fixtures.js";
 import {
   FINGERPRINT_CONTENT,
@@ -348,36 +354,94 @@ export function run(args: ReportArgs): number {
   return 0;
 }
 
-/** Mount the `report` flags. Every per-report declaration is explicit. */
+/**
+ * Mount the `report` flags. Every per-report declaration is explicit.
+ *
+ * `refuseRepeat` on every one of them is `D-0112`'s deliberate divergence from
+ * argparse, carried through the consolidation rather than dropped: argparse
+ * keeps the last value silently, and a report produced from
+ * `--format json --format markdown` carries no sign of which half won. It is
+ * declared per flag because the parser is otherwise measured against CPython
+ * and the settings and sandbox surfaces must keep answering as CPython does.
+ */
 export function addArguments(parser: ArgumentParser): void {
-  parser.addArgument({ flag: "--db", required: true, help: DB_HELP });
   parser.addArgument({
-    flag: "--period-start-ms",
+    optionStrings: ["--db"],
+    dest: "db",
+    required: true,
+    refuseRepeat: true,
+    metavar: "DB",
+    help: DB_HELP,
+  });
+  parser.addArgument({
+    optionStrings: ["--period-start-ms"],
+    dest: "periodStartMs",
     type: "int",
     required: true,
+    refuseRepeat: true,
+    metavar: "PERIOD_START_MS",
     help: PERIOD_START_HELP,
   });
   parser.addArgument({
-    flag: "--period-end-ms",
+    optionStrings: ["--period-end-ms"],
+    dest: "periodEndMs",
     type: "int",
     required: true,
+    refuseRepeat: true,
+    metavar: "PERIOD_END_MS",
     help: PERIOD_END_HELP,
   });
-  parser.addArgument({ flag: "--now-ms", type: "int", help: NOW_HELP });
   parser.addArgument({
-    flag: "--fingerprint",
+    optionStrings: ["--now-ms"],
+    dest: "nowMs",
+    type: "int",
+    refuseRepeat: true,
+    metavar: "NOW_MS",
+    help: NOW_HELP,
+  });
+  parser.addArgument({
+    optionStrings: ["--fingerprint"],
+    dest: "fingerprint",
     choices: FINGERPRINT_MODES,
-    fallback: FINGERPRINT_CONTENT,
+    defaultValue: FINGERPRINT_CONTENT,
+    refuseRepeat: true,
     help: FINGERPRINT_HELP,
   });
-  parser.addArgument({ flag: "--grace-ms", type: "int", help: GRACE_HELP });
-  parser.addArgument({ flag: "--v1-shadow-run-ids", help: SHADOW_HELP });
-  parser.addArgument({ flag: "--fixture-corpus", help: CORPUS_HELP });
-  parser.addArgument({ flag: "--fixture-commit", help: COMMIT_HELP });
   parser.addArgument({
-    flag: "--format",
+    optionStrings: ["--grace-ms"],
+    dest: "graceMs",
+    type: "int",
+    refuseRepeat: true,
+    metavar: "GRACE_MS",
+    help: GRACE_HELP,
+  });
+  parser.addArgument({
+    optionStrings: ["--v1-shadow-run-ids"],
+    dest: "v1ShadowRunIds",
+    refuseRepeat: true,
+    metavar: "V1_SHADOW_RUN_IDS",
+    help: SHADOW_HELP,
+  });
+  parser.addArgument({
+    optionStrings: ["--fixture-corpus"],
+    dest: "fixtureCorpus",
+    refuseRepeat: true,
+    metavar: "FIXTURE_CORPUS",
+    help: CORPUS_HELP,
+  });
+  parser.addArgument({
+    optionStrings: ["--fixture-commit"],
+    dest: "fixtureCommit",
+    refuseRepeat: true,
+    metavar: "FIXTURE_COMMIT",
+    help: COMMIT_HELP,
+  });
+  parser.addArgument({
+    optionStrings: ["--format"],
+    dest: "format",
     choices: RENDERINGS,
-    fallback: MARKDOWN,
+    defaultValue: MARKDOWN,
+    refuseRepeat: true,
     help: FORMAT_HELP,
   });
   parser.setDefaults({ func: run as (values: Namespace) => number });
@@ -385,32 +449,46 @@ export function addArguments(parser: ArgumentParser): void {
 
 /** Mount `report` under the caller's `measure` subcommand table. */
 export function addSubparsers(sub: Subparsers): void {
-  const reportParser = sub.addParser("report", {
-    help:
-      "Measure one report period against a production control plane and " +
+  const reportParser = sub.addParser(
+    "report",
+    "Measure one report period against a production control plane and " +
       "render it. Read-only by capability; states measurements only.",
-  });
+  );
   addArguments(reportParser);
 }
 
 /** The standalone parser, for driving this command without the top-level CLI. */
 export function buildParser(): ArgumentParser {
-  const parser = new ArgumentParser({
-    prog: "continuo measure",
-    description:
-      "Measurement harness for the Interlock control plane " +
+  const parser = new ArgumentParser(
+    "continuo measure",
+    "Measurement harness for the Interlock control plane " +
       "(docs/measurement-harness.md). Read-only by capability.",
-  });
-  addSubparsers(parser.addSubparsers());
+  );
+  addSubparsers(parser.addSubparsers("cmd"));
   return parser;
+}
+
+/**
+ * `sys.stdout` / `sys.stderr` for this module's own parser.
+ *
+ * Both sides go through {@link cliSeams} rather than to `process.stdout`
+ * directly, so that the ported cases read one stream whichever entry point they
+ * drove -- the source's `capsys` sees both without being told which one wrote.
+ * `stderr` is not on the seam because no ported case reads it as this module's
+ * output; a refusal is the parser's, and the parser is handed the stream.
+ */
+function defaultStreams(): ArgparseStreams {
+  return {
+    stdout: (text: string): void => {
+      cliSeams.write(text);
+    },
+    stderr: (text: string): void => {
+      process.stderr.write(text);
+    },
+  };
 }
 
 /** Parse `argv` and run the named command. */
 export function main(argv: readonly string[]): number {
-  return dispatch(buildParser(), argv, {
-    out: (text) => cliSeams.write(text),
-    err: (text) => {
-      process.stderr.write(text);
-    },
-  });
+  return dispatch(buildParser(), argv, defaultStreams());
 }

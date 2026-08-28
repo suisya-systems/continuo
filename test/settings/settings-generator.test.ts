@@ -2,12 +2,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, onTestFinished, test } from "vitest";
-
+import { ArgparseExit, type Namespace } from "../../src/cli/parser.js";
+import { buildParser as buildContinuoParser } from "../../src/cli.js";
 import { pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
 import { expanduser, osJoin, osRealpath, osSep } from "../../src/fencing/pypath.js";
 import { PyKeyError, PyValueError } from "../../src/fencing/pysemantics.js";
-import { ArgparseExit, type Namespace } from "../../src/settings/argparse.js";
-import { buildRuntimeParser, defaultStreams, main } from "../../src/settings/cli.js";
+import { defaultStreams, main } from "../../src/settings/cli.js";
 import {
   bundledSchemaPath,
   detectWsl,
@@ -191,7 +191,7 @@ function captureStderr(body: () => number): [rc: number, err: string] {
 
 /** `parser.parse_args(argv)` on the unified runtime parser, then `args.func`. */
 function runViaRuntimeCli(argv: readonly string[]): number {
-  const parser = buildRuntimeParser();
+  const parser = buildContinuoParser();
   const args = parser.parseArgs(argv, defaultStreams());
   const func = args.func as (a: Namespace) => number;
   return func(args);
@@ -2723,7 +2723,7 @@ describe("the two in-pass repairs (target-only, D-0213)", () => {
     // The other half of "the separator is never removed": with a `nargs=PARSER`
     // positional it is handed to the choice check verbatim. Measured:
     // `claude-org-runtime -- settings` is `invalid choice: '--'`.
-    const parser = buildRuntimeParser();
+    const parser = buildContinuoParser();
     const error = expectRaises(ArgparseExit, () =>
       captureStderr(() => {
         parser.parseArgs(["--", "settings", "show"], defaultStreams());
@@ -2792,7 +2792,7 @@ describe("the round-2 repairs (target-only, D-0213)", () => {
     ["after the subcommand", ["settings", "generate", "--bogus", ...BASE]],
   ] as const) {
     test(`an unrecognized option ${label} is reported, not ignored (target-only)`, () => {
-      const parser = buildRuntimeParser();
+      const parser = buildContinuoParser();
       const error = expectRaises(ArgparseExit, () =>
         captureStderr(() => {
           parser.parseArgs([...argv], defaultStreams());
