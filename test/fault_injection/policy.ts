@@ -42,9 +42,57 @@ export const PROFILE_ENV = "S9_PROFILE";
  */
 export const DEFAULT_SUITE_SEED = 20_260_820;
 
+/**
+ * Largest suite seed accepted. Keeps the value exactly representable.
+ *
+ * The same bound `vitest.config.ts` puts on `CONTINUO_TEST_SEED`, and for the
+ * same reason.
+ */
+const SUITE_SEED_MAX = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The run's suite seed, refused rather than repaired if it is not exactly what
+ * was asked for.
+ *
+ * The source is `int(raw) if raw else DEFAULT`, and Python's `int` is both
+ * strict (it raises on trailing characters) and arbitrary-precision (it never
+ * rounds). `Number.parseInt` is neither: it returns 123 for `"123x"` and rounds
+ * 9007199254740993 to ...992. Either behaviour SILENTLY CHANGES THE SEED, and
+ * the seed is the whole of the reproducibility claim -- a re-run with the seed
+ * printed in the `S9-REPRO` line would then derive different per-case streams
+ * from the ones that failed, and two distinct requested seeds could collapse
+ * onto one. Design 4.4 rests on exactly this not happening.
+ *
+ * So the whole value is validated and a value that cannot be represented
+ * exactly is refused with the reason. This is marginally STRICTER than the
+ * source on inputs Python's `int` would accept and this does not -- surrounding
+ * whitespace, digit underscores, a value past 2**53 -- and that is the
+ * deliberate trade: refusing loudly is a message the operator can act on, while
+ * a quietly rounded seed is a re-run that cannot be compared and says nothing
+ * about why. It also matches the bound this repository already puts on its own
+ * runner seed (`vitest.config.ts`), so the two seeds a run carries are governed
+ * by one rule rather than two. Raised by the review gate on this change.
+ */
 export function suiteSeed(): number {
   const raw = process.env[SUITE_SEED_ENV];
-  return raw ? Number.parseInt(raw, 10) : DEFAULT_SUITE_SEED;
+  if (raw === undefined || raw === "") {
+    return DEFAULT_SUITE_SEED;
+  }
+  if (!/^\d+$/.test(raw)) {
+    throw new ContractViolation(
+      `${SUITE_SEED_ENV} must be a non-negative integer, got ${JSON.stringify(raw)}; a seed that ` +
+        "is silently repaired is a re-run that cannot be compared (design 4.4)",
+    );
+  }
+  const seed = Number(raw);
+  if (!Number.isSafeInteger(seed) || seed > SUITE_SEED_MAX) {
+    throw new ContractViolation(
+      `${SUITE_SEED_ENV} must be a non-negative integer <= ${SUITE_SEED_MAX}, got ${raw}; past ` +
+        "that bound the value cannot be held exactly and the per-case digest would be derived " +
+        "from a different number than the one that was asked for (design 4.4)",
+    );
+  }
+  return seed;
 }
 
 export function profileName(): string {

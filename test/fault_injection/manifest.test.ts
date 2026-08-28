@@ -10,6 +10,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import process from "node:process";
 
 import { describe, expect, test } from "vitest";
 
@@ -27,7 +28,14 @@ import {
   validateCase,
   validateManifest,
 } from "./manifest.js";
-import { installSuiteBudget, manifest as policyManifest, profile } from "./policy.js";
+import {
+  DEFAULT_SUITE_SEED,
+  installSuiteBudget,
+  manifest as policyManifest,
+  profile,
+  SUITE_SEED_ENV,
+  suiteSeed,
+} from "./policy.js";
 
 const BUDGET_PROFILE = profile(policyManifest());
 
@@ -344,6 +352,43 @@ describe("the seed", () => {
         others.filter((title) => pattern.test(title)),
         `${caseId}'s pattern also selects another case`,
       ).toEqual([]);
+    }
+  });
+
+  test("target-only -- a suite seed that cannot be held exactly is refused, not repaired", () => {
+    // TARGET-ONLY. The source needs no counterpart: Python's `int` raises on
+    // trailing characters and never rounds, so `int(raw)` already has both
+    // properties for free. `Number.parseInt` has neither -- it returns 123 for
+    // "123x" and rounds 9007199254740993 down -- and either would SILENTLY
+    // CHANGE THE SEED.
+    //
+    // That is the one thing the reproducibility claim cannot survive: the seed
+    // is printed in the `S9-REPRO` line so a failure can be replayed, and a seed
+    // that is quietly repaired makes the replay derive different per-case
+    // streams from the ones that failed. Two distinct requested seeds could also
+    // collapse onto one. Pinned here because the failure is invisible at the
+    // call site -- everything still runs, and green.
+    //
+    // Raised by the review gate on this change.
+    const previous = process.env[SUITE_SEED_ENV];
+    try {
+      for (const bad of ["123x", " 42", "42 ", "1_000", "-1", "0x10", "9007199254740993", "1e3"]) {
+        process.env[SUITE_SEED_ENV] = bad;
+        expectRefusal(() => suiteSeed(), ContractViolation, SUITE_SEED_ENV);
+      }
+      // A value that IS exactly representable is returned unchanged.
+      process.env[SUITE_SEED_ENV] = "20260820";
+      expect(suiteSeed()).toBe(20_260_820);
+      // And an unset seed still falls back to the fixed default, which is what
+      // keeps an unconfigured run reproducible rather than random.
+      delete process.env[SUITE_SEED_ENV];
+      expect(suiteSeed()).toBe(DEFAULT_SUITE_SEED);
+    } finally {
+      if (previous === undefined) {
+        delete process.env[SUITE_SEED_ENV];
+      } else {
+        process.env[SUITE_SEED_ENV] = previous;
+      }
     }
   });
 
