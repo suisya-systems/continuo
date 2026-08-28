@@ -1,0 +1,10 @@
+tests/attention/test_dedup.py::test_load_missing_returns_empty
+tests/attention/test_dedup.py::test_round_trip
+tests/attention/test_dedup.py::test_load_recovers_from_broken_json
+tests/attention/test_dedup.py::test_load_recovers_from_non_object
+tests/attention/test_dedup.py::test_load_partial_shape
+tests/attention/test_dedup.py::test_event_dedup_blocks_second_call
+tests/attention/test_dedup.py::test_pending_cooldown_blocks_within_window
+tests/attention/test_dedup.py::test_pending_cooldown_clears_after_window
+tests/attention/test_dedup.py::test_pending_garbled_timestamp_allows_notify
+tests/attention/test_dedup.py::test_save_is_atomic_replaces_existing

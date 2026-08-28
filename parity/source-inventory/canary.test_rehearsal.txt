@@ -1,0 +1,1 @@
+tests/canary/test_rehearsal.py::test_the_rehearsed_canary_and_rollback

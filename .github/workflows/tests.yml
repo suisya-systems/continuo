@@ -194,10 +194,12 @@ jobs:
         run: npm run attw
 
   parity:
-    # The parity ledger's enforcement (docs/test-translation-conventions.md).
-    # A ledger nobody checks is a spreadsheet: this job is what makes a missing
+    # The parity ledger's enforcement, and the source inventory's
+    # (docs/test-translation-conventions.md). A ledger nobody checks is a
+    # spreadsheet, and so is an inventory: this job is what makes a missing
     # mapping, a duplicated one, an unaccounted target test, an unapproved skip,
-    # or a shrinking case count turn the merge gate red.
+    # a shrinking case count, or an inventory that no longer reconciles with
+    # interlock's suite baseline turn the merge gate red.
     #
     # Platform-independent, so one cell is enough (same reasoning as `lint`).
     # It runs `vitest list`, not the suite, so it is cheap and does not
@@ -220,6 +222,13 @@ jobs:
 
       - name: Parity ledger check
         run: npm run parity
+
+      - name: Source inventory check
+        # The other half, and the one no ledger reaches: `parity` verifies the
+        # inventories a ledger points at, so a subsystem nobody has started
+        # porting is checked by nothing until the belt that ports it opens the
+        # files -- months later, with the breaking diff long gone.
+        run: npm run inventory
 
   ci-gate:
     # THE REQUIRED CHECK. The default-branch ruleset references this literal
@@ -261,7 +270,7 @@ jobs:
             exit 1
           fi
           if [ "${PARITY_RESULT}" != "success" ]; then
-            echo "::error::The parity ledger check did not pass."
+            echo "::error::The parity ledger or source inventory check did not pass."
             exit 1
           fi
 

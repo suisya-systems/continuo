@@ -58,6 +58,7 @@ spaces distinct.
 | D-0028 | The spike-schema template stops short of the cases whose subject is creation | accepted |
 | D-0029 | The remaining two spike-schema files convert whole, and the CI cap is not the fix | accepted |
 | D-0030 | One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it | accepted |
+| D-0031 | The source inventory is complete and unconditional; porting intent is recorded separately | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -5387,5 +5388,87 @@ path the template's lazy build runs through. Any of the three puts that case bac
 
 **Source.** Task `continuo-provenance-latency-template`, 2026-08-28, after the PR 50 CI observation.
 Measured on Node 22.17.0, better-sqlite3 13.0.3, vitest 4.1.11. Decision id allocated by the window.
+---
+
+## D-0031 -- The source inventory is complete and unconditional; porting intent is recorded separately
+
+**Context.** `parity/source-inventory/` held 1,317 node ids: `control_plane`, `measurement`,
+`fencing` and `settings` -- the four subsystems interlock#74's acceptance criteria name, and the four
+belts had ported. Interlock's suite at `65f36c5` is 2,199. The 877 collected node ids that were not in
+it -- and the five modules pytest never collects at all -- were recorded nowhere: not as ported,
+not as deferred, not as declined. "Is anything missing?" had no
+answer, because the only list that existed was the list of things someone had already chosen to
+look at.
+
+Completing the inventory raises a question the four-subsystem version never had to answer. An
+inventory is *evidence that a case exists*. A porting plan is a *commitment*. They were the same
+list while the list was exactly the ported subsystems, and they cannot stay the same list once it is
+complete -- `tests/gate_record/` makes structural assertions about **interlock's own
+`docs/gate-record.md`**, a document continuo does not have; `tests/scrub/` verifies a Python
+developer tool that runs over interlock's captured state. Writing those into a shared list makes a
+porting decision by filing a snapshot.
+
+The tempting resolutions both fail:
+
+- **Inventory only what will be ported.** Then the denominator moves with every decision, the
+  reconciliation against 2,199 is impossible, and the completeness question is answered "nothing we
+  chose to look at."
+- **Inventory everything and read the inventory as the plan.** Then filing evidence commits the
+  project to porting 2,194 cases, including tests about a document it does not own.
+
+**Decision.** Three layers, with the boundaries enforced rather than described.
+
+1. **The inventory files hold node ids and nothing else.** All 2,194, unconditionally, in collection
+   order. No comments, no notes, no blank lines -- `scripts/parity-check.mjs` reads every non-empty
+   line as a node id, so a `# deferred` line there is a source case that does not exist. The
+   inventory answers one question, "what does pytest collect", and it answers it for the whole
+   suite.
+2. **`parity/source-inventory.manifest.json` holds everything *about* the inventory**: the interlock
+   revision, the collection command and the Python and pytest versions behind it, the per-file and
+   per-subsystem counts, and the reconciliation with the suite baseline. It also names the five
+   modules a module-level `pytest.importorskip` stops pytest from collecting -- which is the only
+   place they *can* be named, since they yield no node id.
+3. **`parity/source-inventory.belts.md` holds porting intent**, per subsystem, as `in-scope`,
+   `candidate-lane`, `retarget`, `decision-pending` or `not-porting`, with a reason. Every status
+   there is a proposal. Confirming one is a human gate, and D-range allocation
+   (see "How to use this file") is part of the same gate.
+
+`scripts/source-inventory-check.mjs` enforces the layering: the shape rule keeps layer 1 free of
+prose, the reconciliation rule keeps layer 2 honest about 2,194 + 5 = 2,199, and the
+`unclassified` rule requires every subsystem in layer 2 to be named in layer 3. It checks that a
+status was **given**, never which one -- a check that enforced today's answer would make changing it
+a fight with CI, and the answers are exactly what is meant to change.
+
+**Why the count of record is `pytest --collect-only`, not a scan of the source.** A static count of
+`def test_` lines is wrong in both directions at once. It misses every `parametrize` expansion, and
+it counts the ~250 test functions in the five quarantined modules that pytest never collects -- so
+it is simultaneously too low and too high, by amounts nothing in the resulting file discloses. The
+whole suite is collected in **one** run and split by path afterwards, because a single-directory
+pytest run and a whole-tree one differ in conftest hooks and import order and can collect different
+sets, silently.
+
+**The reconciliation, and why 2,190 is not the denominator.** pytest reports a module-level skip
+separately from the collected count: at `65f36c5` collection yields **2,194 node ids** and five
+modules skip at import, and the suite run reports **2,190 passed, 8 skipped, 1 xfailed** -- 2,199
+outcomes. 2,194 + 5 = 2,199. Five of the eight skips are those collection-time ones; the other three
+have node ids and are in the inventory. **2,190 is a result breakdown, not a denominator**, and
+quoting it as one understates coverage by nine cases while looking like a total.
+
+**What this decision does not do.** It does not decide what continuo ports. Every status in
+`source-inventory.belts.md` today was written by reading what each subsystem's tests drive and what
+interlock's `PORTING_LEDGER.md` already classed the file as, and each is offered as a proposal with
+its evidence attached.
+
+**Falsifier.** If a belt starts and finds that its subsystem's proposed status was wrong in a way
+that cost real work -- a `not-porting` subsystem it turns out continuo needs, or a `candidate-lane`
+that cannot be ported at all -- the proposals were written too confidently and the document should
+retreat to `decision-pending` plus evidence, rather than offering a status. Equally, if the three
+layers are found being kept in sync by hand rather than by the check, the check is not covering
+enough of the boundary.
+
+**Source.** Task `continuo-remaining-inventory`, 2026-08-28. Codex design review of the same date
+raised the layering as its Blocker and the evidence/commitment separation as a Major; both are
+adopted here. Measured against interlock `65f36c5` on Python 3.12.3 with pytest 9.1.1. Decision id
+allocated by the window.
 
 ---

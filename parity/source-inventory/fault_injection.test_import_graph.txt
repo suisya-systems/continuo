@@ -1,0 +1,3 @@
+tests/fault_injection/test_import_graph.py::test_only_the_adapter_imports_the_implementation_under_test
+tests/fault_injection/test_import_graph.py::test_the_adapter_exists_and_does_import_it
+tests/fault_injection/test_import_graph.py::test_the_contract_and_controller_name_no_spike_symbol
