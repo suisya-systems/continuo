@@ -4075,10 +4075,10 @@ parser's own tokens, and the integer coercion. The last two are worth naming:
   accepted; the target-only case originally used `1.5` alone, which the surviving half refuses, so
   it could not tell the two guards apart.
 
-**And two things the review gate found that the sweep could not.** A mutation sweep asks whether the
-cases can see the behaviour the module *has*; it cannot ask whether that behaviour is the source's.
-Both of these were parity questions, and both were answered by reading Python rather than by running
-anything here:
+**And four things the review gate found that the sweep could not.** A mutation sweep asks whether the
+cases can see the behaviour the module *has*. It cannot ask whether that behaviour is the source's,
+and it cannot ask about a path no case takes. Three of the four are the first kind and were answered
+by reading Python; the fourth is the second kind and is the most serious defect this belt produced:
 
 - **`int()` accepts underscores between digits.** `int("1_700_000_000_000")` is `1700000000000`, so
   the source's parser takes `--period-start-ms 1_700_000_000_000` and the first version of this one
@@ -4092,6 +4092,23 @@ anything here:
   the parser that refused and the error line from the root, so the two named different commands and
   the operator was sent to read the flags of the one that has none of them. `UsageError` now carries
   the `prog` of the parser that raised it.
+- **`--flag=value` is argparse's other spelling of `--flag value`,** and this parser took only one of
+  them. The two are the same command line; a port that accepts one is a port that refuses command
+  lines interlock runs. Split at the **first** `=`, because the value on the right of it may hold
+  more, and pinned with a commit string that carries one.
+- **The entry-point guard did not resolve `process.argv[1]`,** and that is the path every installed
+  user takes. npm publishes a `bin` on Unix as a symlink -- `node_modules/.bin/continuo` -> the real
+  `dist/cli.js` -- and Node sets `argv[1]` to the link while resolving `import.meta.url` to the real
+  file, so the guard was false and **the process exited 0 having run no command and printed
+  nothing.** `node dist/cli.js` worked throughout, which is why every test and every smoke run in
+  this belt was green over it. Both sides now go through `realpathSync`.
+
+  The last one is worth reading twice as a *measurement* failure rather than a coding one. It is the
+  shape conventions section 10 describes -- a property no case was watching -- and the sweep could
+  not have found it, because the sweep only mutates lines the cases already reach. It also resisted
+  the first mutation written for it: resolving only the module's side of the comparison is
+  **equivalent** to the fix in a checkout with no symlinks in its path, so that mutation survived and
+  said nothing. The mutation that reproduces the defect is the one that leaves `argv[1]` unresolved.
 
 **Alternatives.**
 

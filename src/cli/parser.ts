@@ -294,27 +294,33 @@ export class ArgumentParser {
       if (!token.startsWith("--")) {
         break;
       }
-      const option = byFlag.get(token);
+      // `--db=value` is argparse's other spelling of `--db value`, and the two
+      // are the same command line. Split at the FIRST `=` only: a path or a
+      // description on the right of it may hold more.
+      const equals = token.indexOf("=");
+      const flag = equals === -1 ? token : token.slice(0, equals);
+      const inline = equals === -1 ? undefined : token.slice(equals + 1);
+      const option = byFlag.get(flag);
       if (option === undefined) {
-        throw new UsageError(`unrecognized argument: ${token}`, this);
+        throw new UsageError(`unrecognized argument: ${flag}`, this);
       }
       if (option.kind === "version") {
         throw new VersionRequested(`${option.version ?? ""}\n`);
       }
-      const raw = argv[index + 1];
+      const raw = inline ?? argv[index + 1];
       if (raw === undefined) {
-        throw new UsageError(`${token} expects a value`, this);
+        throw new UsageError(`${flag} expects a value`, this);
       }
-      if (seen.has(token)) {
+      if (seen.has(flag)) {
         // argparse silently keeps the last one. Refused here instead: a command
         // line that names one flag twice with two values is one whose author
         // believes something about it that is not true, and the report it would
         // produce carries no sign of which half won.
-        throw new UsageError(`${token} is given more than once`, this);
+        throw new UsageError(`${flag} is given more than once`, this);
       }
-      seen.add(token);
-      namespace[destinationOf(token)] = coerce(option, raw, this);
-      index += 2;
+      seen.add(flag);
+      namespace[destinationOf(flag)] = coerce(option, raw, this);
+      index += inline === undefined ? 2 : 1;
     }
 
     for (const option of this.options) {

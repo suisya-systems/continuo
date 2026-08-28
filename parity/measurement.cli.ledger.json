@@ -69,7 +69,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 13,
+      "count": 15,
       "ids": [
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the help walk reaches the mounted subcommand's own flags",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- --help after a subcommand is the subcommand's help",
@@ -79,14 +79,26 @@
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- an integer flag accepts Python's underscore spelling",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a nested command's refusal names the nested command",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- an unreadable shadow file refuses rather than throwing raw",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a flag may be written --flag=value",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the CLI runs when it is invoked through a bin symlink",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a required flag that is absent is refused by name",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a value outside a flag's choices is refused by name",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a flag given twice is refused rather than silently last-wins",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- half a corpus reference is refused for being half",
         "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the top-level CLI reports the build's version"
       ],
-      "why": "Thirteen, all of them about `src/cli/parser.ts`, `src/cli.ts` and the one repair in `src/measurement/cli.ts` -- code this port had to write because Node has no argparse, and which therefore carries no warrant from interlock (rule 11). Five of the thirteen exist because something could not see the property it named. Two came from the mutation sweep: `the help walk reaches the mounted subcommand's own flags` closes the hazard that both cp932 cases are a loop over helpStrings and a walk returning nothing makes both vacuously green, and `half a corpus reference is refused for being half` closes an inherited blind spot -- the ported case (and its source) point --fixture-corpus at a directory that does not exist, so loadCorpus refuses with a FixtureRefusal, which IS a ControlPlaneRefusal, and the case stays green with the half-reference guard deleted (measured). Three came from the review gate: Python's `int()` accepts underscores between digits so the source's parser takes `--period-start-ms 1_700_000_000_000` and the port's first parser refused it; a nested command's refusal named the root parser above a usage line naming the child; and a missing or malformed shadow file escaped as a raw filesystem error or SyntaxError rather than as the refusal the function documents. The remaining eight pin the parser's own refusals: a required flag, a value outside a flag's choices, a flag given twice, three spellings of a non-integer millisecond value, --help routed to the subcommand rather than the root, and the version flag."
-    }
+      "why": "Fifteen, all of them about `src/cli/parser.ts`, `src/cli.ts` and the one repair in `src/measurement/cli.ts` -- code this port had to write because Node has no argparse, and which therefore carries no warrant from interlock (rule 11). Five of the thirteen exist because something could not see the property it named. Two came from the mutation sweep: `the help walk reaches the mounted subcommand's own flags` closes the hazard that both cp932 cases are a loop over helpStrings and a walk returning nothing makes both vacuously green, and `half a corpus reference is refused for being half` closes an inherited blind spot -- the ported case (and its source) point --fixture-corpus at a directory that does not exist, so loadCorpus refuses with a FixtureRefusal, which IS a ControlPlaneRefusal, and the case stays green with the half-reference guard deleted (measured). Five came from the review gate, in two rounds. Round 1: Python's `int()` accepts underscores between digits so the source's parser takes `--period-start-ms 1_700_000_000_000` and the port's first parser refused it; a nested command's refusal named the root parser above a usage line naming the child; and a missing or malformed shadow file escaped as a raw filesystem error or SyntaxError rather than as the refusal the function documents. Round 2 found the two the port had that argparse does not: `--flag=value` is argparse's other spelling of `--flag value` and this parser took only one of them, and the entry-point guard compared `process.argv[1]` unresolved -- which is the symlink npm publishes a `bin` as, so the installed command exited 0 having run nothing and printed nothing while `node dist/cli.js` worked. The remaining eight pin the parser's own refusals: a required flag, a value outside a flag's choices, a flag given twice, three spellings of a non-integer millisecond value, --help routed to the subcommand rather than the root, and the version flag."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/measurement/cli.test.ts",
+        "reason": "Target-only, and skipped where the hazard does not exist. `the CLI runs when it is invoked through a bin symlink` drives the built CLI through a symlink, which is how npm publishes a `bin` on Unix: `node_modules/.bin/continuo` is a link, Node sets process.argv[1] to it, and an entry-point guard that does not resolve it is false for every installed user. On Windows npm writes a `.cmd` shim that invokes node with the real path, so argv[1] is already resolved and there is nothing for this case to catch; creating a file symlink there also needs a privilege the CI cells are not guaranteed to hold. The property itself is not left unguarded on Windows -- there is nothing there to guard.",
+        "approved_by": "worker, 2026-08-28, on the codex review gate's P1",
+        "constructs": {
+          "skipIf": 1
+        }
+      }
+    ]
   },
   "totals": {
     "source_cases": 25,
@@ -353,8 +365,8 @@
     }
   ],
   "mutation_sweep": {
-    "ran": "27 mutations, one per property the cases in this file claim to pin, across src/measurement/cli.ts, src/cli/parser.ts, src/cli.ts and the one line of src/measurement/reader.ts the read-only claim rests on. Harness kept at .sweep/ and not committed; it is 23 mutations of the belt as first written plus 4 covering the three repairs the review gate produced.",
-    "caught": 27,
+    "ran": "30 mutations, one per property the cases in this file claim to pin, across src/measurement/cli.ts, src/cli/parser.ts, src/cli.ts and the one line of src/measurement/reader.ts the read-only claim rests on. Harness kept at .sweep/ and not committed; it is 23 mutations of the belt as first written plus 7 covering the five repairs the review gate produced.",
+    "caught": 30,
     "survivors": [],
     "note": "The FIRST run of this sweep reported 21 of 21 caught, and eight of those verdicts were worthless: six mutations were `if (false)`, which TypeScript refuses, so the build failed and the harness read a failed run as a caught mutation, and two more had their JSON report mis-sliced because vitest prints its pretty failure output to the same stream. That is section 10's own hazard -- red for a reason other than the one being tested -- reached from inside the tool built to check for it. The harness now reports INCONCLUSIVE for a build that refuses a mutation and writes its report to a file rather than to stdout, and every always-false condition is written to survive the type-checker.",
     "closed_survivors": [
@@ -377,13 +389,23 @@
         "mutation": "(review gate, not the sweep) a nested command's refusal names the root parser",
         "verdict": "a defect in this port's own code, closed with a target-only case",
         "note": "`continuo measure report --bogus` printed `usage: continuo measure report` above `continuo: error: ...`, naming two different commands and sending the operator to read the flags of the one that has none of them. `UsageError` now carries the prog of the parser that refused."
+      },
+      {
+        "mutation": "(review gate, not the sweep) the entry-point guard compares process.argv[1] unresolved",
+        "verdict": "a P1 defect in this port's own code, closed with a target-only case",
+        "note": "npm publishes a `bin` on Unix as a symlink, and Node sets process.argv[1] to the link while resolving import.meta.url to the real file, so the guard was false through the only path an installed user takes -- and silently: the process exits 0 having run no command. Both sides now go through realpathSync. Reproducing it needed the right mutation: resolving only the module side is EQUIVALENT to the fix in a tree with no symlinks, so the first mutation survived and said nothing. The one that reproduces the defect leaves argv[1] unresolved."
+      },
+      {
+        "mutation": "(review gate, not the sweep) --flag=value is not accepted",
+        "verdict": "a divergence from the source, repaired with a target-only case",
+        "note": "argparse takes `--db=path` and `--db path` as the same command line. Split at the FIRST `=`, and the case pins that with a commit string carrying one: a split at the last `=` truncates `c0f=fee` to `c0f`, and the first version of the case used a value with no `=` in it at all, so that mutation survived."
       }
     ]
   },
   "divergences": [
     {
       "decision": "D-0112",
-      "behaviour": "The CLI is parsed by a purpose-built parser rather than by argparse, and it accepts less than argparse does: long flags only, one value each, no positional arguments, no prefix matching, no nargs. It also refuses one command line argparse accepts -- a flag given twice, which argparse resolves by keeping the last value. Python's own integer spelling is matched rather than approximated, underscores between digits included.",
+      "behaviour": "The CLI is parsed by a purpose-built parser rather than by argparse, and it accepts less than argparse does: long flags only (in both of argparse's spellings, `--flag value` and `--flag=value`), one value each, no positional arguments, no prefix matching, no nargs. It also refuses one command line argparse accepts -- a flag given twice, which argparse resolves by keeping the last value. Python's own integer spelling is matched rather than approximated, underscores between digits included.",
       "matches_source": false,
       "deliberate": true
     },

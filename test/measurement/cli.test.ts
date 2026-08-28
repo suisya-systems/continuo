@@ -32,7 +32,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type Database from "better-sqlite3";
@@ -678,6 +678,60 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     expect(malformed.message).toContain("could not be read as the v1 shadow input");
     expect(malformed.cause).toBeInstanceOf(SyntaxError);
   });
+
+  test("target-only -- a flag may be written --flag=value", () => {
+    // argparse accepts both spellings and they are the same command line, so a
+    // port that took only one of them refuses command lines interlock runs.
+    // Split at the FIRST `=`, because the value on the right of it may hold
+    // more -- pinned here by a commit string that carries one, which a split at
+    // the last `=` would truncate to `c0f`.
+    const path = db();
+    const corpus = join(REPO_ROOT, "test", "fixtures", "labelled");
+
+    const { code, out } = captured(() =>
+      measurementCli.main([
+        "report",
+        `--db=${path}`,
+        `--period-start-ms=${PERIOD_START}`,
+        `--period-end-ms=${PERIOD_END}`,
+        `--now-ms=${GENERATED_AT}`,
+        `--fixture-corpus=${corpus}`,
+        "--fixture-commit=c0f=fee",
+        "--format=markdown",
+      ]),
+    );
+
+    expect(code).toBe(0);
+    const facts = parseMarkdown(out);
+    expect(facts.get("header.db_path")).toBe(path);
+    expect(facts.get("header.period_start_ms")).toBe(String(PERIOD_START));
+    expect(facts.get("header.fixture_suite_ref.commit")).toBe("c0f=fee");
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "target-only -- the CLI runs when it is invoked through a bin symlink",
+    () => {
+      // How this command is actually started once it is installed: npm publishes
+      // the `bin` as `node_modules/.bin/continuo`, a symlink, and Node sets
+      // `process.argv[1]` to the link while resolving `import.meta.url` to the
+      // real file. The entry-point guard compared the two unresolved, so through
+      // the link it was false and the process exited 0 having run nothing and
+      // printed nothing -- a CLI that is silent for every installed user and
+      // correct for everyone who runs `node dist/cli.js`.
+      //
+      // Skipped on Windows because the hazard is not there: npm writes a `.cmd`
+      // shim that invokes node with the real path, so argv[1] is already
+      // resolved. Approved in parity/measurement.cli.ledger.json.
+      const entry = join(REPO_ROOT, "dist", "cli.js");
+      expect(existsSync(entry), "dist/cli.js is missing; `npm run pretest` builds it").toBe(true);
+      const link = join(caseRoot("bin"), "continuo");
+      symlinkSync(entry, link);
+
+      const stdout = execFileSync(process.execPath, [link, "--version"], { encoding: "utf8" });
+
+      expect(stdout.trim()).toBe("@suisya-systems/continuo 0.0.0");
+    },
+  );
 
   test("target-only -- a required flag that is absent is refused by name", () => {
     const errors = captureStderr(() => measurementCli.main(["report", "--period-start-ms", "1"]));

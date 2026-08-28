@@ -22,7 +22,8 @@
  * reaches `--help` on a cp932 console.
  */
 
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { TOOL_VERSION } from "./about.js";
 import { ArgumentParser, dispatch } from "./cli/parser.js";
@@ -71,11 +72,36 @@ export function main(argv: readonly string[]): number {
   });
 }
 
-// Run only when this file *is* the process's entry point, so the suite can
-// import it without a command running. Compared as a resolved file URL rather
-// than by name: a basename match would fire for any entry script that happened
-// to be called `cli.js`, which on Windows includes the drive-letter and
-// separator differences that make a raw string compare wrong as well.
-if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+/**
+ * Is this file the process's entry point?
+ *
+ * Asked so the suite can import the module without a command running, and
+ * answered through `realpathSync` on **both** sides, because the normal way this
+ * CLI is invoked goes through a symlink: npm publishes a `bin` as
+ * `node_modules/.bin/continuo` pointing at `dist/cli.js`, and Node sets
+ * `process.argv[1]` to the link it was handed while resolving `import.meta.url`
+ * to the real file. Comparing the two unresolved is false for every installed
+ * user, and the failure is silent -- the process exits 0 having run no command
+ * and printed nothing.
+ *
+ * Resolved *paths* rather than URLs, because that is what `realpathSync`
+ * returns. The URL form is what made the symlink case look like it worked.
+ */
+function isEntryPoint(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) {
+    return false;
+  }
+  try {
+    return realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    // A path that will not resolve is not this file. Nothing here is worth
+    // failing a process over: the caller asked to run a command, not to have
+    // this question answered.
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   process.exitCode = main(process.argv.slice(2));
 }
