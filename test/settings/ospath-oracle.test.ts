@@ -7,11 +7,13 @@ import {
   normpath,
   ntIsabs,
   ntJoin,
+  ntNormcase,
   ntNormpath,
   ntSplit,
   ntSplitdrive,
   posixIsabs,
   posixJoin,
+  posixNormcase,
   posixSplit,
   posixSplitdrive,
 } from "../../src/fencing/pypath.js";
@@ -54,6 +56,7 @@ interface ModuleSection {
   readonly dirname: readonly string[];
   readonly basename: readonly string[];
   readonly join: readonly string[];
+  readonly normcase: readonly string[];
 }
 
 const corpus: {
@@ -75,6 +78,7 @@ interface Transcription {
   readonly split: (p: string) => [string, string];
   readonly splitdrive: (p: string) => [string, string];
   readonly join: (first: string, ...rest: readonly string[]) => string;
+  readonly normcase: (p: string) => string;
 }
 
 const POSIX: Transcription = {
@@ -83,6 +87,7 @@ const POSIX: Transcription = {
   split: posixSplit,
   splitdrive: posixSplitdrive,
   join: posixJoin,
+  normcase: posixNormcase,
 };
 
 const NT: Transcription = {
@@ -91,6 +96,7 @@ const NT: Transcription = {
   split: ntSplit,
   splitdrive: ntSplitdrive,
   join: ntJoin,
+  normcase: ntNormcase,
 };
 
 describe("the os.path vector is not vacuous", () => {
@@ -110,6 +116,7 @@ describe("the os.path vector is not vacuous", () => {
       expect(section.dirname).toHaveLength(vector.counts.paths);
       expect(section.basename).toHaveLength(vector.counts.paths);
       expect(section.join).toHaveLength(vector.counts.joins);
+      expect(section.normcase).toHaveLength(vector.counts.paths);
     }
   });
 
@@ -126,6 +133,12 @@ describe("the os.path vector is not vacuous", () => {
     // whole file exists to rule out.
     expect(vector.ntpath.normpath).not.toStrictEqual(vector.posixpath.normpath);
     expect(vector.ntpath.splitdrive).not.toStrictEqual(vector.posixpath.splitdrive);
+    // normcase is the one where a vacuous corpus is easy to write by accident:
+    // the two namespaces differ only for a path containing an upper-case letter
+    // or a `/`, and an all-lowercase POSIX-shaped corpus would let the identity
+    // stand in for the Windows fold with every assertion green.
+    expect(vector.ntpath.normcase).not.toStrictEqual(vector.posixpath.normcase);
+    expect(vector.posixpath.normcase).toStrictEqual([...corpus.paths]);
     expect(vector.ntpath.join).not.toStrictEqual(vector.posixpath.join);
   });
 
@@ -177,6 +190,20 @@ for (const [name, port, expected] of [
         // pass the pair comparison above only by luck.
         const [drive, tail] = port.splitdrive(input);
         expect(drive + tail).toBe(input);
+      }
+    });
+
+    test("normcase", () => {
+      // Added with D-0216, which made `_is_inside_root` compare normcased paths
+      // so a Windows drive-letter case difference stops reading as a sandbox
+      // escape. `ntpath.normcase` is `s.replace("/", "\\\\").lower()` and
+      // `str.lower()` is a FULL Unicode lowering, not ASCII-only -- which is
+      // the half a reading of the two specifications is least likely to get
+      // right, and the reason this is a differential rather than a unit test.
+      for (const [index, input] of corpus.paths.entries()) {
+        expect(port.normcase(input), `normcase(${JSON.stringify(input)})`).toBe(
+          expected.normcase[index],
+        );
       }
     });
 

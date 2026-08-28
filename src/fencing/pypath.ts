@@ -666,9 +666,36 @@ export function posixRealpath(path: string): string {
   return posixAbspath(joinRealpath("", path, new Map())[0]);
 }
 
-/** `ntpath.normcase`, for the two places `ntRealpath` compares paths. */
-function ntNormcase(p: string): string {
+/**
+ * `ntpath.normcase`: separators normalised to `\\`, then lowercased.
+ *
+ * CPython's is `s.replace('/', '\\').lower()` -- `str.lower()`, which is the
+ * FULL Unicode lowering, not ASCII-only. `String.prototype.toLowerCase` is the
+ * same Default Case Conversion algorithm without a locale, so the two agree on
+ * every code point including the Turkish dotted I that `toLocaleLowerCase`
+ * would get wrong. The oracle vector checks this against CPython rather than
+ * leaving it as a reading of both specifications.
+ */
+export function ntNormcase(p: string): string {
   return p.split("/").join("\\").toLowerCase();
+}
+
+/**
+ * `posixpath.normcase`: the identity.
+ *
+ * Spelled out rather than inlined as "POSIX needs no normcase", because that
+ * sentence is what a reader has to trust when the dispatch below looks
+ * one-sided. CPython's `posixpath.normcase` is `os.fspath(s)` and nothing more:
+ * POSIX path identity is case-SENSITIVE, so folding case there would make two
+ * genuinely different files compare equal.
+ */
+export function posixNormcase(p: string): string {
+  return p;
+}
+
+/** `os.path.normcase`, bound the way Python binds `os.path` at import time. */
+export function osNormcase(p: string): string {
+  return process.platform === "win32" ? ntNormcase(p) : posixNormcase(p);
 }
 
 /**

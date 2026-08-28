@@ -7,13 +7,29 @@
  * - `measure report ...` -> `src/measurement/cli.ts`
  *
  * Ported from interlock `src/claude_org_runtime/cli.py` at `65f36c5`, which
- * mounts six subtrees. **Five of them are not here**, and their absence is not
- * an omission this file should be read as hiding: `dispatcher`, `settings`,
- * `sandbox`, `attention` and `migrate` mount modules that continuo has not
- * ported yet, so mounting a subcommand for them would put a command in `--help`
- * that cannot run. Each arrives with its own lane, and the shape this file
- * establishes -- the subtree's own module owns its parser, this file only mounts
- * it -- is what keeps the flags in lock-step when they do.
+ * mounts six subtrees. **Five of them are not here**, and the reason differs
+ * between them, which it did not when this file was written:
+ *
+ * - `dispatcher`, `attention` and `migrate` mount modules continuo has not
+ *   ported yet, so mounting a subcommand for them would put a command in
+ *   `--help` that cannot run. Each arrives with its own lane, and the shape this
+ *   file establishes -- the subtree's own module owns its parser, this file only
+ *   mounts it -- is what keeps the flags in lock-step when they do.
+ * - **`settings` and `sandbox` ARE ported** (D-0213, D-0214) and are still not
+ *   mounted, which is a gap rather than a policy: `continuo sandbox doctor` is
+ *   unreachable from the published binary today, and the preflight is only
+ *   callable through the library surface or the module's own parser. It is
+ *   recorded here rather than fixed in passing because the fix is a decision
+ *   this file cannot take on its own. Those two subtrees declare their flags
+ *   with `src/settings/argparse.ts` -- a transcription of CPython's `argparse`
+ *   (D-0213), whose exact two-pass behaviour eleven ported cases pin, including
+ *   the `--` separator and the negative-number classification -- while this file
+ *   parses with `src/cli/parser.ts`, the purpose-built parser D-0112 chose
+ *   precisely because it is NOT an argparse port. Re-declaring the flags here
+ *   would duplicate a security-relevant surface in a second parser with
+ *   different semantics and let the two drift; delegating raw argv instead needs
+ *   a passthrough `src/cli/parser.ts` does not have, since `dispatch` consumes
+ *   the whole vector. Either is a cross-lane change with a real choice in it.
  *
  * The subcommand re-uses the same parser builder the per-module CLI exposes, so
  * `continuo measure report --db ...` and the module's own parser cannot drift.

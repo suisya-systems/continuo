@@ -1,0 +1,197 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "fencing",
+      "collected": 124,
+      "inventory": "parity/source-inventory/fencing.all.txt"
+    },
+    "file": {
+      "path": "tests/fencing/test_readback.py",
+      "collected": 15,
+      "inventory": "parity/source-inventory/fencing.test_readback.txt",
+      "status": "15 passed, re-run at 65f36c5 on the porting host with `PYTHONPATH=src python3 -m pytest tests/fencing/test_readback.py -q`."
+    }
+  },
+  "target": {
+    "test_file": "test/fencing/readback.test.ts",
+    "target_only_tests": {
+      "count": 4,
+      "ids": [
+        "test/fencing/readback.test.ts::dict.get is presence, not truthiness or nullishness (target-only, D-0214) > an explicitly null mcp name or status stringifies as None (target-only)",
+        "test/fencing/readback.test.ts::dict.get is presence, not truthiness or nullishness (target-only, D-0214) > a non-mapping mcp_servers entry is skipped, not read as an empty one (target-only)",
+        "test/fencing/readback.test.ts::a malformed mcp_servers cannot become a vacuous all-connected (target-only, D-0214) > a truthy non-iterable mcp_servers raises, as the source's `for` does (target-only)",
+        "test/fencing/readback.test.ts::a malformed mcp_servers cannot become a vacuous all-connected (target-only, D-0214) > what the coercion would have bought: a vacuous all-connected (target-only)"
+      ],
+      "note": "Four. The first two are rule 9 -- the port's types are wider than the source's -- at shapes the source's suite could not construct wrongly because Python does not offer the wrong spelling. (1) `entry.get('name', '')` returns the default only when the key is ABSENT; a key present with the value `None` returns `None`, which `str()` renders `'None'`. The obvious TypeScript spelling, `entry['name'] ?? ''`, collapses those two and reports an explicitly-null server name as `''` -- indistinguishable from an empty name the CLI genuinely sent. The first draft of this port HAD that spelling; the review gate found it. (2) `isinstance(entry, Mapping)` is false for a list, and `typeof [] === 'object'` in JavaScript, so without an `Array.isArray` test an `mcp_servers` entry given as `['name', 'connected']` would be read as a mapping with neither key and become `('', 'unknown')` -- a server the caller never declared, reported as not connected, which turns `requireConnected` into a permanent refusal. Both were probed by reverting the code they pin and confirming they go red for their own stated reason. (3) and (4) close a fail-open the review gate found: `for entry in payload.get('mcp_servers') or ():` raises `TypeError` on a truthy non-iterable, and the first draft coerced that to an empty server list. The consequence is not a lost field -- `all(...)` over an EMPTY list is `true`, so a readback whose `mcp_servers` could not be read reported every server CONNECTED, and `requireConnected: true` -- whose entire job is to refuse while a server is `pending` -- would compare the full tools snapshot and call the restart sound. This module's premise is that it refuses rather than returning a verdict it cannot support, and that coercion was the one shape that turned the refusal off. `PyTypeError` and not `ReadbackUnsound`, because the source raises `TypeError` at exactly that point and a caller catching `ReadbackUnsound` means 'the readback is unsound', not 'the payload was not a JSON document' (D-0017). The second case pins the vacuity itself on a hand-built readback -- the only way to reach the state now that the parser refuses to produce it -- because `all([])` cannot be fixed downstream, so the parser is the only place to stop it. Both were probed in BOTH directions: red with the raise removed, and red with it widened to the falsy values the source's `or ()` must keep accepting. What is NOT here: a pin for D-0211's number-spelling carry. This module rebuilds containers and owes that obligation nothing, because every value it copies out of a payload passes through `pyStr` and no container it builds reaches a serialiser. That reasoning is in the module header rather than in a case, because a case asserting `pyStr` was called would pin the implementation and not the property."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 15,
+    "ported": 14,
+    "adapted": 1,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestParsing::test_the_init_event_is_found_in_a_stream",
+      "target_id": "test/fencing/readback.test.ts::TestParsing > the init event is found in a stream",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestParsing::test_a_stream_with_no_init_event_is_an_error_not_an_empty_readback",
+      "target_id": "test/fencing/readback.test.ts::TestParsing > a stream with no init event is an error, not an empty readback",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestParsing::test_mcp_server_statuses_are_read",
+      "target_id": "test/fencing/readback.test.ts::TestParsing > mcp server statuses are read",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestAnIncompleteReadbackIsUnsoundNotEqual::test_a_readback_with_no_permission_mode_is_refused",
+      "target_id": "test/fencing/readback.test.ts::TestAnIncompleteReadbackIsUnsoundNotEqual > a readback with no permission mode is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestAnIncompleteReadbackIsUnsoundNotEqual::test_a_readback_with_no_tools_is_refused",
+      "target_id": "test/fencing/readback.test.ts::TestAnIncompleteReadbackIsUnsoundNotEqual > a readback with no tools is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestAnIncompleteReadbackIsUnsoundNotEqual::test_a_malformed_tools_field_is_refused",
+      "target_id": "test/fencing/readback.test.ts::TestAnIncompleteReadbackIsUnsoundNotEqual > a malformed tools field is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestAnIncompleteReadbackIsUnsoundNotEqual::test_two_empty_events_cannot_be_compared_into_equality",
+      "target_id": "test/fencing/readback.test.ts::TestAnIncompleteReadbackIsUnsoundNotEqual > two empty events cannot be compared into equality",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestTheNormalisationRule::test_two_runs_of_one_configuration_differ_before_normalisation",
+      "target_id": "test/fencing/readback.test.ts::TestTheNormalisationRule > two runs of one configuration differ before normalisation",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestTheNormalisationRule::test_excluding_mcp_tools_makes_them_equal",
+      "target_id": "test/fencing/readback.test.ts::TestTheNormalisationRule > excluding mcp tools makes them equal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestTheNormalisationRule::test_requiring_connected_refuses_when_a_server_is_pending",
+      "target_id": "test/fencing/readback.test.ts::TestTheNormalisationRule > requiring connected refuses when a server is pending",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestTheNormalisationRule::test_requiring_connected_compares_the_full_list_when_it_can",
+      "target_id": "test/fencing/readback.test.ts::TestTheNormalisationRule > requiring connected compares the full list when it can",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestWhatTheReadbackCanAndCannotSettle::test_permission_mode_is_diffable_across_a_restart",
+      "target_id": "test/fencing/readback.test.ts::TestWhatTheReadbackCanAndCannotSettle > permission mode is diffable across a restart",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestWhatTheReadbackCanAndCannotSettle::test_a_changed_permission_mode_is_caught",
+      "target_id": "test/fencing/readback.test.ts::TestWhatTheReadbackCanAndCannotSettle > a changed permission mode is caught",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestWhatTheReadbackCanAndCannotSettle::test_a_genuinely_changed_non_mcp_tool_set_is_caught",
+      "target_id": "test/fencing/readback.test.ts::TestWhatTheReadbackCanAndCannotSettle > a genuinely changed non-mcp tool set is caught",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fencing/test_readback.py::TestWhatTheReadbackCanAndCannotSettle::test_the_readback_carries_no_hooks_and_no_sandbox",
+      "target_id": "test/fencing/readback.test.ts::TestWhatTheReadbackCanAndCannotSettle > the readback carries no hooks and no sandbox",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asserts `not hasattr(readback, 'hooks')` and `not hasattr(readback, 'sandbox')` on a frozen dataclass. `InitReadback` is a TypeScript interface and is erased at runtime, so there is no object to interrogate about a field it never received, and `\"hooks\" in readback` would be green for any object nobody set the key on -- including one produced by a `parseInitEvent` that HAD grown a `hooks` field and left it `undefined`, which is the change the source's assertion exists to catch. The property is asserted over the readback's own keys, listed exhaustively, which is strictly STRONGER than the source's pair of `hasattr` calls: it fails for `hooks`, for `sandbox`, and for any third field a future `parseInitEvent` starts reporting. The source's second half -- that the event itself carries none of the three keys -- translates directly and is asserted unchanged.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "intentional_divergences": [],
+  "inherited_limitations": [
+    {
+      "what": "`read_init_event` skips a line that is not JSON and keeps reading, so a stream that is entirely malformed reports `no system/init event in the stream` rather than naming the parse failures. A CLI whose event stream had silently changed format would look like a CLI that emitted no init event.",
+      "matches_source": true,
+      "source": "fencing/readback.py `read_init_event`: `except json.JSONDecodeError: continue` -- transcribed verbatim.",
+      "where_a_fix_belongs": "Neither side; the skip is deliberate. The CLI interleaves its own diagnostics with the event stream, so a non-JSON line is expected traffic and failing on one would make the readback unusable. The residual cost is the wording of the refusal, which no caller branches on."
+    },
+    {
+      "what": "`parse_init_event` reads `mcp_servers` entries with `str(entry.get('name', ''))`, so a server whose `name` is a number is reported under its stringified form and a server entry that is not a mapping is skipped silently. Neither is distinguishable in the result from a server that was genuinely absent.",
+      "matches_source": true,
+      "source": "fencing/readback.py `parse_init_event` -- transcribed verbatim, including the `isinstance(entry, Mapping)` skip.",
+      "where_a_fix_belongs": "Upstream, if anywhere. The field is reported by the CLI rather than authored by an operator, so a malformed entry is a CLI bug rather than a configuration error, and refusing the whole readback for one would lose the permission-mode comparison that is the module's reason to exist."
+    }
+  ]
+}
