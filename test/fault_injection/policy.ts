@@ -20,6 +20,8 @@
 
 import process from "node:process";
 
+import { afterAll, beforeAll } from "vitest";
+
 import type { CaseAdapter, FaultCase } from "./contract.js";
 import { ContractViolation, LANE_LINUX, LANE_PORTABLE } from "./contract.js";
 import { loadManifest } from "./manifest.js";
@@ -152,6 +154,59 @@ export function laneSkipReason(faultCase: FaultCase): string | null {
     "macOS would run the signal cases and deliberately does not: a single-lane conformance " +
     "claim means a macOS scheduler flake can never block the gate (design 8.1)"
   );
+}
+
+/**
+ * The suite budget (design 9), installed by each of the belt's test files.
+ *
+ * The outermost of the three budgets, and it is a BUDGET CHECK rather than a
+ * hang detector -- deliberately, and the source says why: a hang is caught by
+ * the per-barrier and per-case deadlines inside the controller, which run on
+ * host monotonic time and convert a wedged case into an attributable failure
+ * with its trace attached. This one exists so that *growth* -- a matrix that
+ * creeps past its runtime allowance without ever hanging -- becomes an explicit
+ * budget diff instead of silent CI creep.
+ *
+ * **The port's watchdog is per FILE where the source's is per PACKAGE, and that
+ * is a real narrowing.** The source hooks pytest's report stream and accumulates
+ * the durations of every test whose node id starts with `tests/fault_injection`,
+ * across the whole session, then fails once at session teardown. Vitest runs
+ * each test file in its own worker (`isolate: true`, vitest.config.ts), so there
+ * is no in-process place where the belt's five files can be summed; doing it
+ * anyway would mean a side channel on disk keyed by something stable across
+ * workers, and a racy or stale-prone budget checker inside a harness whose whole
+ * point is determinism is a worse trade than a narrower one. Aggregating
+ * properly needs a custom reporter in `vitest.config.ts`, which is shared by
+ * every lane and is not one belt's to change.
+ *
+ * So: each file is charged its own wall time and fails if THAT exceeds the
+ * profile's `suite_timeout_s`. What it catches is what the budget is for -- one
+ * file's runtime growing without bound. What it misses is the belt's total
+ * creeping past the budget while no single file does. Recorded in
+ * `parity/fault-injection.cases.ledger.json`. Raised by the review gate on this
+ * change, which found the budget was being read from the manifest and never
+ * enforced at all.
+ *
+ * Wall time rather than summed per-test durations, which is the other small
+ * divergence: it additionally charges the file's imports and hooks, so it is
+ * marginally stricter than the source, never looser.
+ */
+export function installSuiteBudget(activeProfile: Record<string, unknown>): void {
+  const budgetS = Number(activeProfile["suite_timeout_s"]);
+  let startedAtMs = 0;
+  beforeAll(() => {
+    startedAtMs = performance.now();
+  });
+  afterAll(() => {
+    const elapsedS = (performance.now() - startedAtMs) / 1000;
+    if (elapsedS > budgetS) {
+      throw new ContractViolation(
+        `the ${String(activeProfile["name"])} profile spent ${elapsedS.toFixed(0)}s in this ` +
+          `fault-injection file, over its ${budgetS.toFixed(0)}s suite budget (design 9): ` +
+          "prune the matrix or raise the budget in an explicit diff",
+      );
+    }
+  });
 }
 
 /**

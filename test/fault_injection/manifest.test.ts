@@ -16,7 +16,7 @@ import { describe, expect, test } from "vitest";
 import { expectRefusal } from "../testkit/errors.js";
 import * as contract from "./contract.js";
 import { ContractViolation, caseSeed, resolveSkewMs } from "./contract.js";
-import { reproLine } from "./controller.js";
+import { caseTestTitle, escapeTestNamePattern, reproLine } from "./controller.js";
 import {
   buildManifest,
   COLLAPSE_RULES,
@@ -27,8 +27,16 @@ import {
   validateCase,
   validateManifest,
 } from "./manifest.js";
+import { installSuiteBudget, manifest as policyManifest, profile } from "./policy.js";
+
+const BUDGET_PROFILE = profile(policyManifest());
 
 type CaseEntry = Record<string, unknown>;
+
+// The suite budget (design 9). Installed per file rather than per package --
+// see `installSuiteBudget` for why, and for what that narrowing does and does
+// not catch.
+installSuiteBudget(BUDGET_PROFILE);
 
 /** A deep copy, so a mutation made to provoke a refusal cannot leak. */
 function copy<T>(value: T): T {
@@ -296,6 +304,46 @@ describe("the seed", () => {
     for (const entry of manifest["cases"] as CaseEntry[]) {
       expect(entry).not.toHaveProperty("suite_seed");
       expect(entry).not.toHaveProperty("seed");
+    }
+  });
+
+  test("target-only -- the reproduction line's test-name pattern selects exactly one case", () => {
+    // TARGET-ONLY. The source has no counterpart, and it exists because the
+    // review gate on this change found the port had inherited the very defect
+    // the source's reproduction line is designed around.
+    //
+    // The source emits a pytest NODE ID and its comment explains why: `-k` is a
+    // substring match, and the manifest's grammar makes one case id a substring
+    // of another, so the documented "re-run this one case" would quietly run
+    // three. Vitest has no node-id selector; `-t` is the nearest thing, and it
+    // is a REGULAR EXPRESSION. A case title is full of regex metacharacters --
+    // `[...]` is a character class, and a combination id carries `+` -- so an
+    // unescaped pattern selects NOTHING and the run exits reporting success.
+    // Running zero tests and reporting success is a worse failure than running
+    // three, which is why this is pinned rather than left to a comment.
+    //
+    // Measured (vitest 4.1.11): the unescaped title selects 0 of cases.test.ts's
+    // 22 tests, the escaped leaf title selects exactly 1.
+    for (const caseId of [
+      "disp__attempt__before_durable_write__sigkill",
+      // The combination shape, which additionally carries `+`.
+      "sup+disp__attempt__before_durable_write__sigkill",
+      // A variant slug, which carries `-`.
+      "sup__observe__observed__incident-repeat__increment-in-place-in",
+    ]) {
+      const pattern = new RegExp(escapeTestNamePattern(caseTestTitle(caseId)));
+      // It matches its own title ...
+      expect(pattern.test(caseTestTitle(caseId)), `${caseId} does not match its own title`).toBe(
+        true,
+      );
+      // ... and no other case's, which is the "one case, not three" property.
+      const others = (loadManifest()["cases"] as CaseEntry[])
+        .map((entry) => caseTestTitle(entry["case_id"] as string))
+        .filter((title) => title !== caseTestTitle(caseId));
+      expect(
+        others.filter((title) => pattern.test(title)),
+        `${caseId}'s pattern also selects another case`,
+      ).toEqual([]);
     }
   });
 

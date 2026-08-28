@@ -19,6 +19,7 @@ import { assertInvariants, CaseFailure, Controller, executeCase, reproLine } fro
 import {
   adapterFor,
   caseTimeoutS,
+  installSuiteBudget,
   laneSkipReason,
   manifest as loadPolicyManifest,
   profileSelectedCases,
@@ -36,6 +37,11 @@ import {
 const CASES = profileSelectedCases();
 
 const PROFILE = resolveProfile(loadPolicyManifest());
+
+// The suite budget (design 9). Installed per file rather than per package --
+// see `installSuiteBudget` for why, and for what that narrowing does and does
+// not catch.
+installSuiteBudget(PROFILE);
 
 describe("the manifest cases", () => {
   /**

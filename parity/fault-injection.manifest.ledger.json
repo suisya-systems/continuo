@@ -57,9 +57,11 @@
       }
     ],
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "why": "None. Every collected test in this file is a translation of a source case."
+      "count": 1,
+      "ids": [
+        "test/fault_injection/manifest.test.ts::the seed > target-only -- the reproduction line's test-name pattern selects exactly one case"
+      ],
+      "why": "One, added by the review gate on this change. The source's reproduction line emits a pytest NODE ID, and its comment explains why that rather than `-k`: `-k` is a substring match and the manifest's grammar makes one case id a substring of another, so the documented 're-run this one case' would quietly run three. Vitest has no node-id selector, so the port's nearest equivalent is `-t` -- which is a REGULAR EXPRESSION, and a case title is full of metacharacters (`[...]` is a character class; a combination id carries `+`; a variant slug carries `-`). MEASURED on vitest 4.1.11 against cases.test.ts: the unescaped title selects 0 of its 22 tests and the run then exits REPORTING SUCCESS, which is a worse failure than running three. This case pins both halves of the fix -- the pattern matches its own case and no other -- across the three shapes that carry metacharacters. Target-only because the source cannot have it: pytest node ids are literal and the hazard does not exist there."
     }
   },
   "inherited_limitations": [

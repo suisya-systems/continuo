@@ -92,16 +92,49 @@ export class CaseTimeout extends Error {
   }
 }
 
+/** The file a manifest case lives in, named by the reproduction line. */
+export const CASE_TEST_FILE = "test/fault_injection/cases.test.ts";
+
 /**
- * The test id template a reproduction line hands the reader.
+ * The title of one manifest case, as Vitest's `-t` matches it.
  *
- * The source spells a pytest node id and warns that `-k` is a substring match,
- * so the manifest's grammar would make "re-run this one case" run three. Vitest
- * has the same hazard and the same answer: `-t` is a substring match over the
- * test name, so the line names the file and the exact full title instead.
+ * The LEAF title, deliberately, and not the `describe > test` path. MEASURED on
+ * vitest 4.1.11 against this very file:
+ *
+ * - `-t 'the manifest cases > run one manifest case\[disp__...\]'` selects
+ *   **nothing** (22 skipped) -- `-t` does not match the joined path;
+ * - `-t 'run one manifest case\[disp__...\]'` selects **exactly one** (1
+ *   passed, 21 skipped).
+ *
+ * The leaf title is still unique across the file, because the case id is, so
+ * naming it selects one test and not three -- which is the property the source
+ * builds its whole reproduction line around.
  */
-export const CASE_TEST_ID =
-  'test/fault_injection/cases.test.ts -t "the manifest cases > run one manifest case[{case_id}]"';
+export function caseTestTitle(caseId: string): string {
+  return `run one manifest case[${caseId}]`;
+}
+
+/**
+ * Escape a test title for Vitest's `-t`.
+ *
+ * `-t` is a **regular expression**, not a literal substring -- and a manifest
+ * case title is full of characters that mean something in one. `[disp__...]`
+ * reads as a CHARACTER CLASS, so the pattern matches a single character from
+ * that set and selects nothing; a combination case id additionally contains `+`
+ * (`sup+disp__...`), which is a quantifier. MEASURED on vitest 4.1.11: the
+ * unescaped title selects **0** of this file's 22 tests and the run then exits
+ * reporting success, while the escaped one selects exactly **1**. Reporting
+ * success while running nothing is precisely the failure mode the source warns
+ * about for pytest's `-k` and takes pains to avoid, so inheriting it in a new
+ * spelling would be losing the property rather than translating it.
+ *
+ * Every ECMAScript regular-expression metacharacter is escaped, including `-`
+ * (meaningful inside a class) and `/` (a delimiter if the value is ever pasted
+ * into a literal). Raised by the review gate on this change.
+ */
+export function escapeTestNamePattern(title: string): string {
+  return title.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+}
 
 export interface EventRecord {
   readonly event?: string;
@@ -130,7 +163,11 @@ export function reproLine(options: {
   const contractVersion = options.contractVersion ?? contract.FAULT_RUNNER_CONTRACT_VERSION;
   const resolvedSkewMs = options.resolvedSkewMs ?? null;
   const profile = options.profile ?? "fast";
-  const testId = CASE_TEST_ID.replace("{case_id}", options.caseId);
+  // Single-quoted on both shells so the backslashes the escape introduces reach
+  // Vitest intact: inside POSIX double quotes a backslash is consumed by the
+  // shell, and PowerShell treats single quotes as fully literal.
+  const pattern = escapeTestNamePattern(caseTestTitle(options.caseId));
+  const testId = `${CASE_TEST_FILE} -t '${pattern}'`;
   // Spelled for the shell of the host that printed it. The line exists to be
   // pasted, and POSIX `VAR=value cmd` is a syntax error in both PowerShell and
   // cmd.exe -- so on the Windows jobs the advertised way to reproduce a failure

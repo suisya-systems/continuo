@@ -42,6 +42,12 @@
         "to": "`try { try { ... } catch { throw new CaseFailure(..., { cause: error }) } } finally { await controller.teardown() }`",
         "why": "Both of the source's properties are kept. Teardown is unconditional (the `finally`, which is what the `with` gave for free). And a failure is wrapped in a NEW error carrying the reproduction line, with the original as `cause`, rather than the original's type re-instantiated from a string -- the source's own reason being that several harness errors have structured constructors and rebuilding one from a message replaces the real failure with a failure about reporting it. The guard that avoids double-wrapping an error that already carries the line is kept too.",
         "affects": "all 21 case entries"
+      },
+      {
+        "from": "`conftest._suite_budget`: an autouse session fixture plus a `pytest_runtest_logreport` hook that accumulates the duration of every test whose node id starts with `tests/fault_injection`, and fails once at session teardown if the total exceeds the profile's `suite_timeout_s`",
+        "to": "`policy.installSuiteBudget(profile)`, called by each of the belt's five test files, charging that FILE's wall time against the same `suite_timeout_s`",
+        "why": "A REAL NARROWING, recorded rather than glossed. Vitest runs each test file in its own worker (`isolate: true`), so there is no in-process place the five files can be summed; a disk side channel keyed across workers would be racy and stale-prone, which is a worse trade inside a harness whose whole point is determinism, and aggregating properly needs a custom reporter in `vitest.config.ts` -- shared by every lane and not one belt's to change. What the port catches is what the budget exists for: one file's runtime growing without bound turns the gate red with the budget named. What it misses is the belt's TOTAL creeping past the budget while no single file does. Wall time rather than summed per-test durations additionally charges imports and hooks, so it is marginally stricter than the source, never looser. Raised by the review gate on this change, which found the budget was read from the manifest and never enforced at all; the watchdog was then measured firing against a deliberately impossible budget, because a check nobody has seen fail is indistinguishable from one that cannot.",
+        "affects": "the whole belt (installed in all five files)"
       }
     ],
     "target_only_tests": {

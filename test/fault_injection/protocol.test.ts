@@ -29,9 +29,17 @@ import {
   PROTOCOL_VERSION,
 } from "./contract.js";
 import { BarrierTimeout, Controller, epochRegressions } from "./controller.js";
+import { installSuiteBudget, manifest, profile } from "./policy.js";
 import { SPIKE_ADAPTER } from "./spike_driver.js";
 
+const BUDGET_PROFILE = profile(manifest());
+
 const POSIX = process.platform !== "win32";
+
+// The suite budget (design 9). Installed per file rather than per package --
+// see `installSuiteBudget` for why, and for what that narrowing does and does
+// not catch.
+installSuiteBudget(BUDGET_PROFILE);
 
 /** `SIGKILL`'s number, which a killed process reports as a negative status. */
 const SIGKILL_NUMBER = 9;

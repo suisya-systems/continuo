@@ -24,9 +24,16 @@ import { parametrize } from "../testkit/parametrize.js";
 import * as conformance from "./conformance.js";
 import type { FullFaultAdapter } from "./contract.js";
 import * as contract from "./contract.js";
-import { FULL_FAULT_ADAPTERS } from "./policy.js";
+import { FULL_FAULT_ADAPTERS, installSuiteBudget, manifest, profile } from "./policy.js";
+
+const BUDGET_PROFILE = profile(manifest());
 
 const LINUX = process.platform === "linux";
+
+// The suite budget (design 9). Installed per file rather than per package --
+// see `installSuiteBudget` for why, and for what that narrowing does and does
+// not catch.
+installSuiteBudget(BUDGET_PROFILE);
 
 /**
  * The adapter's id in a test name.

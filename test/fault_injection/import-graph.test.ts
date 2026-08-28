@@ -24,9 +24,18 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
 
+import { installSuiteBudget, manifest, profile } from "./policy.js";
+
+const BUDGET_PROFILE = profile(manifest());
+
 const HARNESS_ROOT = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HARNESS_ROOT, "..", "..");
 const SRC_ROOT = join(REPO_ROOT, "src");
+
+// The suite budget (design 9). Installed per file rather than per package --
+// see `installSuiteBudget` for why, and for what that narrowing does and does
+// not catch.
+installSuiteBudget(BUDGET_PROFILE);
 
 /**
  * The modules allowed to reach the implementation of the day: one adapter per
