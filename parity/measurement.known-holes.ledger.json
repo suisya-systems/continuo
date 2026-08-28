@@ -13,7 +13,7 @@
       "name": "measurement",
       "collected": 425,
       "inventory": "parity/source-inventory/measurement.all.txt",
-      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. known_holes is the thirteenth file of this lane; query_catalogue remains."
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. known_holes is the thirteenth file of this lane; query_catalogue is the fourteenth and last."
     },
     "file": {
       "path": "tests/measurement/test_known_holes.py",

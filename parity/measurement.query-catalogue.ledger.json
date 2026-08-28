@@ -1,0 +1,195 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. query_catalogue is the fourteenth and last, so with it the measurement lane's inventoried files are complete."
+    },
+    "file": {
+      "path": "tests/measurement/test_query_catalogue.py",
+      "collected": 8,
+      "inventory": "parity/source-inventory/measurement.test_query_catalogue.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 8 pass there (measured 2026-08-28 against a clone of interlock at 65f36c5, `PYTHONPATH=src python3 -m pytest -q tests/measurement/test_query_catalogue.py`: 8 passed)."
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/query-catalogue.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "_RecordingConnection, a forwarding class over sqlite3.Connection with execute() overridden",
+        "to": "a Proxy over the better-sqlite3 Database, recording prepare / exec / pragma",
+        "why": "better-sqlite3's Database keeps its state on the native handle and its methods are not bound, so a hand-written forwarding class would have to enumerate the surface and would silently stop forwarding whatever it had not heard of -- and every assertion in this file is about the report that connection produced. A Proxy forwards by construction; the methods it does not record are returned bound to the real connection, because `this` would otherwise be the proxy. The recorded set is `prepare` / `exec` / `pragma`, which is this driver's whole SQL surface and the same set `module-scan.ts` scans the sources for (D-0115), so the file's two halves cannot disagree about what counts as running a query. `pragma()` takes the statement without its keyword, so `PRAGMA ` is restored on the way into the trace, for the reason D-0115 restores it in the static scan. Pinned by a target-only case: the report built through the recorder renders byte-identically to one built without it. See D-0116.",
+        "affects": "all four trace cases"
+      },
+      {
+        "from": "sys._getframe(1), rendered as f'{Path(frame.f_code.co_filename).stem}.{frame.f_code.co_name}'",
+        "to": "Error.captureStackTrace with Error.prepareStackTrace returning the call-site array",
+        "why": "The caller is read off the stack rather than passed in, because the point of the trace half is to name statements issued by code this file has never heard of. V8's structured stack-trace API is the counterpart: it hands back call sites as objects with getFileName() and getFunctionName(), so the two fields the source reads are read rather than parsed out of `error.stack`, which is a rendered string with no format contract and would fail by returning a plausible wrong name rather than by throwing. prepareStackTrace is global and Vitest installs its own, so it is saved and restored around the capture. A statement issued from a module's top level has no function name and is called `<module>`, which is what module-scan.ts calls the same position. See D-0116.",
+        "affects": "the trace cases, and `no declared exemption is stale` in particular"
+      },
+      {
+        "from": "where in UNATTESTED_STATEMENTS, compared directly",
+        "to": "both sides folded to lower case with underscores removed",
+        "why": "render.UNATTESTED_STATEMENTS is keyed by the SOURCE's function names (`reader._require_query_only`, `provenance._columns_of`) and render.ts records why: the report is what a parity comparison of the two implementations is made from, so renaming the keys would move a published field whose subject is identical. The trace observes this port's names (`reader.requireQueryOnly`, `provenance.columnsOf`). One function, two conventions, so both sides are folded to a form neither convention can move. A hand-written table from one spelling to the other was rejected: it is exactly the 'keep this list current' note the source's own docstring says does not survive a new module. The fold discarding too much is how it fails, so a target-only case asserts it stays one-to-one over UNATTESTED_STATEMENTS. See D-0116.",
+        "affects": "`the report catalogue carries every statement the report runs`, `no declared exemption is stale`"
+      },
+      {
+        "from": "assert any(text is constant for constant in vars(module).values())",
+        "to": "the catalogue entry's value expression must be an identifier, plus the runtime value check",
+        "why": "Python's `is` is object identity. JavaScript strings are primitives: `===` compares by value, and no operator or reflective API can tell a constant apart from a copy of it, so a literal translation is `==` where the source wrote `is` and is weaker in precisely the direction the case exists to cover -- a pasted copy passes it. The property is therefore read off the syntax: the module's QUERY_DEFINITIONS entry for the name must be an IDENTIFIER, not a literal. Together with the source's own call-site check (which this port keeps) that is what identity asserted -- the catalogue is built from the constant, and the call site executes the constant, so there is one string and no copy to drift. Measured: a byte-identical string literal substituted for the identifier turns this case red and no other. See D-0117.",
+        "affects": "`a catalogued module executes the constant and not a copy[ac9]`, `[cohort]`"
+      },
+      {
+        "from": "vars(module), which carries a module's private names as well as its public ones",
+        "to": "the ESM namespace's string values, unioned with the module-level `const NAME = <string literal>` declarations read off the source",
+        "why": "An ESM namespace carries only exports. Reading the source's `vars(module)` half off the namespace alone would fail a module-private constant that Python's `vars` finds -- STRICTER than the source, which docs/test-translation-conventions.md rule 0 makes wrong in the same way as weaker. The source is read for the private half. Measured both ways: with OWNERSHIP_COLLISION_QUERY made non-exported, all ten cases stay green, which is the source's width; before the union it went red.",
+        "affects": "`a catalogued module executes the constant and not a copy[ac9]`, `[cohort]`"
+      },
+      {
+        "from": "ast.Constant / ast.JoinedStr rejected; ast.Name / ast.Subscript / ast.Attribute required; .format(...) unwrapped",
+        "to": "the TypeScript compiler API's node kinds, with .replace(\"{placeholders}\", ...) unwrapped",
+        "why": "Node kind for node kind: a string literal, a no-substitution template and a template expression are the port's literal forms (a JoinedStr is an f-string, and a template expression is the same thing), and an identifier, an element access and a property access are the port's Name / Subscript / Attribute. The port expands an IN list's placeholders with `.replace(\"{placeholders}\", ...)` where the source calls `.format(placeholders=...)`, so that is the call unwrapped to the template it was made on -- for the source's stated reason: expanding an IN list is arity, not text, and the template is what the catalogue carries.",
+        "affects": "`a catalogued module executes the constant and not a copy[ac9]`, `[cohort]`"
+      },
+      {
+        "from": "from .test_known_holes import _module_sources, _statements_executed",
+        "to": "test/measurement/module-scan.ts, imported by both test files",
+        "why": "pytest collects a module once however many times it is imported; vitest collects per FILE, so importing known-holes.test.ts here would register that belt's 23 cases a second time under this file's name and a ledger counting them would be counting the same coverage twice. The shared half lives in a module the runner does not collect, exactly as the source shares it as private helpers of one test file. Landed with the known-holes belt (D-0114, D-0115); this belt only imports it.",
+        "affects": "the two static cases"
+      },
+      {
+        "from": "from .test_render import GENERATED_AT, PERIOD_END, PERIOD_START, db",
+        "to": "test/measurement/report-fixture.ts (the db fixture and its writers) and test/measurement/report-reading.ts (the clock)",
+        "why": "The same per-file collection problem, for the fixture rather than the scanner. The clock was already shared through report-reading.ts by the render and CLI belts; the populated control plane -- one run, one incident, one completed ai_invocation, written by the real writers at the fixed clock -- moves to report-fixture.ts in this belt and render.test.ts imports it from there. Behaviour-preserving for the render belt: 71 cases before the move and 71 after. Sharing rather than copying is load-bearing here, because `every catalogued query was one the report ran` needs the ai_invocation row -- a second fixture that quietly stopped writing it would take a catalogue entry out of the observed set and turn that case red for a reason that has nothing to do with the catalogue."
+      },
+      {
+        "from": "report.header.queries, read straight off the returned report",
+        "to": "the same, after asserting the header is a ReportHeader",
+        "why": "MeasurementReport.header is typed as the structural ReportHeaderLike, which does not carry `queries`. The narrow is an assertion rather than a bare cast: a header that stopped being a ReportHeader would otherwise turn the digest and catalogue cases into checks of `undefined === undefined`."
+      }
+    ],
+    "target_only_tests": {
+      "count": 2,
+      "ids": [
+        "test/measurement/query-catalogue.test.ts::target-only -- the port's own machinery carries no warrant from the source > target-only -- the issuer fold does not collapse two exemptions into one",
+        "test/measurement/query-catalogue.test.ts::target-only -- the port's own machinery carries no warrant from the source > target-only -- a report built through the recorder is the report built without it"
+      ],
+      "why": "Two, both about machinery this port had to write and which therefore carries no warrant from interlock (rule 11). (1) The ISSUER FOLD exists only because the port and the source spell these function names differently; the source has one language and no fold. It works by discarding the information the two conventions disagree about, and discarding too much is how it fails -- two exemptions that folded together would let an entry written for one function excuse a statement issued by another, and every ported case in the file would stay green over a hole in the catalogue. Measured: with a second exemption spelled `provenance.columns_of` added beside `provenance._columns_of`, this case goes red and the eight ported cases stay green. (2) The RECORDER is a Proxy where the source has a forwarding class with one overridden method, which is a far larger surface to get wrong, and getting it wrong is silent: a report built over a subtly different connection still renders, and every assertion in this file is about that report. Measured: with the proxy made to return a wrong `user_version` from pragma, this case goes red and nothing else does."
+    }
+  },
+  "totals": {
+    "source_cases": 8,
+    "ported": 4,
+    "adapted": 4,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "test/measurement/report-fixture.ts is a test helper and is not part of the package surface.",
+      "why": "It builds a control plane through the real writers and is imported by two test files. It is not a `.test.ts` file, so the runner does not collect it, which is the whole reason it exists -- the same move report-reading.ts and module-scan.ts made before it."
+    },
+    {
+      "what": "Nothing in src/ changed in this belt.",
+      "why": "The catalogue, the exemptions and the digest were already built by render.ts and provenance.ts; this belt is the suite that holds them to section 6. The two decisions it files (D-0116, D-0117) are about how the port asserts the source's properties, not about what the package does."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "`the digest still moves when a query text moves` edits a query's text by replacing the first occurrence of `run_id`, so a catalogued query whose text does not contain `run_id` would be edited to itself and the assertion for that entry would be `digest != digest` over an unchanged set -- which fails, but for the wrong reason.",
+      "matches_source": true,
+      "note": "The source has the same shape (`text.replace(\"run_id\", \"run_id_2\", 1)`), and every catalogued query in both implementations names `run_id` today. The port's `String.prototype.replace` with a string pattern replaces only the first occurrence, which is what the source's `count=1` asks for, so the two edits are the same edit. Observed while probing: a stale catalogue entry `a_query_nobody_runs` added with a text containing no `run_id` turns this case red as well as `every catalogued query was one the report ran` -- red is the right colour there, but only one of the two reds is the one the case is about.",
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023). Not repaired here because the repair would have to invent an edit rule the source does not have, and rule 11 makes that new code carrying no warrant -- while the failure mode it would close is a case going red rather than green."
+    },
+    {
+      "behaviour": "`the report catalogue carries every statement the report runs` compares the trace's issuer against UNATTESTED_STATEMENTS by FUNCTION, not by statement. An exemption written for one of a function's statements excuses every statement that function issues, including one added later.",
+      "matches_source": true,
+      "note": "The source keys the mapping the same way, and its own note explains the shape: two of the nine entries are for statements with no fixed text at all (composed per table at call time), which cannot be keyed by text. Measured: an extra inline statement added to `provenance.columnsOf` is not reported, where the same statement added to `cohort.selectCohort` is.",
+      "where_a_fix_belongs": "interlock's own suite. Not repaired here: keying by text is precisely what the two `provenance` entries exist because it cannot do, so the repair is not available without changing what the exemption means."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_every_statement_a_catalogued_module_executes_is_in_its_catalogue[ac9]",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the catalogue is what ran, not a copy of it > every statement a catalogued module executes is in its catalogue[ac9]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The static half, asserted through the same shared resolver the source shares. `statementsExecuted()` re-derives, from ac9.ts's own source, every statement the module hands the driver, and each resolved text must be in ac9.QUERY_DEFINITIONS -- with an unresolvable text reported as a failure rather than skipped, which is the property that makes this an assertion about the lift rather than about a list. The resolver is module-scan.ts's rather than a second one written here, exactly as the source reuses test_known_holes._statements_executed. Measured: an uncatalogued statement added to a catalogued module turns this case red naming the function and the text.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_every_statement_a_catalogued_module_executes_is_in_its_catalogue[cohort]",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the catalogue is what ran, not a copy of it > every statement a catalogued module executes is in its catalogue[cohort]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "As for [ac9]. The cohort case additionally exercises the `{placeholders}` arm of the match: cohort.assertNoRunIsClaimedByBoth executes the ownership-collision template, which the static resolver reports unexpanded, so equality is what matches it here and the expansion arm is what matches the same statement in the trace half.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_a_catalogued_module_executes_the_constant_and_not_a_copy[ac9]",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the catalogue is what ran, not a copy of it > a catalogued module executes the constant and not a copy[ac9]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED on the half the source states as its whole point: 'Equality of text is not the property; identity of object is.' Python asserts `text is constant`. JavaScript strings are primitives -- `===` is value equality and there is no operator, no Object.is answer and no reflective API that separates a constant from a copy of it -- so the literal translation is `==` where the source wrote `is`, and it is WEAKER in exactly the direction the case covers: a pasted byte-identical copy passes it. The property is therefore asserted on the syntax, in three parts that must all hold: (1) the module's QUERY_DEFINITIONS entry for the name is an identifier, not a literal, so what the catalogue is built from is the constant; (2) a module-level string constant of that module holds that text at run time -- the source's `vars(module)` half, read from the ESM namespace UNIONED with the source's module-level string declarations, because vars() carries private names and a namespace does not and reading only the namespace would be STRICTER than the source (rule 0 refuses that too); (3) the source's own `_execute_arguments` check, translated node kind for node kind, with `.replace(\"{placeholders}\", ...)` unwrapped where the source unwraps `.format(...)`. Parts 1 and 3 stand on the two ends object identity joined: the catalogue is built from the constant, and the call site executes the constant. Measured: a byte-identical string literal substituted for the identifier in QUERY_DEFINITIONS turns this case red and no other -- the mutation the literal translation could not fail; the constant made module-private leaves all ten green, which is vars()'s width and not the namespace's. See D-0117.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_a_catalogued_module_executes_the_constant_and_not_a_copy[cohort]",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the catalogue is what ran, not a copy of it > a catalogued module executes the constant and not a copy[cohort]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "As for [ac9], and the same adaptation for the same reason (D-0117). Measured on this module specifically, because it is the one whose call site is a `.replace` on the template: with cohort.ts's `connection.prepare(COHORT_RUNS_QUERY)` rewritten as a byte-identical inline literal, this case goes red and `every statement a catalogued module executes is in its catalogue[cohort]` stays GREEN -- which is the source's own account of why the two cases are not one, reproduced in the port.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_the_report_catalogue_carries_every_statement_the_report_runs",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the report's catalogue against the report's own execution > the report catalogue carries every statement the report runs",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED in how the issuer is named, and in nothing else. The report is the real report over the real populated database, built through the read-only handle wrapped in a recorder, with the same shadow input the source uses (a v1 run id this database does not hold) so that the chunked ownership-collision statement actually runs. The assertion is the source's: every recorded statement is in the header's catalogue by its text, or its issuer is named in render.UNATTESTED_STATEMENTS, and the vacuity guard (more than ten statements recorded) is carried across. What is adapted: the issuer comes from V8's structured stack trace rather than a Python frame, and the comparison against UNATTESTED_STATEMENTS is made on a fold of both sides, because that mapping is keyed by the source's snake_case function names on purpose and the trace observes the port's camelCase ones (D-0116). Measured: 32 statements from nine functions, all nine matching their exemption through the fold; an uncatalogued statement added to cohort.ts is reported by name; dropping ac9 from REPORT_QUERY_SOURCES turns this case red and only this one.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_every_catalogued_query_was_one_the_report_ran",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the report's catalogue against the report's own execution > every catalogued query was one the report ran",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The converse, over the same trace: the set of catalogue names observed executing must equal the catalogue, so completeness cannot be bought with a stale entry. Nothing about it is language-specific -- the assertion is set equality over names the port and the source spell identically, since they are catalogue keys rather than function names. This case is why the fixture is the POPULATED one and is shared rather than copied: `cohort_invocations` only runs on a non-empty cohort, so a database with no ai_invocation row would take it out of the observed set. Measured: a catalogue entry nothing executes turns this case red naming the entry.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_no_declared_exemption_is_stale",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the report's catalogue against the report's own execution > no declared exemption is stale",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED for the issuer fold alone (D-0116). The assertion is the source's -- every name in UNATTESTED_STATEMENTS was seen issuing a statement, so an exemption that outlives the statement it excuses is reported rather than left telling the reader the report ran something it did not -- and the only difference is that the comparison is made on the folded spelling, since the exemption keys are the source's names and the trace observes the port's. This case is also the one that fails LOUDLY if the stack reading breaks: an issuer the port could not name matches no exemption, and the whole set is reported stale. Measured: an exemption for a function nothing calls turns this case red and only this one.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_query_catalogue.py::test_the_digest_still_moves_when_a_query_text_moves",
+      "target_id": "test/measurement/query-catalogue.test.ts::section 6 -- the report's catalogue against the report's own execution > the digest still moves when a query text moves",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The enlarged catalogue is INSIDE the digest, not beside it: the header's own digest is reproduced from its published definitions, and then each lifted measurement query is edited in turn and the digest must move. `String.prototype.replace` with a string pattern replaces the first occurrence only, which is what the source's `count=1` asks for, so the edit is the same edit. Measured: with queryCatalogue's hasher fed only the names and not the texts, this case goes red and the other nine stay green -- a catalogue carried beside the digest instead of inside it, which is the failure the source says would pass every other case in the file.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
