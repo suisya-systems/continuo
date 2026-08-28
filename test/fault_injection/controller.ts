@@ -745,11 +745,22 @@ export class Controller {
   async kill(role: string, options: { assertExitStatus?: boolean } = {}): Promise<number | null> {
     const assertExitStatus = options.assertExitStatus ?? POSIX;
     const roleProcess = this.require(role);
-    if (roleProcess.reaped) {
-      // Already exited and reaped: its pid may have been recycled, and
-      // signalling a recycled id is the one thing design section 8.2 forbids
-      // outright. The recorded exit status is the answer, and for a kill case it
-      // is the wrong one -- which is the point.
+    if (roleProcess.reaped || roleProcess.exited) {
+      // Already gone: its pid may have been recycled, and signalling a recycled
+      // id is the one thing design section 8.2 forbids outright. The recorded
+      // exit status is the answer, and for a kill case it is the wrong one --
+      // which is the point.
+      //
+      // `exited` counts here, not just `reaped`, and that is the Node
+      // difference again. In the source this branch tests `reaped` alone and
+      // the fall-through `os.kill` is SAFE for a process that exited on its
+      // own: an un-waited-for child is a zombie, and a zombie's pid cannot be
+      // recycled, so the signal either lands on the zombie or raises
+      // `ProcessLookupError`, which the source catches. Node reaps every child
+      // the moment it exits, so "exited but not reaped by us" is precisely the
+      // window in which the pid IS available for reuse -- and signalling it
+      // could hit an unrelated process. Raised by the review gate on the
+      // integrated tip.
       const status = roleProcess.exitStatus;
       if (assertExitStatus && status !== -SIGKILL_NUMBER) {
         throw new ContractViolation(
@@ -817,6 +828,15 @@ export class Controller {
       throw new ContractViolation("SIGSTOP cases are Linux-lane only (design 8.1)");
     }
     const roleProcess = this.require(role);
+    if (roleProcess.exited || roleProcess.reaped) {
+      // Same pid-reuse rule as `kill`. A holder that died before it could be
+      // paused is a case that cannot mean what it says, so this refuses rather
+      // than signalling into the dark.
+      throw new ContractViolation(
+        `${role} had already exited when the case tried to pause it; SIGSTOP would be sent to a ` +
+          "pid that may have been reused",
+      );
+    }
     process.kill(roleProcess.pid, "SIGSTOP");
     roleProcess.stopped = true;
   }
@@ -856,7 +876,10 @@ export class Controller {
 
   sigcont(role: string): void {
     const roleProcess = this.require(role);
-    if (roleProcess.stopped) {
+    if (roleProcess.stopped && !roleProcess.exited && !roleProcess.reaped) {
+      // A stopped process cannot exit until it is continued, so reaching here
+      // with `exited` set means something else killed it; either way the pid is
+      // no longer safely ours to signal.
       process.kill(roleProcess.pid, "SIGCONT");
       roleProcess.stopped = false;
     }
