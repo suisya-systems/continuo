@@ -1029,6 +1029,20 @@ export interface CaseAdapter {
 export interface FullFaultAdapter extends CaseAdapter {
   /** The adapter's own window names, asserted equal to {@link CHECKPOINTS}. */
   checkpointVocabulary(): readonly string[];
+  /**
+   * Parse one driver command line, throwing if it is not accepted.
+   *
+   * The battery needs this because of a coupling the port loses. The source's
+   * driver is an `argparse` parser and its `--help` is GENERATED from that
+   * parser, so "the option appears in --help" implies "the parser accepts it"
+   * -- which is what makes a substring check over the help text a real
+   * assertion there. A hand-written parser with independently hand-written help
+   * has no such implication: an option can sit in the help text while its
+   * branch is missing, and the substring check would still qualify the adapter.
+   *
+   * Exposing the parser restores the implication by testing it directly.
+   */
+  parseDriverArguments(argv: readonly string[]): void;
   /** The driver's source file, which the no-host-clock check parses. */
   readonly driverSourcePath: string;
 }

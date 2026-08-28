@@ -2354,6 +2354,11 @@ export class SpikeAdapter implements FullFaultAdapter {
     return [...OUTBOX_CHECKPOINTS];
   }
 
+  /** The driver's own parser, so the battery can test acceptance rather than help text. */
+  parseDriverArguments(argv: readonly string[]): void {
+    parseArguments(argv);
+  }
+
   openStore(dbPath: string): SqliteDatabase {
     return openControlPlane(dbPath);
   }
@@ -2487,7 +2492,12 @@ function requireInteger(option: string, raw: string): number {
   return parsed;
 }
 
-function parseArguments(argv: readonly string[]): ParsedArguments {
+/**
+ * @internal Not package API -- exported so the conformance battery can assert that
+ * the parser accepts every option the contract names (interlock D-0101's rule for
+ * a module-private name a case has to reach).
+ */
+export function parseArguments(argv: readonly string[]): ParsedArguments {
   const parsed: ParsedArguments = {
     role: "",
     db: "",
