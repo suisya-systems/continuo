@@ -808,39 +808,64 @@ describe("store enforcement on every connection (target-only)", () => {
     expect(scalar(ledger, "SELECT routed_at_ms FROM run_owner WHERE run_id = 'run-1'")).toBe(T0);
   });
 
-  test("target-only -- the reserved sentinel keeps ordinary appends appending", () => {
+  test("target-only -- a negative sequence cannot brick ordinary appends", () => {
     // SQLite gives NEW.decision_seq the value -1 in a BEFORE INSERT trigger
     // when the insert supplies no sequence (the manual says "undefined";
     // measured, it is -1 on an empty table and a populated one alike). The
     // replacement guard asks whether NEW.decision_seq is already in the table,
     // so a row sitting AT -1 would make every ordinary append look like a
     // replacement and be refused -- a working ledger bricked by a value only an
-    // out-of-band writer could have put there. `CHECK (decision_seq <> -1)`
-    // reserves it. Both halves are asserted, because the CHECK on its own could
-    // be removed and only the second half would notice.
+    // out-of-band writer could have put there. `CHECK (decision_seq >= 0)`
+    // reserves the negative half, and it has to be the half rather than the one
+    // value: SQLite assigns an omitted rowid as MAX + 1, so a stored -2 makes
+    // the NEXT auto-assigned sequence -1, the sentinel arriving from the other
+    // direction. Both values are driven here, and both halves of the property
+    // are asserted -- the refusal, and that appends still append afterwards,
+    // which is the half that would notice the CHECK being deleted.
     const { path, ledger } = ledgerFixture();
     ledger.close();
 
     const foreign = rawConnection(path);
-    expectSqliteError(
-      () =>
-        execute(
-          foreign,
-          "INSERT INTO routing_decision (decision_seq, owning_system, decided_at_ms, reason) " +
-            "VALUES (-1, 'synthetic_v1', ?, 'out of band')",
-          T0,
-        ),
-      { code: "SQLITE_CONSTRAINT_CHECK", message: /decision_seq <> -1/ },
-    );
+    for (const seq of [-1, -2]) {
+      expectSqliteError(
+        () =>
+          execute(
+            foreign,
+            "INSERT INTO routing_decision (decision_seq, owning_system, decided_at_ms, reason) " +
+              "VALUES (?, 'synthetic_v1', ?, 'out of band')",
+            seq,
+            T0,
+          ),
+        { code: "SQLITE_CONSTRAINT_CHECK", message: /decision_seq >= 0/ },
+      );
+    }
     foreign.close();
 
-    // Zero and everything below -1 are still ordinary sequence numbers: only
-    // the one sentinel value is reserved, so the back-filling the ordering
-    // trigger refuses is refused by that trigger and not by this CHECK.
     const reopened = closeAfterTest(openRoutingLedger(path));
     addDecision(reopened);
     addDecision(reopened, { owningSystem: "interlock", reason: "canary" });
     expect(scalar(reopened, "SELECT MAX(decision_seq) FROM routing_decision")).toBe(2);
+  });
+
+  test("target-only -- zero is still an ordinary sequence the ordering trigger judges", () => {
+    // The reserved half stops at zero on purpose. `a decision cannot be back
+    // filled behind the newest` is a ported case: it inserts sequence 0 and
+    // matches `appended in order`, the ORDERING trigger's sentence. A CHECK
+    // that swallowed 0 first would leave that case green while it asserted
+    // something else, which is the quiet way a translated assertion decays.
+    const { ledger } = ledgerFixture();
+    addDecision(ledger);
+
+    expectSqliteError(
+      () =>
+        execute(
+          ledger,
+          "INSERT INTO routing_decision (decision_seq, owning_system, decided_at_ms, reason) " +
+            "VALUES (0, 'synthetic_v1', ?, 'prehistory')",
+          T0,
+        ),
+      { code: "SQLITE_CONSTRAINT_TRIGGER", message: /appended in order/ },
+    );
   });
 
   test("target-only -- a trigger dropped by a foreign connection is caught at reopen", () => {

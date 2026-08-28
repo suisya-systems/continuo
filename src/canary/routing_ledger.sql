@@ -64,19 +64,29 @@ CREATE TABLE routing_decision (
     CHECK (typeof(decided_at_ms) = 'integer'),
     CHECK (owning_system IN ('interlock', 'synthetic_v1')),
     CHECK (length(reason) > 0),
-    -- -1 is excluded because it is the value SQLite gives NEW.decision_seq in a
-    -- BEFORE INSERT trigger when the insert did not supply one. The manual
-    -- calls that value UNDEFINED; measured on SQLite 3.53.4 it is -1, on an
-    -- empty table and a populated one alike. `routing_decision_is_never_replaced`
-    -- asks whether NEW.decision_seq is already in the table, so a row sitting at
-    -- the sentinel would make every ordinary (sequence-omitting) append look
-    -- like a replacement and be refused. Reserving the one value keeps the guard
-    -- exact instead of making it guess whether a sequence was supplied. Any
-    -- other value the undefined case might take is harmless on its own terms: it
-    -- matches no row, so the guard stands aside, which is the correct answer for
-    -- an insert that cannot collide. Zero and every negative below -1 are still
-    -- accepted, so the back-filling an ordering trigger refuses is untouched.
-    CHECK (decision_seq <> -1)
+    -- A sequence number is a counter, so it is not negative -- and reserving
+    -- the negative half is what keeps `routing_decision_is_never_replaced`
+    -- exact. That trigger asks whether NEW.decision_seq is already in the
+    -- table, and SQLite gives NEW.decision_seq the value **-1** in a BEFORE
+    -- INSERT trigger when the insert supplies no sequence (the manual calls it
+    -- undefined; measured on SQLite 3.53.4 it is -1, on an empty table and a
+    -- populated one alike). So a row stored at -1 would make every ordinary,
+    -- sequence-omitting append look like a replacement and be refused: a
+    -- working ledger bricked by a value only an out-of-band writer could have
+    -- put there.
+    --
+    -- `>= 0` rather than `<> -1` because SQLite assigns an omitted rowid as
+    -- MAX + 1, so a stored -2 makes the NEXT auto-assigned sequence -1 -- the
+    -- sentinel again, this time as the value being written. Excluding the whole
+    -- negative half closes both directions at once: nothing can be stored at
+    -- the sentinel, and nothing can be assigned it either (with the smallest
+    -- legal sequence 0, an auto-assignment is always 1 or more).
+    --
+    -- ZERO IS DELIBERATELY STILL LEGAL. `routing_decision_is_appended_in_order`
+    -- is what refuses a back-filled sequence, and the ported case that pins it
+    -- inserts 0 and matches that trigger's sentence; a CHECK swallowing 0 first
+    -- would change what that case asserts.
+    CHECK (decision_seq >= 0)
 );
 
 -- The newest decision is the routing, so an insert that back-fills a smaller
@@ -109,7 +119,7 @@ END;
 -- refuse anyway is left for the CHECK to refuse, so this guard never masks a
 -- validation failure with a "you may not replace this" refusal. IT RESTATES
 -- EVERY CHECK ON THE TABLE, AND A CHECK ADDED ABOVE BELONGS HERE TOO -- except
--- `decision_seq <> -1`, which is what makes the sentinel case safe rather than
+-- `decision_seq >= 0`, which is what makes the sentinel case safe rather than
 -- something this clause has to handle (see that CHECK's own note). An ordinary
 -- append supplies no decision_seq, arrives here as the reserved -1, matches no
 -- row, and never reaches the RAISE.

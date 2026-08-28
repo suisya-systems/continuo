@@ -5873,15 +5873,40 @@ and passes through as itself. The restatement is duplication in the DDL, and it 
 there in capitals, because a CHECK added to `run_owner` and not to the guard would reopen this
 quietly.
 
+**The sentinel `routing_decision` has to reserve.** SQLite gives `NEW.decision_seq` the value
+**-1** in a `BEFORE INSERT` trigger when the insert supplies no sequence -- the manual calls it
+undefined; measured on SQLite 3.53.4 it is -1, on an empty table and a populated one alike. The
+guard asks whether `NEW.decision_seq` is already in the table, so a row stored **at** -1 would make
+every ordinary, sequence-omitting append look like a replacement and be refused: a working ledger
+bricked by a value only an out-of-band writer could have put there.
+
+`CHECK (decision_seq >= 0)` reserves the negative half, and it has to be the half rather than the
+one value: SQLite assigns an omitted rowid as **MAX + 1**, so a stored -2 makes the next
+auto-assigned sequence -1 -- the sentinel arriving as the value being *written* rather than the
+value being *matched*. Excluding everything negative closes both directions at once, and with 0 the
+smallest legal sequence an auto-assignment is always 1 or more. Any other value the undefined case
+might take is harmless on its own terms: it matches no row, the guard stands aside, and standing
+aside is the right answer for an insert that cannot collide.
+
+**Zero stays legal, deliberately.** `routing_decision_is_appended_in_order` is what refuses a
+back-filled sequence, and the ported case that pins it inserts 0 and matches that trigger's
+sentence; a CHECK swallowing 0 first would leave that case green while it asserted something else.
+Both boundaries are pinned by target-only cases so neither can be widened quietly.
+
+Raised as [P2] by the review gate on this change, in two rounds -- the stored sentinel first, the
+assigned one second -- reproduced each time, and closed here rather than disclosed. `run_owner`
+needs nothing equivalent: `run_id` is not a rowid alias, so `NEW.run_id` is always the value the
+insert supplied.
+
 **Measured** (better-sqlite3 13.0.3, SQLite 3.53.4, 2026-08-29). With both guards in place: a
 duplicate `run_id` reports `SQLITE_CONSTRAINT_TRIGGER` with the guard's sentence and no longer
 reports `UNIQUE constraint failed: run_owner.run_id` at all; a duplicate carrying a non-integer
 `routed_at_ms` reports `SQLITE_CONSTRAINT_CHECK`, as does a duplicate `decision_seq` naming a system
 outside the vocabulary or carrying an empty reason (each guard's `WHEN` restates every CHECK on its
 table, which is why); `INSERT OR REPLACE` is refused on a connection whose `recursive_triggers`
-reads 0, with the standing row unchanged; and an explicit `decision_seq` of -1 is refused by CHECK
-with appends still appending after it. All 86 cases of the canary belt are green, and the two ported
-`or replace ...` cases changed only the sentence they match.
+reads 0, with the standing row unchanged; and an explicit `decision_seq` of -1 or -2 is refused by
+CHECK with appends still appending after it. All 87 cases of the canary belt are green, and the two
+ported `or replace ...` cases changed only the sentence they match.
 
 **Alternatives.**
 
