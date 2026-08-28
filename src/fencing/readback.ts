@@ -152,7 +152,18 @@ export function parseInitEvent(payload: Record<string, unknown>): InitReadback {
   if (Array.isArray(rawServers)) {
     for (const entry of rawServers) {
       if (isMapping(entry)) {
-        servers.push([pyStr(entry["name"] ?? ""), pyStr(entry["status"] ?? "unknown")]);
+        // `entry.get("name", "")`, which is PRESENCE and not truthiness -- and
+        // not `??` either. `dict.get(k, default)` returns the default only when
+        // the key is ABSENT; a key present with the value `None` returns `None`,
+        // and `str(None)` is `"None"`. `entry["name"] ?? ""` collapses those two
+        // cases into one and reports an explicitly-null server name as `""`,
+        // which is indistinguishable from a name the CLI genuinely sent as
+        // empty. Rule 9's shape: `??` is usually the right TypeScript spelling,
+        // and here it is wider than the source's.
+        servers.push([
+          pyStr(Object.hasOwn(entry, "name") ? entry["name"] : ""),
+          pyStr(Object.hasOwn(entry, "status") ? entry["status"] : "unknown"),
+        ]);
       }
     }
   }

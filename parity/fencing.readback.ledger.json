@@ -24,9 +24,12 @@
   "target": {
     "test_file": "test/fencing/readback.test.ts",
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "note": "None. The module is small and every property it has is one the source already pins; the one obligation a reader might expect -- D-0211's number-spelling carry over the containers it rebuilds -- does not apply, because every value it copies out of a payload passes through `pyStr` and no container it builds reaches a serialiser. That reasoning is in the module header rather than in a case, because a case asserting `pyStr` was called would pin the implementation and not the property."
+      "count": 2,
+      "ids": [
+        "test/fencing/readback.test.ts::dict.get is presence, not truthiness or nullishness (target-only, D-0214) > an explicitly null mcp name or status stringifies as None (target-only)",
+        "test/fencing/readback.test.ts::dict.get is presence, not truthiness or nullishness (target-only, D-0214) > a non-mapping mcp_servers entry is skipped, not read as an empty one (target-only)"
+      ],
+      "note": "Two, and both are rule 9 -- the port's types are wider than the source's -- at shapes the source's suite could not construct wrongly because Python does not offer the wrong spelling. (1) `entry.get('name', '')` returns the default only when the key is ABSENT; a key present with the value `None` returns `None`, which `str()` renders `'None'`. The obvious TypeScript spelling, `entry['name'] ?? ''`, collapses those two and reports an explicitly-null server name as `''` -- indistinguishable from an empty name the CLI genuinely sent. The first draft of this port HAD that spelling; the review gate found it. (2) `isinstance(entry, Mapping)` is false for a list, and `typeof [] === 'object'` in JavaScript, so without an `Array.isArray` test an `mcp_servers` entry given as `['name', 'connected']` would be read as a mapping with neither key and become `('', 'unknown')` -- a server the caller never declared, reported as not connected, which turns `requireConnected` into a permanent refusal. Both were probed by reverting the code they pin and confirming they go red for their own stated reason. What is NOT here: a pin for D-0211's number-spelling carry. This module rebuilds containers and owes that obligation nothing, because every value it copies out of a payload passes through `pyStr` and no container it builds reaches a serialiser. That reasoning is in the module header rather than in a case, because a case asserting `pyStr` was called would pin the implementation and not the property."
     },
     "approved_non_running": []
   },

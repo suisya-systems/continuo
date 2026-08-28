@@ -243,3 +243,51 @@ describe("TestWhatTheReadbackCanAndCannotSettle", () => {
     expect(present).toStrictEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// target-only: two properties of `dict.get` no source case constructs
+// ---------------------------------------------------------------------------
+
+describe("dict.get is presence, not truthiness or nullishness (target-only, D-0214)", () => {
+  test("an explicitly null mcp name or status stringifies as None (target-only)", () => {
+    // `entry.get("name", "")` returns the default only when the key is ABSENT.
+    // A key present with the value `None` returns `None`, and `str(None)` is
+    // `"None"`. The obvious TypeScript spelling -- `entry["name"] ?? ""` --
+    // collapses the two, and reports an explicitly-null name as `""`, which is
+    // indistinguishable from a name the CLI genuinely sent as empty. No source
+    // case constructs the shape, because the source cannot get it wrong.
+    const readback = parseInitEvent({
+      type: "system",
+      subtype: "init",
+      permissionMode: "auto",
+      tools: [],
+      mcp_servers: [{ name: null, status: null }, { name: "s", status: "connected" }, {}],
+    });
+    expect(readback.mcpServers).toStrictEqual([
+      ["None", "None"],
+      ["s", "connected"],
+      // ...and the ABSENT case still takes the defaults, which is the half that
+      // would break if presence were spelled as a truthiness test instead.
+      ["", "unknown"],
+    ]);
+    // A server reporting `None` is not `connected`, so the refusal still fires.
+    expect(allServersConnected(readback)).toBe(false);
+  });
+
+  test("a non-mapping mcp_servers entry is skipped, not read as an empty one (target-only)", () => {
+    // `isinstance(entry, Mapping)` is false for a list; `typeof [] === "object"`
+    // in JavaScript. Without the array test a `["name", "connected"]` entry
+    // would be read as a mapping with neither key and become `("", "unknown")`
+    // -- a server the caller never declared, reported as not connected, which
+    // turns `requireConnected` into a permanent refusal.
+    const readback = parseInitEvent({
+      type: "system",
+      subtype: "init",
+      permissionMode: "auto",
+      tools: [],
+      mcp_servers: [["name", "connected"], "nope", 1, { name: "s", status: "connected" }],
+    });
+    expect(readback.mcpServers).toStrictEqual([["s", "connected"]]);
+    expect(allServersConnected(readback)).toBe(true);
+  });
+});
