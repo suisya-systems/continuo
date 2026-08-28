@@ -415,10 +415,11 @@ class Sources {
     }
   }
 
-  textOf(node: ts.Node, depth: number): string | null {
+  textOf(unwrapped: ts.Node, depth: number): string | null {
     if (depth > 4) {
       return null;
     }
+    const node = ts.isExpression(unwrapped) ? unwrap(unwrapped) : unwrapped;
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       return node.text;
     }
@@ -487,10 +488,11 @@ class Sources {
    * classifier resolves the whole text where it can, and where it cannot the
    * fallback carries a precondition (see {@link textsForArgument}).
    */
-  wholeTextOf(node: ts.Node, depth: number): string | null {
+  wholeTextOf(unwrapped: ts.Node, depth: number): string | null {
     if (depth > 4) {
       return null;
     }
+    const node = ts.isExpression(unwrapped) ? unwrap(unwrapped) : unwrapped;
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       return node.text;
     }
@@ -581,9 +583,10 @@ class Sources {
    * fail-closed branch.
    */
   textsForArgument(
-    node: ts.Expression,
+    wrapped: ts.Expression,
     options: { readonly method: "prepare" | "exec" | "pragma" },
   ): readonly string[] | null {
+    const node = unwrap(wrapped);
     if (ts.isPropertyAccessExpression(node) && node.name.text === "sql") {
       // `recordClass.sql` over a declared set of record classes: each declared
       // sql is executed, so each is classified -- and if any one of them could
@@ -776,9 +779,61 @@ function blankLiteralsAndComments(sql: string): string {
   return out.join("");
 }
 
-/** The leading verb of a statement, ignoring blank and comment-only lines. */
+/**
+ * Strip the wrappers that vanish when the code runs.
+ *
+ * `ast.parse` has no node for parentheses -- `(X) > y` and `X > y` are the same
+ * tree -- and none for a cast, because Python has no casts. TypeScript keeps all
+ * of them, so a scan written against the source's node shapes sees
+ * `ParenthesizedExpression` where the source saw a `Name` and records nothing:
+ * `(PROMPT_REDUCTION_TARGET) > measured` is the comparison the case exists to
+ * reject, wearing a spelling the source could not produce. Raised by the review
+ * gate.
+ */
+function unwrap(node: ts.Expression): ts.Expression {
+  let current = node;
+  for (;;) {
+    if (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isSatisfiesExpression(current) ||
+      ts.isNonNullExpression(current) ||
+      ts.isTypeAssertionExpression(current)
+    ) {
+      current = current.expression;
+      continue;
+    }
+    return current;
+  }
+}
+
+/**
+ * The leading verb of a statement, ignoring blank lines and comments.
+ *
+ * The source skips `--` lines only, so a statement opening with a block comment
+ * -- `/* why this query is shaped this way *\/ SELECT ...` -- reads as a verb of
+ * `/*` and is reported as unrecognised. That fails in the safe direction, and it
+ * refuses a query nobody should have to rewrite to satisfy a scan, so the
+ * leading comment run is stripped first. Only the LEADING run: a `--` inside a
+ * string literal has something before it and cannot be reached this way, which
+ * is why this needs none of the blanking {@link hiddenWriteVerbs} does. Raised
+ * by the review gate.
+ */
 export function leadingVerb(sql: string): string {
-  for (const line of sql.split("\n")) {
+  let text = sql;
+  for (;;) {
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith("/*")) {
+      text = trimmed;
+      break;
+    }
+    const end = trimmed.indexOf("*/");
+    if (end < 0) {
+      return "";
+    }
+    text = trimmed.slice(end + 2);
+  }
+  for (const line of text.split("\n")) {
     const stripped = line.trim();
     if (stripped === "" || stripped.startsWith("--")) {
       continue;
@@ -885,7 +940,8 @@ export function comparisonOperands(): readonly ComparisonOperand[] {
     const visit = (node: ts.Node): void => {
       if (ts.isBinaryExpression(node) && COMPARISON_OPERATORS.has(node.operatorToken.kind)) {
         const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-        for (const operand of [node.left, node.right]) {
+        for (const wrapped of [node.left, node.right]) {
+          const operand = unwrap(wrapped);
           const name = ts.isIdentifier(operand)
             ? operand.text
             : ts.isPropertyAccessExpression(operand) && ts.isIdentifier(operand.name)

@@ -4764,7 +4764,27 @@ reports **nothing**. Five more for the third round: a `.replace` that really ins
 reports nothing; a `.replace` with an unresolvable insertion and an interpolated `pragma` both
 report `statement not statically inspectable`; an unreadable `sql:` on one record class reports
 `canary.readInterlockRecords` uninspectable; and `export const { MIN_SAMPLE_SIZE } = ...` is
-reported by name by the forbidden-name walk.
+reported by name by the forbidden-name walk. Four for the fourth round:
+`(PROMPT_REDUCTION_TARGET) > 0.5` and `(PROMPT_REDUCTION_TARGET as number) > 0.5` are both reported
+by file, line and constant; a read opening with a block comment reports **nothing**; and
+`/* harmless */ INSERT ...` still reports `INSERT`.
+
+**Two shapes TypeScript has and `ast` does not.** The fourth review round found both, and they are
+the same observation as rule 9 reached through the syntax tree rather than through a type: a scan
+written against the source's node shapes sees a node the source could not produce.
+
+- **Erasable wrappers.** `ast.parse` has no node for parentheses -- `(X) > y` and `X > y` are one
+  tree -- and none for a cast, because Python has no casts. So `(PROMPT_REDUCTION_TARGET) > measured`
+  named no operand and the comparison scan permitted the comparison it exists to reject. Parentheses,
+  `as`, `satisfies`, `!` and the angle-bracket assertion are unwrapped, in the comparison scan and in
+  the statement resolvers alike.
+- **A statement opening with a block comment.** The source's `_leading_verb` skips `--` lines only,
+  so `/* why this query is shaped this way */ SELECT ...` read as a verb of `/*`. This is the one
+  finding on this scan that was a **false positive** rather than a fail-open -- it refuses a
+  legitimate query rather than admitting a write -- and it is repaired for that reason: a guard that
+  costs whoever next writes a commented query is a guard that gets edited around. Only the LEADING
+  comment run is stripped, because a comment marker inside a string literal has something before it
+  and cannot be reached that way.
 
 **Status.** accepted
 
