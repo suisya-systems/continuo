@@ -107,11 +107,13 @@ ledgers -- one per source file, per D-0019:
 | `tests/canary/test_structural.py` | 5 | `parity/canary.structural.ledger.json` |
 | `tests/canary/test_rehearsal.py` | 1 | `parity/canary.rehearsal.ledger.json` |
 
-Nine further target-only cases sit beside them, covering machinery the port had to write and the
+Eleven further target-only cases sit beside them, covering machinery the port had to write and the
 source therefore carries no warrant for: the `dist/` placement of the DDL (D-0404), the seam
 liveness, the rollback journal, a refused open leaving no sidecar, the store enforcement holding on
-a *reopened* ledger and against a *foreign* connection, and the result-code/message disagreement
-that D-0402 turns on.
+a *reopened* ledger and against a *foreign* connection, the result-code/message disagreement that
+D-0402 turns on, and the two 64-bit-integer cases -- the audit's digest and the routing snapshot
+each hold a value a double cannot carry, which Python's arbitrary-precision `int` gave the source
+for free and this port had to be repaired to get (D-0023).
 
 **Not to be confused with `measurement.test_canary.txt`,** which was already ported and covers
 `tests/measurement/test_canary.py` -- the measurement harness's view of a canary, not the canary's
