@@ -131,6 +131,14 @@
     {
       "behaviour": "A record whose run_id is not a string (a number, null, an object) is rendered with String() into the id set instead of raising.",
       "why": "The source neither type-checks run_id nor could sort a mixed set -- Python's sorted() would raise TypeError there. Adding a refusal would be a guard the source does not have (rule 0 ceiling), so the wider behaviour is documented at the site (runIdOf) rather than fixed."
+    },
+    {
+      "behaviour": "The torn-tail guard in `#append` tests only for a trailing LF (`0x0a`), while `records()` splits on Python `str.splitlines()`'s full boundary set (CR, CRLF, VT, FF, FS, GS, RS, NEL, U+2028, U+2029). A store whose final record is terminated by one of the non-LF boundaries therefore gets an extra LF prepended, producing an empty line that the next `records()` then refuses.",
+      "why": "Reproduced from the source exactly: `synthetic_v1.py` writes `tail = self._path.read_bytes()[-1:]` and `if tail and tail != b'\\n'` while reading with `str.splitlines()`, so CPython carries the identical asymmetry. Repairing it here would make the port accept a store interlock refuses, which conventions rule 0 forbids in the same way as the reverse. Raised as [P2] by the review gate and deliberately left; a fix belongs upstream, or in a change that moves both sides together (D-0023)."
+    },
+    {
+      "behaviour": "`canonicalJson` renders numbers with JavaScript semantics, so a value Python's `json.dumps` would write as `1.0` is written as `1`; the two encodings would disagree for any non-integral number.",
+      "why": "Unreachable through this module's own writers: every record it appends carries a string `run_id`, a string `record` kind and an integer `at_ms` taken from the caller's clock. The divergence is real but has no path to a store either implementation writes, and closing it would mean carrying an emulation of Python's float repr for values nothing produces. Raised as [P2] by the review gate; recorded rather than fixed."
     }
   ],
   "entries": [

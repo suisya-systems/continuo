@@ -112,6 +112,10 @@
     {
       "behaviour": "`create_routing_ledger` applies the DDL before the pragmas are configured, so `executescript`/`exec` runs with foreign keys and recursive triggers off.",
       "why": "The source's order. It is DDL only, so nothing observable depends on it, but it is preserved rather than tidied."
+    },
+    {
+      "behaviour": "The schema fingerprint query filters with `name NOT LIKE 'sqlite_%'`, in which `_` is a single-character wildcard rather than a literal underscore, so an object named `sqliteX` and similar would also be excluded from the fingerprint.",
+      "why": "Carried verbatim from `ledger.py`, and load-bearing: the fingerprint hashes exactly the rows this query returns, so narrowing the pattern (to `LIKE 'sqlite\\_%' ESCAPE '\\'`) would change every fingerprint this build computes and make it disagree with a ledger written by interlock's. `src/control_plane/schema.ts` carries the same pattern for the same reason. Raised as [P2] by the review gate; a parity port cannot narrow it unilaterally."
     }
   ],
   "entries": [

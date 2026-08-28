@@ -129,6 +129,10 @@
     {
       "behaviour": "A run_id that is not TEXT (SQLite affinity makes the declared type a preference) is String()-rendered rather than refused.",
       "why": "Rule 9. Python would put the int in the set and then raise TypeError from sorted(); nothing in TS can raise that, and refusing a non-string id would be a guard the source does not have. Mirrors the same choice already made in synthetic_v1.ts's runIdOf."
+    },
+    {
+      "behaviour": "`sqliteRunIds` interpolates discovered table names into SQL inside double quotes without doubling an embedded quote character, so a table literally named `a\"b` would produce a malformed statement.",
+      "why": "Reproduced from `audit.py`, which builds the same statement the same way. The names are not caller-supplied -- they are read from `sqlite_master` on a store the audit was handed. Doubling embedded quotes would be strictly safer and strictly stricter than the source, and this function's subject is the digest rather than the enumeration's hardening. Raised as [P2] by the review gate; recorded, not repaired (D-0023)."
     }
   ],
   "entries": [
