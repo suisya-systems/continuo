@@ -71,6 +71,8 @@ spaces distinct.
 | D-0111 | A fenced block's fence is widened past any backtick run its value holds | accepted |
 | D-0112 | The CLI is parsed by a purpose-built parser, not by an argparse port | accepted |
 | D-0113 | The cp932 help-text guarantee is asserted as ASCII, and on the bytes | accepted |
+| D-0114 | The package walk is `import.meta.glob`, and the renderer the port adds is bound, not exempted | accepted |
+| D-0115 | The write scan names better-sqlite3's whole SQL surface, and restores the pragma keyword | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -4557,3 +4559,132 @@ deleted, that case goes red and the two cp932 cases stay green.
 gaining a general encoder (`TextEncoder` with a label), or this CLI needing to print a language
 ASCII cannot spell -- at which point the guarantee has to become real cp932 encodability and the
 table stops being optional.
+
+## D-0114 -- The package walk is `import.meta.glob`, and the renderer the port adds is bound, not exempted
+
+**Context.** `tests/measurement/test_known_holes.py` binds section 7's five open questions to the
+suite so that filling one silently fails. Two of its properties are **discovery-driven on purpose**,
+and the docstring says why: a test that reads a hand-written list of modules covers exactly the
+modules that existed on the day it was written, and the module that fills a hole is by definition a
+later one. So it walks the package with `pkgutil.iter_modules`, and a public `render_*` with no
+entry in `REPORT_FACTORIES` **fails** rather than being skipped.
+
+**Python's walk imports a name computed at run time. ESM cannot.** A dynamic `import()` of a path
+built from `readdirSync` reaches Node, not Vite: the `.ts` file is never transformed, and importing
+the built `dist/` copy instead would produce a **second module graph**, where a class reached through
+the walk fails `instanceof` against the same class reached through a static import. Both spellings
+are available and both are wrong.
+
+**Decision.** The walk is `import.meta.glob("../../src/measurement/*.ts")`, in
+`test/measurement/module-scan.ts`.
+
+- Vite expands it **from the same directory listing**, at transform time. A module added to the
+  package is imported on the next run without this file being edited, which is the property the
+  source's two discovery tests are built on.
+- Measured: the namespaces it yields are the **same module instances** a static import of
+  `../../src/measurement/x.js` yields (`ns.renderShadowReconciliation === renderShadowReconciliation`
+  is true), so nothing about identity or `instanceof` changes.
+- The expansion is cross-checked against a `readdirSync` of the package, and a module on disk that
+  the walk did not import is an error. Vite's expansion is a build-time artefact; without the check,
+  a stale one would narrow every discovery below it and read as a clean pass.
+- `index.ts` is excluded, because `pkgutil.iter_modules` excludes `__init__`. The **static** walk
+  (`*.py` -> every file in the package) includes it, because the source's glob does. The two sets
+  differ in the source and they differ here.
+
+**The static walk's subject set is "every file in the package", not an extension.** A file the scan
+cannot parse as TypeScript is a failure, not a skip. This is
+`docs/test-translation-conventions.md` section 10 instance 3 applied before it could happen again:
+the fencing belt's `*.ts` glob silently stopped covering `hook.mjs` on the day that file shipped,
+and stayed green over the rest.
+
+**Discovery finds one renderer the source has no counterpart for.** `render_header_json` and
+`render_json` are `json.dumps` calls in Python. Node has no `json.dumps`, so `renderPythonJson` is
+this port's own spelling of it, and `D-0017` rule 4 makes it **one** renderer shared by the two
+callers rather than two copies -- which means it is exported from `provenance.ts`, which means
+`/^render[A-Z]/` finds it.
+
+**Decision.** It is **bound to a factory and read for a verdict like the other ten**, and its
+parametrized case is declared target-only in the ledger.
+
+- **Rejected: name it out of the walk.** A renderer that dodges discovery by being spelled
+  differently is precisely what the source's design refuses to allow, and an exemption list is the
+  hand-written list the walk exists to replace.
+- **Rejected: rename it so the predicate misses it.** Same objection, reached by a different route,
+  and it would trade a real property for a naming convention.
+- It takes a second argument, the nesting depth, where every renderer the source discovers is unary.
+  A one-entry `EXTRA_ARGUMENTS` table supplies it, and a target-only case fails if a key in that
+  table names a renderer discovery does not find -- a stale key would be ignored in silence and the
+  renderer would then be called with `depth` undefined, which renders wrongly rather than not at all.
+
+**What was measured.** Six mutations, each red for its own reason and for no other:
+a new `export function renderWindowSummary` in `windows.ts` is reported as `unbound`; renaming
+`renderLatencyReport` is reported as `stale`; a verdict word added to `renderAc9Report`'s first line
+turns three cases red naming the word; the same word added inside `pythonJsonString` turns
+`renderPythonJson` and the two renderers built on it red; an em-dash in a rendered line trips the
+ASCII half alone; and a rendered line that mentions `Q-0005` is **not** reported, which is the
+source's own exemption for a sentence that states the hole rather than closing it.
+
+**Status.** accepted
+
+**Source.** Measured 2026-08-28 on Node 22 / Vite (vitest 4.1.11), against interlock `65f36c5`.
+Falsified by: Vite dropping `import.meta.glob`, or Node gaining a way to import a run-time specifier
+inside the transformed graph -- either would make a literal directory walk available again; or by
+`json.dumps` acquiring a Node counterpart, which would remove the eleventh renderer.
+
+## D-0115 -- The write scan names better-sqlite3's whole SQL surface, and restores the pragma keyword
+
+**Context.** Hole 5 is that the measurement harness never writes, and `ai_invocation` least of all:
+its single-writer property (`interlock D-0003`) holds only while nothing here writes. The source
+proves it by parsing every `.py` in the package and classifying every `execute` / `executemany` /
+`executescript` call -- parsed rather than grepped, so an `INSERT` inside a docstring does not fire
+and an `INSERT` built by an f-string does.
+
+**The set of methods is the load-bearing half.** `execute` / `executemany` / `executescript` is
+every `sqlite3` API that is handed a statement; if it were a subset, a write through the missing one
+would be invisible and the scan would report a clean package.
+
+**Decision.** The port's set is `prepare`, `exec` and `pragma` -- better-sqlite3's complete set of
+methods handed SQL text. Everything else on the driver takes bindings, not text.
+
+- **`pragma()` takes the statement without its keyword.** `connection.pragma("query_only = ON")` is
+  `PRAGMA query_only = ON`. The keyword is restored before the verb is read, because the source's
+  rule for a pragma is "offending if the text sets anything", and a text of `query_only = ON` would
+  be classified by its first word `query_only` as an unrecognised verb -- a red for the wrong
+  reason, which is the failure mode conventions section 10 is about.
+- **Matched on the method name whatever the receiver is**, exactly as the source matches `.execute(`.
+  A `RegExp.exec` in a measurement module would therefore be reported as an unrecognised statement
+  verb. That is loud and in the safe direction; a scan that quietly narrowed itself around a receiver
+  it did not recognise is how a write hides. There is no such call today.
+- **A statement whose text cannot be resolved statically is a failure**, as in the source, because
+  an uninspectable statement is where a write would sit unread.
+
+**The resolver gains two forms and loses none.** Statements arrive five ways here: a literal, a
+template, a module or local constant, an entry in a query mapping, and a `sql` field of a record
+class. The source's `QUERY.format(...)` is this port's `QUERY.replace("{placeholders}", ...)`; the
+source's `sql=` keyword on a call is this port's `sql:` property of an options object; the source's
+`MappingProxyType({...})` unwrap is this port's `readOnlyMap([[k, v], ...])`. Each is resolved to the
+text that is actually executed.
+
+**The five read-only-proof exemptions map one for one.** `reader.py`'s
+`_arm_and_verify_both_mechanisms`, `_require_query_only`, `prove_read_only`, `_undo_the_probe` and
+`measurement_snapshot` are `reader.ts`'s `armAndVerifyBothMechanisms`, `requireQueryOnly`,
+`proveReadOnly`, `undoTheProbe` and `measurementSnapshot`. They are named function by function, not
+module by module, so a second function added to `reader.ts` is still covered. The enclosing function
+is resolved **outermost-first**, because `ast.walk` is breadth-first and the source's `setdefault`
+therefore records the outermost enclosing function rather than the nearest -- a statement inside a
+closure is attributed to the named function that holds it, which is what the exemptions are written
+against.
+
+**What was measured.** 42 statements found across the fourteen modules, every one statically
+resolved, none unclassified. Three mutations, each red for its own reason: an `INSERT` added to
+`cohort.ts` reports `cohort.selectCohort: INSERT`; `connection.prepare(String(Math.random()))`
+reports `statement not statically inspectable`; and a scan that matches no method at all trips the
+`seen > 20` guard with `only 0 executed statements found; the scan is not working`, which is the
+source's own guard against a vacuous pass.
+
+**Status.** accepted
+
+**Source.** Measured 2026-08-28 against interlock `65f36c5` and better-sqlite3 13.0.3. Falsified by:
+better-sqlite3 gaining another method that takes SQL text (the set would have to grow with it), or
+this package reaching a statement form the resolver cannot follow -- which fails loudly rather than
+silently, and is a reason to widen the resolver, not the exemptions.
