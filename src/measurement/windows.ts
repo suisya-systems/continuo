@@ -605,6 +605,31 @@ export function requireGraceMs(graceMs: number): void {
 }
 
 /**
+ * The module's replaceable internals (DECISIONS.md `D-0014`).
+ *
+ * One source case reaches into this module with `monkeypatch.setattr`:
+ * `test_render.py::test_the_grace_rule_the_report_enforces_is_the_window_model_s_own`
+ * replaces `require_grace_ms` **here** and asserts that the report refuses what
+ * the replacement refuses. That is the whole point of the case -- it is bound to
+ * the code, so a second copy of the rule inside the report module passes the
+ * plain negative-grace case and fails this one -- and it only works because
+ * Python resolves the name on this module at call time.
+ *
+ * ESM bindings cannot be rebound from outside, so the call sites go through this
+ * record instead. Every internal call site below goes through it too, which is
+ * what Python's late binding actually does: patching the name changes what
+ * {@link episodeWindow} and {@link classifyEpisodes} enforce as well, not only
+ * what a caller in another module does.
+ *
+ * Not re-exported from `src/index.ts`: it is a seam for the tests that own these
+ * modules, not public API.
+ */
+export const windowsSeams = {
+  /** @see requireGraceMs */
+  requireGraceMs,
+};
+
+/**
  * One episode's window and classification, under one resolved revision.
  *
  * `revisionId` is the caller's, always: interlock `D-0031`'s corollary is that a
@@ -623,7 +648,7 @@ export function episodeWindow(
 ): EpisodeWindow {
   const { revisionId, episode, graceMs, periodStartMs, periodEndMs } = options;
 
-  requireGraceMs(graceMs);
+  windowsSeams.requireGraceMs(graceMs);
 
   const policyRow = detectionLatency(connection, {
     revisionId,
@@ -711,7 +736,7 @@ export function classifyEpisodes(
   // applied. Called here once, after the grace is resolved, so the declaration
   // is validated whether or not the period held anything; episodeWindow keeps
   // its own call for its own direct callers.
-  requireGraceMs(graceMs);
+  windowsSeams.requireGraceMs(graceMs);
 
   const windows: EpisodeWindow[] = [];
   const seen = new Set<string>();

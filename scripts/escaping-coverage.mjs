@@ -31,7 +31,7 @@
  *   are silent, and both fail in the one direction a measurement must not: an
  *   unseen site is never reported as uncovered, so it shrinks the denominator
  *   and reads as a BETTER score.
- * - **33 of 35** now. `callSites` walks the TypeScript AST instead, which ends
+ * - **33 of 35** at that point. `callSites` walks the TypeScript AST instead, which ends
  *   that class rather than patching instances of it -- an identifier is an
  *   identifier however it is spelled. Both recovered sites measure as covered.
  *   The two that remain are unreachable rather than unexercised, and are
@@ -40,6 +40,16 @@
  *   - `evidence.uri` comes from `pathToFileURL`, which percent-encodes every
  *     non-ASCII byte and every control character, so the value is printable
  *     ASCII however the database's directory is named.
+ * - **37 of 39** now, with `render.ts` added. Four sites -- a banner line, a
+ *   dotted key, a table cell and a line of a fenced block -- and all four
+ *   covered. The block one is why the module is in this list at all rather than
+ *   being taken on trust: the first version of that renderer left fenced blocks
+ *   verbatim, on the argument that only this package's own constants reach one,
+ *   and the argument was wrong. A fact carrying a newline becomes a block, and a
+ *   fact is whatever the database or the caller supplied -- a v1 shadow source,
+ *   a run id, a baseline's description. Nothing in the file looked wrong; the
+ *   report simply carried a non-ASCII line through to the console, and only
+ *   rendering a hostile report showed it.
  *
  * **A hostile value that is also a path needs care.** A newline is a legal
  * filename character on POSIX and an invalid one on Windows, so a fixture that
@@ -71,6 +81,7 @@ const MODULES = [
   "canary",
   "latency",
   "provenance",
+  "render",
 ];
 
 /**

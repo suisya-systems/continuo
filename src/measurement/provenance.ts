@@ -1393,7 +1393,19 @@ function isHeaderMap(value: HeaderValue): value is ReadonlyMap<string, HeaderVal
   );
 }
 
-function renderPythonJson(value: HeaderValue, depth: number): string {
+/**
+ * `json.dumps(value, indent=2, ensure_ascii=True)` for a header-shaped value.
+ *
+ * Exported for {@link ../measurement/render.js}, which renders the whole report
+ * -- this header included -- with the same call in the source. `D-0017` rule 4
+ * is why it is shared rather than copied: a second renderer is a second thing
+ * to keep in step with Python, and the two copies that existed before that rule
+ * had already drifted apart in the same way.
+ *
+ * Not re-exported from `src/index.ts`: it is an implementation shared by two
+ * renderers, not a rendering a consumer should reach for.
+ */
+export function renderPythonJson(value: HeaderValue, depth: number): string {
   const pad = "  ".repeat(depth + 1);
   const closePad = "  ".repeat(depth);
   if (value === null) {
