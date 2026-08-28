@@ -54,6 +54,12 @@
         "to": "`skipIf(!POSIX, reason)` from test/testkit/marks.ts",
         "why": "Keeps the reason with the result and keeps the mark distinct from `test.todo`. Declared in `approved_non_running` with an exact count, and in `conditionally_collected` because `vitest list` omits a skipped test where pytest collects one.",
         "affects": "cases 9, 11, 12"
+      },
+      {
+        "from": "`status = process.popen.wait(timeout=...)` followed by `process.reaped = True`",
+        "to": "an `await roleProcess.waitForExit(...)` that is followed by an explicit `exited` check, throwing `ProcessWaitTimeout` when the child has not exited",
+        "why": "A CONTROL-FLOW DIFFERENCE THAT LOOKED LIKE A LINE-FOR-LINE TRANSLATION. Python's `Popen.wait(timeout=...)` RAISES `TimeoutExpired`, so in the source the next line -- `process.reaped = True` -- is simply not reached when the wait times out, and the still-live child stays eligible for the teardown ladder. The port's wait returns instead of throwing, so the unconditional `reaped = true` beneath it marked a possibly-live child as reaped; teardown's `reaped` fast path then skipped signalling it, and on a host where the exit-status assertion is disabled the case could continue while that child went on mutating its database. Restored by asserting the exit actually happened. The TEARDOWN path keeps the source's unconditional `reaped = True` (its own `except Exception: pass` around the wait says that is last-resort, deliberate). Raised by the review gate on the rebased tip.",
+        "affects": "every case that kills or runs a role to completion"
       }
     ],
     "target_only_tests": {

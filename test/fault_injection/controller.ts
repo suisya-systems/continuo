@@ -84,6 +84,25 @@ export class BarrierTimeout extends Error {
   }
 }
 
+/**
+ * A role process did not exit within the time the wait allowed.
+ *
+ * The counterpart of Python's `subprocess.TimeoutExpired`, and it exists because
+ * of a divergence that is easy to miss: `Popen.wait(timeout=...)` RAISES, so in
+ * the source the line after it -- `process.reaped = True` -- is simply not
+ * reached when the wait times out, and the still-live child therefore stays
+ * eligible for the teardown ladder. A port whose wait merely RETURNS would mark
+ * that child reaped, teardown's `reaped` fast path would skip signalling it, and
+ * a live process could go on mutating the case's database after the case had
+ * moved on. Raised by the review gate on this change.
+ */
+export class ProcessWaitTimeout extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProcessWaitTimeout";
+  }
+}
+
 /** A case outran its budget (design 9). Converted from a CI hang. */
 export class CaseTimeout extends Error {
   constructor(message: string) {
@@ -733,6 +752,15 @@ export class Controller {
       roleProcess.child.kill("SIGKILL");
     }
     const status = await roleProcess.waitForExit(this.remaining(this.barrierTimeoutS));
+    // Only once the exit is CONFIRMED. A wait that timed out leaves a possibly
+    // live child, and marking it reaped would take it out of teardown's ladder
+    // -- see ProcessWaitTimeout for why the source gets this for free.
+    if (!roleProcess.exited) {
+      throw new ProcessWaitTimeout(
+        `${role} did not exit after the kill within the wait; it is left unreaped so teardown ` +
+          "still signals it",
+      );
+    }
     roleProcess.reaped = true;
     if (assertExitStatus && status !== -SIGKILL_NUMBER) {
       throw new ContractViolation(
@@ -822,6 +850,12 @@ export class Controller {
     const roleProcess = this.require(role);
     const event = await roleProcess.waitForEvent([EVENT_DONE], this.remaining(this.caseTimeoutS));
     const status = await roleProcess.waitForExit(this.remaining(this.barrierTimeoutS));
+    if (!roleProcess.exited) {
+      throw new ProcessWaitTimeout(
+        `${role} reported done but had not exited within the wait; it is left unreaped so ` +
+          "teardown still signals it",
+      );
+    }
     roleProcess.reaped = true;
     if (status !== 0) {
       throw new Error(
