@@ -69,6 +69,8 @@ spaces distinct.
 | D-0109 | A renderer's ASCII claim covers the values it prints, not only the words it authors | accepted |
 | D-0110 | The content fingerprint orders by storage class as well as by value | accepted |
 | D-0111 | A fenced block's fence is widened past any backtick run its value holds | accepted |
+| D-0112 | The CLI is parsed by a purpose-built parser, not by an argparse port | accepted |
+| D-0113 | The cp932 help-text guarantee is asserted as ASCII, and on the bytes | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -4336,6 +4338,231 @@ handed a path where 8.3 expansion or the `\\?\` prefix round-trip decides a supp
 point the adaptation stops being a spelling difference and becomes a behavioural one; the settings
 suite's tmp-directory cases realpath their `worker_dir` up front precisely because that expansion is
 observable on the Windows cells.
+
+---
+
+## D-0112 -- The CLI is parsed by a purpose-built parser, not by an argparse port
+
+**Context.** `measure report` is interlock's only entry point, and its parser is `argparse` -- a
+standard-library module with subcommands, generated `--help`, `type=`, `choices=`, `required=` and
+an introspectable action list. Node's standard library has none of it. `node:util`'s `parseArgs`
+handles flags and stops exactly short of the two things this command is built on: it has no
+subcommand support and generates no help text. Continuo had no CLI at all before this belt, so
+there was nothing to extend either.
+
+Three of the ported cases depend on more than "the flags parse". `test_the_command_is_mounted_on_the_top_level_cli`
+needs a subcommand table. Both cp932 cases walk `parser._actions` and a subparsers action's
+`choices` to collect **every** help string reachable from a parser -- a check written against a
+hand-kept list would police the strings whoever wrote it remembered, and the walk polices the ones
+that exist.
+
+**Decision.** `src/cli/parser.ts` is a small parser written for this port, carrying only the surface
+the two CLI modules use: long flags taking one value, `int` and `choices` coercion, `required`, a
+subcommand table, a `version` flag, and generated `--help`. It is **not** an argparse port and says
+so in its own docstring: no positional arguments, no prefix matching, no `nargs`, no argument
+groups, no `argv[0]` inference of `prog`, and no dozen actions.
+
+Two of argparse's behaviours are reproduced deliberately because cases rest on them:
+
+- **The parser is introspectable**, and `helpStrings` -- the port of the source suite's
+  `_help_strings` -- lives beside the structure it walks rather than in the test, so the two cannot
+  drift apart.
+- **`--help` writes and stops.** argparse raises `SystemExit(0)`; a parser that returned an empty
+  namespace would run the command with no arguments. The stop is `HelpRequested`, a value, so the
+  boundary that owns stdout is the one that writes it. There is no `process.exit` in the module: a
+  library that exits cannot be tested in process, and a suite that spawns a subprocess per case is a
+  suite nobody runs.
+
+Where it differs from argparse it is stricter, in one place and on purpose: **a flag given twice is
+refused** where argparse silently keeps the last value. A command line naming one flag twice with
+two values is one whose author believes something about it that is not true, and the report it
+produces carries no sign of which half won.
+
+**Rule 11 applies to all of it.** This is new code with no source to underwrite it: it was not
+reviewed in interlock, not exercised there, and its shape is not evidence of anything. So it is
+pinned by ten target-only cases and a 23-mutation sweep rather than by the ported cases, which
+mostly cannot see it -- three of them build the arguments namespace by hand and never reach the
+parser at all.
+
+**What was measured.** Every one of the parser's guards was deleted in turn and the case that names
+it went red: a required flag, a value outside a flag's choices, a flag given twice, a value-taking
+flag that consumes no value, `--help` scanned over the whole command line rather than the current
+parser's own tokens, and the integer coercion. The last two are worth naming:
+
+- **`--help` after a subcommand.** The first implementation scanned the whole of `argv`, so
+  `measure report --help` printed the **top-level** screen -- the one screen that does not list the
+  flags the operator was asking about. Found by running the built CLI, not by a test; the test was
+  written afterwards and the mutation confirms it.
+- **The integer coercion needs both of its halves.** `Number("1.5")` is `1.5`, `Number("0x10")` is
+  `16`, and `Number("")` is `0` -- a period boundary quietly at the epoch selects every run ever
+  recorded. With only the `Number.isSafeInteger` half left, `0x10` and the empty string are both
+  accepted; the target-only case originally used `1.5` alone, which the surviving half refuses, so
+  it could not tell the two guards apart.
+
+**And seven things the review gate found that the sweep could not.** A mutation sweep asks whether the
+cases can see the behaviour the module *has*. It cannot ask whether that behaviour is the source's,
+and it cannot ask about a path no case takes. Three of the four are the first kind and were answered
+by reading Python; the fourth is the second kind and is the most serious defect this belt produced:
+
+- **`int()` accepts underscores between digits.** `int("1_700_000_000_000")` is `1700000000000`, so
+  the source's parser takes `--period-start-ms 1_700_000_000_000` and the first version of this one
+  refused it. That is the worst direction for a divergence to run in: it fails only for the operator
+  who spelled a long timestamp readably, and every test written against a plain spelling stays green.
+  The coercion now matches Python's rule exactly -- a single underscore **between** digits and
+  nowhere else, so `_1`, `1_` and `1__0` are still errors -- and both directions are pinned.
+  Whitespace padding is accepted for the same reason: `int(" 12 ")` is `12`.
+- **A refusal named the wrong command.** `continuo measure report --bogus` printed
+  `usage: continuo measure report` and, under it, `continuo: error: ...`. The usage line came from
+  the parser that refused and the error line from the root, so the two named different commands and
+  the operator was sent to read the flags of the one that has none of them. `UsageError` now carries
+  the `prog` of the parser that raised it.
+- **`--flag=value` is argparse's other spelling of `--flag value`,** and this parser took only one of
+  them. The two are the same command line; a port that accepts one is a port that refuses command
+  lines interlock runs. Split at the **first** `=`, because the value on the right of it may hold
+  more, and pinned with a commit string that carries one.
+- **The entry-point guard did not resolve `process.argv[1]`,** and that is the path every installed
+  user takes. npm publishes a `bin` on Unix as a symlink -- `node_modules/.bin/continuo` -> the real
+  `dist/cli.js` -- and Node sets `argv[1]` to the link while resolving `import.meta.url` to the real
+  file, so the guard was false and **the process exited 0 having run no command and printed
+  nothing.** `node dist/cli.js` worked throughout, which is why every test and every smoke run in
+  this belt was green over it. Both sides now go through `realpathSync`.
+
+  The last one is worth reading twice as a *measurement* failure rather than a coding one. It is the
+  shape conventions section 10 describes -- a property no case was watching -- and the sweep could
+  not have found it, because the sweep only mutates lines the cases already reach. It also resisted
+  the first mutation written for it: resolving only the module's side of the comparison is
+  **equivalent** to the fix in a checkout with no symlinks in its path, so that mutation survived and
+  said nothing. The mutation that reproduces the defect is the one that leaves `argv[1]` unresolved.
+- **A flag was swallowed as another flag's missing value,** and this is the only one of the five
+  whose symptom is a *wrong* report rather than no report. `--fixture-commit --format json` recorded
+  `--format` as the commit the labelled corpus came from and then rendered in the default format:
+  the operator gets a plausible document whose provenance is false and whose rendering is not the one
+  they asked for, and nothing downstream can catch it, because a commit is an opaque string and
+  `--format`'s default is valid. argparse refuses a next-token value that reads as a flag, and so
+  does this now -- **with argparse's exception for a negative number**, because `--grace-ms -1` is a
+  command line a ported case runs and a guard written without the exception would leave that case
+  green for the parser's refusal instead of the window model's. `--flag=--literal` is the escape
+  hatch for a value that really does begin with a dash, which is argparse's escape hatch too.
+- **`--version=x` printed the version and exited 0.** argparse refuses a value handed to a
+  zero-argument action, and dropping it silently reads to the operator as though the value was
+  understood. Matched, argparse's wording included.
+
+**One of the gate's findings was not adopted, and that is a decision rather than an omission.**
+Python's `int()` accepts **any Unicode decimal digit** -- `int("１２")` is `12`, and so is
+`int("१२")` -- so the source's parser takes a full-width timestamp and this one refuses it. The
+review asked for it to be decoded. It is refused instead, for three reasons that point the same way:
+
+- The value is an epoch millisecond **the report prints in its header**. Decoding `１２` produces a
+  document saying `12`, which the operator cannot get back by copying what they typed.
+- Decoding it correctly needs a Unicode digit-value table. NFKD folds the full-width forms and not
+  the Devanagari ones, so there is no normalization shortcut -- and a table written here is new code
+  with no source to underwrite it whose failure mode is a **silently wrong number** rather than an
+  error. That is exactly the class rule 11 names, and the wrong number is worse than the refusal.
+- The refusal is fail-visible and quotes what it got. On the Japanese console `D-0113` is about, an
+  IME left in full-width mode is the likely cause, and `--period-start-ms takes an integer, got
+  '１２'` is the message that fixes it.
+
+So `\d` in the coercion is ASCII on purpose. It is a divergence, it is recorded as one in
+`parity/measurement.cli.ledger.json`, and a target-only case pins it so that it stays deliberate
+rather than decaying into an accident nobody chose.
+
+**Alternatives.**
+
+- **Depend on a parser library (rejected).** The repository has two runtime dependencies and adds
+  them deliberately. A CLI parser is not where a third belongs, and none of them reproduces
+  argparse's help-string walk anyway -- the check would have to be written against library internals
+  that no version pins.
+- **Use `node:util`'s `parseArgs` and hand-write the help (rejected).** The help text is then a
+  second structure beside the flag list, kept in step by hand, and the cp932 walk would police the
+  copy rather than the flags. That is precisely the defect the source's walk exists to catch.
+- **Skip the top-level CLI and mount nothing (rejected).** One ported case asserts the command is
+  reachable from the top-level entry point, and a `measure report` that only works when imported is
+  not the command the report's operators are given.
+
+**Consequences.**
+
+- `src/cli.ts` mounts **one** subtree where interlock's mounts six. `dispatcher`, `settings`,
+  `sandbox`, `attention` and `migrate` name modules continuo has not ported, and mounting a
+  subcommand for an absent module puts a command in `--help` that cannot run. Recorded in
+  `parity/measurement.cli.ledger.json` under `divergences`.
+- The package grows a `bin` (`continuo` -> `dist/cli.js`) and `knip.json` grows `src/cli.ts` as an
+  entry, so the modules under it are not read as dead code.
+- A later lane mounting its own subtree adds one `sub.addParser` call and its module's
+  `addSubparsers`, and inherits the ASCII walk without doing anything.
+
+**Status.** accepted
+
+**Source.** Measured 2026-08-28 on Node 22 / vitest 4.1.11, against interlock `65f36c5`. Falsified
+by: Node's standard library gaining subcommands and generated help in `parseArgs`, at which point
+this module is a wrapper worth deleting.
+
+---
+
+## D-0113 -- The cp932 help-text guarantee is asserted as ASCII, and on the bytes
+
+**Context.** Interlock's CLI module carries an **ASCII only** rule in its docstring, and the reason
+is operational rather than aesthetic: this report is read on a Japanese Windows console, where
+stdout is cp932, and a single character cp932 cannot encode is a `UnicodeEncodeError` that kills the
+process mid-`--help`. `pytest` captures stdout as UTF-8 and cannot see it, so the source guards it
+twice -- `text.encode("cp932")` on every help string in process, and `--help` run in a real
+subprocess with `PYTHONIOENCODING=cp932`.
+
+**Neither guard has a counterpart in Node.** `TextEncoder` emits UTF-8 and nothing else; there is no
+cp932 encoder in the runtime, and `TextDecoder` decodes Shift-JIS but cannot encode to it. And Node
+writes UTF-8 to stdout whatever the console's code page is, so there is no `PYTHONIOENCODING` to
+set and no exception to provoke: the same em-dash that kills the Python process renders as mojibake
+here and exits 0.
+
+**Decision.** The port asserts **ASCII**, in both places.
+
+- The two in-process cases assert `isAscii(text)` over the same walk. ASCII is a subset of cp932, so
+  this implies encodability; and the source's first case already asserts `text.isascii()` beside its
+  `encode`, which makes the port's assertion that case's own stronger half.
+- The subprocess case asserts that `--help` wrote **no byte above 0x7F**. ASCII bytes are the same
+  bytes in cp932, so a `--help` that passes renders identically on the console the source case is
+  about. Its other two assertions -- exit 0, `--fingerprint` present -- are unchanged.
+
+**The property being guaranteed is the same one, and the port's is narrower than the source's.**
+cp932 admits thousands of characters ASCII does not; a help string in Japanese would pass in
+interlock and fail here. That is a real difference and it is the right way round: everything under
+`--help` in both codebases is written in English, and ASCII is a property a reviewer can check by
+eye while cp932-encodability is not.
+
+**What was measured.** An em-dash was put in one help string. Both the in-process case and the
+subprocess case went red -- which also confirms the subprocess case is reaching the built CLI rather
+than passing on an absent binary, the hazard conventions section 10 instance 1 describes. The case
+asserts `dist/cli.js` exists before spawning it for that reason.
+
+**The walk is the load-bearing half, and it can be vacuous.** Both in-process cases are a loop over
+`helpStrings(parser)`, and a walk that returned an empty array -- or that stopped at the top-level
+parser -- makes both of them green over nothing. A target-only case therefore asserts the walk
+reaches a string only the innermost parser holds. Measured: with the recursion into subparsers
+deleted, that case goes red and the two cp932 cases stay green.
+
+**Alternatives.**
+
+- **Vendor a cp932 encoding table (rejected).** Several thousand mappings, maintained here, to check
+  a property that ASCII already implies for every string this repository will ever put in `--help`.
+- **Assert nothing and rely on review (rejected).** The source's own history is the argument: the
+  rule is written in the module docstring *and* guarded twice, because a docstring does not stop an
+  em-dash from being typed.
+- **Spawn the subprocess with a cp932 console for real (rejected).** There is no portable way to do
+  it, and on the CI matrix the cells that could are the ones that already set the pace.
+
+**Consequences.**
+
+- `test_the_help_of_the_mounted_subcommand_encodes_to_cp932` becomes a case that asserts **more**
+  than its source, which checks only encodability there. Rule 0 makes that a divergence like any
+  other, so it is recorded as `adapted` in the ledger rather than passing silently.
+- The rule extends to every string the CLI can print, `src/cli/parser.ts`'s own generated usage and
+  option lines included -- they are inside the walk, and the walk is what the cases loop over.
+
+**Status.** accepted
+
+**Source.** Measured 2026-08-28 on Node 22 (Linux), against interlock `65f36c5`. Falsified by: Node
+gaining a general encoder (`TextEncoder` with a label), or this CLI needing to print a language
+ASCII cannot spell -- at which point the guarantee has to become real cp932 encodability and the
+table stops being optional.
 
 ---
 
