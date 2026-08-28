@@ -1824,3 +1824,82 @@ describe("shutil.which, at the three places a PATH split loses it (target-only, 
     );
   });
 });
+
+describe("Python `or` is truthiness, and the canary has two of them (target-only, D-0214)", () => {
+  test("an EMPTY bwrapPath override falls back to discovery (target-only)", () => {
+    // `bwrap_path or shutil.which("bwrap")`. `??` differs from `or` for exactly
+    // one value the caller can supply, and it is the one an unset-or-empty
+    // environment override produces: with `??`, `bwrapPath: ""` suppresses the
+    // PATH lookup and leaves an empty argv[0], so the default runner reports a
+    // launch failure the settings did not cause and an injected runner is handed
+    // a command it cannot recognise. Rule 9: `??` is usually right, and here it
+    // is narrower than the source's operator.
+    const tmp = caseTree("or-truthiness");
+    const probed = join(tmp, "hosts");
+    writeFileSync(probed, "", "utf8");
+    const target = {
+      layer: "permissions.deny",
+      source: `Read(//${probed.replace(/^\/+/, "")})`,
+      path: probed,
+      sourceFile: "",
+      sourceSpelling: undefined,
+    };
+    const captured: string[][] = [];
+    const runner = (cmd: string[]): CompletedProcess => {
+      captured.push(cmd);
+      return { args: cmd, returncode: 0, stdout: "", stderr: "" };
+    };
+    // The lookup the empty override must NOT suppress, pinned through the seam
+    // so the case does not depend on the host having bwrap.
+    patchSeam(doctorSeams, "which", () => "/discovered/bwrap");
+
+    runBwrapCanary([target], { runner, bwrapPath: "" });
+    expect(captured[0]?.[0]).toBe("/discovered/bwrap");
+
+    // ...and a non-empty override still wins, which is the half that would
+    // break if `or` were mistranslated the other way.
+    captured.length = 0;
+    runBwrapCanary([target], { runner, bwrapPath: "/explicit/bwrap" });
+    expect(captured[0]?.[0]).toBe("/explicit/bwrap");
+  });
+
+  test("the second `or` still defaults argv[0] to the bare name (target-only)", () => {
+    // `resolved_bwrap = resolved_bwrap or "bwrap"`. Reached when discovery found
+    // nothing AND a runner was injected -- the substitution case, where
+    // requiring bwrap on PATH would make the caller's stand-in depend on the
+    // tool it is standing in for.
+    //
+    // What this pins is the DEFAULT reaching argv[0], not the choice of `or`
+    // over `??`, and the probe is why that is stated instead of assumed:
+    // reverting that second line to `??` leaves this case GREEN. It has to --
+    // once the first `or` is truthiness, `discovered` is a non-empty string or
+    // `null` and can never be `""`, so the two operators cannot disagree there.
+    // The faithful spelling is kept anyway, because it costs nothing and the
+    // line's correctness would otherwise depend on a property of its caller
+    // that nothing states.
+    const tmp = caseTree("or-second");
+    const probed = join(tmp, "hosts");
+    writeFileSync(probed, "", "utf8");
+    const captured: string[][] = [];
+    patchSeam(doctorSeams, "which", () => null);
+    const [status] = runBwrapCanary(
+      [
+        {
+          layer: "permissions.deny",
+          source: "x",
+          path: probed,
+          sourceFile: "",
+          sourceSpelling: undefined,
+        },
+      ],
+      {
+        runner: (cmd: string[]): CompletedProcess => {
+          captured.push(cmd);
+          return { args: cmd, returncode: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    expect(captured[0]?.[0]).toBe("bwrap");
+    expect(status).toBe(CANARY_PASS);
+  });
+});

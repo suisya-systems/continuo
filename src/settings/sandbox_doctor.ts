@@ -83,6 +83,7 @@ import {
   type PyNumberSpelling,
   pyNumberSpelling,
   pyStr,
+  pyTruthy,
   rememberNumberSpellings,
 } from "../fencing/pysemantics.js";
 import {
@@ -637,14 +638,29 @@ export function runBwrapCanary(
   options: { readonly runner?: CanaryRunner | null; readonly bwrapPath?: string | null } = {},
 ): [status: string, detail: string] {
   const runner = options.runner ?? null;
-  let resolvedBwrap = options.bwrapPath ?? doctorSeams.which("bwrap");
+  // `bwrap_path or shutil.which("bwrap")` -- Python's `or`, which is TRUTHINESS,
+  // and NOT `??`, which is nullishness. The two differ for the empty string,
+  // and the empty string is what an unset-or-empty environment override hands a
+  // caller. With `??`, `bwrapPath: ""` suppresses the PATH lookup and leaves an
+  // empty argv[0]: the default runner reports a launch failure the settings did
+  // not cause, and an injected runner is handed a command it cannot recognise.
+  // `pyTruthy` is this repository's spelling of the source's operator, and rule
+  // 9 is why it exists -- `??` is usually the right TypeScript spelling and here
+  // it is narrower than the source's.
+  const override = options.bwrapPath;
+  const discovered: string | null = pyTruthy(override)
+    ? (override as string)
+    : doctorSeams.which("bwrap");
   // An injected `runner` stands in for the real binary, so requiring bwrap on
   // PATH would make the caller's substitution depend on the host having the
   // tool it is substituting for.
-  if (resolvedBwrap === null && runner === null) {
+  if (discovered === null && runner === null) {
     return [CANARY_SKIPPED, "bwrap not found on PATH; live canary not run"];
   }
-  resolvedBwrap = resolvedBwrap ?? "bwrap";
+  // `resolved_bwrap = resolved_bwrap or "bwrap"`, the source's second `or`, for
+  // the same reason: `which` cannot return `""`, but this line is reached with
+  // whatever the line above produced and a nullish test would let one through.
+  const resolvedBwrap: string = pyTruthy(discovered) ? (discovered as string) : "bwrap";
 
   // Deliberately no `--proc` / `--dev`: those mount fresh filesystems that
   // *shadow* the corresponding host trees, and a shadowed region has no symlink
