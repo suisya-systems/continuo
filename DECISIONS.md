@@ -20,9 +20,11 @@ spaces distinct.
   the fact and the version it was measured at, so a later reader can tell "still true" from "was
   true in 2026".
 - **The port's belts hold disjoint number ranges**, so three lanes appending at once conflict only
-  in the index table above and never over an ID. `D-0019`+ is the control-plane belt, `D-0100`+ the
-  measurement belt, `D-0200`+ the fencing and settings belt. The ranges are an allocation, not a
-  meaning: nothing about an entry follows from which range it is in.
+  in the index table above and never over an ID. `D-0019`..`D-0099` is the control-plane belt and
+  the shared band for cross-belt decisions taken at the window, `D-01xx` the measurement belt,
+  `D-02xx` the fencing and settings belt, `D-03xx` the session belt, `D-04xx` the canary belt,
+  `D-05xx` the messagebus belt (the last three allocated by D-0032). The ranges are an allocation,
+  not a meaning: nothing about an entry follows from which range it is in.
 
 ## Index
 
@@ -59,6 +61,7 @@ spaces distinct.
 | D-0029 | The remaining two spike-schema files convert whole, and the CI cap is not the fix | accepted |
 | D-0030 | One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it | accepted |
 | D-0031 | The source inventory is complete and unconditional; porting intent is recorded separately | accepted |
+| D-0032 | Three not-porting proposals are ratified, and three belts start with D-ranges allocated | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -5470,5 +5473,52 @@ enough of the boundary.
 raised the layering as its Blocker and the evidence/commitment separation as a Major; both are
 adopted here. Measured against interlock `65f36c5` on Python 3.12.3 with pytest 9.1.1. Decision id
 allocated by the window.
+
+---
+
+## D-0032 -- Three not-porting proposals are ratified, and three belts start with D-ranges allocated
+
+**Context.** D-0031 separated evidence from commitment: `parity/source-inventory.belts.md` holds a
+porting-intent status per subsystem, every status was written as a proposal, and confirming one --
+together with allocating a D-range to any belt that starts -- is a human gate. Until that gate is
+passed, the document's `not-porting` rows decline nothing and its `candidate-lane` rows start
+nothing.
+
+**Decision.** The human gate was passed on 2026-08-28, in two halves recorded as one decision
+because they were ratified together.
+
+1. **Three `not-porting` proposals are ratified as decisions.** `gate_record` (64 cases), `scrub`
+   (20) and `package_smoke` (1) -- 85 cases in all -- will not be ported, for the reasons
+   `source-inventory.belts.md` already states per subsystem: `gate_record` asserts the structure of
+   a document continuo does not have, and the technique is already held natively
+   (`test/contract/carried-documents.test.ts`); `scrub` is interlock-side developer tooling whose
+   TypeScript twin would be a second scrubber to keep in agreement with the first; `package_smoke`
+   is package plumbing continuo already holds more strictly. The inventory itself is unchanged --
+   all 2,194 node ids stay, per D-0031's layering -- but the effective porting target becomes
+   2,194 - 85 = **2,109**: the pool of cases not declined, within which every unratified status is
+   still a proposal, not a commitment to port all 2,109.
+2. **Three belts start, with D-ranges allocated.** `session` (142 cases) takes `D-03xx`, `canary`
+   (70) takes `D-04xx`, and `messagebus` (43) takes `D-05xx`; all three move from
+   `candidate-lane` to `in-scope` with a belt start date of 2026-08-28. The ordering follows the
+   dependency argument already in the belts document: `session` is the belt `gate_item2` and
+   `gate_item11` wait on, `canary`'s store-enforced guarantees are the property continuo ports
+   best, and `messagebus` is the destination the five quarantined broker modules are pointed at.
+
+Statuses not named here are untouched and remain proposals; ratifying them is a later pass of the
+same gate.
+
+This is the gate D-0031 defined, exercised for the first time -- not a supersession of it. D-0031's
+"every status there is a proposal" described the document as first written; it now holds for the
+unratified rows, and the belts document marks ratified rows explicitly so the two states cannot be
+confused. D-0031's three-layer boundary is unchanged.
+
+**Falsifier.** For the first half, D-0031's falsifier applies with more force now that the answer
+is ratified rather than proposed: if a belt finds it needs one of the three declined subsystems,
+this entry is superseded, not edited. For the second half, if any of the three belts cannot in fact
+be ported largely as its cases stand, the `in-scope` status retreats and the allocated range stays
+burned -- ranges are permanent whether or not the belt completes.
+
+**Source.** Ratified by the user on 2026-08-28, task `continuo-belts-ratification`. Decision id
+allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to use this file").
 
 ---
