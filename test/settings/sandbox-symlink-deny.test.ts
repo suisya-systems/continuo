@@ -32,6 +32,7 @@ import {
   discoverMergedScopes,
   doctorSeams,
   formatReport,
+  pathStr,
   reportFailures,
   reportOk,
   runBwrapCanary,
@@ -1327,9 +1328,9 @@ function captureStderr(): { text: () => string } {
  * passing for the wrong reason. `pypath.ts` dispatches at CALL time precisely
  * so these repairs are falsifiable on the cells where most runs happen.
  */
-function asWindows<T>(body: () => T): T {
+function asPlatform<T>(platform: string, body: () => T): T {
   const real = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
   try {
     return body();
   } finally {
@@ -1338,6 +1339,21 @@ function asWindows<T>(body: () => T): T {
     }
   }
 }
+
+const asWindows = <T>(body: () => T): T => asPlatform("win32", body);
+
+/**
+ * The inverse, and it is not decoration.
+ *
+ * A case asserting a POSIX property has to SET the platform, not assume it. The
+ * first draft of the `normcase` pin below asserted that two paths differing only
+ * in case stay distinct, ran on whatever host it landed on, and went red on the
+ * Windows CI cells -- where the assertion is false by design, because that is
+ * the whole of what D-0216 changed. Forcing the platform makes it a claim about
+ * `posixpath.normcase` being the identity, which is what it was always meant to
+ * be, and makes it falsifiable on every cell instead of on some of them.
+ */
+const asPosix = <T>(body: () => T): T => asPlatform("linux", body);
 
 describe("the malformed-filesystem repair (target-only, D-0215)", () => {
   test("a truthy non-mapping filesystem is refused, not emptied (target-only)", () => {
@@ -1507,27 +1523,35 @@ describe("the case-sensitivity repair (target-only, D-0216)", () => {
     // the substitution. Pinned in the direction that would break: two paths
     // differing only in case are two different files on POSIX, and an entry
     // under one must not be judged in-root by the other.
-    const result = renderRoleWithMetadata(
-      {
-        worker_roles: {
-          demo: {
-            sandbox: {
-              enabled: true,
-              filesystem: {
-                denyRead: [{ anchor: "absolute", path: "/tmp/WORKER/secret" }],
-                denyWrite: [],
+    //
+    // Wrapped in `asPosix` rather than left to the host. Unwrapped it asserted
+    // a POSIX property while running wherever it landed, and went red on the
+    // Windows cells -- where the entry IS in-root, correctly, because that is
+    // exactly what D-0216 changed. The wrapper turns a host-dependent case into
+    // a claim about `posixpath.normcase`, falsifiable on every cell.
+    const result = asPosix(() =>
+      renderRoleWithMetadata(
+        {
+          worker_roles: {
+            demo: {
+              sandbox: {
+                enabled: true,
+                filesystem: {
+                  denyRead: [{ anchor: "absolute", path: "/tmp/WORKER/secret" }],
+                  denyWrite: [],
+                },
               },
             },
           },
         },
-      },
-      {
-        role: "demo",
-        workerDir: "/tmp/worker",
-        claudeOrgPath: "/co",
-        realpathFn: (p: string) => p,
-        symlinkProbeFn: () => null,
-      },
+        {
+          role: "demo",
+          workerDir: "/tmp/worker",
+          claudeOrgPath: "/co",
+          realpathFn: (p: string) => p,
+          symlinkProbeFn: () => null,
+        },
+      ),
     );
     expect(result.sandbox.suppressions).toHaveLength(1);
   });
@@ -1901,5 +1925,74 @@ describe("Python `or` is truthiness, and the canary has two of them (target-only
     );
     expect(captured[0]?.[0]).toBe("bwrap");
     expect(status).toBe(CANARY_PASS);
+  });
+});
+
+describe("str(Path(p)) is not normpath, and the port models a Path as a string (target-only, D-0214)", () => {
+  /**
+   * Measured against CPython 3.12.3: `str(PurePosixPath(p))` and
+   * `str(PureWindowsPath(p))`, beside `posixpath.normpath` / `ntpath.normpath`
+   * for the one input where the two rules disagree.
+   *
+   * `discover_merged_scopes` returns `list[Path]`, and this port models a
+   * `Path` as a string -- so every place the source relies on `Path`
+   * normalising has to do it explicitly. It is not cosmetic: the returned path
+   * reaches `Finding.source_file` and is quoted back to an operator through
+   * `--json`.
+   */
+  const POSIX_CASES: readonly (readonly [string, string])[] = [
+    ["a//b", "a/b"],
+    ["a/./b", "a/b"],
+    // `..` is KEPT, where normpath would collapse it to `b`.
+    ["a/../b", "a/../b"],
+    ["../x/y", "../x/y"],
+    ["/home/u/.claude/settings.json", "/home/u/.claude/settings.json"],
+    ["a/", "a"],
+    ["", "."],
+  ];
+
+  const WINDOWS_CASES: readonly (readonly [string, string])[] = [
+    ["a//b", String.raw`a\b`],
+    ["a/./b", String.raw`a\b`],
+    ["a/../b", String.raw`a\..\b`],
+    ["../x/y", String.raw`..\x\y`],
+    [String.raw`a\b/c`, String.raw`a\b\c`],
+    // The case that failed on the Windows cells: `ntpath.expanduser` returns
+    // the tail's forward slashes intact, and `Path(...)` is what turns them
+    // into separators before the value is compared or reported.
+    [String.raw`C:\Users\x/.claude/settings.json`, String.raw`C:\Users\x\.claude\settings.json`],
+  ];
+
+  test("PurePosixPath, at every shape the two rules could disagree on (target-only)", () => {
+    for (const [input, expected] of POSIX_CASES) {
+      expect(
+        asPlatform("linux", () => pathStr(input)),
+        `str(PurePosixPath(${JSON.stringify(input)}))`,
+      ).toBe(expected);
+    }
+  });
+
+  test("PureWindowsPath, including the expanduser tail that broke CI (target-only)", () => {
+    for (const [input, expected] of WINDOWS_CASES) {
+      expect(
+        asPlatform("win32", () => pathStr(input)),
+        `str(PureWindowsPath(${JSON.stringify(input)}))`,
+      ).toBe(expected);
+    }
+  });
+
+  test("the two namespaces disagree somewhere, so neither stands in for the other (target-only)", () => {
+    // The vacuity guard the ospath oracle taught this lane to write. A corpus on
+    // which both platforms answer identically would let one transcription pass
+    // for both, and this table is small enough for that to happen by accident.
+    const shared = POSIX_CASES.filter(([input]) =>
+      WINDOWS_CASES.some(([other]) => other === input),
+    );
+    expect(shared.length).toBeGreaterThan(0);
+    const differs = shared.some(([input, posixExpected]) => {
+      const windows = WINDOWS_CASES.find(([other]) => other === input);
+      return windows?.[1] !== posixExpected;
+    });
+    expect(differs, "no input distinguishes the two namespaces").toBe(true);
   });
 });

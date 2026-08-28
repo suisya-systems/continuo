@@ -72,12 +72,16 @@ import { join as nodeJoin, delimiter as pathDelimiter } from "node:path";
 import { pyJsonDumps, pyJsonLoads } from "../fencing/pyjson.js";
 import {
   expanduser,
+  OS_CURDIR,
+  osAltsep,
   osIsabs,
   osJoin,
   osNormcase,
   osNormpath,
   osRealpath,
+  osSep,
   osSplit,
+  osSplitdrive,
 } from "../fencing/pypath.js";
 import {
   type PyNumberSpelling,
@@ -887,6 +891,54 @@ function parentOf(path: string): string {
 }
 
 /**
+ * `str(Path(p))`: what a `pathlib.Path` looks like when it is printed.
+ *
+ * `discover_merged_scopes` returns `list[Path]`, and the port models a `Path`
+ * as a string -- so every place the source relies on `Path` NORMALISING has to
+ * do it explicitly or the two disagree. Here it is not cosmetic:
+ * `ntpath.expanduser("~/.claude/settings.json")` returns
+ * `C:\Users\x/.claude/settings.json`, with the tail's forward slashes intact,
+ * and the source's `Path(...)` turns that into `C:\Users\x\.claude\settings.json`
+ * before it is ever compared or reported. The raw string reaches `Finding.
+ * source_file`, so `--json` would quote a mixed-separator path back at an
+ * operator who has to match it against their own settings tree.
+ *
+ * NOT `osNormpath`, and the difference is one component: `pathlib` collapses
+ * repeated separators and drops `.`, and **keeps `..`**, where `normpath`
+ * collapses `..` too (measured against CPython 3.12.3: `PureWindowsPath("a/../b")`
+ * is `a\..\b` and `ntpath.normpath("a/../b")` is `b`). Collapsing `..` here
+ * would resolve a path textually across a symlink, which is the exact mistake
+ * `absoluteSymlinkInChain` exists because of.
+ *
+ * Exported so it can be pinned against CPython directly, under both platforms.
+ * Reaching it only through `discoverMergedScopes` would mean the Windows half
+ * is exercised on the Windows cells alone -- and the Windows cells are exactly
+ * where this was found, after it had passed everywhere else.
+ */
+export function pathStr(p: string): string {
+  const sep = osSep();
+  const alt = osAltsep();
+  const unified = alt !== null ? p.split(alt).join(sep) : p;
+  const [drive, rest] = osSplitdrive(unified);
+  // POSIX reserves a leading `//` (exactly two) as its own root, and `pathlib`
+  // preserves it; three or more collapse to one. `ntpath`'s UNC roots come out
+  // of `splitdrive` as the drive, so this only ever sees the POSIX case.
+  let root = "";
+  let tail = rest;
+  if (rest.startsWith(sep)) {
+    const leading = rest.length - rest.replace(new RegExp(`^\\${sep}+`), "").length;
+    root = leading === 2 ? sep + sep : sep;
+    tail = rest.slice(leading);
+  }
+  const parts = tail.split(sep).filter((c) => c !== "" && c !== OS_CURDIR);
+  const body = parts.join(sep);
+  const out = drive + root + body;
+  // `str(Path(""))` is `"."`, and `Path("a/")` is `a` -- both fall out of the
+  // filter above, and the empty result is the one that needs a name.
+  return out === "" ? OS_CURDIR : out;
+}
+
+/**
  * `discover_merged_scopes`: settings scopes that merge into the effective deny
  * set, if present.
  *
@@ -922,12 +974,12 @@ export function discoverMergedScopes(inputs?: readonly string[] | null): string[
 
   for (const path of given) {
     for (const name of PROJECT_SCOPE_FILENAMES) {
-      add(nodeJoin(parentOf(path), name));
+      add(pathStr(osJoin(parentOf(path), name)));
     }
   }
-  add(expanduser(USER_SETTINGS_PATH));
+  add(pathStr(expanduser(USER_SETTINGS_PATH)));
   for (const candidate of doctorSeams.managedSettingsPaths) {
-    add(candidate);
+    add(pathStr(candidate));
   }
   return found;
 }
