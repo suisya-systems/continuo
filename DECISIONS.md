@@ -108,6 +108,7 @@ spaces distinct.
 | D-0215 | A truthy non-mapping `sandbox.filesystem` is refused, not coerced to the empty mapping | accepted |
 | D-0216 | `_is_inside_root` compares normcased paths, so Windows path identity is not a sandbox escape | accepted |
 | D-0301 | The five session verbs are `Promise`-returning, serialised per instance, and the capability probe stays synchronous | accepted |
+| D-0302 | The watcher's closed fact-state set is restated here, so the S1 vocabulary lint has an oracle in this repository | accepted |
 | D-0401 | The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store | accepted |
 | D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
 | D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
@@ -6221,6 +6222,68 @@ receipt would then be a promise of a receipt, and item 8 would need re-arguing, 
 
 **Source.** Belt dispatched 2026-08-29, task `continuo-secretary-port`, Refs #37. The range
 allocation follows the gate D-0032 exercised for `session`, `canary` and `messagebus`.
+## D-0302 — The watcher's closed fact-state set is restated here, so the S1 vocabulary lint has an oracle in this repository
+
+**Context.** interlock's `tests/session/test_provider_contract.py` carries a lint over the *source
+text* of the provider interface: none of the watcher's fact-state names may appear anywhere in it,
+token or prose, comments and docstrings included. Writing `observation unavailable` into a docstring
+maps the interface onto the fact-state set as surely as importing the constant would, and the whole
+point of `SessionReadout` is that a provider's own lifecycle word is carried **uninterpreted** --
+conversion belongs to the detector layer.
+
+The case does not hard-code the vocabulary. It reads it out of interlock's `DECISIONS.md`, splitting
+on the `## D-0005 —` heading and collecting every `- \`NAME\`` bullet in that entry's body, and it
+fails loudly on an implausible parse rather than silently checking nothing. That indirection is the
+substance of the case, not plumbing: interlock's D-0005 says a seventh state may be added only by a
+new `D-` entry, so reading the set from the file makes the lint widen automatically on the day such
+an entry lands, where a copied list would go stale and keep passing.
+
+**A mechanical port of that parse reads the wrong entry.** `D-0005` in *this* repository is the
+double-green rule. A port that split continuo's `DECISIONS.md` on `## D-0005 —` would find an entry
+with no such bullets, and the source's own `>= 6` guard would fire -- which is the guard working, but
+it does not give the ported case an oracle.
+
+Two alternatives were rejected before this one. **Copying the six names into the test file** loses
+exactly the property the source built the indirection for. **Vendoring interlock's `DECISIONS.md`**
+into this repository puts a second copy of another project's decision record under version control
+here, to be kept in agreement by hand.
+
+**Decision.** The closed set is restated in this file, and the ported lint reads it from here, by the
+same parse the source uses. The set, carried from interlock D-0005 unchanged:
+
+- `ACTIVE_EVIDENCE`
+- `KNOWN_WAIT`
+- `EXPLICIT_BLOCK`
+- `NO_ACTIVITY_EVIDENCE`
+- `OBSERVATION_UNAVAILABLE`
+- `TERMINAL`
+
+This is a **restatement for the oracle's sake, not an adoption**. Continuo has no watcher and this
+entry does not give it one; what is decided here is that these six names are the vocabulary the
+session interface's prose must stay clear of. The procedural half of interlock's D-0005 is carried
+with the list and is what makes the indirection worth keeping: a seventh name is added by a new `D-`
+entry in this file, never by editing a list inside a test, and on the day one lands the lint widens
+without anyone remembering to widen it.
+
+The parse is deliberately the source's, character for character -- split on the heading, collect
+`^- \`[A-Z][A-Z_]+\`$` from the body, refuse a parse of fewer than six. Reproducing it rather than
+writing a friendlier one keeps a single failure mode: if this entry is ever reformatted so the
+bullets stop matching, the case goes red here for the same reason it would go red there.
+
+**Falsifier.** If interlock adds a seventh fact state and this list is not updated, the ported lint
+passes while the source's fails -- the copied-list failure this entry claims to avoid, arriving one
+level up. That is the cost of restating rather than reading interlock's own file, and it is accepted
+because the alternative is a vendored copy of that file with the same exposure and more surface. The
+observation that would show the trade was wrong is a divergence found by anything other than this
+sentence: if a reviewer ever discovers the two lists disagree, the restatement needs a mechanical
+check against interlock at the pinned revision, in the shape of `test/contract/carried-documents.
+test.ts`.
+
+**Source.** Task `continuo-session-port`, 2026-08-28, porting
+`tests/session/test_provider_contract.py::test_no_fact_state_vocabulary_appears_anywhere_in_s1` from
+interlock `65f36c5`. The six names and the "a seventh requires a new `D-` entry" rule are interlock
+D-0005, quoted from that revision. Decision id from the `D-03xx` range allocated to this belt by
+D-0032.
 
 ---
 
