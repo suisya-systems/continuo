@@ -99,7 +99,15 @@ import process from "node:process";
 
 import { pyJsonDumps } from "../fencing/pyjson.js";
 import { pyRepr } from "../fencing/pyrepr.js";
-import { getOwn, PyValueError, pyKeys, pyStr, pyStrip, pyTruthy } from "../fencing/pysemantics.js";
+import {
+  getOwn,
+  PyValueError,
+  pyKeys,
+  pyLstrip,
+  pyStr,
+  pyStrip,
+  pyTruthy,
+} from "../fencing/pysemantics.js";
 import {
   CapabilityReport,
   Failure,
@@ -547,7 +555,15 @@ function validatedPrompt(sessionId: string, name: string, value: unknown): strin
         "contains a NUL, which no operating system can carry in an argv",
     );
   }
-  if (value.replace(/^\s+/, "").startsWith("-")) {
+  // `value.lstrip().startswith("-")`, and `pyLstrip` rather than
+  // `value.replace(/^\s+/, "")` because the two whitespace sets are not the
+  // same one. Python strips per `str.isspace()`, which includes U+001C..U+001F
+  // and U+0085; JavaScript's `\s` includes none of them, so a prompt whose
+  // first character is U+001C followed by `--resume` is refused by interlock
+  // and would have been *carried into an argv as a flag* here. The set differs
+  // the other way too -- U+FEFF is `\s` to JavaScript and not whitespace to
+  // Python -- so the naive spelling is wrong in both directions.
+  if (pyLstrip(value).startsWith("-")) {
     return new Failure(
       FailureKind.REFUSED_BY_PROVIDER,
       `settings[${pyRepr(name)}] for session ${pyRepr(sessionId)} ` +
@@ -674,7 +690,7 @@ function pyTypeWord(value: unknown): string {
  * validated *before* any string or list field, so a record missing
  * `session_id` and carrying `"generation": null` reports the generation error.
  *
- * Two rule-9 notes on `int`, both unreachable from the ported suite and both
+ * Three rule-9 notes on `int`, all unreachable from the ported suite and all
  * recorded rather than left to be found:
  *
  * - CPython's `isinstance(True, int)` is `True`, so `"pid": true` parses there
@@ -683,6 +699,12 @@ function pyTypeWord(value: unknown): string {
  * - CPython refuses `"pid": 3.0` (a `float` is not an `int`); `JSON.parse`
  *   collapses `3.0` to the number `3` before this function can see the
  *   spelling, so it is accepted.
+ * - CPython *accepts* `"pid": 0` and `"pid": -1`, because they are `int`s and
+ *   nothing downstream of it refuses them. This port refuses them, for the
+ *   reason spelled out at the check itself: the two values POSIX reads as
+ *   "the caller's own group" and "every process the caller may signal" must
+ *   not reach a stop ladder, and refusing them at the seam alone would turn a
+ *   verb that owes a typed answer into a rejected promise.
  */
 function recordFromJson(text: string): SessionRecord {
   const raw: unknown = JSON.parse(text);
@@ -718,6 +740,30 @@ function recordFromJson(text: string): SessionRecord {
     if (typeof value !== "number" || !Number.isSafeInteger(value)) {
       throw new PyValueError(
         `record field ${pyRepr(key)} must be an integer or null, got ${pyRepr(value)}`,
+      );
+    }
+    // The range check the source does not have, and the one place it can be
+    // done. `_optional_int` accepts any `int`, so a record carrying `"pid": 0`
+    // is a *well-formed* record to CPython -- and interlock survives that only
+    // because `os.kill(0, 0)` and `os.killpg(0, sig)` do not raise: they
+    // silently address the caller's OWN process group, so the source answers
+    // "yes, that process exists" about itself and, in the stop ladder, would
+    // SIGKILL the interpreter running it. This port refuses those pids at the
+    // seam instead (`assertPid` / `assertSignallablePgid` in
+    // `src/session/runtime.ts`), which is right and stays -- but a refusal at
+    // the seam is a THROW, out of a `readState`/`stop`/`resume` that owes its
+    // caller a typed `Failure` or a broken-record readout. So the value is
+    // stopped here, where the record is already being validated and where the
+    // answer the contract wants -- a broken record, classified exactly as every
+    // other type-invalid field is -- is one `PyValueError` away.
+    //
+    // `record.pgid || record.pid` is what makes a recorded `0` quiet rather
+    // than loud: the falsy fallback swallows it into the pid before any seam
+    // sees it, so a `0` pgid would never have reached `assertSignallablePgid`
+    // at all.
+    if (value < 1) {
+      throw new PyValueError(
+        `record field ${pyRepr(key)} must be a positive integer or null, got ${pyRepr(value)}`,
       );
     }
     return value;
@@ -2522,7 +2568,25 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     const recordPath = this.#recordPath(sessionId);
     let record: SessionRecord;
     try {
-      record = recordFromJson(readFileSync(recordPath, "utf8"));
+      // `read_text(encoding="utf-8")` with CPython's default `errors="strict"`,
+      // which is the fatal decode and NOT `readFileSync(path, "utf8")`. Node's
+      // `"utf8"` substitutes U+FFFD for an undecodable byte, so a record with
+      // one corrupt byte in its workspace path, its resume prompt or its argv
+      // would parse as perfectly good JSON and be *acted on* -- resumed with a
+      // mangled path, or spawned with a mangled argument -- where the source
+      // raises `UnicodeDecodeError` and takes the broken-record route below.
+      // The convention and its reason are D-0015's; the spelling is the one
+      // `src/fencing/state.ts`, `src/settings/generator.ts` and the SQLite
+      // migrator already use. (That third path is described rather than
+      // spelled: this module's own text is scanned for the name of the
+      // directory it lives in, in prose as much as in an import.)
+      //
+      // `UnicodeDecodeError` is a `ValueError`, so the source's
+      // `except (OSError, ValueError, KeyError, TypeError)` already covers it
+      // and it needs no branch of its own; `TextDecoder`'s refusal is a
+      // `TypeError` here and lands in the same wide catch.
+      const bytes = readFileSync(recordPath);
+      record = recordFromJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch (exc) {
       if (isSystemError(exc) && exc.code === "ENOENT") {
         return null;

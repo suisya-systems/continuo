@@ -1899,6 +1899,156 @@ test("an identity incident is committed to the record, and read back from it (ta
   expect(refusalOf(result).detail).toContain("identity incident");
 });
 
+// -- target-only: three values Python's types excluded and JavaScript admits --
+//
+// Rule 9's exact shape, three times. Each of these is a value the source's own
+// suite could not construct -- CPython refuses it at a type, at a decode or at
+// a `str` predicate -- so no ported case can reach the branch, and each one was
+// reachable here until the fix these cases pin.
+
+test("a record whose bytes are not UTF-8 is a broken record, not a mangled one (target-only)", async () => {
+  // `record_path.read_text(encoding="utf-8")` is CPython's STRICT decode, and
+  // the `UnicodeDecodeError` it raises is a `ValueError`, which the source's
+  // `except (OSError, ValueError, KeyError, TypeError)` catches as a broken
+  // record. `readFileSync(path, "utf8")` substitutes U+FFFD instead, so the
+  // record parsed, was cached, and the session was ADOPTED -- with a workspace
+  // path, a resume prompt and an argv that are no longer the ones written. The
+  // acting verbs would then resume a child in a directory nobody named.
+  //
+  // No source case can construct this: to interlock a record either decodes or
+  // is broken, and there is no third answer to assert.
+  const root = caseRoot("cli");
+  const provider = cliProvider(root);
+  const sessionDir = join(root, "state", "notutf8");
+  mkdirSync(sessionDir, { recursive: true });
+  const workspace = join(root, "workspaces", "notutf8");
+  mkdirSync(workspace, { recursive: true });
+  // A well-formed record in every other respect: the only thing wrong with it
+  // is one byte, and it sits inside a string the provider would act on.
+  const bytes = Buffer.from(
+    JSON.stringify({
+      session_id: "notutf8",
+      claude_session_uuid: claudeSessionUuid("notutf8"),
+      workspace: join(workspace, "Pmarker"),
+      role: "worker",
+      resume_prompt: "continue",
+      cli_args: [],
+      generation: 0,
+      argv: ["claude", "-p", "x"],
+      pid: null,
+      pgid: null,
+      incident: null,
+    }),
+    "utf8",
+  );
+  // 0xFF is not a legal byte anywhere in UTF-8, in any position.
+  const marker = bytes.indexOf(Buffer.from("Pmarker", "utf8"));
+  expect(marker, "the marker byte was not found in the rendered record").toBeGreaterThan(0);
+  bytes[marker] = 0xff;
+  writeFileSync(join(sessionDir, "record.json"), bytes);
+
+  const read = await provider.readState("notutf8");
+  const readout = okValue(read);
+  expect(readout.observation).toBe(Observation.COULD_NOT_OBSERVE);
+  // The broken-record sentence, not one of the several other reasons a healthy
+  // record with no child can produce -- which is the whole discrimination: a
+  // lossy read reaches this verb with an answer that also reads as
+  // could-not-observe, for a different and much quieter reason.
+  expect(String(readout.couldNotObserveReason)).toContain("could not be read as one");
+  // And the acting half: signalling or resuming a child whose identity did not
+  // decode is acting on a guess.
+  expect(await provider.stop("notutf8")).toBeInstanceOf(Failure);
+  expect(await provider.resume("notutf8")).toBeInstanceOf(Failure);
+});
+
+test("a record naming pid or pgid 0 is a broken record, not a throw out of a verb (target-only)", async () => {
+  // `_optional_int` accepts any `int`, so `"pid": 0` is a WELL-FORMED record to
+  // CPython -- and interlock survives it only because `os.kill(0, 0)` and
+  // `os.killpg(0, sig)` do not raise: they address the caller's OWN process
+  // group, so the source answers "yes, that process exists" about itself and
+  // its stop ladder would SIGKILL the interpreter running it. This port refuses
+  // those pids at the runtime seam, which is right and stays; what this pins is
+  // that the record parser refuses them FIRST, because a refusal at the seam is
+  // a throw out of a verb that owes its caller a typed answer.
+  //
+  // The third planted record is the quiet one: `record.pgid || record.pid`
+  // absorbs a recorded `0` into the pid before any seam sees it, so a `0` pgid
+  // beside a plausible pid never reaches `assertSignallablePgid` at all and is
+  // only ever catchable here.
+  const root = caseRoot("cli");
+  const provider = cliProvider(root);
+  const planted: readonly [string, Readonly<Record<string, unknown>>][] = [
+    // The quiet one first, deliberately: `record.pgid || record.pid` absorbs a
+    // recorded `0` into the pid, so this record reaches no seam guard at all
+    // and is the only one of the three whose absence shows up as a comparison
+    // rather than as a throw.
+    ["pgid-zero", { pid: 12345, pgid: 0 }],
+    ["pid-zero", { pid: 0, pgid: 0 }],
+    ["pid-negative", { pid: -1, pgid: -1 }],
+  ];
+  for (const [sessionId, overrides] of planted) {
+    plantRecord(root, sessionId, overrides);
+  }
+
+  for (const [sessionId] of planted) {
+    // `Ok(COULD_NOT_OBSERVE)`, not a rejected promise: this is the assertion
+    // that is red without the parser check, and it is red by THROWING rather
+    // than by comparing.
+    const readout = okValue(await provider.readState(sessionId));
+    expect(readout.observation, sessionId).toBe(Observation.COULD_NOT_OBSERVE);
+    expect(String(readout.couldNotObserveReason), sessionId).toContain(
+      "must be a positive integer or null",
+    );
+    // The acting verbs answer the way they answer for every other broken
+    // record -- a reason-bearing refusal.
+    const stopped = await provider.stop(sessionId);
+    expect(stopped, sessionId).toBeInstanceOf(Failure);
+    expect(refusalOf(stopped).kind, sessionId).toBe(FailureKind.REFUSED_BY_PROVIDER);
+  }
+
+  // R4: a broken record is still a session, so all three are still on the
+  // roster rather than having vanished from it.
+  expect(okValue(await provider.listSessions()).map((each) => each.sessionId)).toEqual([
+    "pgid-zero",
+    "pid-negative",
+    "pid-zero",
+  ]);
+});
+
+test("a prompt whose leading whitespace is Python's alone is still refused as a flag (target-only)", async () => {
+  // `value.lstrip().startswith("-")` strips per `str.isspace()`, and the two
+  // whitespace sets differ in BOTH directions, so a `\s` stand-in is wrong
+  // twice over. `settings` is opaque and caller-supplied, so both spellings are
+  // reachable and neither is constructible from the source's suite: to CPython
+  // there is one strip and no second answer to assert against.
+  const root = caseRoot("cli");
+  const provider = cliProvider(root);
+  const log = spawnLog(root);
+
+  // U+001C is whitespace to `str.isspace()` and not to JavaScript's `\s`, so
+  // interlock refuses this prompt and the naive spelling CARRIES IT INTO AN
+  // ARGV, where the CLI reads `--resume` as its own flag.
+  const refused = await provider.start(
+    cliRequest(root, "sess-1", { prompt: "\u001c--resume 00000000-0000-0000-0000-000000000000" }),
+  );
+  expect(refused).toBeInstanceOf(Failure);
+  expect(refusalOf(refused).kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
+  expect(refusalOf(refused).detail).toContain("begins with '-'");
+  expect(spawned(log), "the flag-shaped prompt reached a spawn").toEqual([]);
+
+  // And the other direction, which a `\s` strip gets wrong by being too eager:
+  // U+FEFF is whitespace to JavaScript and NOT to Python, so `"\ufeff-x"` does
+  // not begin with `-` once Python has stripped it and interlock spawns it.
+  // Refusing it here would be the port inventing a refusal the source has not
+  // got.
+  const kept = await provider.start(cliRequest(root, "sess-2", { prompt: "\ufeff-p is a prompt" }));
+  expect(kept, describeValue(kept)).toBeInstanceOf(Ok);
+  // Waited for, not read: the fake CLI writes the log line itself, so an
+  // immediate read races the child and would report zero spawns for a start
+  // that did spawn.
+  expect(await waitForSpawns(log, 1)).toHaveLength(1);
+});
+
 test("the provider names no control-plane symbol in either spelling (target-only)", () => {
   // The camelCase half of `test_the_provider_imports_nothing_from_the_control_plane`,
   // which is that case's whole assertion in the source and only half of it here.
