@@ -187,13 +187,36 @@ export function moduleBindings(short: string): readonly ModuleBinding[] {
     }
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
-        if (ts.isIdentifier(declaration.name)) {
-          bindings.push({ name: declaration.name.text, importedFrom: null });
+        for (const name of boundNames(declaration.name)) {
+          bindings.push({ name, importedFrom: null });
         }
       }
     }
   }
   return bindings;
+}
+
+/**
+ * Every identifier a declaration's binding name introduces, patterns included.
+ *
+ * `export const { MIN_SAMPLE_SIZE } = settings` binds a module-level name that
+ * is in the namespace at run time and would have been invisible to a scan that
+ * looked only at `ts.isIdentifier(declaration.name)` -- which is exactly the
+ * shape the forbidden-name test exists to catch, arriving through a spelling
+ * the scan did not anticipate. Raised by the review gate.
+ */
+function boundNames(name: ts.BindingName): readonly string[] {
+  if (ts.isIdentifier(name)) {
+    return [name.text];
+  }
+  const found: string[] = [];
+  for (const element of name.elements) {
+    if (ts.isOmittedExpression(element)) {
+      continue;
+    }
+    found.push(...boundNames(element.name));
+  }
+  return found;
 }
 
 function importedBindings(statement: ts.ImportDeclaration): ModuleBinding[] {
@@ -331,6 +354,16 @@ class Sources {
   private readonly mappings = new Map<string, Map<string, ts.Expression>>();
   private readonly fieldTexts: string[] = [];
   /**
+   * Whether any `sql:` field in the module could NOT be resolved.
+   *
+   * Dropping one silently is fail-open twice over: the unresolved query is never
+   * classified, and because the module's OTHER record classes still resolve, the
+   * `recordClass.sql` branch returns a non-empty list and the scan reports a
+   * clean package. One unreadable field makes the whole `.sql` access
+   * unresolvable instead. Raised by the review gate.
+   */
+  private unresolvedField = false;
+  /**
    * Names declared more than once in the module.
    *
    * The source keys its bindings by name over a walk of the whole tree, so a
@@ -347,6 +380,7 @@ class Sources {
   private readonly ambiguous = new Set<string>();
 
   constructor(source: ts.SourceFile) {
+    const fields: ts.Expression[] = [];
     const visit = (node: ts.Node): void => {
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
         if (this.names.has(node.name.text)) {
@@ -362,14 +396,23 @@ class Sources {
       // will hand the driver. The source reads the `sql=` keyword of a call; the
       // port's spelling of that argument is a property of the options object.
       if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === "sql") {
-        const text = this.textOf(node.initializer, 0);
-        if (text !== null) {
-          this.fieldTexts.push(text);
-        }
+        fields.push(node.initializer);
       }
       ts.forEachChild(node, visit);
     };
     visit(source);
+    // Resolved in a second pass: a field bound to a constant declared further
+    // down the file is invisible during the walk, and a resolver that saw it as
+    // unresolvable would report a statement uninspectable for a reason that is
+    // about traversal order rather than about the code.
+    for (const initializer of fields) {
+      const text = this.wholeTextOf(initializer, 0);
+      if (text === null) {
+        this.unresolvedField = true;
+      } else {
+        this.fieldTexts.push(text);
+      }
+    }
   }
 
   textOf(node: ts.Node, depth: number): string | null {
@@ -471,14 +514,27 @@ class Sources {
       const right = this.wholeTextOf(node.right, depth + 1);
       return left === null || right === null ? null : left + right;
     }
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-      // `QUERY.replace("{placeholders}", ...)` substitutes a bind-parameter list
-      // into a template. The template's own text is what is classified: the
-      // substitution is a run of `?` separated by commas, which can hold neither
-      // a statement separator nor a verb.
-      if (node.expression.name.text === "replace") {
-        return this.wholeTextOf(node.expression.expression, depth + 1);
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "replace" &&
+      node.arguments.length === 2
+    ) {
+      // `QUERY.replace(needle, insertion)` is performed rather than skipped. The
+      // receiver's text alone is what the source's `.format()` branch returns,
+      // and it is wrong in the one direction that matters here: what a
+      // `.replace` INSERTS is SQL too, so `QUERY.replace("{tail}", "INSERT ...")`
+      // would be classified from a text the write is not in. Raised by the
+      // review gate. Where the insertion cannot be read, the whole text cannot
+      // be read; `textsForArgument`'s fallback then decides, under the
+      // precondition that makes the receiver's leading verb sound.
+      const subject = this.wholeTextOf(node.expression.expression, depth + 1);
+      const needle = this.wholeTextOf(node.arguments[0] as ts.Expression, depth + 1);
+      const insertion = this.wholeTextOf(node.arguments[1] as ts.Expression, depth + 1);
+      if (subject === null || needle === null || insertion === null) {
+        return null;
       }
+      return subject.split(needle).join(insertion);
     }
     return null;
   }
@@ -526,18 +582,26 @@ class Sources {
    */
   textsForArgument(
     node: ts.Expression,
-    options: { readonly runsEveryStatement: boolean },
+    options: { readonly method: "prepare" | "exec" | "pragma" },
   ): readonly string[] | null {
     if (ts.isPropertyAccessExpression(node) && node.name.text === "sql") {
       // `recordClass.sql` over a declared set of record classes: each declared
-      // sql is executed, so each is classified.
-      return this.fieldTexts.length > 0 ? [...this.fieldTexts] : null;
+      // sql is executed, so each is classified -- and if any one of them could
+      // not be read, none of them stands for the set.
+      return this.fieldTexts.length > 0 && !this.unresolvedField ? [...this.fieldTexts] : null;
     }
     const whole = this.wholeTextOf(node, 0);
     if (whole !== null) {
       return [whole];
     }
-    if (options.runsEveryStatement) {
+    // Only `prepare` may fall back. `exec` runs every statement in the string,
+    // so an interpolation can append one behind the fragment's verb; and a
+    // `pragma` is classified by its whole text rather than by its verb -- every
+    // statement it can hold reads `PRAGMA`, and whether it SETS is decided by
+    // what follows, so `pragma(`user_version ${suffix}`)` reduced to its
+    // fragment reads as `PRAGMA user_version`, a read, whatever the suffix does.
+    // Raised by the review gate.
+    if (options.method !== "prepare") {
       return null;
     }
     const fragment = this.textOf(node, 0);
@@ -746,7 +810,9 @@ export function statementsExecuted(): readonly ExecutedStatement[] {
       }
       const argument = node.arguments[0] as ts.Expression;
       const functionOf = enclosing.get(node) ?? "<module>";
-      const texts = sources.textsForArgument(argument, { runsEveryStatement: method === "exec" });
+      const texts = sources.textsForArgument(argument, {
+        method: method as "prepare" | "exec" | "pragma",
+      });
       if (texts === null) {
         found.push({
           module: short,

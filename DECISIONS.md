@@ -4726,6 +4726,25 @@ guessing.
   parentheses alone do not separate the two (`PRAGMA table_info("run")` is a read). That list is the
   engine's, not this package's, and a pragma missing from it is reported rather than skipped.
 
+**And three more of the same family, which is what makes it a family rather than a list.** Every
+finding on this scan across three review rounds has one shape: *a resolver reads part of a text and
+treats the rest as absent.* Named, so the next person extending the scan checks for it rather than
+rediscovering it.
+
+- **`.replace(needle, insertion)` is performed, not skipped.** The source's `.format()` branch
+  returns the template and never looks at the arguments, which is sound for a bind-parameter list
+  and not for an arbitrary insertion: `QUERY.replace("{tail}", "; INSERT ...")` was classified from
+  a text the write is not in. The replacement runs when both arguments resolve; the text is
+  unresolvable when the insertion is not.
+- **Only `prepare` may fall back to the fragment rule.** For a `pragma`, every statement the call can
+  hold reads `PRAGMA`, and whether it *sets* is decided by what follows the name -- so
+  `pragma(`user_version ${suffix}`)` reduced to its fragment reads as a plain read whatever the
+  suffix does. The source has no `pragma()` method to have this problem with; it issues pragmas
+  through `execute`, where the whole text is the statement.
+- **One unreadable `sql:` field makes the whole `recordClass.sql` unresolvable.** Dropping it was
+  fail-open twice: the query is never classified, and because the module's other record classes
+  still resolve, the access returns a non-empty list and the scan reports a clean package.
+
 **What was measured.** 42 statements found across the fourteen modules, every one statically
 resolved, none unclassified, and none reported by the hidden-write sweep. Six mutations, each red
 for its own reason: an `INSERT` added to `cohort.ts` reports `cohort.selectCohort: INSERT`;
@@ -4740,7 +4759,12 @@ which is the direction the blanking exists for. Six more for the second round:
 not statically inspectable`; `exec(`SELECT 1; ${aWriteConstant}`)` reports `INSERT behind a leading
 SELECT`; a second `const statement` in `false-termination.ts` reports its own function
 uninspectable; `pragma("user_version(1)")` reports `sets a pragma`; and `pragma('table_info("run")')`
-reports **nothing**.
+reports **nothing**. Five more for the third round: a `.replace` that really inserts
+`; INSERT ...` reports `INSERT behind a leading SELECT` while the same replace inserting a comment
+reports nothing; a `.replace` with an unresolvable insertion and an interpolated `pragma` both
+report `statement not statically inspectable`; an unreadable `sql:` on one record class reports
+`canary.readInterlockRecords` uninspectable; and `export const { MIN_SAMPLE_SIZE } = ...` is
+reported by name by the forbidden-name walk.
 
 **Status.** accepted
 
