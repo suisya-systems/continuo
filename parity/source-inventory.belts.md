@@ -42,9 +42,9 @@ That is 1,317 of the 2,194 -- the inventory as it stood before this document exi
 
 ## The remaining 877
 
-### `session` -- 142 cases
+### `session` -- `candidate-lane` -- 142 cases
 
-`candidate-lane`. `tests/session/` drives `claude_org_runtime/session/`: the provider contract, a
+`tests/session/` drives `claude_org_runtime/session/`: the provider contract, a
 stub provider, and the Claude CLI provider. A provider/process-lifecycle belt is the natural unit,
 and `test_provider_contract.py` is written as a contract battery, which is the shape that ports
 best -- one implementation-independent set of assertions, run against each provider.
@@ -53,9 +53,9 @@ It is also the belt several others wait on: `gate_item2` drives crash-and-retry 
 provider, and `gate_item11` exists to assert that no provider detail leaks into the control plane.
 Porting those before `session` would mean porting their fixtures twice.
 
-### `attention` -- 194 cases
+### `attention` -- `retarget` -- 194 cases
 
-`retarget`. Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
+Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
 (mechanism)` or `rewrite`; **none** is a straight carry. `test_classifier.py` (61) carries the
 strongest invariant -- that every fact-vocabulary row has a pinned expectation -- but the mechanism
 is re-derived onto a closed fact-state set. `test_dedup.py` is called out explicitly: its two
@@ -67,9 +67,9 @@ That last point is why this is `retarget` and not `candidate-lane`: a straight t
 would carry a behaviour the source repository has already decided is wrong, and continuo's D-0023
 says an inherited defect is repaired at the first belt that touches it, not reproduced.
 
-### `fault_injection` -- 98 cases
+### `fault_injection` -- `candidate-lane` -- 98 cases
 
-`candidate-lane`, as an acceptance harness rather than a product module. There is no
+An acceptance harness rather than a product module. There is no
 `claude_org_runtime/fault_injection/`; `test_conformance.py` is a battery run against every adapter
 a build ships, and `test_manifest.py` / `test_protocol.py` / `test_import_graph.py` pin the shape
 adapters must satisfy. Continuo already has the same instinct in `test/contract/`, so this may end
@@ -77,9 +77,9 @@ up merged into that directory rather than given a directory of its own. The Issu
 injection specifically, which is the argument for a belt; the counter-argument is that a conformance
 battery with one adapter in it is a battery for a build continuo does not yet have.
 
-### `canary` -- 70 cases
+### `canary` -- `candidate-lane` -- 70 cases
 
-`candidate-lane`, a canary/rollout belt. Drives `claude_org_runtime/canary/`: a routing ledger with
+A canary/rollout belt. Drives `claude_org_runtime/canary/`: a routing ledger with
 database-enforced guarantees, an audit, synthetic v1 fixtures.
 
 **Not to be confused with `measurement.test_canary.txt`,** which is already ported and covers
@@ -91,9 +91,9 @@ things.
 refused *in the store, not in the discipline of the writer*, which is exactly the property continuo
 already ports well (`control_plane` is 585 cases of it).
 
-### `curator` -- 71 cases
+### `curator` -- `decision-pending` -- 71 cases
 
-`decision-pending`. `tests/curator/` covers skill-candidate promotion: a digest, a path audit, and
+`tests/curator/` covers skill-candidate promotion: a digest, a path audit, and
 gate item 9's five negatives. The promotion gate's whole premise is that a filesystem write into a
 live skill directory *is* the promotion, which is a claim about running Claude Code sessions --
 continuo is a library, and whether it owns that surface at all is not settled. Porting the tests
@@ -103,9 +103,9 @@ If the answer is yes, `test_promotion_gate.py` is high-value: every negative ass
 decision was a refusal *and* that nothing landed on disk, which is the two-sided shape that catches
 a gate that refuses in name only.
 
-### `gate_record` -- 64 cases
+### `gate_record` -- `not-porting` -- 64 cases
 
-`not-porting`, proposed. `tests/gate_record/test_gate_record.py` makes structural checks on
+`tests/gate_record/test_gate_record.py` makes structural checks on
 **interlock's own `docs/gate-record.md`**: that eleven items are present and distinct, that the
 summary table and the per-item sections agree, that item 2's C1 failure has not been tidied away.
 The subject is a document continuo does not have and would not gain by having a copy of.
@@ -114,25 +114,25 @@ The *technique* is worth keeping and continuo already uses it -- `test/contract/
 polices carried prose the same way -- so this is a case of the property being held natively rather
 than of it being dropped.
 
-### `gate_item11` -- 64 cases
+### `gate_item11` -- `retarget` -- 64 cases
 
-`retarget`. The property is real and worth having: no session-backend detail may leak into the
+The property is real and worth having: no session-backend detail may leak into the
 control plane, asserted structurally so a leak fails the build the day it is introduced. But
 `test_no_provider_detail_leaks.py` asserts it over Python imports of a Python package, and
 `test_suite_runs_unchanged.py` measures it by running interlock's suite. Both need re-derivation
 against continuo's module graph before any of the 64 cases mean anything. Continuo has the machinery
 for that already -- `import.meta.glob` package walks (D-0114) and the write-scan (D-0115).
 
-### `gate_item2` -- 34 cases
+### `gate_item2` -- `candidate-lane` -- 34 cases
 
-`candidate-lane`, downstream of `session`. Every case runs a crash-and-retry through the control
+Downstream of `session`. Every case runs a crash-and-retry through the control
 plane and asserts a durable row rather than an exit code, which is a shape that translates directly.
 It needs the provider fixture that `session` brings, so it is a belt that follows rather than a
 belt that leads.
 
-### `broker` -- 54 cases collected, 4 further modules not collected
+### `broker` -- `retarget` -- 54 cases collected, 4 further modules not collected
 
-`retarget`, and the only subsystem where the inventory and the source directory disagree in size.
+The only subsystem where the inventory and the source directory disagree in size.
 
 Collected: `test_residents.py` alone, 54 cases -- process-identity fault injection through injected
 platform seams. `PORTING_LEDGER.md` classes it `carry (invariant) / rewrite (mechanism)` and names
@@ -153,17 +153,17 @@ inventory and nothing may be invented.
 Whatever continuo decides about them, it decides after interlock does. They are `retarget` upstream
 first.
 
-### `messagebus` -- 43 cases
+### `messagebus` -- `candidate-lane` -- 43 cases
 
-`candidate-lane`, a durable-messaging belt, and the destination the five quarantined broker modules
+A durable-messaging belt, and the destination the five quarantined broker modules
 above are pointed at. `tests/messagebus/` drives `claude_org_runtime/messagebus/`: the bus, an
 endpoint, carried specifications, a stale-readout case, and an import-graph guard. It is small now
 and will not stay small, which is an argument for porting it early rather than late -- continuo's
 `control_plane/outbox.ts` is already the at-most-once half of the same problem.
 
-### `scrub` -- 20 cases
+### `scrub` -- `not-porting` -- 20 cases
 
-`not-porting`, proposed. `tests/scrub/test_scrub.py` verifies `tests/scrub/scrub_fixture.py`, a
+`tests/scrub/test_scrub.py` verifies `tests/scrub/scrub_fixture.py`, a
 deterministic PII/secret scrubber used to promote real `.state/` snapshots into publishable
 fixtures. `PORTING_LEDGER.md` classes both `carry`, and rightly: it is the pipeline that makes
 accident-derived fixtures publishable at all.
@@ -174,26 +174,26 @@ would be a second scrubber to keep in agreement with the first, over the same po
 (`docs/scrub-policy.md`), and a disagreement between two scrubbers is a leak. Better that continuo
 consume the fixtures interlock's scrubber produces.
 
-### `secretary` -- 11 cases
+### `secretary` -- `candidate-lane` -- 11 cases
 
-`candidate-lane`, an observation / human-gate belt, most likely alongside `attention`. Gate item 8's
+An observation / human-gate belt, most likely alongside `attention`. Gate item 8's
 behavioural half: the intake answers while every consumer stalls, with the stall made *verifiable*
 rather than assumed and no latency threshold invented (`Q-0011` is open). Small, and it depends on
 nothing else in this list -- which makes it a reasonable first port for anyone wanting the shape of
 this belt before committing to `attention`'s 194.
 
-### `migrate` -- 11 cases
+### `migrate` -- `decision-pending` -- 11 cases
 
-`decision-pending`. `tests/test_migrate.py`, fixture-driven checks of v1 to v2 key normalisation.
+`tests/test_migrate.py`, fixture-driven checks of v1 to v2 key normalisation.
 `PORTING_LEDGER.md` classes it `rewrite`, against "whatever migration/comparison bridge the run
 boundary cutover needs" -- a bridge that does not exist yet in either repository. Two of its cases
 call `pytest.importorskip("jsonschema")` inside the test body rather than at module level, so unlike
 the broker five they *are* collected and *are* in the inventory; they will skip on a host without
 `jsonschema` and continuo will need a decision about the equivalent dependency.
 
-### `package_smoke` -- 1 case
+### `package_smoke` -- `not-porting` -- 1 case
 
-`not-porting`, proposed, on the grounds that the property is already held. `tests/test_smoke.py` is
+Proposed on the grounds that the property is already held. `tests/test_smoke.py` is
 a five-line import check asserting `claude_org_runtime.__version__ == "0.1.42"` --
 `PORTING_LEDGER.md` classes it `rewrite` for exactly that reason: it is package plumbing, re-created
 for the new package rather than carried.

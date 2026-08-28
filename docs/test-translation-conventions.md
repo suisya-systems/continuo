@@ -599,9 +599,12 @@ every not-yet-ported subsystem checked by nothing:
 6. **baseline** -- node ids plus collection-time-skipped modules must be the collected total, and
    the outcome breakdown must add up to it too.
 7. **fabricated** -- a node id from a module recorded as skipped at collection time.
-8. **unclassified** -- a subsystem the belts document does not name. It checks that a status was
-   *given*, never which one: the answer is a human's, and a check that enforced today's answer would
-   make changing it a fight with CI.
+8. **unclassified** -- a subsystem the belts document gives no status, in its own heading or its
+   row in the summary table. Prose is not a classification: `session` is named in `gate_item2`'s
+   paragraph beside the word `candidate-lane`, so a substring search read it as classified after
+   both of its own entries were deleted. It checks that a status was *given*, never which one: the
+   answer is a human's, and a check that enforced today's answer would make changing it a fight
+   with CI.
 
 Each of these eight has been observed failing; a check never seen red is not a check.
 

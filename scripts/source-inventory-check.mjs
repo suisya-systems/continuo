@@ -42,10 +42,12 @@
  *                        nevertheless has an inventory file or a node id. Those
  *                        modules yield no node id; one appearing means a case
  *                        was invented for a test pytest never collected.
- *  8. **unclassified**-- a subsystem the belts document does not name. Being in
- *                        the inventory is evidence, not a commitment to port,
- *                        and the place that says which is which has to cover
- *                        every subsystem or the distinction is only rhetorical.
+ *  8. **unclassified**-- a subsystem the belts document gives no status, in a
+ *                        heading or a table row rather than in passing prose.
+ *                        Being in the inventory is evidence, not a commitment to
+ *                        port, and the place that says which is which has to
+ *                        cover every subsystem or the distinction is only
+ *                        rhetorical.
  *
  * Wired into `npm run verify` beside `npm run parity`, for the reason the
  * parity check states about itself: a ledger nobody checks is a spreadsheet,
@@ -73,6 +75,14 @@ function fail(kind, detail) {
  * Returned as read, in order, because order is part of what `aggregate` checks:
  * an inventory is a collection snapshot, and a sorted copy of one is a
  * different artefact that no longer says what pytest would emit.
+ *
+ * `sourcePath` is the one source file a per-file inventory may hold node ids
+ * from, or `null` for a `.all.txt`, which aggregates several. Everything else
+ * applies to both -- and it has to. Reading a `.all.txt` by discarding empty
+ * lines would let a blank line, or a missing final newline, survive into an
+ * aggregate that then still compares equal to the concatenation, so the file
+ * would violate the node-ids-only rule that the parity check depends on while
+ * this one called it exact.
  */
 function readInventory(path, sourcePath) {
   const raw = readFileSync(join(ROOT, path), "utf8");
@@ -93,7 +103,11 @@ function readInventory(path, sourcePath) {
     if (line !== line.trim()) {
       fail("shape", `${at}: node id carries leading or trailing whitespace`);
     }
-    if (!line.startsWith(`${sourcePath}::`)) {
+    if (sourcePath === null) {
+      if (!line.includes("::")) {
+        fail("shape", `${at}: not a node id: ${line}`);
+      }
+    } else if (!line.startsWith(`${sourcePath}::`)) {
       fail("shape", `${at}: expected a node id under '${sourcePath}', found: ${line}`);
     }
     ids.push(line);
@@ -164,9 +178,7 @@ for (const subsystem of manifest.subsystems) {
       `${subsystem.name}: its files hold ${expected.length} node ids but ${MANIFEST} records ${subsystem.collected}`,
     );
   }
-  const aggregate = readFileSync(join(ROOT, subsystem.inventory), "utf8")
-    .split("\n")
-    .filter((line) => line !== "");
+  const aggregate = readInventory(subsystem.inventory, null);
   if (aggregate.length !== expected.length || aggregate.some((id, i) => id !== expected[i])) {
     fail(
       "aggregate",
@@ -226,6 +238,16 @@ if (skips.length > baseline.skipped) {
   );
 }
 const skipped = new Set(skips.map((module) => module.path));
+// The reconciliation adds *modules*, not manifest rows. One entry accidentally
+// overwritten with a copy of another leaves `skips.length` at five and every
+// arithmetic check above still passing, while only four modules are named --
+// and the Set below would quietly absorb the duplicate.
+if (skipped.size !== skips.length) {
+  fail(
+    "baseline",
+    `${skips.length} collection-time skip entries name only ${skipped.size} distinct modules`,
+  );
+}
 for (const module of skips) {
   if (!module.reason) {
     fail("baseline", `collection-time skip has no reason: ${module.path}`);
@@ -248,13 +270,28 @@ for (const [id, path] of seen) {
 }
 
 // (8): every subsystem is classified somewhere a human reads.
+//
+// The name has to appear in a *classifying* line -- the subsystem's own heading
+// or its row in the summary table -- carrying one of the statuses. Searching the
+// whole document for the name is not enough and was tried: `session` is
+// mentioned in `gate_item2`'s prose, next to the word `candidate-lane`, so
+// deleting `session`'s own section AND its table row still read as classified.
+// Prose about one subsystem is not a status for another.
+const STATUSES = ["in-scope", "candidate-lane", "retarget", "decision-pending", "not-porting"];
 const beltsPath = manifest.porting_intent.document;
-const belts = readFileSync(join(ROOT, beltsPath), "utf8");
+const beltLines = readFileSync(join(ROOT, beltsPath), "utf8").split("\n");
 for (const subsystem of manifest.subsystems) {
-  if (!belts.includes(`\`${subsystem.name}\``)) {
+  const heading = `### \`${subsystem.name}\` --`;
+  const row = `| \`${subsystem.name}\` |`;
+  const classified = beltLines.some(
+    (line) =>
+      (line.startsWith(heading) || line.startsWith(row)) &&
+      STATUSES.some((status) => line.includes(`\`${status}\``)),
+  );
+  if (!classified) {
     fail(
       "unclassified",
-      `${beltsPath} does not name the '${subsystem.name}' subsystem, so its porting status is unstated`,
+      `${beltsPath} has no heading or table row giving the '${subsystem.name}' subsystem one of ${STATUSES.join(", ")}`,
     );
   }
 }
