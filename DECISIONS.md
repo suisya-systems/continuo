@@ -67,6 +67,8 @@ spaces distinct.
 | D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
 | D-0404 | The ledger DDL is a shipped data file, and the belt asserts it reached `dist/` | accepted |
 | D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
+| D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
+| D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -5798,6 +5800,16 @@ expected and is the point: interlock is frozen, so continuo is where this can be
 - **Repair it here and adjust the two cases' expectations (rejected).** It buys a real fix at the
   cost of the belt's claim to be a faithful translation, in the same commit that claims 70/70. The
   two are separable and should be separate.
+
+**Carried out** (2026-08-29, continuo#55). Both `..._is_never_replaced` guards are in
+`routing_ledger.sql`; the re-decision this entry booked is **D-0406**, which also records the one
+thing the measurement here did not anticipate -- that a `BEFORE INSERT` guard runs ahead of `CHECK`
+constraints too, so the guard has to defer to them or it swallows a validation failure. The two
+ported cases are re-pointed onto the new refusal and recorded as deliberate divergences in
+`parity/canary.routing-ledger.ledger.json`, with interlock's `match=` kept visible beside each;
+the measurement above is now a target-only case driving a foreign connection. The [P2] the belt left
+open beside this one is closed by **D-0407**. What this entry predicted has held: continuo's store
+now diverges from interlock's DDL, which is the point of the entry rather than a cost of it.
 - **Widen the refusal assertions to match either message (rejected).** A pattern satisfied by both
   the old and the new sentence is a pattern that stops testing which guard fired -- and which guard
   fires is the entire subject of the repair.
@@ -5808,5 +5820,166 @@ expected and is the point: interlock is frozen, so continuo is where this can be
 `recursive_triggers`, the bypass closes on its own and the scheduled change reduces to deleting this
 entry's reason for existing. Re-run `tmp/`-style probe: create a ledger, route a run, then attempt
 the `INSERT OR REPLACE` above on a bare connection.
+
+---
+
+## D-0406 -- With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read
+
+**Context.** D-0405 scheduled the repair of the `INSERT OR REPLACE` bypass and named the price:
+the guard that closes it is a `BEFORE INSERT` trigger, and a `BEFORE INSERT` trigger fires **ahead
+of conflict resolution**. That is what makes it work on a connection with `recursive_triggers` OFF,
+and it is also what puts it ahead of the primary key. So the duplicate `run_id` that D-0402
+measured as `SQLITE_CONSTRAINT_PRIMARYKEY` now arrives as `SQLITE_CONSTRAINT_TRIGGER`, and that is
+the signal `route_run_start`'s idempotent-retry path classifies on. **This entry re-decides D-0402's
+classification for the changed code; everything else D-0402 decided still stands** -- the ban on
+message-substring matching (D-0016), the confirmation by re-read, and the comparison on
+`owningSystem` only.
+
+Firing ahead of conflict resolution has a second consequence D-0402 never had to face, and it is
+the one that makes this more than a widened set. `SQLITE_CONSTRAINT_PRIMARYKEY` and
+`SQLITE_CONSTRAINT_UNIQUE` are **specific**: on `ROUTE_RUN_START_SQL`, which writes only
+`run_owner` and whose only uniqueness is `run_id`, either one can mean exactly one thing.
+`SQLITE_CONSTRAINT_TRIGGER` is **not**: five triggers in the DDL raise it, and one of them --
+`run_owner_matches_its_decision` -- sits on this very statement. A port that simply added the third
+code to the accepted set would read any trigger refusal as "already routed" and hand back a row for
+a write that never happened.
+
+**Decision.** The accepted set gains `SQLITE_CONSTRAINT_TRIGGER`, and the classification becomes
+two-stage:
+
+1. **The code proposes.** `SQLITE_CONSTRAINT_PRIMARYKEY` / `_UNIQUE` keep D-0402's meaning
+   unchanged, and their path through the method is untouched -- including the fact that a re-read
+   finding no row surfaces as `UnroutedRun`, which is the source's own shape.
+2. **The store disposes, for `_TRIGGER` only.** The `run_owner` row is read back before the error
+   is read as an ownership question. A row means the replacement guard is what fired, and the
+   existing idempotent-retry / `OwnerChangeRefused` decision runs on it exactly as before. **No row
+   means some other trigger fired, and the error propagates as itself** -- the same disposition
+   every non-ownership integrity failure has had since D-0402.
+
+The asymmetry between the two branches is deliberate and is the point: the wider code gets the
+stricter confirmation, because it is the only one of the three that more than one constraint can
+produce.
+
+**The guard defers to the row's own CHECKs, and that is load-bearing here rather than tidiness.**
+SQLite runs `BEFORE INSERT` triggers ahead of constraint checking (measured: a duplicate insert
+carrying a `TEXT` value in an INTEGER column reports the trigger, not the `CHECK`). A guard whose
+`WHEN` were a bare `EXISTS (...)` would therefore answer a malformed duplicate with "you may not
+replace this", the re-read would find the standing row, and the retry would be reported as an
+idempotent success **with nothing written** -- which is precisely what the ported case
+`an_idempotent_retry_does_not_absorb_a_validation_failure` exists to forbid, and it would have gone
+red. So `run_owner_is_never_replaced`'s `WHEN` restates the column CHECKs and stands aside for a row
+the table would reject anyway: a malformed retry is a `CHECK` failure, reaches neither branch above,
+and passes through as itself. The restatement is duplication in the DDL, and it is written down
+there in capitals, because a CHECK added to `run_owner` and not to the guard would reopen this
+quietly.
+
+**The sentinel `routing_decision` has to reserve.** SQLite gives `NEW.decision_seq` the value
+**-1** in a `BEFORE INSERT` trigger when the insert supplies no sequence -- the manual calls it
+undefined; measured on SQLite 3.53.4 it is -1, on an empty table and a populated one alike. The
+guard asks whether `NEW.decision_seq` is already in the table, so a row stored **at** -1 would make
+every ordinary, sequence-omitting append look like a replacement and be refused: a working ledger
+bricked by a value only an out-of-band writer could have put there.
+
+`CHECK (decision_seq >= 0)` reserves the negative half, and it has to be the half rather than the
+one value: SQLite assigns an omitted rowid as **MAX + 1**, so a stored -2 makes the next
+auto-assigned sequence -1 -- the sentinel arriving as the value being *written* rather than the
+value being *matched*. Excluding everything negative closes both directions at once, and with 0 the
+smallest legal sequence an auto-assignment is always 1 or more. Any other value the undefined case
+might take is harmless on its own terms: it matches no row, the guard stands aside, and standing
+aside is the right answer for an insert that cannot collide.
+
+**Zero stays legal, deliberately.** `routing_decision_is_appended_in_order` is what refuses a
+back-filled sequence, and the ported case that pins it inserts 0 and matches that trigger's
+sentence; a CHECK swallowing 0 first would leave that case green while it asserted something else.
+Both boundaries are pinned by target-only cases so neither can be widened quietly.
+
+Raised as [P2] by the review gate on this change, in two rounds -- the stored sentinel first, the
+assigned one second -- reproduced each time, and closed here rather than disclosed. `run_owner`
+needs nothing equivalent: `run_id` is not a rowid alias, so `NEW.run_id` is always the value the
+insert supplied.
+
+**Measured** (better-sqlite3 13.0.3, SQLite 3.53.4, 2026-08-29). With both guards in place: a
+duplicate `run_id` reports `SQLITE_CONSTRAINT_TRIGGER` with the guard's sentence and no longer
+reports `UNIQUE constraint failed: run_owner.run_id` at all; a duplicate carrying a non-integer
+`routed_at_ms` reports `SQLITE_CONSTRAINT_CHECK`, as does a duplicate `decision_seq` naming a system
+outside the vocabulary or carrying an empty reason (each guard's `WHEN` restates every CHECK on its
+table, which is why); `INSERT OR REPLACE` is refused on a connection whose `recursive_triggers`
+reads 0, with the standing row unchanged; and an explicit `decision_seq` of -1 or -2 is refused by
+CHECK with appends still appending after it. All 87 cases of the canary belt are green, and the two
+ported `or replace ...` cases changed only the sentence they match.
+
+**Alternatives.**
+
+- **Accept `_TRIGGER` unconfirmed (rejected).** It is the too-wide reading D-0402 already rejected
+  once, one code along: `run_owner_matches_its_decision` raises the same code on the same statement.
+- **Keep the guard out of `run_owner` and repair only `routing_decision` (rejected).** Ownership is
+  the guarantee the belt is named for; repairing the lesser half would be a change that looks like
+  the repair and is not.
+- **Distinguish the guard by its message (rejected).** D-0016. The message is what D-0402 refused to
+  classify on, and the guard's own sentence is not a compatibility surface either.
+- **A bare `EXISTS (...)` guard, and re-point the validation case too (rejected).** That case is
+  interlock's, its subject is the exact confusion the bare guard would create, and rule 0 does not
+  let a translator trade it away. The `WHEN` clause costs four predicates and keeps it.
+
+**Falsifier.** `test/canary/routing.test.ts::target-only -- the duplicate run conflict is the
+replacement guard, not the primary key` goes red if the code changes back, and
+`test/canary/ledger.test.ts::target-only -- the replacement guard defers to the row's own CHECKs`
+goes red if the `WHEN` clause is simplified. If SQLite ever runs `CHECK` constraints ahead of
+`BEFORE INSERT` triggers, the second becomes unnecessary rather than wrong.
+
+---
+
+## D-0407 -- The routing point reads its INTEGER columns 64-bit wide
+
+**Context.** The canary belt's review gate raised, and the belt left open as a [P2], the last of
+three 64-bit narrowings in this package: `routeNewRunsTo` took `lastInsertRowid` through
+`Number(...)`, and `currentDecision` / `routedRun` read `decision_seq`, `decided_at_ms` and
+`routed_at_ms` as JavaScript numbers. SQLite's INTEGER is 64-bit and Python's `int` is arbitrary
+precision, so this is the port's own defect and not interlock's: a ledger carrying a `decision_seq`
+at or past 2**53 -- which the schema permits -- would have been reported with a sequence id or a
+timestamp that disagreed with the stored row by one, presented as the store's own value.
+
+It was left open in the belt with a stated reason: the two narrowings that **were** repaired sat on
+the audit digest and the rollback comparison, where a wide value arrives as ordinary data in any
+audited column and the failure is silent and evidential -- a changed store reported as untouched.
+This one is reachable only by a writer that inserts an explicit `decision_seq` past 2**53, which no
+continuo API can do. That writer is the out-of-band one D-0405 is about, so the belt recorded it in
+`parity/canary.routing.ledger.json` and pointed it at this change, where the classification it sits
+beside was being re-decided anyway.
+
+**Decision.** The three statements run with `safeIntegers(true)`, and every integer read is passed
+through a local `narrowInteger` that returns a `number` when a double holds the value exactly and
+leaves a `bigint` when it does not -- the same rule, and the same five lines, `src/canary/audit.ts`
+already applies to the digest and the rollback rows. `RoutingDecision.decisionSeq` /
+`.decidedAtMs` and `RoutedRun.decisionSeq` / `.routedAtMs` widen to `number | bigint`
+(`LedgerInteger`).
+
+**Why narrow back rather than always return `bigint`.** Every value any continuo API can write is
+inside the safe range, so narrowing keeps the observable type exactly what it was for every ledger
+this package can produce -- the ported cases still compare `decisionSeq` with `toBe(1)` and
+`toBe(3)`, which a `bigint` fails. The widening is visible only where the alternative was a wrong
+answer.
+
+**Why not refuse a wide value instead.** `measurement/fixtures.ts` refuses beyond
+`Number.MAX_SAFE_INTEGER` (D-0007), and that is right where the value is a caller's input being
+validated. Here the value is already in the store, written by someone else; a reader whose job is
+to report what the ledger holds should report it, not refuse to look. Refusing would also give
+`currentDecision` a new refusal type the source has no counterpart for.
+
+**Known and left: the boundary is the safe range, not exact representability.** A stored value a
+double happens to hold exactly but which sits outside the safe range -- 2**53 itself -- comes back
+as a `bigint` where `routeNewRunsTo` returns the `number` its caller passed. `Number.isSafeInteger`
+is the boundary this repo already draws for the same question in `src/canary/audit.ts` (twice, over
+this very ledger's integers), `src/measurement/ac9.ts` and `src/measurement/fixtures.ts` (D-0007),
+so narrowing here on a different rule would give the routing point and the audit two different
+answers about the same column of the same store -- the drift D-0017 rule 4 exists to prevent, and a
+worse trade than a type that differs past 2**53. Raised as [P2] by the review gate on this change
+and recorded in `parity/canary.routing.ledger.json`. Moving the rule is a decision that moves all
+four sites together; it is not this entry's to make unilaterally.
+
+**Falsifier.** `test/canary/routing.test.ts::target-only -- a decision sequence past 2**53 survives
+the round trip` writes 2**53+1 through a foreign connection and asserts the value comes back
+identical; with `safeIntegers` removed it reads 9007199254740992 and the case goes red naming the
+loss.
 
 ---

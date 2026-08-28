@@ -84,6 +84,19 @@ triggers off — SQLite's default — `INSERT OR REPLACE` resolves a primary-key
 *implicit* delete that fires no `BEFORE DELETE` trigger, so a mid-flight owner change would be
 reachable in a single statement that never touches the trigger meant to refuse it.
 
+A pragma is per-connection, though, and that leaves the guarantee true only of writers who came
+through this package. It was measured to be exactly that narrow: an ordinary `new Database(path)`
+moved a started run's owner in one statement, and the tampered ledger then passed the opener's
+every check, because ownership is data and no verification rung reads it. **continuo's DDL
+therefore diverges from interlock's here** (D-0405, D-0406): `run_owner` and `routing_decision`
+each carry a `BEFORE INSERT` trigger refusing a row whose key is already present. A `BEFORE INSERT`
+trigger fires ahead of conflict resolution, so the refusal holds whatever the pragma says, on any
+connection at all. Interlock is frozen and concedes the hole in a comment; continuo is where the
+sentence above can be made true rather than intended. The cost is one thing a reader of both should
+know: a duplicate insert is now refused by that trigger rather than by the primary key, so it
+reports `SQLITE_CONSTRAINT_TRIGGER`, and the routing point classifies its own idempotent retries
+accordingly.
+
 The ledger deliberately does **not** enter Q-0001's territory: `owning_system` names a *system*
 (`interlock`, or the stand-in `synthetic_v1`) and never a component, a role, or a lease holder.
 A run→system ledger folded into a component→state-item writer table would answer Q-0001 by

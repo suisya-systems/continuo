@@ -63,7 +63,30 @@ CREATE TABLE routing_decision (
     CHECK (typeof(owning_system) = 'text' AND typeof(reason) = 'text'),
     CHECK (typeof(decided_at_ms) = 'integer'),
     CHECK (owning_system IN ('interlock', 'synthetic_v1')),
-    CHECK (length(reason) > 0)
+    CHECK (length(reason) > 0),
+    -- A sequence number is a counter, so it is not negative -- and reserving
+    -- the negative half is what keeps `routing_decision_is_never_replaced`
+    -- exact. That trigger asks whether NEW.decision_seq is already in the
+    -- table, and SQLite gives NEW.decision_seq the value **-1** in a BEFORE
+    -- INSERT trigger when the insert supplies no sequence (the manual calls it
+    -- undefined; measured on SQLite 3.53.4 it is -1, on an empty table and a
+    -- populated one alike). So a row stored at -1 would make every ordinary,
+    -- sequence-omitting append look like a replacement and be refused: a
+    -- working ledger bricked by a value only an out-of-band writer could have
+    -- put there.
+    --
+    -- `>= 0` rather than `<> -1` because SQLite assigns an omitted rowid as
+    -- MAX + 1, so a stored -2 makes the NEXT auto-assigned sequence -1 -- the
+    -- sentinel again, this time as the value being written. Excluding the whole
+    -- negative half closes both directions at once: nothing can be stored at
+    -- the sentinel, and nothing can be assigned it either (with the smallest
+    -- legal sequence 0, an auto-assignment is always 1 or more).
+    --
+    -- ZERO IS DELIBERATELY STILL LEGAL. `routing_decision_is_appended_in_order`
+    -- is what refuses a back-filled sequence, and the ported case that pins it
+    -- inserts 0 and matches that trigger's sentence; a CHECK swallowing 0 first
+    -- would change what that case asserts.
+    CHECK (decision_seq >= 0)
 );
 
 -- The newest decision is the routing, so an insert that back-fills a smaller
@@ -79,6 +102,38 @@ AFTER INSERT ON routing_decision
 WHEN NEW.decision_seq < (SELECT MAX(decision_seq) FROM routing_decision)
 BEGIN
     SELECT RAISE(ABORT, 'routing decisions are appended in order; the newest row is the routing');
+END;
+
+-- A decision, once recorded, is never overwritten -- and this trigger is what
+-- makes that true for a connection this package did not hand out (D-0405,
+-- D-0406). The BEFORE DELETE trigger below refuses an explicit DELETE, but
+-- `INSERT OR REPLACE` resolves a primary-key conflict with an IMPLICIT delete
+-- that fires no trigger unless `recursive_triggers` is ON -- and that pragma is
+-- per-connection, so an ordinary `new Database(path)` gets SQLite's default of
+-- OFF and rewrites history in one statement. A BEFORE INSERT trigger fires
+-- ahead of conflict resolution, so it refuses the replacement whatever the
+-- pragma says; that is the whole of the repair, measured.
+--
+-- The WHEN clause defers to the row's own CHECKs (see the matching note on
+-- `run_owner_is_never_replaced`, which explains why): a row this table would
+-- refuse anyway is left for the CHECK to refuse, so this guard never masks a
+-- validation failure with a "you may not replace this" refusal. IT RESTATES
+-- EVERY CHECK ON THE TABLE, AND A CHECK ADDED ABOVE BELONGS HERE TOO -- except
+-- `decision_seq >= 0`, which is what makes the sentinel case safe rather than
+-- something this clause has to handle (see that CHECK's own note). An ordinary
+-- append supplies no decision_seq, arrives here as the reserved -1, matches no
+-- row, and never reaches the RAISE.
+CREATE TRIGGER routing_decision_is_never_replaced
+BEFORE INSERT ON routing_decision
+WHEN typeof(NEW.decision_seq) = 'integer'
+ AND typeof(NEW.owning_system) = 'text'
+ AND typeof(NEW.decided_at_ms) = 'integer'
+ AND typeof(NEW.reason) = 'text'
+ AND NEW.owning_system IN ('interlock', 'synthetic_v1')
+ AND length(NEW.reason) > 0
+ AND EXISTS (SELECT 1 FROM routing_decision WHERE decision_seq = NEW.decision_seq)
+BEGIN
+    SELECT RAISE(ABORT, 'a routing decision is never replaced; the routing history is appended to, never rewritten');
 END;
 
 -- Append-only in both directions: a decision, once taken, is history. An
@@ -103,7 +158,10 @@ END;
 -- "No run changes owner mid-flight" is enforced here by the database, not by
 -- the discipline of whoever routes: the UPDATE trigger refuses every update,
 -- including a no-op one, because there is nothing on this row that is
--- legitimately updatable. Re-routing the same run to the same owner is
+-- legitimately updatable, the DELETE trigger refuses every delete, and the
+-- BEFORE INSERT trigger refuses a row that would replace one already here --
+-- which is the one of the three that holds on a connection this package did
+-- not configure (D-0405). Re-routing the same run to the same owner is
 -- handled above this table as an idempotent no-op (a crashed router may
 -- retry); re-routing it to a DIFFERENT owner is refused as an owner change.
 -- --------------------------------------------------------------------------
@@ -140,12 +198,45 @@ BEGIN
     SELECT RAISE(ABORT, 'a run never changes owning system mid-flight (gate item 10)');
 END;
 
--- NOTE for both delete triggers in this file: they guard the INSERT OR
--- REPLACE path only on a connection with PRAGMA recursive_triggers = ON --
--- with it off (SQLite's default) the implicit conflict-resolution DELETE
--- fires no trigger at all. The pragma is per-connection, so ledger.ts sets
--- it in configureLedgerConnection() on every connection it hands out, and
--- the tests exercise OR REPLACE through exactly those connections.
+-- The mid-flight guarantee against a writer this package did not hand out
+-- (D-0405). `INSERT OR REPLACE INTO run_owner` moves a started run's owner in
+-- one statement on any connection where `recursive_triggers` is OFF -- SQLite's
+-- default, and the pragma is per-connection, so every caller that has not read
+-- ledger.ts is such a connection. The implicit conflict-resolution DELETE fires
+-- no BEFORE DELETE trigger there; a BEFORE INSERT trigger fires ahead of
+-- conflict resolution and so refuses the replacement with the pragma either
+-- way. Measured, and the reason this trigger exists rather than a comment
+-- conceding the hole.
+--
+-- The WHEN clause deliberately DEFERS TO THE ROW'S OWN CHECKS: SQLite runs
+-- BEFORE INSERT triggers ahead of constraint checking, so a bare
+-- `EXISTS (...)` guard would answer a malformed row with "you may not replace
+-- this" and the CHECK that should have refused it would never run. A row this
+-- table would reject anyway is therefore left to the CHECK, and only a
+-- well-formed replacement reaches the RAISE. The predicates below restate the
+-- column CHECKs above for exactly that reason: A CHECK ADDED TO run_owner
+-- BELONGS HERE TOO. (`run_id` and `length(run_id) > 0` are not restated: this
+-- trigger only fires when NEW.run_id equals a row already in the table, which
+-- is text and non-empty by those same CHECKs.)
+CREATE TRIGGER run_owner_is_never_replaced
+BEFORE INSERT ON run_owner
+WHEN typeof(NEW.owning_system) = 'text'
+ AND typeof(NEW.decision_seq) = 'integer'
+ AND typeof(NEW.routed_at_ms) = 'integer'
+ AND NEW.owning_system IN ('interlock', 'synthetic_v1')
+ AND EXISTS (SELECT 1 FROM run_owner WHERE run_id = NEW.run_id)
+BEGIN
+    SELECT RAISE(ABORT, 'a started run keeps the owning system it was routed to; its ledger row is never replaced (gate item 10)');
+END;
+
+-- NOTE for both delete triggers in this file: on their own they guard the
+-- INSERT OR REPLACE path only on a connection with PRAGMA recursive_triggers =
+-- ON -- with it off (SQLite's default) the implicit conflict-resolution DELETE
+-- fires no trigger at all. The pragma is per-connection, so ledger.ts sets it
+-- in configureLedgerConnection() on every connection it hands out. The two
+-- `..._is_never_replaced` BEFORE INSERT triggers above close that path for
+-- every OTHER connection as well, which is what makes the guarantee a property
+-- of the store rather than of the opener (D-0405).
 CREATE TRIGGER run_owner_rows_are_never_deleted
 BEFORE DELETE ON run_owner
 BEGIN
