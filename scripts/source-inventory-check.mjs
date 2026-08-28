@@ -49,6 +49,17 @@
  *                        cover every subsystem or the distinction is only
  *                        rhetorical.
  *
+ * **What it cannot check, stated so nobody reads more into a green run.** Node
+ * ids are recorded in pytest's collection order, and nothing available offline
+ * says what that order is -- the whole point of a committed snapshot is that it
+ * runs without an interlock checkout. So `aggregate` checks that a `.all.txt`
+ * is its per-file inventories concatenated; it cannot check that those files
+ * are in the order the collection actually emitted. Six measurement
+ * inventories were alphabetised rather than collected-order and passed every
+ * check here until a reviewer re-ran the collection. Order is a claim the
+ * regeneration procedure makes, and re-running that procedure is the only thing
+ * that tests it.
+ *
  * Wired into `npm run verify` beside `npm run parity`, for the reason the
  * parity check states about itself: a ledger nobody checks is a spreadsheet,
  * and so is an inventory.

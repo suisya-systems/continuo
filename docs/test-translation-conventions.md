@@ -608,6 +608,13 @@ every not-yet-ported subsystem checked by nothing:
 
 Each of these eight has been observed failing; a check never seen red is not a check.
 
+**What it cannot check.** Node ids are recorded in pytest's collection order, and nothing offline
+says what that order is -- running without an interlock checkout is the point of a committed
+snapshot. `aggregate` verifies that a `.all.txt` is its per-file inventories concatenated; it cannot
+verify that those files are in collected order. Six measurement inventories were alphabetised
+instead and passed everything here until a reviewer re-ran the collection. Order is a claim the
+regeneration procedure makes, and re-running it is the only thing that tests it.
+
 ### The suite baseline
 
 Interlock at `65f36c5` is **2,199 collected = 2,190 passed + 8 skipped + 1 xfailed**. Reproduced on
