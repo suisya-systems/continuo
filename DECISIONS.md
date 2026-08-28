@@ -76,6 +76,7 @@ spaces distinct.
 | D-0115 | The write scan names better-sqlite3's whole SQL surface, and restores the pragma keyword | accepted |
 | D-0116 | The statement trace names its issuer from the V8 call site, and folds the two languages' spellings | accepted |
 | D-0117 | The catalogue's no-copy property is read off the syntax, because JavaScript has no string identity | accepted |
+| D-0118 | The last two measurement files convert whole, and the copy is verified by the testkit rather than by an opener | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -5285,3 +5286,106 @@ which would make the source's assertion directly translatable; or this package b
 some way other than a literal array of `[name, CONSTANT]` pairs, which the syntax read would have to
 follow.
 
+## D-0118 -- The last two measurement files convert whole, and the copy is verified by the testkit rather than by an opener
+
+**Context.** D-0029 closed the control-plane belt's conversion and named `latency.test.ts` as the
+one measurement file still building a production control plane per case. It undercounted by one, in
+the same way issue 37's survey undercounted the spike files: `provenance.test.ts` builds one per case
+too, 46 times, and is the heavier of the two. PR 50's run put a number on it -- the slow
+`windows-latest` cell blew the 60s per-test cap at **81s** inside this file, on the single case that
+builds **five** control planes rather than one. (The task brief said four; read line by line the case
+takes `productionDb` five times -- `first`, `second`, `onlyInteger`, `nocaseA`, `nocaseB` -- and the
+count is recorded here because the exclusion judgement below is a per-call-site judgement and an
+off-by-one in the census is the thing that would hide a site.)
+
+**Decision.** Both files convert, and **every one of their 65 fixture call sites converts** -- 46 in
+`provenance.test.ts`, 19 in `latency.test.ts`. There are no exclusions in either file. As in D-0029
+that is not an oversight of D-0028's two exclusion kinds; it is that no kind is present. Judged per
+call site and measured, not argued:
+
+- **Nothing here has creation as its subject.** Each file contains exactly one
+  `createProductionControlPlane` call, in its own fixture. `provenance.test.ts` builds two databases
+  by hand -- the non-production header case and the empty-ledger case -- and neither goes through the
+  fixture, so neither moves.
+- **Nothing here asserts what an opener would verify.** `latency.test.ts` never mentions
+  `application_id`, `user_version` or a schema stamp. `provenance.test.ts` does, in one case, and it
+  is the shape that is *not* excluded: it reads `application_id`, `user_version` and the migration
+  head **off the database it was handed** and asserts the header agrees with them. A copy carries all
+  three verbatim, so the case is comparing the header against the same file it always was.
+- **Nothing here patches a seam before taking its fixture.** Neither file contains a `patchSeam`
+  call at all, so D-0028's falsifier -- a seam replaced before the lazy template build runs inside
+  whichever case copies first -- cannot arise.
+- **Nothing here needs a database that does not exist yet.** Neither file contains an `existsSync`,
+  an `unlinkSync` or any assertion about a file's absence, which is D-0027's fourth property.
+
+**D-0027's other half does not apply on this belt, and the testkit covers what it was for.** A
+converted control-plane fixture returns a *connection*, and D-0027 has it opened through
+`openProductionControlPlane` so that a template which failed to build is a refusal rather than a case
+running quietly against the wrong schema. A measurement fixture returns a **path**: the case opens it
+itself, through `openForMeasurement` or a plain writable handle, and there is no public entry point
+for the fixture to route through. The guarantee is not lost, because `suiteTemplate` already provides
+it directly -- it memoizes the build's *outcome*, rethrows the same failure into every later case, and
+raises if the build function returned without leaving a file at the path. That is why
+`cohort.test.ts`, `render.test.ts`, `known-holes.test.ts` and `cli.test.ts` are already this shape;
+this entry records the reason rather than leaving it to be re-derived a fifth time.
+
+**`provenance.test.ts` keeps its fixture's filename parameter.** `productionDb(name)` names the copy,
+because three cases build a second, third, fourth and fifth database to compare digests across and
+depend on the paths differing. `suiteTemplate.copyInto`'s `as` argument carries it, so the call sites
+are untouched.
+
+**Measurement.** Per case, on this Linux box: **42.5ms** to create a production control plane against
+**0.68ms** to copy one (N=30). Per file, tests-only wall clock: `provenance.test.ts` **4.18s to
+1.17s**, `latency.test.ts` **0.92s to 0.17s**. The case that blew the Windows cap goes **295ms to
+126ms** run alone, and the 126ms still contains the file's single template build, which a full-file
+run amortises. As in D-0029 the Linux figures understate the point: what is removed is one fsync per
+case, and it is the Windows cells that pay for fsyncs.
+
+Verified the way D-0028 and D-0029 were, by making each template's build throw and reading which
+cases go red:
+
+- `provenance.test.ts`: **71 of 77** red. The file has 47 case-producing declarations, 41 of which
+  take the fixture; one of those 41 is a `parametrize` over the 31 section-6 fields, so 40 + 31 = 71.
+  The 6 green are exactly the 6 declarations that never call `productionDb`, by name.
+- `latency.test.ts`: **19 of 23** red, matching the 19 fixture call sites one for one, with no
+  `parametrize` in the file.
+
+Wall-clock improvement alone would not have shown which call sites actually moved, and in
+`provenance.test.ts` the red count is not the call-site count -- the parametrised block is one site
+and 31 cases. The reconciliation above is what makes the two numbers agree.
+
+**Alternatives.**
+
+- **Raise the per-test timeout above 60s (rejected, D-0029's position kept).** Issue 37: "The cap is
+  not the fix -- the testkit template is." The brief for this task forbids it outright.
+- **Convert `latency.test.ts` only, as D-0029's sentence literally named (rejected).** It is the
+  smaller of the two and not the file that failed. Leaving `provenance.test.ts` would have kept the
+  type-A flake source and handed the next PR the same coin-flip on a slower cell.
+- **Give `provenance.test.ts`'s tie-digest case a template of its own holding the `probe` table
+  (rejected, D-0027's rule kept).** Each of its five databases gets a *different* `probe`, which is
+  the whole subject; the rows stay per-case and the template stays the same four lines every other
+  converted file declares.
+
+**Consequences.**
+
+- Case counts are unchanged file by file -- 77 and 23 -- and this branch adds no case to the suite.
+  Measured both ways: 1834 on `b552317` and 1834 on this branch across five seeds before D-0030
+  landed, then 1835 on `origin/main` and 1835 here after merging it. The +1 is D-0030's, in
+  `test/measurement/cli.test.ts`; the two settings files it also touched changed their imports and
+  their parser, not their case counts.
+- No ledger changes. Nothing about what is ported changed, only what the fixture copies.
+- This closes the type-A Windows pace-flake sources: no test file in the port now builds a production
+  or spike control plane per case.
+
+**Falsifier.** A case in either file that comes to need a database which does not exist yet, that
+asserts a stamp or fingerprint against a constant rather than against the file it was handed, or that
+patches a `migratorSeams` or `schemaSeams` entry before taking its fixture -- the two records on the
+path the template's lazy build runs through. Any of the three puts that case back on
+`createProductionControlPlane`, the way D-0028's four are.
+
+**Status.** accepted
+
+**Source.** Task `continuo-provenance-latency-template`, 2026-08-28, after the PR 50 CI observation.
+Measured on Node 22.17.0, better-sqlite3 13.0.3, vitest 4.1.11. Decision id allocated by the window.
+
+---

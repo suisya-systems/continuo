@@ -91,7 +91,7 @@ import {
   TableNotReadable,
 } from "../../src/measurement/provenance.js";
 import { openForMeasurement } from "../../src/measurement/reader.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { parametrize } from "../testkit/parametrize.js";
 
@@ -159,11 +159,29 @@ const SECTION_6_FIELDS: readonly string[] = [
 // helpers
 // --------------------------------------------------------------------------
 
-/** The source's `db` fixture, as a per-test call (rule 8). */
-function productionDb(name = "production.sqlite3"): string {
-  const path = join(caseRoot("provenance"), name);
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Every case here wants the same thing -- a production control plane at head,
+ * created at `T0`, with no options -- and creating one costs about 42.5ms
+ * against about 0.68ms to copy one (N=30, this Linux box). Building it once per
+ * file and handing each case its own copy removes the migrations this file used
+ * to run 46 times over (D-0118).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
   createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+});
+
+/**
+ * The source's `db` fixture, as a per-test call (rule 8).
+ *
+ * Still a fresh, writable database in a fresh per-case directory -- the copy is
+ * the case's own file, and nothing here is shared with another case at runtime.
+ * `name` still names the copy, because the cases that build a second database
+ * to compare digests across depend on the two having different paths.
+ */
+function productionDb(name = "production.sqlite3"): string {
+  return productionTemplate.copyInto(caseRoot("provenance"), name);
 }
 
 /** An ordinary writable handle -- deliberately not the harness's. */
