@@ -94,6 +94,14 @@ const LEDGERS = [
   "parity/canary.synthetic-v1.ledger.json",
   "parity/canary.structural.ledger.json",
   "parity/canary.rehearsal.ledger.json",
+  // lane E -- fault_injection (the S9/I-11 acceptance harness). One ledger per
+  // source test file, as everywhere else; the belt's own directory is
+  // test/fault_injection/ rather than test/contract/ (DECISIONS.md D-0601).
+  "parity/fault-injection.cases.ledger.json",
+  "parity/fault-injection.conformance.ledger.json",
+  "parity/fault-injection.import-graph.ledger.json",
+  "parity/fault-injection.manifest.ledger.json",
+  "parity/fault-injection.protocol.ledger.json",
   // lane F -- secretary (gate item 8's rehearsal). Two files, and the smallest
   // belt in the inventory; the D-range is `D-07xx` (D-0701).
   "parity/secretary.behaviour.ledger.json",

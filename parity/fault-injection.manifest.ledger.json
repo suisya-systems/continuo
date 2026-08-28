@@ -1,0 +1,298 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "fault_injection",
+      "collected": 98,
+      "inventory": "parity/source-inventory/fault_injection.all.txt",
+      "note": "The S9/I-11 fault-injection harness, interlock tests/fault_injection/, 5 test files plus the durable modules they drive (contract, controller, manifest + frozen manifest.json, conformance) and two adapters. One ledger per source file. The subsystem is an acceptance HARNESS rather than a product module: there is no claude_org_runtime/fault_injection/, and the port therefore lands in a directory of its own (test/fault_injection/) rather than in src/ -- see DECISIONS.md D-0601, which also records why it is not merged into test/contract/."
+    },
+    "file": {
+      "path": "tests/fault_injection/test_manifest.py",
+      "collected": 26,
+      "inventory": "parity/source-inventory/fault_injection.test_manifest.txt",
+      "note": "The matrix as an enumeration, and the enumeration checked: the generator freeze, the seed derivation, the coverage counts, the eight validation refusals and the budgets. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. It was taken under the DEFAULT profile (S9_PROFILE unset, so `fast`), which is why the 98 ids contain 21 manifest cases and not all 59 the frozen matrix holds -- the other 38 are `full`-only and are not collected by a default run. That distinction is load-bearing for this belt's completion claim and is spelled out in the cases ledger."
+    }
+  },
+  "target": {
+    "test_file": "test/fault_injection/manifest.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`copy.deepcopy(manifest['cases'][0])` to build a case that is then mutated to provoke a refusal",
+        "to": "`JSON.parse(JSON.stringify(...))`",
+        "why": "The manifest is pure JSON data -- no dates, no functions, no cycles -- so a JSON round trip is a total deep copy for this input, and it is the same copy the generator itself uses. The point of the copy is the source's: a mutation made to provoke a refusal must not leak into the next case's view of the manifest.",
+        "affects": "the eight validation cases"
+      },
+      {
+        "from": "Python set equality (`{...} == set(X)`) and subset tests",
+        "to": "sorted-array `toEqual` for equality, and per-member membership loops for subsets",
+        "why": "Set equality in Python is membership-only. Sorting both sides reproduces exactly that; a membership loop additionally names WHICH member is missing, which a two-set diff does not.",
+        "affects": "cases 4, 7, 8"
+      },
+      {
+        "from": "tuples used as set members / dict keys",
+        "to": "a joined string key (`role|checkpoint`, `targets.join('+')`)",
+        "why": "JavaScript has no value equality for arrays in a `Set`. Both separators are chosen to be impossible inside the values being joined, so the encoding is injective; `+` is additionally the manifest's own canonical spelling for a target set, so that key is the manifest's rather than one invented here.",
+        "affects": "cases 5 and 11"
+      },
+      {
+        "from": "`pytest.raises(ContractViolation, match='...')`",
+        "to": "`expectRefusal(fn, ContractViolation, '...')` from test/testkit/errors.ts",
+        "why": "Keeps both halves pytest asserts -- the exception class and a regex SEARCH over the message. The eight validation cases are exactly the ones where dropping the class half would leave a green test over the wrong refusal.",
+        "affects": "cases 16-23 and 26"
+      },
+      {
+        "from": "a 64-bit integer seed returned as a Python `int`",
+        "to": "`bigint`",
+        "why": "The pinned constant 0x574FF7BDD408EA49 exceeds Number.MAX_SAFE_INTEGER. Returning a `number` would round the contract's own pin, so the assertion would hold against a corrupted value. Same boundary rule this repository draws for SQLite integers (interlock D-0007).",
+        "affects": "case 13"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    }
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The frozen manifest.json is interlock's own file, copied byte-for-byte, and the port's generator is asserted to reproduce it. So every property of the matrix itself -- which 59 cases exist, which are `fast`, the pruning rule -- is interlock's, including any it got wrong.",
+      "why": "That is the intended relationship: rule 0 of docs/test-translation-conventions.md forbids a stricter translation than the source's, and the matrix IS the specification being ported. A change to the matrix is a change to interlock's evidence and belongs upstream, not in a translation."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_generator_reproduces_the_frozen_matrix_exactly",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the generator reproduces the frozen matrix exactly",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The belt's single most load-bearing case, and the one that proves the generator was ported and not merely re-invented: `buildManifest()` must equal the frozen manifest.json, which is interlock's own 59-case literal copied across unchanged. MEASURED: it does, for all 59 cases and every header field. The adaptation is the comparison itself -- the source compares two Python dicts, and dict equality is key-order independent, so the port canonicalises both sides (recursively sorting every object's keys) before `toEqual` rather than relying on JavaScript's insertion-ordered objects happening to agree. Without that the case would be asserting the order the generator writes keys in, which is not a property the source has."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_frozen_matrix_validates",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the frozen matrix validates",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_every_case_id_is_unique_and_parses_back_to_its_classification",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > every case id is unique and parses back to its classification",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Straight port of the five segment assertions and the uniqueness check. One spelling change: the source's `assert 'seed' not in case['case_id']` is a substring test on a string, and is kept as `not.toContain`; the neighbouring `'seed' not in case` on the *dict* (case 14) is a KEY test and is translated differently, as `not.toHaveProperty`. The two read alike in Python and mean different things, so they are called out here rather than collapsed."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_seed_set_covers_every_fault_kind_checkpoint_and_lane",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the seed set covers every fault kind checkpoint and lane",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Python set equality becomes a sorted-array `toEqual`. A bare `toEqual` over two `Set` objects compares insertion order in some matchers and membership in others; sorting both sides makes the comparison membership-only, which is what `==` on Python sets is. The middle assertion is a subset test (`set(CHECKPOINTS) <= {...}`) and stays a subset test -- written as a per-checkpoint membership loop so a failure names WHICH checkpoint has no case rather than printing two sets and leaving the reader to diff them."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_every_role_is_killed_at_every_mandated_window",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > every role is killed at every mandated window",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Gate item 4's twelve (role, window) cells. The source builds a set of TUPLES and tests membership; JavaScript has no value-equality for arrays in a Set, so the pair is joined into a composite string key. The separator is `|`, which cannot occur in a role or a checkpoint name (both are lowercase identifiers with underscores and hyphens), so the encoding is injective and two different pairs cannot collide into one key. The failure message names the missing cell, as the source's tuple assertion does."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_every_acceptance_section_2_injection_has_a_case",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > every acceptance section 2 injection has a case",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_incident_row_parameterises_q_0002_rather_than_answering_it",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the incident row parameterises Q-0002 rather than answering it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Python set equality becomes a sorted-array `toEqual`. A bare `toEqual` over two `Set` objects compares insertion order in some matchers and membership in others; sorting both sides makes the comparison membership-only, which is what `==` on Python sets is. The last assertion needs naming: the source writes `len({key.count('/') for key in keys}) > 1`, which asserts the dedup keys are not all one SHAPE -- Q-0002 asks what composes an incident dedup key, and a matrix whose keys were all spelled one way would have answered it by inertia. Python's `str.count` has no direct JavaScript counterpart, so the port counts separators as `key.split('/').length - 1`, which is the same number for every input that contains no overlapping matches -- and '/' is a single character, so overlap is impossible. Same assertion, one arithmetic step longer."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_observation_row_asserts_one_fact_state_per_injection",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the observation row asserts one fact state per injection",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Python set equality becomes a sorted-array `toEqual`. A bare `toEqual` over two `Set` objects compares insertion order in some matchers and membership in others; sorting both sides makes the comparison membership-only, which is what `==` on Python sets is. Everything else is the source's, including the two assertions that make interlock D-0006 falsifiable rather than decorative: each mode names exactly one fact state, and each case's escalation policy asks for the very state its own injection produces, so the driver is asked to escalate and must refuse."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_every_named_invariant_is_reachable_from_some_case",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > every named invariant is reachable from some case",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_fast_profile_still_covers_every_fault_kind",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the fast profile still covers every fault kind",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_combination_subsets_are_covered",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the combination subsets are covered",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same four subsets. The source keys a set by `tuple(case['targets'])`; the port joins the targets with `+`, which is exactly how the manifest's own case_id grammar spells a target set, so the key is the manifest's own canonical spelling rather than a second encoding invented here. Roles are validated to be written in contract order, so each subset has one spelling and the join cannot produce two keys for one set."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_pruning_rule_is_recorded_in_the_header",
+      "target_id": "test/fault_injection/manifest.test.ts::the frozen matrix > the pruning rule is recorded in the header",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_per_case_seed_is_order_and_platform_independent",
+      "target_id": "test/fault_injection/manifest.test.ts::the seed > the per case seed is order and platform independent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "THE PINNED CONSTANT IS WHY THIS IS ADAPTED, and it is the strongest single piece of evidence in this belt. The source pins `case_seed(...) == 0x574FF7BDD408EA49`, a 64-bit value that exceeds Number.MAX_SAFE_INTEGER -- so a `number` return would have rounded the contract's own pinned constant and the pin would then have held against a value that had itself been corrupted. `caseSeed` therefore returns a `bigint` and the case asserts `=== 0x...n`. MEASURED: the port's digest is bit-identical to interlock's for the same inputs, which means the sha256 material (`manifest_version NUL case_id NUL suite_seed`) was ported exactly rather than approximately. The remaining three inequality assertions are the source's, unchanged."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_seed_never_appears_in_a_cases_identity",
+      "target_id": "test/fault_injection/manifest.test.ts::the seed > the seed never appears in a case's identity",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The source's `assert 'suite_seed' not in case` is a DICT KEY test, not a substring test. `not.toHaveProperty` is the key test; `not.toContain` would have been the wrong translation and would have quietly asserted something about a JSON rendering instead. Called out because the sibling assertion in case 3 is genuinely a substring test and the two look identical in Python."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_reproduction_line_carries_everything_a_re_run_needs",
+      "target_id": "test/fault_injection/manifest.test.ts::the seed > the reproduction line carries everything a re-run needs",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The five fields and the `S9-REPRO ` prefix are the source's and are asserted unchanged. What the line CONTAINS on its second row is re-pointed at this runner: the source emits a pytest node id and warns that `-k` is a substring match, so the manifest's grammar (one case id is a substring of another) would make 're-run this one case' run three. Vitest's `-t` has exactly the same hazard, so the port emits the file plus the full test title -- which is unique -- rather than a bare case id. The Windows/POSIX shell branch is kept, because a POSIX `VAR=value cmd` prefix is a syntax error in PowerShell and the line exists to be pasted."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_a_barrier_that_cannot_be_reached_is_refused_at_collection",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > a barrier that cannot be reached is refused at collection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_an_effect_window_case_must_name_a_destination_assertion",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > an effect window case must name a destination assertion",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_a_restarting_case_must_name_its_recovery_owner",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > a restarting case must name its recovery owner",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_a_same_role_skew_observed_in_flight_is_invalid_by_construction",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > a same-role skew observed in flight is invalid by construction",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_a_sigstop_case_off_the_linux_lane_is_refused",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > a sigstop case off the linux lane is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_a_duplicate_case_id_fails_the_run_before_any_case_executes",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > a duplicate case id fails the run before any case executes",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_growth_past_a_profile_budget_fails_collection",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > growth past a profile budget fails collection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_a_manifest_targeting_another_contract_version_is_refused",
+      "target_id": "test/fault_injection/manifest.test.ts::validation refuses > a manifest targeting another contract version is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_profiles_carry_the_budgets_the_watchdogs_enforce",
+      "target_id": "test/fault_injection/manifest.test.ts::the budgets > the profiles carry the budgets the watchdogs enforce",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_off_linux_add_on_stays_inside_its_own_budget",
+      "target_id": "test/fault_injection/manifest.test.ts::the budgets > the off-linux add-on stays inside its own budget",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_manifest.py::test_the_clock_programme_is_symbolic_and_resolves_against_the_lease_geometry",
+      "target_id": "test/fault_injection/manifest.test.ts::the budgets > the clock programme is symbolic and resolves against the lease geometry",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "totals": {
+    "source_cases": 26,
+    "ported": 16,
+    "adapted": 10,
+    "not_ported": 0,
+    "waivers": 0
+  }
+}

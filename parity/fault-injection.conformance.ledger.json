@@ -1,0 +1,390 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "fault_injection",
+      "collected": 98,
+      "inventory": "parity/source-inventory/fault_injection.all.txt",
+      "note": "The S9/I-11 fault-injection harness, interlock tests/fault_injection/, 5 test files plus the durable modules they drive (contract, controller, manifest + frozen manifest.json, conformance) and two adapters. One ledger per source file. The subsystem is an acceptance HARNESS rather than a product module: there is no claude_org_runtime/fault_injection/, and the port therefore lands in a directory of its own (test/fault_injection/) rather than in src/ -- see DECISIONS.md D-0601, which also records why it is not merged into test/contract/."
+    },
+    "file": {
+      "path": "tests/fault_injection/test_conformance.py",
+      "collected": 34,
+      "inventory": "parity/source-inventory/fault_injection.test_conformance.txt",
+      "note": "The adapter conformance battery: the qualification exam an adapter must pass before it may contribute matrix results (design 6.3). The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. It was taken under the DEFAULT profile (S9_PROFILE unset, so `fast`), which is why the 98 ids contain 21 manifest cases and not all 59 the frozen matrix holds -- the other 38 are `full`-only and are not collected by a default run. That distinction is load-bearing for this belt's completion claim and is spelled out in the cases ledger."
+    }
+  },
+  "target": {
+    "test_file": "test/fault_injection/conformance.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "stacked `@pytest.mark.parametrize` decorators",
+        "to": "an explicit product builder in the test file, feeding `test(`name[id]`)`",
+        "why": "pytest's two rules for a stacked parametrize point in opposite directions: the ID is built from the decorator CLOSEST to the function first, while the axis that varies FASTEST is the outermost decorator. A generic nested helper gets one of the two right and silently reorders the ids, which would make the ledger unable to tell a renamed case from a missing one. The builder here states the id order and the iteration order separately, and the result was DIFFED against the source inventory: all 34 parameter ids match, in order.",
+        "affects": "all 34 cases"
+      },
+      {
+        "from": "`adapter.driver_module.rsplit('.', 1)[-1]` -> `spike_driver`",
+        "to": "`basename(adapter.driverModule)` minus the `.ts` extension -> `spike_driver`",
+        "why": "The port's driver module is a file path rather than a dotted path, and the id has to come out as the same string or every one of these 34 node ids changes. It does.",
+        "affects": "all 34 cases"
+      },
+      {
+        "from": "`ADAPTERS = (SPIKE_ADAPTER,)` in the test file",
+        "to": "`FULL_FAULT_ADAPTERS` in policy.ts, with the two adapter classes named in the contract (D-0601)",
+        "why": "The source's tuple conflates two things the port separates: a battery SUBJECT and something a manifest case may route to. The session adapter is a `CaseAdapter` and is deliberately NOT a battery subject -- it cannot pass the battery until the orchestrator it stands on is ported, and listing it would turn a known absence into a red build that says nothing new. See DECISIONS.md D-0601.",
+        "affects": "all 34 cases"
+      },
+      {
+        "from": "synchronous battery checks",
+        "to": "`async` battery checks the cases `await`",
+        "why": "Node has no blocking read on a child process's pipe from the parent side, so every controller method that waits is async. The battery's assertions are unchanged.",
+        "affects": "the 27 cases that spawn a process"
+      },
+      {
+        "from": "`importlib.import_module` + `ast.parse` of the driver's source for the clock scan",
+        "to": "`ts.createSourceFile` over `adapter.driverSourcePath`",
+        "why": "The adapter exposes its own source path rather than the scan importing the module and asking where it came from -- the driver is an executable entry point, and importing it to find its file is a heavier side effect than reading a path the adapter already knows.",
+        "affects": "case 27"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    }
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "`one case and one seed give identical traces` asserts that TWO RUNS OF THIS PORT agree, not that the port's trace bytes equal interlock's. The payload bytes in particular differ: the source seeds Python's Mersenne Twister, whose stream is not reproducible outside CPython, and the port uses SplitMix64 seeded from the same per-case seed.",
+      "why": "The property the battery names is determinism, and the seed's authority is payload and schedule only (design 4.3) -- it never chooses a checkpoint, a fault, a target set or a kill order, all of which live in the manifest and are byte-identical to interlock's. So nothing that is ASSERTED depends on the stream. SplitMix64 was chosen over an ad-hoc generator because it is exactly specified, which keeps the stream a written-down function of the seed rather than a property of a runtime."
+    },
+    {
+      "behaviour": "The battery has one subject. It is a qualification exam rather than a comparison, so one subject is a complete exam -- but it does mean the battery has never been run against a second adapter, and an assumption specific to the spike adapter could in principle be baked into a check without anything noticing.",
+      "why": "This is the source's own position (its ADAPTERS tuple has one member and its docstring says the others join later), and D-0601 records the reasoning rather than leaving it implied. The mitigation is structural: every check is written against the contract's vocabulary and the adapter interface, and the session adapter's presence in the registry -- refusing loudly rather than stubbing -- keeps the two-class distinction honest."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[before_durable_write-sup-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[before_durable_write-sup-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[before_durable_write-disp-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[before_durable_write-disp-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[before_durable_write-sec-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[before_durable_write-sec-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[after_record_before_effect-sup-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[after_record_before_effect-sup-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[after_record_before_effect-disp-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[after_record_before_effect-disp-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[after_record_before_effect-sec-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[after_record_before_effect-sec-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[after_effect_before_record-sup-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[after_effect_before_record-sup-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[after_effect_before_record-disp-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[after_effect_before_record-disp-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[after_effect_before_record-sec-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[after_effect_before_record-sec-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[delivered_before_ack-sup-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[delivered_before_ack-sup-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[delivered_before_ack-disp-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[delivered_before_ack-disp-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_every_checkpoint_is_reachable_and_blocks[delivered_before_ack-sec-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > every checkpoint is reachable and blocks[delivered_before_ack-sec-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. This is gate item 4's twelve (role, window) cells: all four windows for all three roles, each reached, announced and held. MEASURED green for all twelve."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_non_delivery_operations_expose_their_windows[lease-acquire-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the non delivery operations expose their windows[lease-acquire-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. A barrier the applicability matrix advertises can actually be reached, so a case arming it fails at collection rather than timing out in CI (design 3.1)."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_non_delivery_operations_expose_their_windows[lease-renew-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the non delivery operations expose their windows[lease-renew-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. A barrier the applicability matrix advertises can actually be reached, so a case arming it fails at collection rather than timing out in CI (design 3.1)."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_non_delivery_operations_expose_their_windows[enqueue-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the non delivery operations expose their windows[enqueue-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. A barrier the applicability matrix advertises can actually be reached, so a case arming it fails at collection rather than timing out in CI (design 3.1)."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_non_delivery_operations_expose_their_windows[ack-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the non delivery operations expose their windows[ack-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. A barrier the applicability matrix advertises can actually be reached, so a case arming it fails at collection rather than timing out in CI (design 3.1)."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_observation_step_exposes_its_windows[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the observation step exposes its windows[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. The observation operation is armable like any other durable write, and it is on the Supervisor's script only -- the Supervisor is the role that binds a session, so it is the role that observes it."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_no_two_refusals_in_one_case_share_an_attempt_id[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > no two refusals in one case share an attempt id[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. The check that keeps refusal records durable: a composed action_id collides the moment the same writer is refused twice, and the collision surfaces as a constraint error from inside the write's own transaction INSTEAD of the refusal exception -- losing exactly the record ACCEPTANCE.md section 2 requires. The stale-writer injection is what makes two refusals happen at all, so the check is not run over an empty set. MEASURED: the injection produces the two refusal rows the check needs, and their ids differ."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_escalation_path_can_record_a_recommendation[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the escalation path can record a recommendation[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. So that the matrix's 'none were produced' is evidence and not a tautology: the escalation path is driven with a fact state interlock D-0006 says nothing about, supplied as case data, and the row must appear. MEASURED: it does, so the observation cases' count assertion is falsifiable."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_barrier_round_trip_releases_the_process[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the barrier round trip releases the process[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. `continue` releases the barrier and the script runs to a clean exit."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_a_kill_at_each_window_is_a_signal_and_leaves_a_readable_database[before_durable_write-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > a kill at each window is a signal and leaves a readable database[before_durable_write-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. Both halves matter: the kill is a real signal (exit status -9, asserted wherever the platform reports one), and afterwards every named invariant query still runs against the reopened file -- which is the evidence that SQLite's journal recovered rather than that nothing was going on. The lane-conditional half is keyed on the host being Linux, as the source keys it."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_a_kill_at_each_window_is_a_signal_and_leaves_a_readable_database[after_record_before_effect-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > a kill at each window is a signal and leaves a readable database[after_record_before_effect-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. Both halves matter: the kill is a real signal (exit status -9, asserted wherever the platform reports one), and afterwards every named invariant query still runs against the reopened file -- which is the evidence that SQLite's journal recovered rather than that nothing was going on. The lane-conditional half is keyed on the host being Linux, as the source keys it."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_a_kill_at_each_window_is_a_signal_and_leaves_a_readable_database[after_effect_before_record-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > a kill at each window is a signal and leaves a readable database[after_effect_before_record-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. Both halves matter: the kill is a real signal (exit status -9, asserted wherever the platform reports one), and afterwards every named invariant query still runs against the reopened file -- which is the evidence that SQLite's journal recovered rather than that nothing was going on. The lane-conditional half is keyed on the host being Linux, as the source keys it."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_a_kill_at_each_window_is_a_signal_and_leaves_a_readable_database[delivered_before_ack-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > a kill at each window is a signal and leaves a readable database[delivered_before_ack-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. Both halves matter: the kill is a real signal (exit status -9, asserted wherever the platform reports one), and afterwards every named invariant query still runs against the reopened file -- which is the evidence that SQLite's journal recovered rather than that nothing was going on. The lane-conditional half is keyed on the host being Linux, as the source keys it."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_restart_entrypoint_recovers_and_is_idempotent[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the restart entrypoint recovers and is idempotent[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. Kill, restart, snapshot, restart again, snapshot again, compare. The snapshot is the source's and deliberately wider than the unfinished-work queries: it carries the write history, the retry counts and the destination's effect and attempt counts, because an adapter whose restart appended another applied action or bumped a retry count would leave every unfinished-work query empty and pass a check that never looked at what it mutated. The non-emptiness guard before the comparison is kept, so 'changes nothing' cannot be satisfied by comparing nothing to nothing. Comparison is by canonical JSON rather than Python dict equality. MEASURED green."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_injected_clock_is_honoured[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the injected clock is honoured[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. A `set_clock_offset` at a barrier moves the driver's reported now_ms by exactly the injected offset, and the offset it reports back is the one that was asked for. Both assertions are the source's."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_driver_never_reads_the_host_clock[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the driver never reads the host clock[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The property is the source's and the forbidden set is re-expressed for the language, which is the whole of the adaptation. Python forbids `time`/`datetime` IMPORTS plus a list of dotted calls; TypeScript has no module to forbid, because `Date` is a global. So the scan forbids the CALLS (Date.now, performance.now, process.hrtime, process.hrtime.bigint, process.uptime) and, additionally, the ZERO-ARGUMENT `new Date()` -- which is the JavaScript spelling of `datetime.now()`. `new Date(someMs)` is deliberately allowed: it is arithmetic on a value the caller already had, exactly as the source leaves `datetime.fromtimestamp` of an injected value alone. Asserted over the parsed tree with the TypeScript compiler API, not over the text, for the source's stated reason: a prose mention in a doc comment is not a call, and a checker that cannot tell them apart teaches people to stop writing the comment."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_one_case_and_one_seed_give_identical_traces[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > one case and one seed give identical traces[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. The determinism claim made testable (design 4.4). It holds only because the clock is virtual and because no identifier the driver puts on the wire is randomly generated -- the port keeps both properties, including composing refusal ids from the generation and repeat index rather than from a uuid. MEASURED: two runs of one case under one seed produce byte-identical traces. NOTE the honest limit of this case, recorded in inherited_limitations: it asserts the port is deterministic, not that its bytes equal interlock's."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_checkpoint_vocabulary_is_the_contracts[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the checkpoint vocabulary is the contract's[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The contract's four window names equal the adapter's four. Python compares tuples; the port compares JSON renderings of the two arrays, which keeps ORDER part of the assertion -- and order is part of it, because the four names are documented as being in the sequence a delivery passes them. Today they are textually equal to src/control_plane/outbox.ts's constants, which is what makes the mapping mandatory rather than optional when the spike is discarded."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_driver_accepts_the_contract_cli[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the driver accepts the contract CLI[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Runs the driver's `--help` in a REAL subprocess and asserts every option the contract names appears in stdout -- so it also smoke-tests that the module is executable at all. The adaptation is what 'executable' means: the source runs `python -m <dotted module>`, and the port runs `node [--experimental-strip-types] --import <register shim> <driver>.ts`, which is the command the adapter itself composes (so the battery tests the same invocation the controller uses). The help text is hand-written ASCII rather than argparse-generated, because interlock's own CLI policy forbids characters cp932 cannot encode -- a non-ASCII dash would crash `--help` on the Windows job while every in-process test still passed."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_invariant_queries_bind_the_contract_parameters[spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the invariant queries bind the contract parameters[spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Every named invariant is bound, and binds EXACTLY its named parameters -- equality, not containment, which is the source's own emphasis: a subset check only catches the harmless direction, and an adapter that OMITTED a parameter would pass while a lease-single-holder query without :now_ms reads expired leases as live. The port keeps equality. The parameter scan is the source's regex over the SQL text (`:name`), unchanged."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_invariant_queries_can_see_the_rows_they_are_asserted_over[sup-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the invariant queries can see the rows they are asserted over[sup-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. The guard against the quietest harness failure there is: an invariant of the form 'this result set is empty' is satisfied both by a healthy system and by a query that matches nothing, and the second is not a weaker test but no test -- and it stays green. So each query is asserted in the POSITIVE direction too. MEASURED for all three roles: the write history is non-empty, the role's outbox rows are visible, the lease is held at the instant the run reached (except for the Secretary, whose script ends by releasing -- the source's own exception, kept), and the destination shows exactly one effect per key."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_invariant_queries_can_see_the_rows_they_are_asserted_over[disp-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the invariant queries can see the rows they are asserted over[disp-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. The guard against the quietest harness failure there is: an invariant of the form 'this result set is empty' is satisfied both by a healthy system and by a query that matches nothing, and the second is not a weaker test but no test -- and it stays green. So each query is asserted in the POSITIVE direction too. MEASURED for all three roles: the write history is non-empty, the role's outbox rows are visible, the lease is held at the instant the run reached (except for the Secretary, whose script ends by releasing -- the source's own exception, kept), and the destination shows exactly one effect per key."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_conformance.py::test_the_invariant_queries_can_see_the_rows_they_are_asserted_over[sec-spike_driver]",
+      "target_id": "test/fault_injection/conformance.test.ts::the conformance battery > the invariant queries can see the rows they are asserted over[sec-spike_driver]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "A thin parametrised delegation in the source and in the port alike: the case names the battery check and the battery module holds the assertion, which is the shape that lets a future adapter be added to one tuple and run everything unchanged. Adapted rather than ported because the check it delegates to is `async` here (Node has no blocking read on a child's pipe from the parent side) and because the parametrisation is rebuilt explicitly -- see the systematic mappings. The guard against the quietest harness failure there is: an invariant of the form 'this result set is empty' is satisfied both by a healthy system and by a query that matches nothing, and the second is not a weaker test but no test -- and it stays green. So each query is asserted in the POSITIVE direction too. MEASURED for all three roles: the write history is non-empty, the role's outbox rows are visible, the lease is held at the instant the run reached (except for the Secretary, whose script ends by releasing -- the source's own exception, kept), and the destination shows exactly one effect per key."
+    }
+  ],
+  "totals": {
+    "source_cases": 34,
+    "ported": 0,
+    "adapted": 34,
+    "not_ported": 0,
+    "waivers": 0
+  }
+}

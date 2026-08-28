@@ -107,6 +107,7 @@ spaces distinct.
 | D-0214 | `sandbox doctor` and the readback complete the settings subsystem, and the argparse surface grows two actions rather than one helper | accepted |
 | D-0215 | A truthy non-mapping `sandbox.filesystem` is refused, not coerced to the empty mapping | accepted |
 | D-0216 | `_is_inside_root` compares normcased paths, so Windows path identity is not a sandbox escape | accepted |
+| D-0601 | The fault-injection belt takes `D-06xx`, its own `test/fault_injection/` directory, and two adapter classes | accepted |
 
 ---
 
@@ -6139,5 +6140,74 @@ of run 33203831023. `test/testkit/` is frozen and a change to it is its own PR m
 belts that need it rebase onto it (`docs/test-translation-conventions.md`); this decision and that
 PR are the same change. Decision id allocated by the window in the shared band
 (`D-0019`..`D-0099`).
+
+---
+
+## D-0601 — The fault-injection belt takes `D-06xx`, its own `test/fault_injection/` directory, and two adapter classes
+
+**Context.** `parity/source-inventory.belts.md` classed `fault_injection` (98 cases) as
+`candidate-lane` and left three questions open in writing: which `D-` range the belt gets, whether
+the cases merge into `test/contract/` or take a directory of their own, and what it means to run a
+"conformance battery with one adapter in it". This entry answers all three before any code lands,
+because each one is load-bearing on how the other 97 cases are written.
+
+**Decision 1 -- the band is `D-06xx`.** The index note in this file allocates `D-0019`..`D-0099` to
+the control plane and the window, `D-01xx` measurement, `D-02xx` fencing and settings, `D-03xx`
+session, `D-04xx` canary, `D-05xx` messagebus (the last three by D-0032). `D-06xx` is the next free
+range and is reserved here for the fault-injection belt. As the index note already says, the range
+is an allocation and not a meaning: nothing about an entry follows from which range it is in. The
+point is only that concurrent lanes appending at once conflict in the index table and never over an
+ID.
+
+**Decision 2 -- the cases get `test/fault_injection/`, not `test/contract/`.** `belts.md` floated
+the merge on the grounds that continuo "already has the same instinct in `test/contract/`". The
+instinct is the same; the shape is not. `test/contract/` holds assertions *about* continuo's
+modules. This belt ports an independent acceptance system: it has a wire protocol
+(`contract.ts`), a spawn/barrier/kill/restart engine (`controller.ts`), a frozen case matrix and
+its generator (`manifest.ts`, `manifest.json`), a conformance battery (`conformance.ts`), a
+collection-time policy layer for lanes, profiles and budgets (`policy.ts`), and role drivers that
+run as **real child processes**. Merging six such modules into a directory of ordinary contract
+tests would bury the seam that `test_import_graph.py` exists to police -- the rule that exactly one
+module may import the implementation under test -- in a directory where every file imports
+implementations by design. Interlock keeps the harness in `tests/fault_injection/` for the same
+reason, and the belt keeps that boundary.
+
+**Decision 3 -- the adapters are two classes, and only one of them is a battery subject.** The
+source's `ADAPTERS` tuple in `test_conformance.py` has one member and its docstring says the others
+join "when I-12 and I-14 land". Read carelessly, "a conformance battery with one adapter" sounds
+like a comparison test with nothing to compare against. It is not a comparison test. It is a
+**qualification exam**: `conformance.ts` asserts the contract itself -- every checkpoint reachable
+and blocking, the barrier round-trip, a real SIGKILL leaving a readable database, an idempotent
+restart, an injected clock, identical traces under one seed, the CLI surface, and that no invariant
+query is vacuous -- so an adapter that has not passed it cannot contribute matrix results. One
+subject is a complete exam; a second subject adds coverage of the *next* adapter, not of the exam.
+
+So the belt names the two roles explicitly rather than leaving them implied by a tuple:
+
+- a **`FullFaultAdapter`** is a battery subject. It implements the whole `Adapter` surface and the
+  conformance battery runs against every one the build ships. Today that is exactly one, the spike
+  driver over `src/control_plane`.
+- a **`CaseAdapter`** is the narrower thing a manifest case's `adapter` field may name. It is
+  resolved from a registry at collection time and needs only what the cases routed to it use.
+
+The distinction is structural, not documentary: the registry refuses to be empty, and every
+`adapter` name a manifest case declares must resolve in it, so a case routed to an adapter nobody
+registered fails at collection rather than as a spawn failure in CI. That is the same rule the
+source states for its own manifest validation ("an unknown adapter must refuse at collection, never
+surface as a spawn failure") raised to cover the registry as well as the name.
+
+**What this belt does *not* claim.** The manifest carries 59 cases, of which 55 route to the spike
+adapter and 4 to the session adapter (`session-start`, gate item 2's four injection points). The
+session driver stands on a `SessionOrchestrator` and a C2 provider that continuo has not ported --
+`src/session/` does not exist at this revision. Those four cases are therefore declared in the
+ledger as a **follow-on dependency**, not as passing coverage, and this belt's completion claim is
+"the acceptance harness is ported and the spike adapter passes the battery", never "98 cases at
+parity". The two are different sentences and the ledger keeps them apart.
+
+**Falsifier.** If `test/fault_injection/` is later merged into `test/contract/` without the import
+seam surviving, `test/fault_injection/import-graph.test.ts` goes red naming the module that
+reached the implementation. If a second full adapter is added without passing the battery,
+`test/fault_injection/conformance.test.ts` collects it and fails. If the adapter registry is
+emptied, its own structural case fails rather than the matrix silently collecting nothing.
 
 ---
