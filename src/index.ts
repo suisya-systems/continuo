@@ -901,6 +901,78 @@ export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
  * down in `docs/secretary-intake-boundary.md` (D-0701).
  */
 export { IntakeQueue, IntakeReceipt, IntakeRefused, SecretaryIntake } from "./secretary/index.js";
+
+/**
+ * The session subsystem (S1, S2, S3).
+ *
+ * Re-exported through `src/session/index.ts` rather than from the four modules
+ * directly, so this file and that barrel cannot drift into two different
+ * answers about what the subsystem's surface is.
+ *
+ * **`Observation` is aliased, and only here.** `src/measurement/fixtures.ts`
+ * already exports a class of that name through this barrel, and the two mean
+ * different things -- the measurement one is a harness fixture, this one is
+ * S1's "the backend's state was read" / "it could not be read" distinction.
+ * It is the ONLY alias: `Ok`, `Failure` and `ContractViolation` are generic
+ * enough to look like clashes and are not, and renaming a name the source
+ * chose, without a clash to force it, is a divergence for tidiness.
+ * The alias is on the newcomer because the other name is already on this
+ * surface and renaming it would break a consumer to spare a name clash. Inside
+ * the subsystem, and in `src/session/index.ts`, the name stays `Observation`:
+ * that is what the source calls it and what every ported case asserts against.
+ *
+ * The interface this exposes is **provisional** by its own declaration
+ * (`PROVISIONAL` is `true`, and `PROMOTION_REQUIRES` says what would settle
+ * it). Exporting it is not a claim that it is settled. It is here because the
+ * alternative is worse: a barrel the package entry point does not reach is a
+ * module claiming a consumer it does not have, and it would leave the only
+ * subsystem in this repository that cannot be imported by the name the package
+ * publishes. The package is `private` until publication is decided (D-0008),
+ * so nothing is promised to anyone by this line today.
+ */
+export {
+  ANNOUNCE_AFTER_ENV,
+  CAPABILITY_ASSIGNMENTS,
+  CapabilityAssignment,
+  type CapabilityAssignmentFields,
+  CapabilityReport,
+  type CapabilityReportFields,
+  CLI_VERSION_WRITTEN_AGAINST,
+  ClaudeCliSessionProvider,
+  type ClaudeCliSessionProviderOptions,
+  ContractViolation,
+  checkSpawnPrecondition,
+  claudeSessionUuid,
+  D0009_VERBS,
+  DEFAULT_CHILD_STATE,
+  DELIVERY_ABSENCE_IS_DELIBERATE,
+  Failure,
+  FailureKind,
+  LocalProcessSessionProvider,
+  type LocalProcessSessionProviderOptions,
+  Observation as SessionObservation,
+  Ok,
+  OWNER_MESSAGE_BUS,
+  OWNER_NEITHER_CONTRACT,
+  OWNER_SESSION_PROVIDER,
+  PROMOTION_REQUIRES,
+  PROVISIONAL,
+  type ProviderResult,
+  REQUIRED_CAPABILITIES,
+  SessionProvider,
+  SessionReadout,
+  type SessionReadoutFields,
+  SpawnRefused,
+  STATE_FILE_ENV,
+  StartRequest,
+  type StartRequestFields,
+  VERB_IMPLEMENTATION_HOOKS,
+  WorkspaceDecision,
+  type WorkspaceLifecycleObserver,
+  WorkspaceTransition,
+  type WorkspaceTransitionFields,
+  WorkspaceVerdict,
+} from "./session/index.js";
 export {
   addArguments,
   addDoctorArguments,

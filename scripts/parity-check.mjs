@@ -94,7 +94,20 @@ const LEDGERS = [
   "parity/canary.synthetic-v1.ledger.json",
   "parity/canary.structural.ledger.json",
   "parity/canary.rehearsal.ledger.json",
-  // lane E -- fault_injection (the S9/I-11 acceptance harness). One ledger per
+  // lane E -- session. Lettered `E` rather than `D` because the canary belt
+  // above took `D` first: the three belts started together and appended here
+  // concurrently, and a shared letter would make two blocks read as one.
+  "parity/session.provider-contract.ledger.json",
+  "parity/session.stub-provider.ledger.json",
+  "parity/session.claude-cli-provider.ledger.json",
+  // lane F -- secretary (gate item 8's rehearsal). Two files, and the smallest
+  // belt in the inventory; the D-range is `D-07xx` (D-0701).
+  "parity/secretary.behaviour.ledger.json",
+  "parity/secretary.structural.ledger.json",
+  // lane G -- fault_injection (the S9/I-11 acceptance harness). Lettered `G`
+  // for the reason the session block above gives for `E`: this belt and the
+  // session belt appended concurrently and both reached for `E`, so the one
+  // that landed second moves rather than sharing a letter. One ledger per
   // source test file, as everywhere else; the belt's own directory is
   // test/fault_injection/ rather than test/contract/ (DECISIONS.md D-0601).
   "parity/fault-injection.cases.ledger.json",
@@ -102,10 +115,6 @@ const LEDGERS = [
   "parity/fault-injection.import-graph.ledger.json",
   "parity/fault-injection.manifest.ledger.json",
   "parity/fault-injection.protocol.ledger.json",
-  // lane F -- secretary (gate item 8's rehearsal). Two files, and the smallest
-  // belt in the inventory; the D-range is `D-07xx` (D-0701).
-  "parity/secretary.behaviour.ledger.json",
-  "parity/secretary.structural.ledger.json",
 ];
 
 /**

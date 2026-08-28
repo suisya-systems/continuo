@@ -43,18 +43,64 @@ That is 1,317 of the 2,194 -- the inventory as it stood before this document exi
 
 ## The remaining 877
 
-### `session` -- `in-scope` (ratified 2026-08-28) -- 142 cases
+### `session` -- `in-scope` (ratified 2026-08-28) -- **ported: 142 of 142 cases**
 
-Ratified into scope at the human gate; belt started 2026-08-28, D-range `D-03xx`.
+Ratified into scope at the human gate on 2026-08-28 (D-0032); belt started and **completed**
+2026-08-29, D-range `D-03xx` (`D-0301`..`D-0302` used).
+
+The status keeps its `in-scope` spelling for the reason the `canary` section above gives: the
+vocabulary this document is checked against records **porting intent** (D-0031), and finishing a
+belt does not retract the decision to take it on.
 
 `tests/session/` drives `claude_org_runtime/session/`: the provider contract, a
 stub provider, and the Claude CLI provider. A provider/process-lifecycle belt is the natural unit,
 and `test_provider_contract.py` is written as a contract battery, which is the shape that ports
-best -- one implementation-independent set of assertions, run against each provider.
+best -- one implementation-independent set of assertions, run against each provider. Ported to
+`src/session/` (`provider.ts`, `stub_provider.ts`, `claude_cli_provider.ts`, `uuid5.ts`,
+`index.ts`, and `runtime.ts` -- the single seam described below).
+
+**All 142 cases are translated: 129 `ported`, 13 `adapted`, 0 `not-ported`, 0 waivers**, across
+three ledgers -- one per source file, per D-0019:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/session/test_claude_cli_provider.py` | 65 | `parity/session.claude-cli-provider.ledger.json` |
+| `tests/session/test_stub_provider.py` | 43 | `parity/session.stub-provider.ledger.json` |
+| `tests/session/test_provider_contract.py` | 34 | `parity/session.provider-contract.ledger.json` |
+
+Twenty-two further target-only cases sit beside them, and a thirteen-case UUIDv5 differential
+(`test/session/uuid5.test.ts`, which has no source file and so no ledger, like the other oracles
+and contract batteries under `test/`). Most of the twenty-two exist because a mutation showed the
+property was unprotected: Python's `Enum`, `frozenset` and `private`-by-convention all close things
+at runtime that TypeScript closes only at compile time, so a member list, a capability set and a
+closed vocabulary each had to be made genuinely immutable and then pinned. The rest pin what the
+port had to invent and the source therefore carries no warrant for -- the seam liveness for each
+substituted key, and both halves of D-0301 (the per-instance exclusion queue and the macrotask
+settle before any read of a child's exit status), each of which could be deleted entirely with the
+whole belt still green until its case was written.
+
+**The belt's one structural decision is D-0301.** interlock supervises children with blocking calls
+and uses that as a guarantee; Node releases a child's exit status only on an event-loop turn, so
+the five verbs became `Promise`-returning, serialised per provider instance, with the capability
+probe left synchronous on `spawnSync`. Everything asynchronous is confined to one runtime adapter
+(`src/session/runtime.ts`), and within it exactly four members are async -- the ones that wait on an
+already-running child. The normal test path drives a **real** child process; the seam is substituted
+only for the three branches a real child cannot reach.
 
 It is also the belt several others wait on: `gate_item2` drives crash-and-retry *through* a session
 provider, and `gate_item11` exists to assert that no provider detail leaks into the control plane.
-Porting those before `session` would mean porting their fixtures twice.
+Porting those before `session` would mean porting their fixtures twice -- both can now take the
+fixtures this belt brings.
+
+**Two things left for a Windows cell to answer**, recorded here rather than guessed. interlock's
+own `os.name != "posix"` branches are marked `# pragma: no cover - exercised only on Windows`, so
+continuo's matrix is the first place they run anywhere: `test_stop_terminates_a_running_child_and_
+reports_what_is_left` and `test_a_child_whose_pid_cannot_be_recorded_is_not_left_running` take that
+branch, and the second additionally requires the state directory to be gone, which Windows refuses
+while any handle inside it is open. No Windows-only gate was added for them -- inventing a skip the
+source does not have is what the parity check exists to catch -- and the child-leak hazard behind
+the second was retired structurally instead, by making every teardown await its child's exit rather
+than merely signal it.
 
 ### `attention` -- `retarget` -- 194 cases
 
@@ -324,7 +370,7 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (ratified 2026-08-28), `messagebus` (ratified 2026-08-28), `secretary` (**ported** 2026-08-29) | 1,681 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (ratified 2026-08-28), `secretary` (**ported** 2026-08-29) | 1,681 |
 | `candidate-lane` | `gate_item2` | 34 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |
