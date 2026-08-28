@@ -5876,9 +5876,12 @@ quietly.
 **Measured** (better-sqlite3 13.0.3, SQLite 3.53.4, 2026-08-29). With both guards in place: a
 duplicate `run_id` reports `SQLITE_CONSTRAINT_TRIGGER` with the guard's sentence and no longer
 reports `UNIQUE constraint failed: run_owner.run_id` at all; a duplicate carrying a non-integer
-`routed_at_ms` reports `SQLITE_CONSTRAINT_CHECK`; and `INSERT OR REPLACE` is refused on a connection
-whose `recursive_triggers` reads 0, with the standing row unchanged. All 85 cases of the canary belt
-are green, and the two ported `or replace ...` cases changed only the sentence they match.
+`routed_at_ms` reports `SQLITE_CONSTRAINT_CHECK`, as does a duplicate `decision_seq` naming a system
+outside the vocabulary or carrying an empty reason (each guard's `WHEN` restates every CHECK on its
+table, which is why); `INSERT OR REPLACE` is refused on a connection whose `recursive_triggers`
+reads 0, with the standing row unchanged; and an explicit `decision_seq` of -1 is refused by CHECK
+with appends still appending after it. All 86 cases of the canary belt are green, and the two ported
+`or replace ...` cases changed only the sentence they match.
 
 **Alternatives.**
 

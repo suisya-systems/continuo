@@ -63,7 +63,20 @@ CREATE TABLE routing_decision (
     CHECK (typeof(owning_system) = 'text' AND typeof(reason) = 'text'),
     CHECK (typeof(decided_at_ms) = 'integer'),
     CHECK (owning_system IN ('interlock', 'synthetic_v1')),
-    CHECK (length(reason) > 0)
+    CHECK (length(reason) > 0),
+    -- -1 is excluded because it is the value SQLite gives NEW.decision_seq in a
+    -- BEFORE INSERT trigger when the insert did not supply one. The manual
+    -- calls that value UNDEFINED; measured on SQLite 3.53.4 it is -1, on an
+    -- empty table and a populated one alike. `routing_decision_is_never_replaced`
+    -- asks whether NEW.decision_seq is already in the table, so a row sitting at
+    -- the sentinel would make every ordinary (sequence-omitting) append look
+    -- like a replacement and be refused. Reserving the one value keeps the guard
+    -- exact instead of making it guess whether a sequence was supplied. Any
+    -- other value the undefined case might take is harmless on its own terms: it
+    -- matches no row, so the guard stands aside, which is the correct answer for
+    -- an insert that cannot collide. Zero and every negative below -1 are still
+    -- accepted, so the back-filling an ordering trigger refuses is untouched.
+    CHECK (decision_seq <> -1)
 );
 
 -- The newest decision is the routing, so an insert that back-fills a smaller
@@ -94,15 +107,20 @@ END;
 -- The WHEN clause defers to the row's own CHECKs (see the matching note on
 -- `run_owner_is_never_replaced`, which explains why): a row this table would
 -- refuse anyway is left for the CHECK to refuse, so this guard never masks a
--- validation failure with a "you may not replace this" refusal. An omitted
--- decision_seq is NULL here, which fails the `typeof` test and matches no
--- existing row, so an ordinary append never reaches the RAISE.
+-- validation failure with a "you may not replace this" refusal. IT RESTATES
+-- EVERY CHECK ON THE TABLE, AND A CHECK ADDED ABOVE BELONGS HERE TOO -- except
+-- `decision_seq <> -1`, which is what makes the sentinel case safe rather than
+-- something this clause has to handle (see that CHECK's own note). An ordinary
+-- append supplies no decision_seq, arrives here as the reserved -1, matches no
+-- row, and never reaches the RAISE.
 CREATE TRIGGER routing_decision_is_never_replaced
 BEFORE INSERT ON routing_decision
 WHEN typeof(NEW.decision_seq) = 'integer'
  AND typeof(NEW.owning_system) = 'text'
  AND typeof(NEW.decided_at_ms) = 'integer'
  AND typeof(NEW.reason) = 'text'
+ AND NEW.owning_system IN ('interlock', 'synthetic_v1')
+ AND length(NEW.reason) > 0
  AND EXISTS (SELECT 1 FROM routing_decision WHERE decision_seq = NEW.decision_seq)
 BEGIN
     SELECT RAISE(ABORT, 'a routing decision is never replaced; the routing history is appended to, never rewritten');

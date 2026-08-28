@@ -808,6 +808,41 @@ describe("store enforcement on every connection (target-only)", () => {
     expect(scalar(ledger, "SELECT routed_at_ms FROM run_owner WHERE run_id = 'run-1'")).toBe(T0);
   });
 
+  test("target-only -- the reserved sentinel keeps ordinary appends appending", () => {
+    // SQLite gives NEW.decision_seq the value -1 in a BEFORE INSERT trigger
+    // when the insert supplies no sequence (the manual says "undefined";
+    // measured, it is -1 on an empty table and a populated one alike). The
+    // replacement guard asks whether NEW.decision_seq is already in the table,
+    // so a row sitting AT -1 would make every ordinary append look like a
+    // replacement and be refused -- a working ledger bricked by a value only an
+    // out-of-band writer could have put there. `CHECK (decision_seq <> -1)`
+    // reserves it. Both halves are asserted, because the CHECK on its own could
+    // be removed and only the second half would notice.
+    const { path, ledger } = ledgerFixture();
+    ledger.close();
+
+    const foreign = rawConnection(path);
+    expectSqliteError(
+      () =>
+        execute(
+          foreign,
+          "INSERT INTO routing_decision (decision_seq, owning_system, decided_at_ms, reason) " +
+            "VALUES (-1, 'synthetic_v1', ?, 'out of band')",
+          T0,
+        ),
+      { code: "SQLITE_CONSTRAINT_CHECK", message: /decision_seq <> -1/ },
+    );
+    foreign.close();
+
+    // Zero and everything below -1 are still ordinary sequence numbers: only
+    // the one sentinel value is reserved, so the back-filling the ordering
+    // trigger refuses is refused by that trigger and not by this CHECK.
+    const reopened = closeAfterTest(openRoutingLedger(path));
+    addDecision(reopened);
+    addDecision(reopened, { owningSystem: "interlock", reason: "canary" });
+    expect(scalar(reopened, "SELECT MAX(decision_seq) FROM routing_decision")).toBe(2);
+  });
+
   test("target-only -- a trigger dropped by a foreign connection is caught at reopen", () => {
     // The ported case drops the trigger through the module's own connection,
     // which is the one thing that cannot happen in production: the writer that
