@@ -223,6 +223,13 @@ export class RoleProcess {
   /** Set by the `exit` handler. Node always reaps, so this is also "pid may be recycled". */
   exited = false;
   exitStatus: number | null = null;
+  /**
+   * The last error the control pipe reported, kept for a failure report.
+   *
+   * Never thrown from. See the `error` listener installed in the constructor for
+   * why swallowing is the source's stance and not a shortcut.
+   */
+  controlWriteError: Error | null = null;
 
   /** Events read but not yet consumed, and the waiters queued for them. */
   private readonly pending: (EventRecord | null)[] = [];
@@ -272,6 +279,28 @@ export class RoleProcess {
     stdout.on("error", () => {
       this.push(null);
     });
+    const stdin = this.child.stdin;
+    if (stdin !== null) {
+      // A control-pipe error is recorded and swallowed, never thrown.
+      //
+      // THE SOURCE GETS THIS FROM A LANGUAGE DIFFERENCE. Python's
+      // `stdin.write()`/`flush()` raise `BrokenPipeError` SYNCHRONOUSLY, so its
+      // `try/except (BrokenPipeError, ValueError): pass` really does catch the
+      // case its comment describes -- "the driver is gone; for a kill case that
+      // is the expected shape and the caller's own exit-status assertion is the
+      // authority". Node reports the same condition ASYNCHRONOUSLY through the
+      // stream's `error` event, so the synchronous `try/catch` in `send()`
+      // cannot see it -- and a stream `error` with no listener is thrown
+      // globally, which would take down the Vitest worker instead of producing
+      // an attributable case failure. That is the opposite of what this harness
+      // exists to do: a driver dying is a thing cases DELIBERATELY cause.
+      //
+      // Recorded rather than merely discarded, so a report can still say the
+      // pipe broke. Raised by the review gate on the rebased tip.
+      stdin.on("error", (error: Error) => {
+        this.controlWriteError = error;
+      });
+    }
     this.child.on("exit", (code, signal) => {
       this.exited = true;
       // Python's `Popen.returncode`: the exit code, or the negated signal
@@ -302,9 +331,19 @@ export class RoleProcess {
       return;
     }
     try {
-      stdin.write(`${stableStringify(command)}\n`);
-    } catch {
-      // Broken pipe: same reasoning as above.
+      // The callback consumes the asynchronous failure too: without one, a write
+      // that fails after this call returns surfaces only on the stream's `error`
+      // event. The listener installed in the constructor is the backstop; this
+      // is the per-write half.
+      stdin.write(`${stableStringify(command)}\n`, (error) => {
+        if (error) {
+          this.controlWriteError = error;
+        }
+      });
+    } catch (error) {
+      // The synchronous half, which is the one Python's `except BrokenPipeError`
+      // sees.
+      this.controlWriteError = error as Error;
     }
   }
 
