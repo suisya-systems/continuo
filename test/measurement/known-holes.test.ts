@@ -549,10 +549,23 @@ describe("hole 5 -- the harness never writes, and ai_invocation least of all", (
         offending.push(`${where}: statement not statically inspectable`);
         continue;
       }
+      const exempt = WRITE_PROBE_EXEMPTIONS.has(where);
+      // Beyond the source, and deliberately: `sqlite3.Connection.execute`
+      // refuses a second statement, so reading the leading verb is sufficient
+      // there. better-sqlite3's `exec` runs every statement in the string, and
+      // SQLite accepts a CTE in front of a write on both runtimes -- so
+      // `SELECT 1; INSERT ...` and `WITH x AS (...) DELETE ...` both lead with a
+      // read verb and both write. See D-0115 and the ledger's divergences.
+      if (statement.hiddenWriteVerbs.length > 0 && !exempt) {
+        offending.push(
+          `${where}: ${statement.hiddenWriteVerbs.join(", ")} behind a leading ` +
+            `${statement.verb}`,
+        );
+        continue;
+      }
       if (READ_VERBS.has(statement.verb)) {
         continue;
       }
-      const exempt = WRITE_PROBE_EXEMPTIONS.has(where);
       if (statement.verb === "PRAGMA") {
         if (statement.text.includes("=") && !exempt) {
           offending.push(`${where}: sets a pragma (${pythonRepr(statement.text.trim())})`);
@@ -769,6 +782,46 @@ describe("target-only -- the port's own machinery carries no warrant from the so
       "the unmatched bucket must be reported even at zero -- it is the signal that the key " +
         "needs replacing",
     ).toContain(UNMATCHED_KEY);
+  });
+
+  test("target-only -- a verdict word is exempt only on the line that states the hole", async () => {
+    // The ported case exempts a verdict word within 240 characters of `Q-0005`,
+    // which is its source's rule and is kept there. 240 characters is a
+    // NEIGHBOURHOOD, not a sentence: every rendering prints a standard Q-0005
+    // note, so a line reading `Status: PASS` placed beside that note is inside
+    // the radius and the guard stays green -- which is the one place a verdict
+    // is most likely to be added, because that is where the subject is being
+    // discussed. Raised by the review gate.
+    //
+    // The tighter rule is the LINE: a verdict word is exempt only where `Q-0005`
+    // is on the same line it is. Measured over all eleven renderings, it holds
+    // today without any of them being changed -- each note is a single line and
+    // carries its own vocabulary (`thresholds`, `exit criteria`, `acceptance
+    // threshold`) beside the question it states.
+    //
+    // Target-only rather than a tightening of the ported case: rule 0 makes an
+    // assertion stronger than its source a divergence, and a divergence belongs
+    // beside the faithful translation rather than in its slot.
+    const renderers = await publicRenderers();
+    const path = db();
+    const offending: string[] = [];
+    for (const [name, factory] of REPORT_FACTORIES) {
+      const renderer = renderers.get(name) as (...args: unknown[]) => string;
+      const rendered = renderer(factory(path), ...(EXTRA_ARGUMENTS.get(name) ?? []));
+      for (const line of rendered.split("\n")) {
+        if (line.includes("Q-0005")) {
+          continue;
+        }
+        for (const match of line.matchAll(VERDICT_WORDS)) {
+          offending.push(`${name}: ${match[0]} in ${JSON.stringify(line.trim().slice(0, 80))}`);
+        }
+      }
+    }
+    expect(
+      offending,
+      `${offending}: a verdict word away from the line that states Q-0005 is a verdict, ` +
+        "however near the note it sits",
+    ).toEqual([]);
   });
 
   test("target-only -- the extra-argument table names only renderers discovery finds", async () => {

@@ -4616,13 +4616,17 @@ parametrized case is declared target-only in the ledger.
   table names a renderer discovery does not find -- a stale key would be ignored in silence and the
   renderer would then be called with `depth` undefined, which renders wrongly rather than not at all.
 
-**What was measured.** Six mutations, each red for its own reason and for no other:
+**What was measured.** Seven mutations, each red for its own reason and for no other:
 a new `export function renderWindowSummary` in `windows.ts` is reported as `unbound`; renaming
 `renderLatencyReport` is reported as `stale`; a verdict word added to `renderAc9Report`'s first line
 turns three cases red naming the word; the same word added inside `pythonJsonString` turns
 `renderPythonJson` and the two renderers built on it red; an em-dash in a rendered line trips the
-ASCII half alone; and a rendered line that mentions `Q-0005` is **not** reported, which is the
-source's own exemption for a sentence that states the hole rather than closing it.
+ASCII half alone; a rendered line that mentions `Q-0005` is **not** reported, which is the source's
+own exemption for a sentence that states the hole rather than closing it; and a `Status: PASS` line
+pushed **immediately before** that note is not reported either -- the source's exemption is a
+240-character neighbourhood rather than a sentence, which is where a verdict is most likely to be
+added, so a target-only case scopes the exemption to the LINE and goes red on exactly that mutation
+while the ported cases stay green. Raised by the review gate.
 
 **Status.** accepted
 
@@ -4658,6 +4662,23 @@ methods handed SQL text. Everything else on the driver takes bindings, not text.
 - **A statement whose text cannot be resolved statically is a failure**, as in the source, because
   an uninspectable statement is where a write would sit unread.
 
+**The leading verb is not sufficient here, and it is sufficient in the source.** This is the one
+place the port has to assert more than what it ports, and the reason is the driver rather than the
+test: `sqlite3.Connection.execute` **refuses a second statement** ("You can only execute one
+statement at a time"), so on the source's runtime a text whose first verb is `SELECT` cannot also
+run an `INSERT`. `exec` runs every statement in the string. That is
+`docs/test-translation-conventions.md` rule 9 reached through an API rather than through a type --
+the port's surface admits a value the source's excludes, and nothing in the diff looks odd, because
+reading the leading verb is what the source does.
+
+So every write verb the text carries **beyond its leading position** is reported too, over a copy
+with string literals, quoted identifiers and comments blanked -- `WHERE status = 'DELETE'` is not a
+delete, and `replace(` is SQLite's string function rather than the statement verb. The same sweep
+closes a hole **both** runtimes have and which the source therefore also carries: SQLite accepts a
+CTE in front of a write, so `WITH x AS (...) DELETE FROM run` leads with `WITH`, which is in the
+source's `READ_VERBS`. That half is an inherited defect repaired under `D-0023`, and the ledger
+records both halves as divergences.
+
 **The resolver gains two forms and loses none.** Statements arrive five ways here: a literal, a
 template, a module or local constant, an entry in a query mapping, and a `sql` field of a record
 class. The source's `QUERY.format(...)` is this port's `QUERY.replace("{placeholders}", ...)`; the
@@ -4676,11 +4697,15 @@ closure is attributed to the named function that holds it, which is what the exe
 against.
 
 **What was measured.** 42 statements found across the fourteen modules, every one statically
-resolved, none unclassified. Three mutations, each red for its own reason: an `INSERT` added to
-`cohort.ts` reports `cohort.selectCohort: INSERT`; `connection.prepare(String(Math.random()))`
-reports `statement not statically inspectable`; and a scan that matches no method at all trips the
-`seen > 20` guard with `only 0 executed statements found; the scan is not working`, which is the
-source's own guard against a vacuous pass.
+resolved, none unclassified, and none reported by the hidden-write sweep. Six mutations, each red
+for its own reason: an `INSERT` added to `cohort.ts` reports `cohort.selectCohort: INSERT`;
+`connection.prepare(String(Math.random()))` reports `statement not statically inspectable`; a scan
+that matches no method at all trips the `seen > 20` guard with `only 0 executed statements found;
+the scan is not working`, which is the source's own guard against a vacuous pass;
+`exec("SELECT 1; INSERT INTO ai_invocation ...")` reports `INSERT behind a leading SELECT`;
+`WITH doomed AS (...) DELETE FROM run ...` reports `DELETE behind a leading WITH`; and a statement
+carrying `replace(...)`, a literal `'DELETE'` and a `-- INSERT INTO run` comment reports **nothing**,
+which is the direction the blanking exists for.
 
 **Status.** accepted
 

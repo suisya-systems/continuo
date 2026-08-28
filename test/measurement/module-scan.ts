@@ -295,6 +295,24 @@ export interface ExecutedStatement {
   readonly functionName: string;
   readonly verb: string;
   readonly text: string | null;
+  /**
+   * Write verbs the text carries somewhere OTHER than its leading position.
+   *
+   * The source reads the leading verb and stops, and on its runtime that is
+   * sufficient: `sqlite3.Connection.execute` refuses a second statement
+   * outright ("You can only execute one statement at a time"), so a text whose
+   * first verb is `SELECT` cannot also run an `INSERT`. **better-sqlite3's
+   * `exec` runs every statement in the string**, which is the same widening
+   * `docs/test-translation-conventions.md` rule 9 describes, reached through the
+   * driver rather than through a type: `exec("SELECT 1; INSERT INTO
+   * ai_invocation ...")` classifies as `SELECT` and writes.
+   *
+   * The same sweep closes a hole both runtimes have: SQLite accepts a CTE in
+   * front of a write, so `WITH x AS (...) DELETE FROM run` leads with `WITH`,
+   * which is in the source's READ_VERBS. That one is inherited and repaired here
+   * under `D-0023`; the ledger records it. See `D-0115`.
+   */
+  readonly hiddenWriteVerbs: readonly string[];
 }
 
 /**
@@ -509,6 +527,69 @@ function functionName(node: ts.Node): string | null {
   return null;
 }
 
+/**
+ * Every write verb the text carries beyond its leading position.
+ *
+ * String literals, quoted identifiers and comments are blanked first, so a
+ * `WHERE status = 'DELETE'` is not a delete and a comment explaining what the
+ * writers do is not one either -- the same reason the source parses rather than
+ * greps. `replace(` is spared because it is SQLite's string function; the
+ * statement verb is `REPLACE` followed by a space or the end of the text.
+ */
+function hiddenWriteVerbs(sql: string): readonly string[] {
+  const scanned = blankLiteralsAndComments(sql);
+  const leading = leadingVerb(sql);
+  const found = new Set<string>();
+  for (const match of scanned.matchAll(
+    /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|VACUUM|ATTACH|DETACH|REINDEX)\b(?!\s*\()/gi,
+  )) {
+    found.add((match[1] as string).toUpperCase());
+  }
+  // A statement whose LEADING verb is the write is the source's own branch and
+  // is reported there; dropping it here keeps the two reports disjoint rather
+  // than naming one write twice.
+  found.delete(leading);
+  return [...found].sort();
+}
+
+/**
+ * Blank out SQL string literals, quoted identifiers and comments, keeping
+ * length so an index into the result still points at the same character.
+ */
+function blankLiteralsAndComments(sql: string): string {
+  const out: string[] = [];
+  let index = 0;
+  const blank = (count: number): void => {
+    out.push(" ".repeat(count));
+    index += count;
+  };
+  while (index < sql.length) {
+    const rest = sql.slice(index);
+    const closer = { "'": "'", '"': '"', "`": "`", "[": "]" }[rest[0] as string];
+    if (closer !== undefined) {
+      // Doubling is SQLite's escape inside a quoted run; the scan does not need
+      // to tell an escaped quote from a closing one, because either way what
+      // lies between quotes is blanked.
+      const end = sql.indexOf(closer, index + 1);
+      blank(end < 0 ? rest.length : end - index + 1);
+      continue;
+    }
+    if (rest.startsWith("--")) {
+      const end = sql.indexOf("\n", index);
+      blank(end < 0 ? rest.length : end - index);
+      continue;
+    }
+    if (rest.startsWith("/*")) {
+      const end = sql.indexOf("*/", index + 2);
+      blank(end < 0 ? rest.length : end - index + 2);
+      continue;
+    }
+    out.push(rest[0] as string);
+    index += 1;
+  }
+  return out.join("");
+}
+
 /** The leading verb of a statement, ignoring blank and comment-only lines. */
 export function leadingVerb(sql: string): string {
   for (const line of sql.split("\n")) {
@@ -545,7 +626,13 @@ export function statementsExecuted(): readonly ExecutedStatement[] {
       const functionOf = enclosing.get(node) ?? "<module>";
       const texts = sources.textsForArgument(argument);
       if (texts === null) {
-        found.push({ module: short, functionName: functionOf, verb: "", text: null });
+        found.push({
+          module: short,
+          functionName: functionOf,
+          verb: "",
+          text: null,
+          hiddenWriteVerbs: [],
+        });
         return;
       }
       for (const text of texts) {
@@ -559,6 +646,7 @@ export function statementsExecuted(): readonly ExecutedStatement[] {
           functionName: functionOf,
           verb: leadingVerb(statement),
           text: statement,
+          hiddenWriteVerbs: hiddenWriteVerbs(statement),
         });
       }
     };
