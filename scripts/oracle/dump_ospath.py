@@ -51,6 +51,13 @@ def _module_section(module: Any, corpus: dict) -> dict:
         "dirname": [module.dirname(p) for p in paths],
         "basename": [module.basename(p) for p in paths],
         "join": [module.join(*args) for args in joins],
+        # normcase joined the vector with D-0216, which made `_is_inside_root`
+        # compare normcased paths so a Windows drive-letter case difference
+        # stops reading as a sandbox escape. `str.lower()` is a full Unicode
+        # lowering and the corpus carries characters that exercise it, so this
+        # is checked against CPython like the other six rather than argued from
+        # two specifications.
+        "normcase": [module.normcase(p) for p in paths],
     }
 
 
@@ -74,7 +81,11 @@ def main() -> None:
         Path(sys.argv[1]).write_text(text, encoding="utf-8")
         sys.stdout.write(
             f"wrote {sys.argv[1]} "
-            f"({len(corpus['paths'])} paths x 6 functions x 2 modules, "
+            # 7 functions, 8 keys: dirname and basename are dumped as their own
+            # arrays but are projections of split, and the suite asserts them
+            # under one case. Counting keys here would report 8 and disagree
+            # with every other place the number is written down.
+            f"({len(corpus['paths'])} paths x 7 functions x 2 modules, "
             f"{len(corpus['joins'])} joins x 2 modules)\n"
         )
     else:

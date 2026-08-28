@@ -80,7 +80,9 @@ const LEDGERS = [
   "parity/fencing.deny-hook.ledger.json",
   "parity/fencing.restart.ledger.json",
   "parity/fencing.spawn-precondition.ledger.json",
+  "parity/fencing.readback.ledger.json",
   "parity/settings.settings-generator.ledger.json",
+  "parity/settings.sandbox-symlink-deny.ledger.json",
 ];
 
 /**
@@ -127,6 +129,52 @@ function collectTargetTests() {
   return JSON.parse(raw.slice(start)).map(
     (entry) => `${relative(ROOT, entry.file).split("\\").join("/")}::${entry.name}`,
   );
+}
+
+/**
+ * Whether `title` is declared in `file`'s source text.
+ *
+ * The fallback for a target id that a HOST did not collect, and it exists
+ * because of an asymmetry between the two runners that this check was built
+ * before meeting. **pytest COLLECTS a skipped test** -- `skipif` reports it,
+ * `--collect-only` prints it, and the source inventory therefore contains it.
+ * **`vitest list` OMITS one.** So a ported case guarded by a capability probe
+ * has a source node id and, on a host without the capability, no target id at
+ * all: `test_detector_agrees_with_real_bwrap` resolved on a porting host with
+ * bubblewrap and reported `maps to a target test that does not exist` on the
+ * parity runner without it.
+ *
+ * Answering "was this test deleted?" therefore cannot be `collected.includes`
+ * alone. It is the source text that says whether the file still declares the
+ * case, and that is a question with the same answer on every host -- which is
+ * the property the ledger needs and the collection list does not have.
+ *
+ * Deliberately a literal search for the quoted title rather than a parse: it
+ * has to fail CLOSED. A title this cannot find is reported as missing, so the
+ * escape hatch below can only be opened by a title that is really there.
+ */
+function declaresTitle(file, title) {
+  let source;
+  try {
+    source = readFileSync(join(ROOT, file), "utf8");
+  } catch {
+    return false;
+  }
+  return (
+    source.includes(`"${title}"`) ||
+    source.includes(`'${title}'`) ||
+    source.includes(`\`${title}\``)
+  );
+}
+
+/**
+ * The leaf title of a target id, which is what the file spells at the `test(`
+ * call. `describe` names are the prefix and are not written at that call site.
+ */
+function leafTitle(id) {
+  const name = id.slice(id.indexOf("::") + 2);
+  const parts = name.split(" > ");
+  return parts[parts.length - 1];
 }
 
 /** Every file under `test/`, so the non-running sweep cannot miss a directory. */
@@ -321,13 +369,50 @@ for (const ledgerPath of LEDGERS) {
       fail("unmapped", `${ledgerPath}: target test claimed by no ledger entry: ${id}`);
     }
   }
+  // Target ids the ledger declares as absent-on-some-hosts, because a
+  // capability probe skips them and `vitest list` omits a skipped test where
+  // pytest collects one. Each is named EXPLICITLY -- no wildcards -- and each
+  // still has to be declared in the file, so this cannot hide a deletion.
+  const conditional = new Map(
+    (ledger.target.conditionally_collected ?? []).map((row) => [row.id, row]),
+  );
+  for (const [id, row] of conditional) {
+    if (!row.reason) {
+      fail("unexplained", `${ledgerPath}: conditionally_collected entry has no reason: ${id}`);
+    }
+    if (!id.startsWith(`${ledger.target.test_file}::`)) {
+      fail(
+        "missing",
+        `${ledgerPath}: conditionally_collected names a test outside this ledger's file: ${id}`,
+      );
+    }
+  }
+
+  /** Absent from THIS host's collection, but declared in the file and approved. */
+  const absentButDeclared = (id) => {
+    if (collected.includes(id)) {
+      return false;
+    }
+    if (!conditional.has(id)) {
+      return false;
+    }
+    if (!declaresTitle(ledger.target.test_file, leafTitle(id))) {
+      fail(
+        "missing",
+        `${ledgerPath}: ${id} is declared conditionally_collected but its title is not in ${ledger.target.test_file}; a skipped test is still written down, a deleted one is not`,
+      );
+      return false;
+    }
+    return true;
+  };
+
   for (const id of targetOnly) {
-    if (!collected.includes(id)) {
+    if (!collected.includes(id) && !absentButDeclared(id)) {
       fail("missing", `${ledgerPath}: declared target-only test does not exist: ${id}`);
     }
   }
   for (const [id, source] of claimedTargets) {
-    if (!collected.includes(id)) {
+    if (!collected.includes(id) && !absentButDeclared(id)) {
       fail("missing", `${ledgerPath}: ${source} maps to a target test that does not exist: ${id}`);
     }
   }

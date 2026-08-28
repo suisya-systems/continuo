@@ -25,7 +25,7 @@
   "target": {
     "test_file": "test/settings/settings-generator.test.ts",
     "target_only_tests": {
-      "count": 46,
+      "count": 48,
       "ids": [
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > production reads the symlink probe through the seam record (target-only)",
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > an integral float and a 2**53+ integer survive the whole CLI render (target-only)",
@@ -72,9 +72,11 @@
         "test/settings/ospath-oracle.test.ts::ntpath agrees with CPython at every position > isabs",
         "test/settings/ospath-oracle.test.ts::ntpath agrees with CPython at every position > split, and the dirname / basename projected from it",
         "test/settings/ospath-oracle.test.ts::ntpath agrees with CPython at every position > splitdrive",
-        "test/settings/ospath-oracle.test.ts::ntpath agrees with CPython at every position > join"
+        "test/settings/ospath-oracle.test.ts::ntpath agrees with CPython at every position > join",
+        "test/settings/ospath-oracle.test.ts::posixpath agrees with CPython at every position > normcase",
+        "test/settings/ospath-oracle.test.ts::ntpath agrees with CPython at every position > normcase"
       ],
-      "note": "Four groups, none counted as ported coverage. (1) Six in settings-generator.test.ts pin obligations no translated case can see: the seam liveness rule 5 requires, the thirteen number-spelling rebuild branches D-0211 makes an obligation, and Python's all-occurrences `str.replace` -- no source case writes one placeholder twice in a string, so the narrower JavaScript spelling would translate green and then ship a literal `{worker_dir}` into a rendered settings file. (2) The rest of that file pins the repairs the review gate found, each with the half it must not break beside it. Every value they assert was MEASURED against CPython 3.12.3 on this exact parser rather than reasoned about: the eight `--` separator shapes, the negative-number classification, and where unrecognized arguments are reported from. That discipline came from getting one of them wrong by reading argparse's source instead of running it. (3) Three of them patch `process.platform` for the length of one test, so the `os.path.isabs` repair is falsifiable on a POSIX cell -- see intentional_divergences. (4) Thirteen in ospath-oracle.test.ts are the CPython differential for `src/fencing/pypath.ts`'s `os.path` half, which interlock's suite cannot have a case for because there `os.path` is the standard library."
+      "note": "Four groups, none counted as ported coverage. (1) Six in settings-generator.test.ts pin obligations no translated case can see: the seam liveness rule 5 requires, the thirteen number-spelling rebuild branches D-0211 makes an obligation, and Python's all-occurrences `str.replace` -- no source case writes one placeholder twice in a string, so the narrower JavaScript spelling would translate green and then ship a literal `{worker_dir}` into a rendered settings file. (2) The rest of that file pins the repairs the review gate found, each with the half it must not break beside it. Every value they assert was MEASURED against CPython 3.12.3 on this exact parser rather than reasoned about: the eight `--` separator shapes, the negative-number classification, and where unrecognized arguments are reported from. That discipline came from getting one of them wrong by reading argparse's source instead of running it. (3) Three of them patch `process.platform` for the length of one test, so the `os.path.isabs` repair is falsifiable on a POSIX cell -- see intentional_divergences. (4) Thirteen in ospath-oracle.test.ts are the CPython differential for `src/fencing/pypath.ts`'s `os.path` half, which interlock's suite cannot have a case for because there `os.path` is the standard library. -- UPDATED BY D-0216: the ospath-oracle group is now FIFTEEN, not thirteen. `normcase` joined the transcription and the vector when `_is_inside_root` was repaired to compare normcased paths, and it is asserted for both namespaces here for the same reason as the other six: interlock's suite cannot have a case for `os.path`, because there `os.path` is the standard library. Its two vacuity assertions were added to the existing case rather than as cases of their own, so they do not move this count."
     },
     "approved_non_running": [],
     "notes": [
@@ -102,6 +104,14 @@
         "test/settings/settings-generator.test.ts::the absolute-path repair under a simulated ntpath (target-only, D-0213) > a kept drive-letter entry is emitted as a string, not a dict (target-only)"
       ],
       "how_it_is_pinned_on_a_posix_cell": "`posixpath.isabs` IS `startswith('/')`, so on Linux no case can distinguish the two spellings -- the platform-parameterised pins beside these assert the unchanged behaviour there and the repair only on the Windows cells. That is not good enough for a repair (rule 11), so the three pins above patch `process.platform` for the length of one test: `pypath.ts` dispatches at CALL time, deliberately, because that is how Python binds `os.path`. Each of the three reverts was confirmed to turn its pin red on Linux."
+    },
+    {
+      "topic": "Two limitations this ledger disclosed have been REPAIRED, in PR 4 of this lane, and are no longer limitations of the port.",
+      "decision": "D-0215, D-0216",
+      "source_behaviour": "See `parity/settings.sandbox-symlink-deny.ledger.json` `intentional_divergences` for both, with the before/after measurements.",
+      "port_behaviour": "(1) An enabled sandbox whose `filesystem` is a truthy non-mapping is REFUSED (`PyValueError`, rc 2) rather than coerced to `{}` and rendered as empty deny arrays -- D-0215. (2) `_is_inside_root` compares normcased paths, so a Windows drive-letter case difference no longer reads as an escape and no longer suppresses an in-root deny -- D-0216.",
+      "why_here": "Both were raised by this file's review gate (round 4), escalated at the round limit rather than decided, and routed to PR 4 by the secretary because `sandbox_doctor` owns the readback half that observes the first. Recorded here rather than silently deleted: this ledger told a reader those two behaviours were inherited and disclosed, and a reader who returns to it has to be able to find out that they stopped being.",
+      "platforms": "D-0215 diverges on every platform; D-0216 on Windows only."
     }
   ],
   "inherited_limitations": [
@@ -114,18 +124,6 @@
       "what": "A non-string entry in `sandbox.filesystem.additionalDirectories` reaches `os.path.normpath` and raises. The port raises a typed `PyTypeError` at the same point with its own message rather than forging CPython's `expected str, bytes or os.PathLike object` wording.",
       "matches_source": true,
       "where_a_fix_belongs": "Neither side validates this input; the message text is an adapted detail under D-0017 and no case asserts it."
-    },
-    {
-      "what": "An enabled sandbox whose `filesystem` is a truthy NON-mapping (`\"filesystem\": \"invalid\"`) is coerced to `{}`, so the render emits empty `denyRead` / `denyWrite` instead of surfacing the malformed value. A malformed security configuration becomes a valid, less restrictive one.",
-      "matches_source": true,
-      "source": "settings/generator.py `_evaluate_sandbox_suppressions`: `fs = sandbox.get('filesystem') or {}` followed by `if not isinstance(fs, dict): fs = {}` -- transcribed verbatim, coercion included.",
-      "where_a_fix_belongs": "NOT repaired here, and the reason is the difference from the `os.path.isabs` divergence recorded above. That repair is a no-op on the platform interlock runs on, so it cannot change any behaviour the source exhibits. This one would: interlock renders `denyRead: []` for a malformed `filesystem` on every platform, and a port that raised or preserved instead would be a deliberate behavioural divergence on the primary platform, covered by no case on either side. Raised by the review gate (round 4) and escalated rather than decided at the round limit; it wants a decision id and pins of its own, and `sandbox_doctor` (PR 4) is the natural place, since it owns the readback half that would observe the emptied arrays."
-    },
-    {
-      "what": "`_is_inside_root` compares a realpath'd target against the sandbox read roots with `==` and `startswith`, both case-SENSITIVE. Windows path identity is case-insensitive, so a `worker_dir` authored as `c:\\\\Users\\\\Foo\\\\worker` against a realpath that returns `C:\\\\Users\\\\Foo\\\\worker\\\\secret` reads as an escape, and an in-root deny entry is suppressed.",
-      "matches_source": true,
-      "source": "settings/generator.py `_is_inside_root` -- no `os.path.normcase` on either side, transcribed verbatim.",
-      "where_a_fix_belongs": "NOT repaired here. `normcase` would have to be applied consistently, and the choice of whether `sandbox_read_roots` REPORTS the normcased form or the operator's is a contract question (the launcher's /sandbox status displays it), not a spelling one. Raised by the review gate (round 4) and escalated at the round limit. Windows-only, like the `isabs` divergence, but unlike it this one needs a design call rather than a substitution."
     }
   ],
   "entries": [

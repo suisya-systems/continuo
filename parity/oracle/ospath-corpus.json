@@ -63,7 +63,11 @@
     "secrets.env",
     "subdir/private",
     "~/.aws/credentials",
-    "{base_clone}/.git/HEAD"
+    "{base_clone}/.git/HEAD",
+    "C:\\Users\\Ä\\config",
+    "C:\\Users\\İstanbul\\.aws",
+    "/home/ẞ/ÄÖÜ",
+    "/home/Ä/../Ö"
   ],
   "joins": [
     ["/home/u/work/wd", "secrets.env"],

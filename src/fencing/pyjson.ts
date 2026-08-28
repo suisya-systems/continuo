@@ -133,6 +133,26 @@
  *   `pyIterate`, which would arm the reordering trap the proof describes for the
  *   seven that reorder or discard the copy.
  *
+ *   `../settings/sandbox_doctor.ts` is **one** further branch (D-0214), and it
+ *   is worth naming separately because the module reads as though it had none:
+ *   it collects paths, and a path is a string. The way a number gets in is the
+ *   malformed-input path the module exists to SURFACE rather than skip. A
+ *   `permissions.deny` of `[1.0]` is a non-string rule, so it is reported as
+ *   `unsupported-entry` with the number AS the finding's `source`, and
+ *   `findingToJsonable` hands that number to `pyJsonDumps` under a key on a
+ *   freshly built object -- so `--json` prints `1` where CPython prints `1.0`,
+ *   in the field whose only job is to quote the operator's input back.
+ *
+ *   It is also the one branch so far that `carryNumberSpellings` cannot serve.
+ *   That function matches slots by NAME, and this rebuild moves a value from a
+ *   deny array's numeric index onto the key `source`: a wholesale carry finds
+ *   no `source` entry in the record, does nothing, and stays green. The
+ *   spelling is read at COLLECTION time with `pyNumberSpelling` -- while the
+ *   container that holds it is still in hand -- and re-hung with
+ *   `rememberNumberSpellings` on the new key. Both collection sites (Layer 2
+ *   and Layer 3) are pinned, because they were written from the same shape and
+ *   a pin on one would not have caught a carry missing from the other.
+ *
  *   **Any new rebuild site has to carry the record, or state a proof like the
  *   one above, and either way has to be pinned.** D-0210 shipped with
  *   `deepSortKeys` uncarried and its list naming three, and neither the suite
@@ -143,7 +163,7 @@
  *   `FenceLedger.append`, which its own decision entry had already counted as
  *   the seventh. Three drafts, three undercounts, each one caught by a wider
  *   sweep than the last: that is why D-0212 enumerated mechanically rather than
- *   by reading this paragraph. See D-0211, D-0212 and D-0213.
+ *   by reading this paragraph. See D-0211, D-0212, D-0213 and D-0214.
  * - `pyStr` still renders an integral float as an int, which is visible only
  *   for a role document that spells `role_kind` or `permission_mode` as a
  *   number. Recorded there rather than fixed in passing.

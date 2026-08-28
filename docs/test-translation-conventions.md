@@ -140,6 +140,26 @@ construct under `test/` and requires a ledger approval with a matching **exact c
 example does not license the next one. A skip added quietly is the cheapest way to make a port look
 finished.
 
+**A skippable case that is also MAPPED needs one more thing, and the reason is an asymmetry between
+the two runners.** **pytest collects a skipped test** -- `skipif` reports it, `--collect-only` prints
+it, and the source inventory therefore contains its node id. **`vitest list` omits one.** So a ported
+case guarded by a capability probe has a source node id and, on a host without the capability, no
+target id at all, and the ledger's mapping reports `maps to a target test that does not exist`. It is
+host-dependent, so it passes wherever the capability exists and fails everywhere else -- which is how
+it reached CI: the two bubblewrap oracle cases resolved on a porting host with `bwrap` installed and
+failed on the parity runner without it.
+
+Declare each such id in the ledger's `target.conditionally_collected`, with a reason. Two properties
+make that an escape hatch rather than a hole: ids are named **explicitly**, never by pattern; and the
+checker still requires the test's **title to be present in the file's source text**, which is a
+question with the same answer on every host. A skipped test is still written down; a deleted one is
+not, so a deletion or a rename still fails. Both directions are worth re-checking whenever this is
+used -- confirm the check passes with the capability absent, and fails with the case renamed away.
+
+The general form of the trap: **"the runner collected it" and "the file declares it" are different
+questions**, and a check that asks the first while meaning the second gives a different answer on
+different machines.
+
 ---
 
 ## 5. monkeypatch, and the ESM constraint

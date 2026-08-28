@@ -358,6 +358,27 @@ export {
   probesFor,
   runBattery,
 } from "./fencing/battery.js";
+/**
+ * The public effective-configuration readback (D-0214).
+ *
+ * Not in interlock's `fencing/__init__.py` `__all__` -- its cases import these
+ * from `claude_org_runtime.fencing.readback` directly, which is the submodule
+ * path this package does not have. Same reason `FenceLedger` and `fenceToJson`
+ * are here: a ported case cannot be made to reach less than its original did.
+ */
+export {
+  allServersConnected,
+  compareReadbacks,
+  comparisonEqual,
+  type InitReadback,
+  MCP_COUPLED_TOOLS,
+  MCP_TOOL_PREFIX,
+  parseInitEvent,
+  type ReadbackComparison,
+  ReadbackUnsound,
+  readInitEvent,
+  stableTools,
+} from "./fencing/readback.js";
 export {
   bundledDocumentPath,
   DISCARDED_ROLE_KEYS,
@@ -807,7 +828,9 @@ export {
 } from "./settings/argparse.js";
 export {
   addArguments,
+  addDoctorArguments,
   addShowArguments,
+  buildDoctorParser,
   buildParser,
   buildRuntimeParser,
   defaultStreams,
@@ -834,5 +857,46 @@ export {
   sandboxMetadata,
   sandboxMetadataToJsonable,
 } from "./settings/generator.js";
+/**
+ * The sandbox preflight and its bwrap canary (D-0214).
+ *
+ * Here for the same reason `readback` is: the source's cases reach it as
+ * `claude_org_runtime.settings.sandbox_doctor`, and a single-entry package has
+ * no submodule path to offer instead. `doctorSeams` is deliberately absent, as
+ * `generatorSeams` and `spawnSeams` are -- it is a seam for this module's own
+ * tests, not public API.
+ */
+export {
+  analyzeTargets,
+  CANARY_FAIL,
+  CANARY_PASS,
+  CANARY_SKIPPED,
+  type CanaryRunner,
+  type CompletedProcess,
+  collectDenyTargets,
+  DEFAULT_MANAGED_SETTINGS_PATHS,
+  type DenyTarget,
+  type DoctorArgs,
+  type DoctorReport,
+  diagnose,
+  diagnoseSources,
+  discoverMergedScopes,
+  type Finding,
+  findingToJsonable,
+  formatReport,
+  loadSource,
+  PROJECT_SCOPE_FILENAMES,
+  reportFailures,
+  reportOk,
+  reportToJsonable,
+  run as sandboxDoctor,
+  runBwrapCanary,
+  type SettingsSource,
+  STATUS_OK,
+  STATUS_SYMLINK_ESCAPE,
+  STATUS_UNSUPPORTED,
+  USER_SETTINGS_PATH,
+  validateSettings,
+} from "./settings/sandbox_doctor.js";
 export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";
