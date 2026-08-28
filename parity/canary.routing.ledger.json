@@ -97,6 +97,10 @@
     {
       "behaviour": "`isAlreadyRoutedConflict` accepts a uniqueness code from the statement without checking WHICH constraint produced it.",
       "why": "The source has the same reach through its substring, only narrower by accident of message text. It is sound on this DDL — `ROUTE_RUN_START_SQL` writes only `run_owner`, whose only uniqueness is `run_id` — and the code is not trusted alone: the caller confirms by re-reading the row, and an absent row surfaces as UnroutedRun rather than as a fabricated conflict."
+    },
+    {
+      "behaviour": "`routeNewRunsTo` narrows `lastInsertRowid` with `Number(...)`, and `currentDecision` / `routedRun` read `decision_seq`, `decided_at_ms` and `routed_at_ms` as JavaScript numbers. A ledger carrying an explicit `decision_seq` at or beyond 2**53 -- which the schema permits -- would therefore return a sequence id or timestamp that disagrees with the stored row by one.",
+      "why": "Port-introduced rather than inherited (Python's `int` is arbitrary precision), and knowingly left, which is a different disposition from the two 64-bit repairs this belt DID make and is worth stating apart from them. Those two sat on the audit's digest and the rollback comparison, where the wide value can arrive as ORDINARY data -- any INTEGER column in any audited store -- and the failure is silent and evidential: a changed store reported as untouched. This one is only reachable by a writer that inserts an explicit `decision_seq` past 2**53, which no continuo API can do: `routeNewRunsTo` never supplies the column and `nowMs` is a JavaScript number. The writer that could is the out-of-band one D-0405 is already about, and a ledger in that state has a larger problem than a rounded sequence id. Raised as [P2] by the review gate on the final round; recorded here so the follow-up change D-0405 schedules can close it in the same pass, where the classification it interacts with is already being re-decided."
     }
   ],
   "entries": [
