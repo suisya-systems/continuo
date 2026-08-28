@@ -10,6 +10,53 @@
  */
 
 /**
+ * The item 10 rehearsal (Issue `#23`, D-0022): run-start routing, the run-owner
+ * ledger, the writer audit, and the stand-in counterparty.
+ *
+ * Re-exported through `src/canary/index.ts` rather than from the five modules
+ * directly, because the barrel *is* the surface: it lists 27 names and omits
+ * the five of `ledger.ts`'s that decide whether a file is this ledger
+ * (`LEDGER_APPLICATION_ID`, `LEDGER_REVISION`, `LEDGER_SCHEMA_PATH`,
+ * `LEDGER_TABLES`, `loadLedgerSql`), plus `configureLedgerConnection`. Naming
+ * the modules here would quietly hand back what the barrel withheld.
+ *
+ * The package exports only `.` (D-0002), so this block is what makes the
+ * rehearsal reachable by an installed consumer at all. It is exported for the
+ * same reason the source's package is importable: the rehearsal's artifacts --
+ * the marking above all -- are meant to be readable from outside, and a
+ * throwaway (D-0026) that cannot be inspected is not a rehearsal anyone can
+ * audit.
+ */
+export {
+  CorruptLedgerRefused,
+  canonicalSqliteBytes,
+  canonicalSyntheticBytes,
+  compareAcrossRollback,
+  createRoutingLedger,
+  INTERLOCK,
+  MissingLedgerRefused,
+  NoRoutingDecision,
+  OWNING_SYSTEMS,
+  OwnerChangeRefused,
+  openRoutingLedger,
+  REHEARSAL_MARKING,
+  type RollbackComparison,
+  type RoutedRun,
+  type RoutingDecision,
+  RoutingLedgerRefusal,
+  RoutingRefused,
+  RunStartRoutingPoint,
+  type StoreSnapshot,
+  SYNTHETIC_V1,
+  SyntheticStoreRefusal,
+  SyntheticV1RunStore,
+  snapshotStores,
+  UnknownOwningSystem,
+  UnroutedRun,
+  type WriterAuditReport,
+  writerAudit,
+} from "./canary/index.js";
+/**
  * The settings generator (D-0213), and the parser the whole CLI now shares.
  *
  * The parser moved to `src/cli/parser.ts` with `D-0030` -- it is one parser for

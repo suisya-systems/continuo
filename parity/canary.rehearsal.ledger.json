@@ -1,0 +1,97 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "canary",
+      "collected": 70,
+      "inventory": "parity/source-inventory/canary.all.txt",
+      "note": "The item 10 routing rehearsal, interlock tests/canary, 6 files. One ledger per source file. Not to be confused with parity/measurement.canary.ledger.json, which ports tests/measurement/test_canary.py -- the measurement harness's view of a canary, not the canary's own store. The two names sit next to each other in parity/ and mean different things."
+    },
+    "file": {
+      "path": "tests/canary/test_rehearsal.py",
+      "collected": 1,
+      "inventory": "parity/source-inventory/canary.test_rehearsal.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 1 pass there (measured 2026-08-28 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/canary/ -p no:cacheprovider`: 70 passed, of which 1 are tests/canary/test_rehearsal.py's)."
+    }
+  },
+  "target": {
+    "test_file": "test/canary/rehearsal.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`with interlock:` (Python sqlite3 connection-as-transaction: commit on success, rollback on exception)",
+        "to": "`interlock.transaction(() => { ... })()`",
+        "why": "better-sqlite3 is in autocommit and has no connection context manager, so the source's one implicit transaction is spelled out where it had it and nowhere else. Matches the convention already established in `test/canary/audit.test.ts`.",
+        "affects": "the `startRun` helper's interlock branch"
+      },
+      {
+        "from": "Python tuple equality (`== ()`, `== (\"run-canary\",)`, a tuple of positional 4-tuples)",
+        "to": "`toEqual([])` / `toEqual([\"run-canary\"])` / `toEqual([[seq, system, ms, reason]])`",
+        "why": "A Python tuple is an ordered sequence, as is a JS array; the source compares positionally, so the port does too. `appendedDecisions` is kept as positional arrays rather than objects so the parity with the source's tuple shape is visible, and `rollback.decisionSeq` is already a `number` (the implementation normalises `lastInsertRowid`), so no BigInt coercion was needed in the test.",
+        "affects": "assertions 4, 7, 12, 13"
+      },
+      {
+        "from": "`owners = dict(ledger.execute(\"SELECT run_id, owning_system FROM run_owner\"))` then `assert owners == {...}`",
+        "to": "`.raw().all()` -> `Object.fromEntries(rows)` -> `expect(owners).toEqual({...})`",
+        "why": "Python builds a mapping from 2-column rows and compares two dicts, which ignores key order; `toEqual` over two plain objects asks the same question. `.raw()` gives the row as a positional array, which is what `Object.fromEntries` wants and what Python's `dict(cursor)` consumes. The run ids are the test's own literals, so rule 9's prototype-key hazard is not reachable here and `Object.create(null)` would have changed the `toEqual` comparison for nothing.",
+        "affects": "assertions 9 and 10"
+      },
+      {
+        "from": "the `stores` fixture's `try: yield ... finally: interlock.close(); ledger.close()`",
+        "to": "`onTestFinished` registered at each acquisition, ledger first and control plane second",
+        "why": "Convention rule 1: cleanup at the acquisition site, and Vitest unwinds those callbacks in reverse registration order -- which reproduces the source's close order (control plane, then ledger) exactly, and also survives a failure partway through fixture construction.",
+        "affects": "the `stores()` fixture"
+      },
+      {
+        "from": "`from claude_org_runtime.canary import (...)` -- every name from the package `__init__`",
+        "to": "per-module imports from `../../src/canary/{audit,ledger,marking,routing,synthetic_v1}.js`",
+        "why": "`src/canary/index.ts` is lane E's file and did not exist while this lane ran; importing through a file that was not yet on disk would have made the case's greenness depend on another lane's landing order. Nothing the case asserts is about the barrel. Raised in `concerns` in case the integrator prefers the barrel import for fidelity to the source's import site.",
+        "affects": "the import block"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    }
+  },
+  "totals": {
+    "source_cases": 1,
+    "ported": 1,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "`comparison.onlyTheRoutingDecisionChanged` is vacuously true for two identical snapshots, and the ported case does not (and must not) treat it as proof that a rollback happened.",
+      "why": "The source knows this and pairs it with the exact `appended_decisions` assertion; the port keeps the pair rather than 'improving' the predicate. Strengthening it would assert more than the source (rule 0) and would belong in a target-only case if wanted."
+    },
+    {
+      "behaviour": "The case makes no numeric go/no-go assertion of any kind -- no threshold on timestamps, counts or durations.",
+      "why": "Q-0005 is deliberately left open by the source; the rehearsal is evidence, not a discharge. Adding any threshold here would turn a rehearsal into a criterion the project has not agreed."
+    },
+    {
+      "behaviour": "`final.interlockWritten == ['run-canary']` asserts the interlock-started run is STILL running on Interlock after the rollback; the case says nothing about what should happen to such a run.",
+      "why": "The source's own comment: what a real rollback does with in-flight Interlock runs is Q-0005's open question. The port reproduces the silence."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/canary/test_rehearsal.py::test_the_rehearsed_canary_and_rollback",
+      "target_id": "test/canary/rehearsal.test.ts::the item 10 rehearsal, end to end > the rehearsed canary and rollback",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight transcription. Every assertion the source makes survives, in the source's order; the only changes are runtime spellings (Python tuple -> JS array, `with interlock:` -> `interlock.transaction(...)()`, `dict(cursor)` -> `Object.fromEntries` + order-insensitive `toEqual`). No assertion added, none dropped.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

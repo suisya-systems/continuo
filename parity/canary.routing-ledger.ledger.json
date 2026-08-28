@@ -1,0 +1,370 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "canary",
+      "collected": 70,
+      "inventory": "parity/source-inventory/canary.all.txt",
+      "note": "The item 10 routing rehearsal, interlock tests/canary, 6 files. One ledger per source file. Not to be confused with parity/measurement.canary.ledger.json, which ports tests/measurement/test_canary.py -- the measurement harness's view of a canary, not the canary's own store. The two names sit next to each other in parity/ and mean different things."
+    },
+    "file": {
+      "path": "tests/canary/test_ledger.py",
+      "collected": 27,
+      "inventory": "parity/source-inventory/canary.test_ledger.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 27 pass there (measured 2026-08-28 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/canary/ -p no:cacheprovider`: 70 passed, of which 27 are tests/canary/test_ledger.py's)."
+    }
+  },
+  "target": {
+    "test_file": "test/canary/ledger.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "pytest.raises(sqlite3.IntegrityError)",
+        "to": "expectSqliteError(action, { code: /^SQLITE_CONSTRAINT/, message?: ... })",
+        "why": "better-sqlite3 raises one error type for everything and carries the distinction in `.code` (D-0016). The whole SQLITE_CONSTRAINT family is used, not one member, because `sqlite3.IntegrityError` covers RAISE(ABORT) (SQLITE_CONSTRAINT_TRIGGER), CHECK, UNIQUE and PRIMARYKEY without distinguishing them -- naming one would assert more than the source does. Where the source has a `match=`, it is kept alongside the code; where it has none (5 cases), none was added.",
+        "affects": "All 16 ported cases that expect a store-level refusal."
+      },
+      {
+        "from": "pytest.raises(SomeRefusal, match=\"...\")",
+        "to": "expectRefusal(action, Type, \"...\") from test/testkit/errors.ts",
+        "why": "Keeps both halves pytest asserts (the class AND a regex search over the message). Vitest's `toThrow` drops one half depending on which overload is reached for.",
+        "affects": "The 10 ported cases raising RoutingLedgerRefusal / MissingLedgerRefused / CorruptLedgerRefused."
+      },
+      {
+        "from": "connection.commit()",
+        "to": "dropped",
+        "why": "better-sqlite3 runs in autocommit, so a statement is durable when it returns. The source's `with ledger:` blocks (the two insert helpers) ARE transactions and are translated as `ledger.transaction(...)()`, which rolls back and rethrows exactly as the context manager does.",
+        "affects": "The two helpers and 5 cases that call commit() explicitly before closing."
+      },
+      {
+        "from": "pytest fixtures `ledger_path` / `ledger` (generator fixture with teardown)",
+        "to": "plain per-test functions `ledgerPath()` / `ledgerFixture()`, with the close registered by `onTestFinished` at acquisition",
+        "why": "Conventions rules 1, 6 and 8: cleanup belongs at the acquisition site, and function scope stays function scope. The close is wrapped in try/catch because seven cases close the connection themselves first, which pytest's teardown tolerates too."
+      },
+      {
+        "from": "monkeypatch.setattr(ledger_module, \"LEDGER_SCHEMA_PATH\", stripped)",
+        "to": "patchSeam(ledgerSeams, \"ledgerSchemaPath\", stripped), with loadLedgerSql reading only through the seam record",
+        "why": "ESM bindings resolve at link time and cannot be rebound from outside; `vi.mock` reaches importers, not intra-module calls. This reproduces Python's late binding rather than working around it (D-0014, conventions rule 5). A target-only liveness case pins that production still routes through the seam.",
+        "affects": "test_the_ddl_is_refused_if_the_marking_is_removed."
+      },
+      {
+        "from": "Python's module-private `_collapsed`",
+        "to": "an exported-but-not-barrel `collapsedLedgerSql`",
+        "why": "TypeScript has no private-to-module-but-visible-to-tests spelling. The alternative -- reimplementing the collapse rule in the test -- would make the case compare its own construction against itself instead of against the loader's rule.",
+        "affects": "test_the_ddl_carries_the_rehearsal_marking_as_one_sentence."
+      },
+      {
+        "from": "`fetchone() == (1,)` / `== (\"synthetic_v1\",)` (single-column Python tuple)",
+        "to": "`prepare(sql).pluck().get()` compared to the bare value",
+        "why": "better-sqlite3 returns row objects, and the column name here is literally `COUNT(*)`. `.pluck()` is the faithful reading of a one-column row without hard-coding that name."
+      },
+      {
+        "from": "a function-local `from ...control_plane.schema import APPLICATION_ID`",
+        "to": "a top-of-file import of SPIKE_APPLICATION_ID in the TEST file only",
+        "why": "The deferred import exists so `canary` carries no import-time dependency on `control_plane`. In this port that dependency is the test's, not the module's (`src/canary/ledger.ts` imports nothing from `control_plane`), so a static import in the test file is the honest spelling and the protected property still holds."
+      },
+      {
+        "from": "`sqlite3.connect(other)` for building a decoy database",
+        "to": "rawConnection(other) from the frozen testkit",
+        "why": "An unconfigured better-sqlite3 handle with `unsafeMode(true)` -- the testkit's `raw()` -- is what corresponds to Python's `sqlite3.connect`, which has no defensive mode. It also closes on test finish, which matters on Windows."
+      }
+    ],
+    "target_only_tests": {
+      "count": 6,
+      "ids": [
+        "test/canary/ledger.test.ts::the DDL ships to dist (target-only) > target-only -- the built package carries routing_ledger.sql byte for byte",
+        "test/canary/ledger.test.ts::seam liveness (target-only) > target-only -- loadLedgerSql reads the schema path through the seam record",
+        "test/canary/ledger.test.ts::store enforcement on every connection (target-only) > target-only -- a reopened ledger also refuses INSERT OR REPLACE",
+        "test/canary/ledger.test.ts::store enforcement on every connection (target-only) > target-only -- a trigger dropped by a foreign connection is caught at reopen",
+        "test/canary/ledger.test.ts::store enforcement on every connection (target-only) > target-only -- the ledger stays on the rollback journal, created and reopened",
+        "test/canary/ledger.test.ts::store enforcement on every connection (target-only) > target-only -- a refused open leaves the file byte identical and makes no sidecar"
+      ],
+      "why": "target-only -- the built package carries routing_ledger.sql byte for byte: `LEDGER_SCHEMA_PATH` resolves beside `ledger.js`, so a build that emits the JavaScript and forgets the `.sql` ships a module in which the ledger can be neither created nor opened -- and every other case in this file passes, because they all run against the source tree. Byte-for-byte rather than merely present, because the fingerprint hashes these exact bytes and a normalised line ending would make the packaged build refuse every ledger the source build wrote. Python packages data files differently, so the source has no counterpart. Guarded so a missing build reports 'run npm run build' rather than failing confusingly. target-only -- loadLedgerSql reads the schema path through the seam record: Required by conventions rule 5: a seam that production stopped routing through rots into a decoration, and the case that patches it would then be testing nothing. Pins that the CONTENT loadLedgerSql returns is the patched file's. target-only -- a reopened ledger also refuses INSERT OR REPLACE: The source exercises OR REPLACE only through the create path's connection, so `recursive_triggers = ON` could be applied on that path alone and the whole ported belt would stay green -- while every long-running process, which opens rather than creates, ran without the guarantee. The pragma is per-connection; this asserts the open path carries it. Named as a required addition by the design review. target-only -- a trigger dropped by a foreign connection is caught at reopen: The ported case drops the trigger through the module's own connection, which is the one thing that cannot happen in production: the writer that damages a store is a hand-run `sqlite3` session or another process. This does the damage through a raw handle and asserts the fingerprint catches it on the way back in -- which a cached expected fingerprint, or a verify-on-create-only design, would lose. Named as a required addition by the design review. target-only -- the ledger stays on the rollback journal, created and reopened: The design constraint that this module must not build on `src/sqlite/open.ts`'s `openDatabase` comes down to one pragma: `openDatabase` sets `journal_mode = WAL`. Nothing else in the belt can see WAL (measured -- see failOnPurpose), so without this case a shared opener could be substituted and 32 of 33 tests would stay green. Both halves are asserted (the journal mode on a created AND a reopened connection, and no sidecars while a written-to connection is open) because either alone is satisfiable by accident. target-only -- a refused open leaves the file byte identical and makes no sidecar: 'Verification only reads, so a refused file is left exactly as it was found' is stated in the source's docstring and asserted by no source case. Catches a verification that repairs or otherwise writes (verified by mutation). It does NOT catch WAL -- that is the previous case's job -- and the file comment says so."
+    }
+  },
+  "totals": {
+    "source_cases": 27,
+    "ported": 24,
+    "adapted": 3,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "`createRoutingLedger`'s cleanup path calls `connection.close()` unguarded before `rmSync`. A close that itself throws aborts the cleanup, leaves the half-created file on disk, and surfaces the close error instead of the original.",
+      "why": "Python's `except BaseException: connection.close(); target.unlink(missing_ok=True); raise` has exactly this shape. Guarding it here would make the port quietly better than the source on a path no test reaches, which is the kind of silent divergence a parity port exists to avoid. `control_plane/schema.ts` carries the same inherited shape with the same comment."
+    },
+    {
+      "behaviour": "The `integrity_check` failure message interpolates a Python-repr-shaped rendering (`[('ok',)]`) built by a local `renderRow`/`renderRows` pair, duplicated from `control_plane/schema.ts` rather than shared.",
+      "why": "Python interpolates the repr of a list of 1-tuples and there is no natural TS equivalent, so the rendering is a deliberate choice rather than a translation (it should be pinned in the parity ledger). It is duplicated rather than imported because `schema.ts` does not export it and widening that module's surface for a message would couple two modules that hash different databases for different reasons. No ported case asserts this string -- no fixture in this belt reaches the integrity_check rung."
+    },
+    {
+      "behaviour": "`verify` runs before `configureLedgerConnection`, so `integrity_check` and `foreign_key_check` execute with `foreign_keys` and `recursive_triggers` at SQLite's defaults (both OFF).",
+      "why": "That is the source's order exactly. `foreign_key_check` is unaffected by the `foreign_keys` pragma, so the dangling-reference case still lands; changing the order would be a divergence with no test behind it."
+    },
+    {
+      "behaviour": "`create_routing_ledger` applies the DDL before the pragmas are configured, so `executescript`/`exec` runs with foreign keys and recursive triggers off.",
+      "why": "The source's order. It is DDL only, so nothing observable depends on it, but it is preserved rather than tidied."
+    },
+    {
+      "behaviour": "The schema fingerprint query filters with `name NOT LIKE 'sqlite_%'`, in which `_` is a single-character wildcard rather than a literal underscore, so an object named `sqliteX` and similar would also be excluded from the fingerprint.",
+      "why": "Carried verbatim from `ledger.py`, and load-bearing: the fingerprint hashes exactly the rows this query returns, so narrowing the pattern (to `LIKE 'sqlite\\_%' ESCAPE '\\'`) would change every fingerprint this build computes and make it disagree with a ledger written by interlock's. `src/control_plane/schema.ts` carries the same pattern for the same reason. Raised as [P2] by the review gate; a parity port cannot narrow it unilaterally."
+    },
+    {
+      "behaviour": "A connection this package did not hand out -- an ordinary `new Database(path)`, which sets no pragmas -- can move a started run's owner with `INSERT OR REPLACE INTO run_owner`, because `recursive_triggers` is per-connection and defaults to OFF, so the implicit conflict-resolution DELETE fires no `BEFORE DELETE` trigger. Measured end to end: the owner moved from `synthetic_v1` to `interlock`, and the tampered ledger then passed `openRoutingLedger` in full, since ownership is data and no verification rung reads it.",
+      "why": "Reproduced from interlock, whose DDL concedes the same point in a comment -- but this is NOT recorded as 'inherited, therefore left': D-0023 withdrew that answer. It is SCHEDULED as its own change, and D-0405 states the whole disposition, the measurement, and the repair. The repair (a schema-level `BEFORE INSERT` guard, measured to close the hole even with the pragma OFF) cannot land in this belt: firing ahead of conflict resolution is what makes it work, and that changes both the result code D-0402 classifies on and the refusal MESSAGE that the two ported `or replace is not a way around ...` cases assert verbatim from interlock's `match=`. Repairing it here would mean two of the seventy translated cases asserting something interlock's suite does not say, which conventions rule 0 forbids. See D-0405."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_the_ddl_carries_the_rehearsal_marking_as_one_sentence",
+      "target_id": "test/canary/ledger.test.ts::the marking > the DDL carries the rehearsal marking as one sentence",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion (the on-disk DDL, comment-stripped and whitespace-collapsed, contains REHEARSAL_MARKING). The source reaches into the module-private `_collapsed`; TypeScript has no module-private-but-test-visible spelling, so `src/canary/ledger.ts` exports `collapsedLedgerSql(text)` (documented as not barrel surface). Keeping the loader's own rule as the thing under test is the point: reimplementing the regex in the test would compare the test's construction against itself.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_the_ddl_is_refused_if_the_marking_is_removed",
+      "target_id": "test/canary/ledger.test.ts::the marking > the DDL is refused if the marking is removed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion (RoutingLedgerRefusal, match \"rehearsal\", after rewriting \"NOT A\" to \"A\" in a copy). `monkeypatch.setattr(ledger_module, \"LEDGER_SCHEMA_PATH\", stripped)` has no ESM equivalent, so the module exports a seam record `ledgerSeams` with `ledgerSchemaPath` and `loadLedgerSql` reads the path only through it (D-0014, conventions rule 5). Patched with `patchSeam`. Python's `str.replace` -> JS `replaceAll`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_run_never_changes_owning_system",
+      "target_id": "test/canary/ledger.test.ts::no mid-flight owner change, enforced by the store > a run never changes owning system",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `pytest.raises(sqlite3.IntegrityError, match=\"mid-flight\")` -> `expectSqliteError(..., { code: /^SQLITE_CONSTRAINT/, message: /mid-flight/ })`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_run_owner_row_admits_no_update_at_all",
+      "target_id": "test/canary/ledger.test.ts::no mid-flight owner change, enforced by the store > a run owner row admits no update at all",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, including the no-op self-assignment UPDATE.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_run_owner_row_is_never_deleted",
+      "target_id": "test/canary/ledger.test.ts::no mid-flight owner change, enforced by the store > a run owner row is never deleted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_or_replace_is_not_a_way_around_the_owner_trigger",
+      "target_id": "test/canary/ledger.test.ts::no mid-flight owner change, enforced by the store > or replace is not a way around the owner trigger",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, both halves kept (the refusal and the post-state read that the standing row is still 'synthetic_v1'). Runs through `createRoutingLedger`'s connection, so it exercises `recursive_triggers = ON`; single-column row read via `.pluck().get()` instead of Python's 1-tuple compare.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_or_replace_is_not_a_way_around_the_decision_history",
+      "target_id": "test/canary/ledger.test.ts::no mid-flight owner change, enforced by the store > or replace is not a way around the decision history",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; the explicit `decision_seq` column list is kept as written.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_run_owner_must_agree_with_the_decision_it_cites",
+      "target_id": "test/canary/ledger.test.ts::no mid-flight owner change, enforced by the store > a run owner must agree with the decision it cites",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The refusal is raised inside the helper's transaction; better-sqlite3's `transaction()` rolls back and rethrows, which is Python's `with ledger:` behaviour.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_one_ledger_row_per_run",
+      "target_id": "test/canary/ledger.test.ts::no mid-flight owner change, enforced by the store > one ledger row per run",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The source has no `match=` because two constraints could fire (the agrees-with-its-decision trigger or the primary key); no message assertion was added, per rule 0.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_routing_decision_is_never_edited",
+      "target_id": "test/canary/ledger.test.ts::the routing history is append-only, in order > a routing decision is never edited",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_routing_decision_is_never_deleted",
+      "target_id": "test/canary/ledger.test.ts::the routing history is append-only, in order > a routing decision is never deleted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_decision_cannot_be_back_filled_behind_the_newest",
+      "target_id": "test/canary/ledger.test.ts::the routing history is append-only, in order > a decision cannot be back filled behind the newest",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, both raises kept in order: the occupied-seq insert with NO message assertion (a plain uniqueness refusal, as the source leaves it), then the vacant-seq-behind-the-newest insert with match \"appended in order\".",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_the_owning_system_vocabulary_is_closed[INSERT INTO routing_decision (owning_system, decided_at_ms, reason) VALUES ('v1', ?, 'r')]",
+      "target_id": "test/canary/ledger.test.ts::the vocabulary is closed, the types are asserted > the owning system vocabulary is closed[INSERT INTO routing_decision (owning_system, decided_at_ms, reason) VALUES ('v1', ?, 'r')]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation via `parametrize()` with the id copied verbatim from parity/source-inventory/canary.test_ledger.txt (diffed mechanically against it; identical). No `match=`, as the source has none.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_the_owning_system_vocabulary_is_closed[INSERT INTO run_owner (run_id, owning_system, decision_seq, routed_at_ms) VALUES ('run-x', 'v1', 1, ?)]",
+      "target_id": "test/canary/ledger.test.ts::the vocabulary is closed, the types are asserted > the owning system vocabulary is closed[INSERT INTO run_owner (run_id, owning_system, decision_seq, routed_at_ms) VALUES ('run-x', 'v1', 1, ?)]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; same id-verbatim note. Either the CHECK or the agrees-with-its-decision trigger may surface, and the source asserts neither.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_timestamp_that_is_not_an_integer_is_refused",
+      "target_id": "test/canary/ledger.test.ts::the vocabulary is closed, the types are asserted > a timestamp that is not an integer is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; the statement is fully literal, with no binding, as in the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_an_empty_reason_is_refused",
+      "target_id": "test/canary/ledger.test.ts::the vocabulary is closed, the types are asserted > an empty reason is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; T0 bound as an exact integer so `typeof(decided_at_ms)` stays 'integer' and the length CHECK is what refuses.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_an_absent_ledger_is_not_an_empty_one",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > an absent ledger is not an empty one",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; type-only assertion (`expectRefusal(..., MissingLedgerRefused)`), no message pattern, as the source has none.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_creation_refuses_an_existing_path",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > creation refuses an existing path",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The refusal comes from `openSync(path, \"wx\", 0o600)` and EEXIST, i.e. the atomic O_EXCL claim, not from an existsSync pre-check.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_file_that_is_not_a_database_is_refused",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > a file that is not a database is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, type-only as in the source. better-sqlite3 may notice SQLITE_NOTADB at `new Database` where CPython notices at `PRAGMA integrity_check`; the opener classifies at both sites, and the source asserts only the type, so either route satisfies it identically.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_some_other_database_is_refused_by_application_id",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > some other database is refused by application id",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; the decoy is built with `rawConnection` (an unconfigured better-sqlite3 handle, the testkit's `raw()`), matching the source's bare `sqlite3.connect`. `connection.commit()` dropped (autocommit).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_another_revision_is_refused_never_migrated",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > another revision is refused never migrated",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; `ledger.execute(\"PRAGMA user_version = 2\")` -> `ledger.pragma(...)`, `commit()` dropped. The fixture's close tolerates the connection the test closed itself, as pytest's teardown does.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_ledger_that_lost_a_trigger_is_refused",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > a ledger that lost a trigger is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The match \"trigger\" hits the fingerprint message (\"a table, trigger or CHECK differs\"), which is the rung the source lands on; the fingerprint is derived at runtime from the DDL, never pinned.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_ledger_that_lost_a_table_is_missing_state_not_empty",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > a ledger that lost a table is missing state not empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; the pattern stops before \"(s)\" exactly as the source's does. Verified by mutation that this case is what pins the ladder order (see failOnPurpose).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_dangling_ledger_reference_is_refused",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > a dangling ledger reference is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `PRAGMA foreign_keys = OFF` is issued outside any transaction (it is a silent no-op inside one), then the seq-99 row is inserted in the helper's transaction, exactly as the source sequences it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_directory_is_not_a_ledger",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > a directory is not a ledger",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; the case root directory itself is passed. `statSync().isFile()` (not `lstatSync`), so Python's symlink-following `is_file()` semantics are preserved.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_a_verifiable_ledger_reopens_with_its_rows",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > a verifiable ledger reopens with its rows",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; `fetchone() == (1,)` -> `.pluck().get()` compared to 1, and `LEDGER_TABLES == (\"routing_decision\", \"run_owner\")` -> `toStrictEqual([...])` (ordered, not a set).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_ledger.py::test_the_ledger_application_id_is_not_the_control_plane_s",
+      "target_id": "test/canary/ledger.test.ts::refusal discipline (R3): never created by an open, never read when broken > the ledger application id is not the control plane's",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion (inequality only, not equality against a literal). The source defers the `control_plane.schema` import into the function body so `canary` carries no import-time dependency on `control_plane`; in TypeScript the import lives at the top of the TEST file, which is where the dependency actually is -- `src/canary/ledger.ts` imports nothing from `control_plane`, so the property the deferred import protects still holds. Reuses the existing `SPIKE_APPLICATION_ID` rather than redefining it.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

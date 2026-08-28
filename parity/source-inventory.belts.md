@@ -80,21 +80,53 @@ up merged into that directory rather than given a directory of its own. The Issu
 injection specifically, which is the argument for a belt; the counter-argument is that a conformance
 battery with one adapter in it is a battery for a build continuo does not yet have.
 
-### `canary` -- `in-scope` (ratified 2026-08-28) -- 70 cases
+### `canary` -- `in-scope` (ratified 2026-08-28) -- **ported: 70 of 70 cases**
 
-Ratified into scope at the human gate; belt started 2026-08-28, D-range `D-04xx`.
+Ratified into scope at the human gate on 2026-08-28 (D-0032); belt started and **completed**
+2026-08-28, D-range `D-04xx` (`D-0401`..`D-0405` used -- `D-0405` schedules one repair the belt
+found and deliberately did not make, and is the belt's one piece of open work).
+
+The status keeps its `in-scope` spelling because the five-value vocabulary this document is checked
+against records **porting intent** (D-0031), and completion is a different axis from intent -- the
+belt being finished does not retract the decision to take it on. What changed is the second half of
+the heading, and the detail below.
 
 A canary/rollout belt. Drives `claude_org_runtime/canary/`: a routing ledger with
-database-enforced guarantees, an audit, synthetic v1 fixtures.
+database-enforced guarantees, an audit, synthetic v1 fixtures. Ported to `src/canary/`
+(`ledger.ts`, `routing.ts`, `audit.ts`, `synthetic_v1.ts`, `marking.ts`, `routing_ledger.sql`) with
+the written record at `docs/canary-routing-rehearsal.md`.
 
-**Not to be confused with `measurement.test_canary.txt`,** which is already ported and covers
+**All 70 cases are translated: 54 `ported`, 16 `adapted`, 0 `not-ported`, 0 waivers**, across six
+ledgers -- one per source file, per D-0019:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/canary/test_ledger.py` | 27 | `parity/canary.routing-ledger.ledger.json` |
+| `tests/canary/test_audit.py` | 18 | `parity/canary.routing-audit.ledger.json` |
+| `tests/canary/test_routing.py` | 11 | `parity/canary.routing.ledger.json` |
+| `tests/canary/test_synthetic_v1.py` | 8 | `parity/canary.synthetic-v1.ledger.json` |
+| `tests/canary/test_structural.py` | 5 | `parity/canary.structural.ledger.json` |
+| `tests/canary/test_rehearsal.py` | 1 | `parity/canary.rehearsal.ledger.json` |
+
+Eleven further target-only cases sit beside them, covering machinery the port had to write and the
+source therefore carries no warrant for: the `dist/` placement of the DDL (D-0404), the seam
+liveness, the rollback journal, a refused open leaving no sidecar, the store enforcement holding on
+a *reopened* ledger and against a *foreign* connection, the result-code/message disagreement that
+D-0402 turns on, and the two 64-bit-integer cases -- the audit's digest and the routing snapshot
+each hold a value a double cannot carry, which Python's arbitrary-precision `int` gave the source
+for free and this port had to be repaired to get (D-0023).
+
+**Not to be confused with `measurement.test_canary.txt`,** which was already ported and covers
 `tests/measurement/test_canary.py` -- the measurement harness's view of a canary, not the canary's
 own store. The two names sit next to each other in the inventory directory and mean different
-things.
+things, and the ledgers keep them apart by name: every ledger above is prefixed `canary.`, and the
+harness's is `measurement.canary.ledger.json`. There is deliberately no bare `canary.ledger.json`.
 
-`test_ledger.py`'s framing is the reason this is a good candidate: it says the guarantees must be
-refused *in the store, not in the discipline of the writer*, which is exactly the property continuo
-already ports well (`control_plane` is 585 cases of it).
+`test_ledger.py`'s framing is why this was a good candidate, and it held: it says the guarantees must
+be refused *in the store, not in the discipline of the writer*, which is exactly the property
+continuo ports well (`control_plane` is 585 cases of it). D-0401 is where that framing landed --
+`recursive_triggers = ON` is the pragma without which `INSERT OR REPLACE` walks straight through the
+immutability triggers.
 
 ### `curator` -- `decision-pending` -- 71 cases
 
@@ -225,7 +257,7 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `session` (ratified 2026-08-28), `canary` (ratified 2026-08-28), `messagebus` (ratified 2026-08-28) | 1,572 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `session` (ratified 2026-08-28), `messagebus` (ratified 2026-08-28) | 1,572 |
 | `candidate-lane` | `fault_injection`, `gate_item2`, `secretary` | 143 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |

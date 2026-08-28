@@ -1,0 +1,305 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "canary",
+      "collected": 70,
+      "inventory": "parity/source-inventory/canary.all.txt",
+      "note": "The item 10 routing rehearsal, interlock tests/canary, 6 files. One ledger per source file. Not to be confused with parity/measurement.canary.ledger.json, which ports tests/measurement/test_canary.py -- the measurement harness's view of a canary, not the canary's own store. The two names sit next to each other in parity/ and mean different things."
+    },
+    "file": {
+      "path": "tests/canary/test_audit.py",
+      "collected": 18,
+      "inventory": "parity/source-inventory/canary.test_audit.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 18 pass there (measured 2026-08-28 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/canary/ -p no:cacheprovider`: 70 passed, of which 18 are tests/canary/test_audit.py's)."
+    }
+  },
+  "target": {
+    "test_file": "test/canary/audit.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`with connection:` (sqlite3 connection context manager)",
+        "to": "`connection.transaction(() => { ... })()`",
+        "why": "Python's context manager commits on success and rolls back on an exception. better-sqlite3 is in autocommit, so the source's implicit transactions are spelled out where it had them and NOWHERE else -- the two statements the source runs bare (the DROP TRIGGER and the PRAGMA user_version) are run bare here, because the point of both is that a digest read afterwards on the same connection sees them.",
+        "affects": "startOnInterlock and every setup write in test/canary/audit.test.ts"
+      },
+      {
+        "from": "`assert bytes_a == bytes_b` / `!=`",
+        "to": "`expect(a.equals(b)).toBe(true|false)`",
+        "why": "canonicalSqliteBytes returns a Buffer; `===` on two Buffers is identity and toEqual would compare them as byte-indexed objects and print an unreadable diff. Buffer#equals is the byte comparison Python's `==` on bytes is.",
+        "affects": "the five canonical-bytes cases"
+      },
+      {
+        "from": "Python tuple / tuple-of-tuples (`()`, `(('interlock','run-rogue'),)`)",
+        "to": "JavaScript array / array-of-arrays, compared with toEqual",
+        "why": "These are ordered sequences on both sides, not sets, and the source compares them positionally. Where the source uses `in` (containment of a pair) the port uses toContainEqual, because Array#includes is identity and would never match a freshly built pair.",
+        "affects": "every writer-audit case and appendedDecisions"
+      },
+      {
+        "from": "`json.dumps(..., default=_canonical_blob)`",
+        "to": "a pre-pass `canonicalValue(value)` over each column value before the row reaches `canonicalJson`",
+        "why": "JSON.stringify's `replacer` is not `default=` (it fires for every value, not only unserialisable ones) and the imported canonicalJson has no hook at all. Applying the hook to values is observably identical: Python's default= fires only for values json cannot serialise, and every value this pre-pass passes through unchanged is one json could serialise too.",
+        "affects": "canonicalSqliteBytes row encoding, and the exact TypeError text `${typeName} is not canonically serialisable`"
+      },
+      {
+        "from": "`sorted(rows)` over encoded JSON strings (Python code-point order)",
+        "to": "`encoded.sort()` (JS default, UTF-16 code-unit order)",
+        "why": "ensure_ascii escapes every character from U+007F up, so every encoded line is pure ASCII and the two orders are provably the same order. Stated in a comment as a property of the encoder rather than left as a coincidence. Run ids get the real code-point comparator instead, since they are not ASCII by construction.",
+        "affects": "canonicalSqliteBytes (default sort) vs sqliteRunIds / dualWritten (byCodePoint)"
+      },
+      {
+        "from": "`@dataclass(frozen=True)` with `@property`",
+        "to": "a `readonly` interface plus `Object.freeze({...})` with the derived value computed at construction",
+        "why": "CONTRACT's instruction, and the source's reports have no behaviour beyond the one derivation. A frozen object with the value already in it has the same observable surface with nothing to keep in step.",
+        "affects": "WriterAuditReport.clean, RollbackComparison.onlyTheRoutingDecisionChanged, StoreSnapshot"
+      },
+      {
+        "from": "`tuple(row)` from a sqlite3 cursor",
+        "to": "`.raw().all()` (row as an array in the SELECT's column order), each row frozen",
+        "why": "better-sqlite3's default row shape is an object; .raw() gives the positional tuple the source has, which is what makes routingDecisionRows comparable positionally and constructible by hand in the rewritten-history case.",
+        "affects": "snapshotStores.routingDecisionRows"
+      },
+      {
+        "from": "`prefix == before.routing_decision_rows` (structural tuple equality, all the way down)",
+        "to": "an explicit length check plus element-wise `rowsEqual`",
+        "why": "JavaScript's `===` on arrays is identity, and the rows on the two sides come from two separate reads and are never the same objects. Verified load-bearing by sabotage.",
+        "affects": "compareAcrossRollback.decisionsAppendedOnly"
+      },
+      {
+        "from": "a function-local `import sqlite3 as sqlite3_module`",
+        "to": "the file-level `import Database from 'better-sqlite3'`",
+        "why": "ESM imports are static and hoisted; there is no function-local import. The intent -- a bare driver connection over a database that shares no schema or pragmas with either store -- is preserved and said in a comment.",
+        "affects": "'the enumeration reads every run keyed table'"
+      },
+      {
+        "from": "`interlock.execute('PRAGMA user_version = 999')`",
+        "to": "`interlock.pragma('user_version = 999')`",
+        "why": "better-sqlite3 routes pragmas through its own surface; a prepared statement cannot bind (or reliably run) one. The value stays inlined, as it must be and as the source inlines it.",
+        "affects": "'a changed revision stamp is a changed store'"
+      },
+      {
+        "from": "`after.__class__(interlock_digest=..., ...)` keyword reconstruction",
+        "to": "a typed object literal `const trimmed: StoreSnapshot = { ... }`",
+        "why": "StoreSnapshot is an interface, not a class. The literal applies the same pressure the source's keyword construction did -- a fifth required member on StoreSnapshot would fail to compile at this site.",
+        "affects": "'a rewritten history is not an append'"
+      }
+    ],
+    "target_only_tests": {
+      "count": 2,
+      "ids": [
+        "test/canary/audit.test.ts::integer precision in the digest (target-only) > target-only -- two int64 values a double cannot tell apart digest differently",
+        "test/canary/audit.test.ts::integer precision in the digest (target-only) > target-only -- a routing timestamp past 2**53 survives into the snapshot"
+      ],
+      "why": "target-only -- two int64 values a double cannot tell apart digest differently: Carries no warrant from the source, because the source cannot have the defect: Python's `int` is arbitrary precision, so `canonical_sqlite_bytes` never loses a 64-bit value. This port could and did -- `.all()` returns JavaScript numbers, and 9007199254740992 and 9007199254740993 collapse onto one double, so two stores differing by one in that range produced identical bytes and a rollback that changed such a value would have been reported as touching nothing. That is a false negative in the one function the rollback comparison's evidence rests on. Raised as [P1]/[P2] by the review gate and repaired rather than disclosed (D-0023: the defect is port-introduced, so 'inherited' is not available as an answer): the row read now asks for `safeIntegers(true)` and `canonicalJson` renders a bigint as its decimal digits, which is byte-for-byte what `json.dumps` writes for a Python `int` -- so the repair moves the port TOWARDS the source's bytes, not away from them. Measured: with `safeIntegers(true)` removed, this case goes red and the 18 ported cases stay green, which is exactly why it exists. target-only -- a routing timestamp past 2**53 survives into the snapshot: The same port-introduced defect as the digest case, in the other read, and pinned separately because `compareAcrossRollback` compares routing rows element by element rather than through a digest -- so the digest case cannot cover it. `snapshotStores` read `routing_decision` without safe integers, so a `decided_at_ms` past 2**53 was rounded and a history edited in that range compared EQUAL, reporting a rewritten history as append-only. It carries no warrant from the source for the same reason its sibling does not: Python's `int` is arbitrary precision and interlock's tuples cannot lose the value. Repaired under D-0023 by reading with `safeIntegers(true)` and narrowing back to `number` wherever a double holds the value exactly, so every tuple a clock produces is unchanged and only an unrepresentable value stays a bigint. Measured: with `safeIntegers(true)` removed from that read, this case fails with `expected 9007199254740992 to be 9007199254740993n` and the 18 ported cases stay green. Found by the review gate on the round AFTER the digest half was fixed -- half a repair is why it is a case and not a comment."
+    }
+  },
+  "totals": {
+    "source_cases": 18,
+    "ported": 10,
+    "adapted": 8,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The audit takes no lock and no snapshot: its three enumerations are sequential reads, so a write landing between them can hide from one read what another already missed. Correctness is conditional on quiescent stores, and the caller provides the quiet window.",
+      "why": "The source states this in its module docstring and enforces it nowhere; how an audit window is carved out of a LIVE canary is deliberately not pre-empted by a synthetic rehearsal (same posture as Q-0005's numeric criteria). Reproduced as documentation, not as code, because adding locking would be a guarantee the rehearsal does not have."
+    },
+    {
+      "behaviour": "writer_audit / snapshot_stores assume a ledger with `run_owner(run_id, owning_system)` and `routing_decision(decision_seq, owning_system, decided_at_ms, reason)` and check for neither. A missing table surfaces as a raw driver error.",
+      "why": "The source performs no existence check either. Wrapping it in a typed refusal would change the failure mode and add a guard the source lacks."
+    },
+    {
+      "behaviour": "`dualWritten` and `misrouted` overlap: a run written to both stores is named in dualWritten AND (for whichever store contradicts the ledger) in misrouted.",
+      "why": "The source's own case asserts both, and the report deliberately does not fold one category into the other -- 'clean is a reading aid; the fields are the evidence'."
+    },
+    {
+      "behaviour": "`appendedDecisions` is empty whenever `decisionsAppendedOnly` is false, even though a suffix could be sliced.",
+      "why": "The source suppresses it on purpose: a suffix taken off a rewritten history is not 'what was appended'. Implemented as a conditional, not an unconditional slice."
+    },
+    {
+      "behaviour": "`onlyTheRoutingDecisionChanged` is satisfied vacuously by two identical snapshots -- it never asserts that anything was appended.",
+      "why": "The two questions ('did anything beyond routing change?' and 'did a rollback happen?') are separated on purpose so neither can stand in for the other. A ported case pins the vacuous half."
+    },
+    {
+      "behaviour": "A run_id that is not TEXT (SQLite affinity makes the declared type a preference) is String()-rendered rather than refused.",
+      "why": "Rule 9. Python would put the int in the set and then raise TypeError from sorted(); nothing in TS can raise that, and refusing a non-string id would be a guard the source does not have. Mirrors the same choice already made in synthetic_v1.ts's runIdOf."
+    },
+    {
+      "behaviour": "`sqliteRunIds` interpolates discovered table names into SQL inside double quotes without doubling an embedded quote character, so a table literally named `a\"b` would produce a malformed statement.",
+      "why": "Reproduced from `audit.py`, which builds the same statement the same way. The names are not caller-supplied -- they are read from `sqlite_master` on a store the audit was handed. Doubling embedded quotes would be strictly safer and strictly stricter than the source, and this function's subject is the digest rather than the enumeration's hardening. Raised as [P2] by the review gate; recorded, not repaired (D-0023)."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_clean_split_audits_clean_and_the_report_is_labelled",
+      "target_id": "test/canary/audit.test.ts::the writer audit > a clean split audits clean and the report is labelled",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port. Python empty tuples become toEqual([]); the label is compared verbatim against REHEARSAL_MARKING.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_record_written_by_both_systems_is_named",
+      "target_id": "test/canary/audit.test.ts::the writer audit > a record written by both systems is named",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Only the membership spelling changed: Python's `(SYNTHETIC_V1, 'run-dual') in report.misrouted` is structural containment of a tuple, while Array#includes is identity, so it is written as expect(report.misrouted).toContainEqual([SYNTHETIC_V1, 'run-dual']). Same assertion, same strength -- containment, not whole-list equality, exactly as the source has it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_write_that_bypassed_the_routing_point_is_named",
+      "target_id": "test/canary/audit.test.ts::the writer audit > a write that bypassed the routing point is named",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port. The source omits the `routing` fixture; the port still builds it (one fixtures() call) but never uses it, so the ledger has no routing_decision row and the audit runs against a wholly empty ledger, as intended.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_run_in_the_wrong_store_is_named",
+      "target_id": "test/canary/audit.test.ts::the writer audit > a run in the wrong store is named",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port; the nested one-element pair list is compared positionally as the source does.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_the_audit_reads_the_stores_not_the_ledger",
+      "target_id": "test/canary/audit.test.ts::the writer audit > the audit reads the stores not the ledger",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_insertion_order_does_not_move_the_canonical_bytes",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > insertion order does not move the canonical bytes",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Bytes equality is Buffer#equals rather than `==`; `===` on two Buffers is identity and toEqual would compare them as byte-indexed objects. Same subject, same strength. The two control planes are created in one caseRoot rather than pytest's tmp_path, and both are closed via onTestFinished (the source's try/finally).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_single_changed_value_moves_the_canonical_bytes",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > a single changed value moves the canonical bytes",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same adaptation only: bytes inequality is expect(x.equals(before)).toBe(false).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_exclusion_excludes_exactly_the_named_table",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > exclusion excludes exactly the named table",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "exclude_tables=('routing_decision',) becomes the options object { excludeTables: ['routing_decision'] } per CONTRACT; bytes equality via Buffer#equals.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_schema_only_mutation_moves_the_canonical_bytes",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > a schema only mutation moves the canonical bytes",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port; `with interlock:` becomes interlock.transaction(...)() around the CREATE TABLE.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_the_exclusion_does_not_take_the_routing_schema_with_it",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > the exclusion does not take the routing schema with it",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port. The DROP TRIGGER is run bare on the same connection (no transaction wrapper), matching the source's bare ledger.execute; the digest is read on that same handle.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_changed_revision_stamp_is_a_changed_store",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > a changed revision stamp is a changed store",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`interlock.execute('PRAGMA user_version = 999')` becomes interlock.pragma('user_version = 999') -- better-sqlite3's pragma surface, since a prepared statement cannot bind or (reliably) run a pragma. Value still inlined as the source inlines it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_blob_value_is_canonicalised_not_crashed_on",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > a blob value is canonicalised not crashed on",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Python's b\"\\x00\\x01\\xff\" becomes Buffer.from([0x00, 0x01, 0xff]); `b\"$blob_sha256\" in first` becomes first.includes(Buffer.from('$blob_sha256')), i.e. still a substring search over the byte stream and deliberately not a JSON parse.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_the_enumeration_reads_every_run_keyed_table",
+      "target_id": "test/canary/audit.test.ts::canonical serialisation: stable where it must be, sensitive where it must be > the enumeration reads every run keyed table",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source's function-local `import sqlite3 as sqlite3_module` has no ESM counterpart (imports are hoisted and static); the file-level `import Database from 'better-sqlite3'` is used instead, with the same intent -- a bare driver connection over a scratch database that shares no schema, no application_id and no pragmas with either store.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_rollback_alone_changes_only_the_routing_decision",
+      "target_id": "test/canary/audit.test.ts::the rollback comparison > a rollback alone changes only the routing decision",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port. appendedDecisions is compared as an array of one 4-element array, positionally, against the decisionSeq the routing point returned.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_store_write_during_the_window_is_seen",
+      "target_id": "test/canary/audit.test.ts::the rollback comparison > a store write during the window is seen",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_ledger_write_during_the_window_is_seen",
+      "target_id": "test/canary/audit.test.ts::the rollback comparison > a ledger write during the window is seen",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_the_predicate_answers_touched_nothing_else_not_rollback_happened",
+      "target_id": "test/canary/audit.test.ts::the rollback comparison > the predicate answers touched nothing else not rollback happened",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight port, and deliberately left vacuous: the same snapshot object is passed as both before and after, the predicate is asserted true and appendedDecisions empty. The predicate was NOT strengthened to require an append (verified by sabotage; see failOnPurpose).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/canary/test_audit.py::test_a_rewritten_history_is_not_an_append",
+      "target_id": "test/canary/audit.test.ts::the rollback comparison > a rewritten history is not an append",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Python's `after.__class__(interlock_digest=..., ...)` keyword reconstruction becomes a typed object literal `const trimmed: StoreSnapshot = { ... }`. This is still the case that pins StoreSnapshot's complete public shape -- a fifth required member would fail to compile here, which is the same pressure the source's keyword construction applies.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
