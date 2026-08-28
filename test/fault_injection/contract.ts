@@ -810,10 +810,46 @@ export class ArmedAnchor {
     const occurrence = colon >= 0 ? body.slice(colon + 1) : "";
     return new ArmedAnchor({
       anchor,
-      occurrence: occurrence === "" ? 1 : Number.parseInt(occurrence, 10),
+      occurrence: occurrence === "" ? 1 : parseOccurrence(occurrence, text),
       operation,
     });
   }
+}
+
+/**
+ * The occurrence suffix of an armed anchor, parsed the way the source parses it.
+ *
+ * The source is `int(occurrence)`, which RAISES on anything that is not a whole
+ * number. `Number.parseInt` does neither thing it needs to: it accepts a prefix,
+ * so `"2junk"` silently becomes 2, and it returns `NaN` for `"abc"` -- and `NaN`
+ * slips through an `occurrence < 1` guard, because every comparison with `NaN`
+ * is false.
+ *
+ * Both outcomes are the failure design section 3.1 exists to prevent. A silently
+ * changed index arms a different pass through the loop than the one the case
+ * declared. A `NaN` index matches no occurrence at all, so the barrier is never
+ * reached and the case dies as a CI TIMEOUT -- when the whole point of parsing
+ * the arming eagerly is that "a barrier that cannot be reached is a manifest
+ * error, not a CI timeout".
+ *
+ * So the whole suffix is validated. Raised by the review gate on this change.
+ */
+function parseOccurrence(occurrence: string, wire: string): number {
+  if (!/^\d+$/.test(occurrence)) {
+    throw new ContractViolation(
+      `${JSON.stringify(wire)} has a malformed occurrence ${JSON.stringify(occurrence)}; an ` +
+        "armed anchor's occurrence is a positive whole number, and a malformed one is a " +
+        "manifest error rather than a barrier that is never reached",
+    );
+  }
+  const parsed = Number(occurrence);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new ContractViolation(
+      `${JSON.stringify(wire)} has an occurrence past the exactly-representable range ` +
+        `(${occurrence}); it could not be compared against a real occurrence index`,
+    );
+  }
+  return parsed;
 }
 
 /** The spawn handshake, as the controller checks it. */

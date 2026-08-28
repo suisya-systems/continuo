@@ -98,6 +98,39 @@ describe("the arming vocabulary", () => {
     );
   });
 
+  test("target-only -- a malformed occurrence index is refused at parse, not at a timeout", () => {
+    // TARGET-ONLY. The source needs no counterpart: its `int(occurrence)` raises
+    // on anything that is not a whole number, so the property is free there.
+    //
+    // `Number.parseInt` has neither half of it. It accepts a PREFIX, so
+    // "...:2junk" silently becomes occurrence 2 -- arming a different pass
+    // through the loop than the case declared. And it returns `NaN` for
+    // "...:abc", which slips straight through an `occurrence < 1` guard because
+    // every comparison with `NaN` is false; the anchor then matches no
+    // occurrence at all, the barrier is never reached, and the case dies as a CI
+    // TIMEOUT.
+    //
+    // That last outcome is exactly what design section 3.1 exists to prevent --
+    // "a barrier that cannot be reached is a manifest error, not a CI timeout"
+    // -- so a parse that can produce it has lost the property the eager parse is
+    // for. Pinned because both failures are silent at the call site.
+    //
+    // Raised by the review gate on this change.
+    const wire = `${contract.OPERATION_ATTEMPT}@${contract.CHECKPOINT_BEFORE_DURABLE_WRITE}`;
+    for (const bad of ["2junk", "abc", " 2", "2.0", "-1", "0x2", "1e3"]) {
+      expectRefusal(() => ArmedAnchor.parse(`${wire}:${bad}`), ContractViolation, "occurrence");
+    }
+    // A well-formed one still round trips, so the guard did not close the door.
+    expect(ArmedAnchor.parse(`${wire}:3`).occurrence).toBe(3);
+    // And an EMPTY suffix is not malformed -- it is the source's documented
+    // default. `int(occurrence) if occurrence else 1` treats a bare anchor and a
+    // trailing colon alike, and `ArmedAnchor.parse("lease-acquired")` relies on
+    // it. Pinned alongside the refusals so a stricter guard cannot quietly take
+    // it away.
+    expect(ArmedAnchor.parse(`${wire}:`).occurrence).toBe(1);
+    expect(ArmedAnchor.parse(contract.SYNC_LEASE_ACQUIRED).occurrence).toBe(1);
+  });
+
   test("the handshake refuses a version mismatch", () => {
     // Controller and driver refuse a mismatch rather than guessing (design 6.2).
     const good = new Handshake({

@@ -57,9 +57,11 @@
       }
     ],
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "why": "None. Every collected test in this file is a translation of a source case."
+      "count": 1,
+      "ids": [
+        "test/fault_injection/protocol.test.ts::the arming vocabulary > target-only -- a malformed occurrence index is refused at parse, not at a timeout"
+      ],
+      "why": "One, added by the review gate's third round. The source's `int(occurrence)` raises on anything that is not a whole number, so it has the property for free; `Number.parseInt` has neither half of it. It accepts a PREFIX, so `...:2junk` silently becomes occurrence 2 and arms a different pass through the loop than the case declared. And it returns `NaN` for `...:abc`, which slips through the constructor's `occurrence < 1` guard because every comparison with `NaN` is false -- the anchor then matches no occurrence, the barrier is never reached, and the case dies as a CI TIMEOUT. That is precisely what design section 3.1 exists to prevent ('a barrier that cannot be reached is a manifest error, not a CI timeout'), so a parse that can produce it has lost the property the eager parse is for. The case pins the refusals and, on the other side, pins that an EMPTY suffix still defaults to 1 -- the source's documented behaviour, which `ArmedAnchor.parse('lease-acquired')` depends on and which a stricter guard could have quietly taken away."
     },
     "conditionally_collected": [
       {
@@ -93,6 +95,10 @@
     {
       "behaviour": "`hardExit` in the driver uses `process.exit`, which -- unlike the source's `os._exit` -- emits Node's `exit` event before terminating.",
       "why": "Node has no `os._exit`. What the barrier needs is that the stack does not unwind, no `finally` runs and the SQLite connection is not closed in an orderly way, and `process.exit` gives all three; this module registers no `exit` listener, so the difference is unobservable here. The exit STATUS is preserved, which matters because the controller reads it to tell a crash from a clean finish."
+    },
+    {
+      "behaviour": "`Controller._remaining` floors every wait at 0.1s: `max(0.1, min(wantS, deadline - now))`. Once a case's deadline has passed, each subsequent wait is still granted 0.1s rather than zero, so a case can overrun its budget by roughly 0.1s per remaining wait, and a role that reports completion just after the budget can still be accepted.",
+      "why": "INHERITED AND UNCHANGED, deliberately. interlock's controller.py line 386-387 is `return max(0.1, min(want_s, self._deadline - time.monotonic()))` -- byte-for-byte the same floor -- so this is the source's behaviour rather than a translation defect, and rule 0 of docs/test-translation-conventions.md forbids a stricter translation. The overrun is bounded rather than unbounded (a case makes a bounded number of waits, and each is still capped by the barrier timeout), the hang protection the design actually relies on is the per-barrier deadline, and `checkDeadline()` still throws `CaseTimeout` outright at bootstrap and at every spawn. Raised as [P2] by the review gate's third round and NOT changed here: removing the floor would make a wait that was about to succeed fail instead, which under load is a false red in a suite that runs `retry: 0` -- and this belt has already observed one load-induced timeout on this machine. Whether to tighten it is a change to interlock's own watchdog semantics and belongs to a decision, not to a translation; flagged to the window with this entry as the trail."
     }
   ],
   "entries": [
