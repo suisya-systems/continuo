@@ -5966,6 +5966,17 @@ validated. Here the value is already in the store, written by someone else; a re
 to report what the ledger holds should report it, not refuse to look. Refusing would also give
 `currentDecision` a new refusal type the source has no counterpart for.
 
+**Known and left: the boundary is the safe range, not exact representability.** A stored value a
+double happens to hold exactly but which sits outside the safe range -- 2**53 itself -- comes back
+as a `bigint` where `routeNewRunsTo` returns the `number` its caller passed. `Number.isSafeInteger`
+is the boundary this repo already draws for the same question in `src/canary/audit.ts` (twice, over
+this very ledger's integers), `src/measurement/ac9.ts` and `src/measurement/fixtures.ts` (D-0007),
+so narrowing here on a different rule would give the routing point and the audit two different
+answers about the same column of the same store -- the drift D-0017 rule 4 exists to prevent, and a
+worse trade than a type that differs past 2**53. Raised as [P2] by the review gate on this change
+and recorded in `parity/canary.routing.ledger.json`. Moving the rule is a decision that moves all
+four sites together; it is not this entry's to make unilaterally.
+
 **Falsifier.** `test/canary/routing.test.ts::target-only -- a decision sequence past 2**53 survives
 the round trip` writes 2**53+1 through a foreign connection and asserts the value comes back
 identical; with `safeIntegers` removed it reads 9007199254740992 and the case goes red naming the
