@@ -23,7 +23,8 @@ spaces distinct.
   in the index table above and never over an ID. `D-0019`..`D-0099` is the control-plane belt and
   the shared band for cross-belt decisions taken at the window, `D-01xx` the measurement belt,
   `D-02xx` the fencing and settings belt, `D-03xx` the session belt, `D-04xx` the canary belt,
-  `D-05xx` the messagebus belt (the last three allocated by D-0032). The ranges are an allocation,
+  `D-05xx` the messagebus belt (the last three allocated by D-0032), and `D-07xx` the
+  secretary belt (allocated by D-0701). The ranges are an allocation,
   not a meaning: nothing about an entry follows from which range it is in.
 
 ## Index
@@ -69,6 +70,7 @@ spaces distinct.
 | D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
 | D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
 | D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
+| D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -5981,5 +5983,94 @@ four sites together; it is not this entry's to make unilaterally.
 the round trip` writes 2**53+1 through a foreign connection and asserts the value comes back
 identical; with `safeIntegers` removed it reads 9007199254740992 and the case goes red naming the
 loss.
+
+---
+
+## D-0701 -- The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order
+
+**Context.** The secretary belt ports interlock `tests/secretary/` at `65f36c5` -- 11 node ids over
+two files, the behavioural and structural halves of gate item 8's **rehearsal** (interlock Issue
+#21, interlock D-0022). It is the smallest belt in the inventory and depends on nothing else in it,
+which is why `parity/source-inventory.belts.md` named it a reasonable first port for anyone wanting
+the shape of an observation belt.
+
+It is also the belt where a word-for-word translation would have been quietly wrong in three
+separate places, and all three are decided here rather than in a ledger `reason` field, because each
+one is a rule the next observation belt will meet again.
+
+The subject in all three is the same: **the source's design is written against CPython's
+concurrency, and continuo does not have it.** interlock's `IntakeQueue` is lock-free over a
+`collections.deque` because `append` and `popleft` are atomic under the GIL, and it documents the
+price -- the capacity check is exact under one producer and approximate within the number of
+concurrent producers, because a check-then-append race can overshoot `capacity` by at most `P - 1`.
+Neither the atomicity nor the race exists in a single Node isolate.
+
+**Decision.**
+
+1. **`D-07xx` is allocated to the secretary belt**, and `parity/source-inventory.belts.md` moves
+   `secretary` from `candidate-lane` to `in-scope`. Ranges are permanent whether or not a belt
+   completes (D-0032).
+
+2. **`submit()` is synchronous and run-to-completion, and the capacity bound is therefore exact.**
+   It declares a return type of `IntakeReceipt`, never a Promise. Nothing else in the package is
+   `async` either. The source's tolerance for a `P - 1` overshoot is **not carried**: the
+   concurrent-producer case is recorded `adapted` and re-pointed at the property that does hold
+   here -- submitted asynchronously from eight interleaved producers, the accepted count is
+   *exactly* `capacity`, with nothing lost and nothing duplicated -- and the case witnesses the
+   interleaving so that a serial run cannot satisfy it.
+
+3. **The structural "no lock at all" rule is re-pointed at `await`, not deleted and not
+   transcribed.** The source's third structural case bans `with` blocks and lock constructors
+   because a Python context manager acquires implicitly and is therefore invisible to its ban on
+   *called names*. Node has no lock to take, so the sentence does not port. The subject does: the
+   wait a call-name ban cannot see, which in this runtime is `await` -- a suspension point whose
+   resumption is at the mercy of whatever else holds the loop. `src/secretary/` is held to no
+   `async`, no `await`, no `yield`, and no Promise or cross-thread synchronisation object anywhere,
+   plus the return type of `submit()` above. The source's blanket ban on `await` in a Python package
+   is **not** carried across to continuo's tests, which are asynchronous by necessity.
+
+4. **A stall is proved by state order, never by a clock.** Each behavioural case has its consumer
+   take an item, publish the stage it reached, and park on a Promise the test holds the only
+   resolver for; the submits are then made and the receipts collected, and the case asserts the
+   stall was still unreleased and the consumer still incomplete. The one case whose subject is a
+   genuinely blocked *thread* keeps one: a `worker_threads` worker parked in `Atomics.wait` on a
+   flag the test is the only writer of, released in teardown. **No latency threshold is stated or
+   used anywhere in the belt** -- interlock `Q-0011` is open, and the runner's timeouts bound how
+   long a failing run hangs rather than how fast a passing one must be. Receipt stamps are checked
+   for order (`answeredNs >= receivedNs`) and never against a bound.
+
+**Alternatives.**
+
+- **Make `submit()` `async` and port the concurrency literally (rejected).** It would reproduce the
+  overshoot race by hand, in order to keep a tolerance for it -- inventing the defect so the ported
+  assertion could pass. It also puts a suspension point on the exact path item 8 says must have
+  none, so the belt's headline property would be false in the port and asserted true in its tests.
+- **Keep the `100 <= accepted <= 107` tolerance as the source wrote it (rejected).** The upper bound
+  is unreachable here, so the case stays green over an implementation that had begun dropping or
+  duplicating requests -- a translated case subtly weaker than its source, which
+  `docs/test-translation-conventions.md` rule 0 exists to refuse. Recording it `adapted` puts the
+  trade in the ledger where a reviewer sees it.
+- **Transcribe the "no `with` block" rule (rejected).** TypeScript has no `with`-as-acquire, so the
+  case would pass on an empty file and on a package full of `await`s alike -- green by losing its
+  subject, convention rule 10.
+- **Ban `await` everywhere in the belt, tests included, as the source bans it (rejected).** The
+  source's ban is on its *package*, and its tests use threads freely. Continuo's tests need `await`
+  to have a consumer to stall at all; carrying the ban into them would forbid the only mechanism
+  that can prove the property.
+- **Prove the stall with a timer -- submit for N milliseconds and assert the consumer did not
+  advance (rejected).** That is a latency threshold wearing a different hat, and `Q-0011` is the
+  question it would be answering without authority. It is also the flakiest possible spelling of a
+  fact the resolver already states exactly.
+
+**Falsifier.** `test/secretary/structural.test.ts::the package has no suspension point at all` goes
+red the moment `submit()` gains an `async` modifier or a `Promise<...>` return type, and was
+measured doing so; `test/secretary/behaviour.test.ts::concurrent producers never lose or duplicate a
+request` goes red if the accepted count moves off `capacity` in either direction, and its
+interleaving witness goes red if the producers stop interleaving. If a future continuo Secretary
+genuinely needs a durable, asynchronous intake, this entry is superseded rather than edited -- the
+receipt would then be a promise of a receipt, and item 8 would need re-arguing, not re-testing.
+
+**Source.** Belt dispatched 2026-08-29, task `continuo-secretary-port`, Refs #37. The range
+allocation follows the gate D-0032 exercised for `session`, `canary` and `messagebus`.
 
 ---

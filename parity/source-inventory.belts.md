@@ -219,13 +219,50 @@ would be a second scrubber to keep in agreement with the first, over the same po
 (`docs/scrub-policy.md`), and a disagreement between two scrubbers is a leak. Better that continuo
 consume the fixtures interlock's scrubber produces.
 
-### `secretary` -- `candidate-lane` -- 11 cases
+### `secretary` -- `in-scope` (ratified 2026-08-29) -- **ported: 11 of 11 cases**
+
+Ratified into scope at the human gate on 2026-08-29; belt started and **completed** 2026-08-29,
+D-range `D-07xx` (`D-0701` used).
+
+As with `canary`, the status keeps its `in-scope` spelling because the five-value vocabulary this
+document is checked against records **porting intent** (D-0031), and completion is a different axis
+from intent.
 
 An observation / human-gate belt, most likely alongside `attention`. Gate item 8's
 behavioural half: the intake answers while every consumer stalls, with the stall made *verifiable*
 rather than assumed and no latency threshold invented (`Q-0011` is open). Small, and it depends on
-nothing else in this list -- which makes it a reasonable first port for anyone wanting the shape of
+nothing else in this list -- which made it a reasonable first port for anyone wanting the shape of
 this belt before committing to `attention`'s 194.
+
+Ported to `src/secretary/` (`intake.ts`, `index.ts`) with the written record at
+`docs/secretary-intake-boundary.md`.
+
+**All 11 cases are translated: 2 `ported`, 9 `adapted`, 0 `not-ported`, 0 waivers**, across two
+ledgers -- one per source file, per D-0019:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/secretary/test_behaviour.py` | 6 | `parity/secretary.behaviour.ledger.json` |
+| `tests/secretary/test_structural.py` | 5 | `parity/secretary.structural.ledger.json` |
+
+The `adapted` count is high for a belt this small, and it is all one cause: **the source's design is
+written against CPython's concurrency and continuo does not have it** (D-0701). Three consequences,
+each recorded in its ledger entry. `submit()` is synchronous and run-to-completion, so the source's
+tolerance for a lock-free capacity check overshooting by `P - 1` is not carried and the accepted
+count is asserted exactly. The structural "no lock at all" case is re-pointed from `with lock:` --
+which has no TypeScript spelling -- to `await`, the wait a ban on called names cannot see in this
+runtime. And the three stall cases keep a stalled consumer that is *verifiably* stalled by state
+order rather than by a clock, with the one case whose subject is a genuinely blocked thread keeping
+a real one: a `worker_threads` worker parked in `Atomics.wait`.
+
+One target-only case sits beside them, covering machinery the port had to write and the source
+therefore carries no warrant for: the two AST scans are probed against their own escape routes (a
+type-only import, a relative specifier climbing out of the package, `require()` and dynamic
+`import()` in a function body, an aliased blocking call, an element-access blocking call).
+
+**No numeric latency threshold is stated or used anywhere in the belt.** `Q-0011` is open, this is
+item 8's *rehearsal* and not its discharge, and the runner's timeouts bound how long a failing run
+hangs rather than how fast a passing one must be.
 
 ### `migrate` -- `decision-pending` -- 11 cases
 
@@ -257,8 +294,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `session` (ratified 2026-08-28), `messagebus` (ratified 2026-08-28) | 1,572 |
-| `candidate-lane` | `fault_injection`, `gate_item2`, `secretary` | 143 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `session` (ratified 2026-08-28), `messagebus` (ratified 2026-08-28), `secretary` (**ported** 2026-08-29) | 1,583 |
+| `candidate-lane` | `fault_injection`, `gate_item2` | 132 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
