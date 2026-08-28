@@ -5368,8 +5368,11 @@ and 31 cases. The reconciliation above is what makes the two numbers agree.
 
 **Consequences.**
 
-- Case counts are unchanged file by file -- 77 and 23 -- and the suite stays at 1834 (1832 passed, 1
-  expected fail, 1 skipped), measured on `HEAD` and on this branch across five seeds.
+- Case counts are unchanged file by file -- 77 and 23 -- and this branch adds no case to the suite.
+  Measured both ways: 1834 on `b552317` and 1834 on this branch across five seeds before D-0030
+  landed, then 1835 on `origin/main` and 1835 here after merging it. The +1 is D-0030's, in
+  `test/measurement/cli.test.ts`; the two settings files it also touched changed their imports and
+  their parser, not their case counts.
 - No ledger changes. Nothing about what is ported changed, only what the fixture copies.
 - This closes the type-A Windows pace-flake sources: no test file in the port now builds a production
   or spike control plane per case.
