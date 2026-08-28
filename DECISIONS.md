@@ -5031,6 +5031,18 @@ non-recorded methods are returned bound to the real connection, because `this` w
 the proxy. A target-only case pins the whole of it: the report built through the recorder renders
 byte-identically to one built without it.
 
+**Compiling and running are one call in the source's driver and two in this one.** `execute`
+compiles and runs; better-sqlite3's `prepare` returns a `Statement` that runs only when `run` /
+`get` / `all` / `iterate` is called on it. Recording at `prepare` alone would report a statement the
+report **compiled and then skipped** as one the report ran -- and `every catalogued query was one the
+report ran` is the case whose entire subject is that a catalogued query really was executed, so the
+mismatch is fail-open in precisely the worst place. `prepare` therefore records the text and wraps
+the statement it returns; the flag is set when an execution method fires, and the chaining modifiers
+(`raw`, `pluck`, `expand`, `bind`, `safeIntegers`) hand back the wrapper so a chain is still watched.
+`exec` and `pragma` run immediately and are recorded executed. **The four ported cases read the
+executed set**, which is the source's set exactly; a target-only case reads the two sets apart, so a
+stuck flag fails as a recorder fault rather than as a catalogue fault. Raised by the review gate.
+
 **Decision, part two: fold the two spellings rather than tabulate them.** `UNATTESTED_STATEMENTS` is
 keyed by the **source's** function names -- `reader._require_query_only`, `provenance._columns_of` --
 and `render.ts` records why: the report is what a parity comparison of the two implementations is
@@ -5052,20 +5064,26 @@ and the comparison is made on the folded form.
   the fold stays one-to-one over `UNATTESTED_STATEMENTS`.
 
 **What was measured.** The trace records 32 statements over the populated fixture, from nine
-functions, and every one of the nine matches its exemption through the fold. Mutations, each red for
-its own reason and for no other: an uncatalogued statement added to `cohort.ts` is reported by name
-and turns the trace case red; an exemption for a function nothing calls turns `no declared exemption
-is stale` red and nothing else; a second exemption spelled `provenance.columns_of` beside
-`provenance._columns_of` turns the fold's target-only case red while the eight ported cases stay
-green; and a recorder made to return a wrong `user_version` turns the forwarding case red alone.
+functions, all executed, and every one of the nine matches its exemption through the fold.
+Mutations, each red for its own reason and for no other: an uncatalogued statement added to
+`cohort.ts` is reported by name and turns the trace case red; an exemption for a function nothing
+calls turns `no declared exemption is stale` red and nothing else; a second exemption spelled
+`provenance.columns_of` beside `provenance._columns_of` turns the fold's target-only case red while
+the eight ported cases stay green; a recorder made to return a wrong `user_version` turns the
+forwarding case red alone; a `prepare` of a catalogued query added and never run turns the
+compile-versus-run case red alone; and the same mutation **with the flag forced back to counting a
+prepare as a run** leaves `every catalogued query was one the report ran` GREEN over a catalogued
+query the report never executed, which is the fail-open the flag closes.
 
 **Status.** accepted
 
 **Source.** Measured 2026-08-28 on Node 22.17.0 / V8, vitest 4.1.11, better-sqlite3 13.0.3, against
 interlock `65f36c5`. Falsified by: V8 withdrawing the structured stack-trace API (there is no second
 way to name an unknown caller, and the trace half would have to be redesigned rather than reparsed);
-or by the port and the source converging on one spelling of these function names, which would retire
-the fold.
+by the port and the source converging on one spelling of these function names, which would retire
+the fold; or by better-sqlite3 gaining another way to run a prepared statement, which the execution
+set would have to grow with -- it fails toward reporting a statement as unrun, which is red rather
+than green.
 
 ---
 
@@ -5101,6 +5119,14 @@ Parts 1 and 3 stand on the two ends the object identity joined: the catalogue is
 constant, and the call site executes the constant. Together they are what `is` asserted, reached
 through the only surface that can observe it.
 
+**They are also exactly as wide as `is` was, hole included.** Neither the source nor this reads the
+two ends against *each other*: a module holding two byte-identical constants, one named by the
+catalogue and the other executed at the call site, satisfies both. That is the source's shape and
+not a weakening introduced here -- measured: CPython folds two equal module-level string literals to
+one object, so `is` cannot separate the twins either. Closing it means comparing the two identifiers,
+which asserts more than the source does, so it lives in a pair of target-only cases beside the
+faithful translation rather than in its slot (rule 0). Raised by the review gate.
+
 **`vars(module)` includes private names; an ESM namespace does not.** Reading part 2 off the module
 namespace alone would fail a module-private constant that Python's `vars` would find -- **stricter**
 than the source, which rule 0 makes wrong in the same way as weaker. So the namespace's string values
@@ -5114,12 +5140,14 @@ and a constant that stops being exported is still found. Measured both ways.
   assertion by changing the module under test into something the source does not have, and the
   catalogue's texts are published in the report as strings.
 
-**What was measured.** Four mutations, each red for its own reason and for no other: the catalogue
+**What was measured.** Five mutations, each red for its own reason and for no other: the catalogue
 entry replaced by a **byte-identical** string literal turns this case red and no other -- the case
 the literal translation could not fail; the call site replaced by a byte-identical literal likewise;
-the entry's text edited so it drifts from the constant turns four cases red, this one among them; and
-the constant made module-private leaves all ten green, which is the `vars(module)` half being the
-source's width rather than the namespace's.
+the entry's text edited so it drifts from the constant turns four cases red, this one among them; the
+constant made module-private leaves all 13 green, which is the `vars(module)` half being the source's
+width rather than the namespace's; and a byte-identical twin constant executed at the call site while
+the catalogue keeps naming the original leaves the eight ported cases green and turns only the
+target-only pair red, which is the hole being the source's and the repair being declared as one.
 
 **Status.** accepted
 

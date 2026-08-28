@@ -101,11 +101,36 @@ function reportDb(): string {
 // the recorder
 // --------------------------------------------------------------------------
 
-/** One statement, and the `module.function` that issued it. */
+/** One statement, the `module.function` that issued it, and whether it ran. */
 interface RecordedStatement {
   readonly where: string;
   readonly statement: string;
+  /**
+   * Whether the statement was actually executed, and not merely compiled.
+   *
+   * `sqlite3.Connection.execute` compiles and runs in one call, so the source's
+   * recorder has nothing to distinguish. **better-sqlite3 splits them**:
+   * `prepare` returns a `Statement` that runs only when `run` / `get` / `all` /
+   * `iterate` is called on it. Recording at `prepare` alone would report a
+   * statement the report compiled and then skipped as one the report ran --
+   * which is fail-open in the one case whose whole subject is that a catalogued
+   * query really was executed. So `prepare` records the text and the statement
+   * it returns is wrapped; the flag is set when an execution method fires.
+   * `exec` and `pragma` run immediately and are recorded executed. Raised by
+   * the review gate; see `D-0116`.
+   */
+  executed: boolean;
 }
+
+/**
+ * The `Statement` methods that actually run the compiled statement.
+ *
+ * `raw`, `pluck`, `expand`, `bind` and `safeIntegers` return the statement for
+ * chaining and run nothing, so the chained value is re-wrapped rather than
+ * counted -- `prepare(Q).raw().get(...)` must record one execution, at the
+ * `get`.
+ */
+const EXECUTION_METHODS = new Set(["run", "get", "all", "iterate"]);
 
 /**
  * The methods a statement's text can enter better-sqlite3 through.
@@ -190,15 +215,48 @@ function recordingConnection(connection: SqliteDatabase): {
         // what makes this trace comparable with the static scan, which restores
         // it for the same reason (`D-0115`).
         const text = String(args[0]);
-        recorded.push({
+        const record: RecordedStatement = {
           where: callerOfTheRecorder(),
           statement: method === "pragma" ? `PRAGMA ${text}` : text,
-        });
-        return Reflect.apply(value, target, args);
+          // `exec` and `pragma` compile and run in one call, as the source's
+          // `execute` does. Only `prepare` can be compiled and never run.
+          executed: method !== "prepare",
+        };
+        recorded.push(record);
+        const outcome = Reflect.apply(value, target, args);
+        return method === "prepare" && typeof outcome === "object" && outcome !== null
+          ? recordingStatement(outcome, record)
+          : outcome;
       };
     },
   });
   return { handle, recorded };
+}
+
+/**
+ * A prepared statement that notes when it is run.
+ *
+ * Forwards everything, exactly as the connection proxy does. A method that
+ * returns the statement itself -- the chaining modifiers -- returns the wrapper
+ * instead, so the flag is still set when the chain reaches `get` or `all`.
+ */
+function recordingStatement(statement: object, record: RecordedStatement): object {
+  const wrapper: object = new Proxy(statement, {
+    get(target, property, receiver): unknown {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") {
+        return value;
+      }
+      return (...args: readonly unknown[]): unknown => {
+        if (EXECUTION_METHODS.has(String(property))) {
+          record.executed = true;
+        }
+        const outcome = Reflect.apply(value, target, args);
+        return outcome === target ? wrapper : outcome;
+      };
+    },
+  });
+  return wrapper;
 }
 
 /**
@@ -213,7 +271,10 @@ function recordingConnection(connection: SqliteDatabase): {
 function reportWithTrace(path: string): {
   readonly report: MeasurementReport;
   readonly header: ReportHeader;
+  /** The source's set: the statements the report actually ran. */
   readonly recorded: readonly RecordedStatement[];
+  /** Everything the report handed the driver, run or merely compiled. */
+  readonly issued: readonly RecordedStatement[];
 } {
   const connection = openForMeasurement(path);
   const { handle, recorded } = recordingConnection(connection);
@@ -231,7 +292,12 @@ function reportWithTrace(path: string): {
       report.header,
       "the report's header is no longer a ReportHeader, so its query catalogue cannot be read",
     ).toBeInstanceOf(ReportHeader);
-    return { report, header: report.header as ReportHeader, recorded };
+    return {
+      report,
+      header: report.header as ReportHeader,
+      recorded: recorded.filter(({ executed }) => executed),
+      issued: recorded,
+    };
   } finally {
     connection.close();
   }
@@ -731,6 +797,81 @@ describe("target-only -- the port's own machinery carries no warrant from the so
    *
    * Target-only for the reason above: the machinery being checked is the port's.
    */
+  /**
+   * Nothing the report compiles is left unrun, so the two sets coincide today.
+   *
+   * The trace's `executed` flag exists because better-sqlite3 splits compiling
+   * from running where the source's `execute` does both, and the four ported
+   * cases consume the executed set so that they assert what the source asserts.
+   * That makes the flag load-bearing and invisible: were it stuck at `false`,
+   * `every catalogued query was one the report ran` would go red for a reason
+   * that names the catalogue rather than the recorder. This case reads the two
+   * sets apart, so the recorder is what fails when the recorder is what broke.
+   *
+   * It is an equality and not a subset: a statement compiled and never run is a
+   * report doing work it discards, and it is worth knowing about here rather
+   * than through a catalogue case that cannot say so.
+   *
+   * Target-only: the source has no such distinction to make (rule 11).
+   */
+  test("target-only -- every statement the report compiles is one the report runs", () => {
+    const { recorded, issued } = reportWithTrace(reportDb());
+
+    expect(
+      issued.length,
+      "the trace recorded nothing, so this assertion is vacuous",
+    ).toBeGreaterThan(10);
+    expect(
+      issued
+        .filter(({ executed }) => !executed)
+        .map(({ where, statement }) => `${where}: ${statement}`),
+      "these statements were compiled and never run",
+    ).toStrictEqual([]);
+    expect(recorded.length).toBe(issued.length);
+  });
+
+  /**
+   * The call site executes the very constant the catalogue is built from.
+   *
+   * The ported case asserts each half separately -- the catalogue entry is an
+   * identifier, and the call-site argument is an identifier -- which is what
+   * `text is constant` asserts, *including its hole*: a module holding two
+   * byte-identical constants, one named by the catalogue and the other by the
+   * call site, satisfies it. Measured: CPython folds two equal module-level
+   * string literals to one object, so `is` cannot tell them apart either and
+   * the hole is the source's, not this port's (see `inherited_limitations` in
+   * the ledger).
+   *
+   * Closing it needs the two identifiers compared, which asserts more than the
+   * source does -- so it is here, beside the faithful translation, rather than
+   * occupying its slot (rule 0).
+   */
+  parametrize(
+    "target-only -- the name the catalogue is built from is the name the call site executes",
+    CATALOGUED_MODULES.map((moduleName) => [moduleName, moduleName] as const),
+    (moduleName) => {
+      const catalogued = new Set<string>();
+      for (const expression of catalogueEntryExpressions(moduleName).values()) {
+        if (ts.isIdentifier(expression)) {
+          catalogued.add(expression.text);
+        }
+      }
+      const executed = new Set<string>();
+      for (const [, argument] of statementArguments(moduleName)) {
+        if (ts.isIdentifier(argument)) {
+          executed.add(argument.text);
+        }
+      }
+
+      expect(
+        [...executed].sort(),
+        `${moduleName}.ts executes constants its QUERY_DEFINITIONS is not built from, or is ` +
+          "built from constants it does not execute; a second constant holding the same text " +
+          "is a copy the identity check cannot see",
+      ).toStrictEqual([...catalogued].sort());
+    },
+  );
+
   test("target-only -- a report built through the recorder is the report built without it", () => {
     const path = reportDb();
     const { report: traced } = reportWithTrace(path);
