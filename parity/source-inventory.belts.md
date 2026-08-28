@@ -83,7 +83,8 @@ battery with one adapter in it is a battery for a build continuo does not yet ha
 ### `canary` -- `in-scope` (ratified 2026-08-28) -- **ported: 70 of 70 cases**
 
 Ratified into scope at the human gate on 2026-08-28 (D-0032); belt started and **completed**
-2026-08-28, D-range `D-04xx` (`D-0401`..`D-0404` used).
+2026-08-28, D-range `D-04xx` (`D-0401`..`D-0405` used -- `D-0405` schedules one repair the belt
+found and deliberately did not make, and is the belt's one piece of open work).
 
 The status keeps its `in-scope` spelling because the five-value vocabulary this document is checked
 against records **porting intent** (D-0031), and completion is a different axis from intent -- the
