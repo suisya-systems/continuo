@@ -114,6 +114,18 @@
       "what": "A non-string entry in `sandbox.filesystem.additionalDirectories` reaches `os.path.normpath` and raises. The port raises a typed `PyTypeError` at the same point with its own message rather than forging CPython's `expected str, bytes or os.PathLike object` wording.",
       "matches_source": true,
       "where_a_fix_belongs": "Neither side validates this input; the message text is an adapted detail under D-0017 and no case asserts it."
+    },
+    {
+      "what": "An enabled sandbox whose `filesystem` is a truthy NON-mapping (`\"filesystem\": \"invalid\"`) is coerced to `{}`, so the render emits empty `denyRead` / `denyWrite` instead of surfacing the malformed value. A malformed security configuration becomes a valid, less restrictive one.",
+      "matches_source": true,
+      "source": "settings/generator.py `_evaluate_sandbox_suppressions`: `fs = sandbox.get('filesystem') or {}` followed by `if not isinstance(fs, dict): fs = {}` -- transcribed verbatim, coercion included.",
+      "where_a_fix_belongs": "NOT repaired here, and the reason is the difference from the `os.path.isabs` divergence recorded above. That repair is a no-op on the platform interlock runs on, so it cannot change any behaviour the source exhibits. This one would: interlock renders `denyRead: []` for a malformed `filesystem` on every platform, and a port that raised or preserved instead would be a deliberate behavioural divergence on the primary platform, covered by no case on either side. Raised by the review gate (round 4) and escalated rather than decided at the round limit; it wants a decision id and pins of its own, and `sandbox_doctor` (PR 4) is the natural place, since it owns the readback half that would observe the emptied arrays."
+    },
+    {
+      "what": "`_is_inside_root` compares a realpath'd target against the sandbox read roots with `==` and `startswith`, both case-SENSITIVE. Windows path identity is case-insensitive, so a `worker_dir` authored as `c:\\\\Users\\\\Foo\\\\worker` against a realpath that returns `C:\\\\Users\\\\Foo\\\\worker\\\\secret` reads as an escape, and an in-root deny entry is suppressed.",
+      "matches_source": true,
+      "source": "settings/generator.py `_is_inside_root` -- no `os.path.normcase` on either side, transcribed verbatim.",
+      "where_a_fix_belongs": "NOT repaired here. `normcase` would have to be applied consistently, and the choice of whether `sandbox_read_roots` REPORTS the normcased form or the operator's is a contract question (the launcher's /sandbox status displays it), not a spelling one. Raised by the review gate (round 4) and escalated at the round limit. Windows-only, like the `isabs` divergence, but unlike it this one needs a design call rather than a substitution."
     }
   ],
   "entries": [

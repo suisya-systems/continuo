@@ -188,9 +188,19 @@ export function buildRuntimeParser(): ArgumentParser {
  * `parse_args` raising `SystemExit` is NOT caught here, because the source does
  * not catch it either: the ported case asserts `info.value.code != 0`, which is
  * an argparse exit escaping `main`, not a return value.
+ *
+ * **There is exactly one output sink, and that is deliberate.** An earlier draft
+ * took an `ArgparseStreams` parameter here and passed it to the parser -- so
+ * `main(argv, custom)` sent usage and help to `custom` while the rendered
+ * document and every `error: ...` still went to `generatorSeams`, because `run`
+ * knows nothing about the parameter. Two sinks that can disagree is a worse
+ * shape than the source's, which has one (`sys.stdout`, patched wholesale by
+ * `redirect_stdout`). `generatorSeams` is that one; `ArgparseStreams` is the
+ * plumbing the parser needs to reach it, and `defaultStreams()` is the only
+ * bridge.
  */
-export function main(argv: readonly string[], streams: ArgparseStreams = defaultStreams()): number {
+export function main(argv: readonly string[]): number {
   const parser = buildParser();
-  const args = parser.parseArgs(argv, streams);
+  const args = parser.parseArgs(argv, defaultStreams());
   return run(args as unknown as SettingsArgs);
 }
