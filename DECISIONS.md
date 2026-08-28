@@ -57,6 +57,7 @@ spaces distinct.
 | D-0027 | A converted control-plane fixture opens the template copy through the public entry point | accepted |
 | D-0028 | The spike-schema template stops short of the cases whose subject is creation | accepted |
 | D-0029 | The remaining two spike-schema files convert whole, and the CI cap is not the fix | accepted |
+| D-0030 | One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -4029,6 +4030,133 @@ allocated by the window; scope extension approved by the user through the window
 ---
 
 ---
+
+## D-0030 -- One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it
+
+**Context.** Two lanes landed CLI infrastructure independently, and the repository carried **two
+ArgumentParser implementations and two unified CLIs** (issue 45):
+
+- the fencing + settings lane (`D-0213`) brought `src/settings/argparse.ts`, a 525-line transcription
+  of CPython's `argparse`, and `src/settings/cli.ts`'s `buildRuntimeParser` -- prog
+  `claude-org-runtime`, mounting `settings` and `sandbox`, **reachable from no bin at all**;
+- the measurement lane (`D-0112`) brought `src/cli/parser.ts`, a purpose-built parser written
+  precisely because it is *not* an argparse port, and `src/cli.ts` -- prog `continuo`, mounting
+  `measure`, wired to the published `bin`.
+
+Nothing was broken and every case was green, but `D-0017` rule 4 ("one renderer") was violated at the
+CLI layer, and the cost was concrete rather than aesthetic: **`continuo sandbox doctor` -- the
+preflight whose whole job is to say whether a worker's sandbox will actually launch -- could not be
+run from the published binary.** PR 47's review routed the mounting here rather than lane-side,
+because mounting it without consolidating meant either re-declaring a security-relevant flag surface
+(`--settings`, `--no-merge-scopes`, `--no-probe-bwrap`) in a second parser with different semantics,
+or adding an argv passthrough the purpose-built parser has no shape for.
+
+**Decision.** The **argparse transcription wins**. It moves to `src/cli/parser.ts` -- the CLI
+package, one parser -- and `src/cli.ts` is the one unified CLI, mounting `measure`, `settings` and
+`sandbox` under the `continuo` bin. `buildRuntimeParser` is gone; each subtree's own module owns its
+flags and exports a function that mounts them (`measurementCli.addSubparsers`,
+`addSettingsSubparsers`, `addSandboxSubparsers`), so the entry point mounts a subtree without knowing
+a flag of it.
+
+**Why that side, in one line: the loser's distinctive properties are mostly argparse behaviours it
+reproduced, so they survive the move natively; the winner's are not reproducible without becoming
+it.** Taken property by property, from the two lanes' own lists:
+
+| `D-0112`'s parser had | after the move |
+|---|---|
+| the flag-swallowing guard, with the negative-number exception `--grace-ms -1` needs | argparse's own `_parse_optional` + `_negative_number_matcher`, already transcribed and measured against CPython 3.12.3 |
+| `=value` splitting | already there |
+| `--version` | `action="version"` -- an argparse action, added to the transcription |
+| `type=int` | `type=` -- an argparse feature the source's `cli.py` actually declares, added |
+| the introspectable help walk (`_help_strings`, `D-0113`) | ported onto the transcription's structure, ~15 lines, still living beside the structure it walks |
+| a flag given twice is refused | kept as a per-declaration opt-in, `refuseRepeat` -- see below |
+
+**The rejected alternative and its cost.** Keeping the purpose-built parser meant growing it two-pass
+classification, the `--` separator, prefix abbreviation with the ambiguity report, `store_true` /
+`store_false` / `append`, extras propagated from a subparser to the root, and CPython's exact message
+wording -- which is to say, rewriting it into the file it would have replaced, in one step, with 106
+ported settings cases, 92 ported sandbox cases and 18 target-only cases measured against CPython
+3.12.3 riding on the result. That is rule 11's hazard at full size on the surface that decides what a
+sandbox preflight checks. The transcription's cost, by contrast, is three additive argparse features
+and two opt-in flags.
+
+**What the loser cost anyway, stated rather than buried.** Six target-only cases were **re-pointed,
+not deleted**, and one was **added**:
+
+- Five are wording. argparse says `argument --period-start-ms: invalid int value: '1.5'` where
+  `D-0112` said `--period-start-ms takes an integer, got '1.5'`, and `argument --fixture-commit:
+  expected one argument` where it named the token it declined to swallow. That last one also cost a
+  sub-assertion: the case checked the message mentioned `--format`, which argparse's wording does
+  not -- and the usage line lists every flag, so keeping it would have been an assertion that passes
+  against any refusal at all (conventions rule 10). Dropped rather than made vacuous.
+- One is a **behaviour change**, and it is the one worth reading twice. `a nested command's refusal
+  names the nested command` drove `continuo measure report --bogus`, which the purpose-built parser
+  refused in the child. **CPython does not**: an unrecognized token is an *extra*, handed up by the
+  subparser action and reported by the ROOT under the root's prog. Measured on a replica of this
+  exact command tree at CPython 3.12.3: `continuo: error: unrecognized arguments: --bogus`. The
+  settings suite already pinned that from the other side, and it is not a nicety -- it is what stops
+  an unknown option ahead of a valid subcommand from being silently dropped, which is a defect that
+  lane found and fixed. So the case was re-pointed onto a refusal argparse *does* raise in the child
+  (a value-taking flag with nothing after it), where the property it names -- usage line and error
+  line naming the same parser -- is still live, and the behaviour it used to assert is now pinned by
+  the added case rather than lost.
+
+**The two places the merged parser is deliberately not CPython**, both `D-0112`'s, both carried as
+**per-declaration opt-ins** so that nothing the settings and sandbox surfaces are measured against
+changes:
+
+- **`type: "int"` takes ASCII digits only.** Python's `int()` takes any Unicode decimal digit, so a
+  full-width `12` is `12` there and refused here. Decoding it needs a Unicode digit-value table --
+  NFKD folds the full-width forms and not the Devanagari ones -- which would be new code whose
+  failure mode is a silently wrong epoch millisecond printed in a report header. The refusal now
+  *says which rule it applied*, so on the console it reads as a divergence rather than as the parity
+  refusal CPython gives for `1.5`. The neighbouring refusal for an integer past `2**53-1` is the same
+  shape and the same reason (conventions rule 9: Python's `int` is arbitrary precision, a JavaScript
+  `number` is not).
+- **`refuseRepeat` refuses a flag given twice**, declared on the measurement report's flags and
+  nowhere else. argparse keeps the last value silently, and a report produced from
+  `--format json --format markdown` carries no sign of which half won.
+
+  **The known limitation this leaves**, disclosed rather than smoothed over: one binary now answers
+  two ways -- `continuo measure report --format a --format b` is refused and
+  `continuo settings generate --role a --role b` keeps the last value. Each subtree matches its own
+  source, which is what a parity port owes; making them agree means either dropping a safety
+  property `D-0112` justified or diverging the settings surface from the CPython behaviour 18 cases
+  measure it against. Neither is this task's to take.
+
+**Two defects the consolidation found, both repaired, neither reachable by any existing case.** They
+are the reason the merge is worth more than tidiness -- each was a place where one file had a
+property and its twin did not, and nothing was red:
+
+1. **`ignored explicit argument` dropped the value.** CPython's is
+   `msg = _('ignored explicit argument %r')`, so `--version=x` is
+   `argument --version: ignored explicit argument 'x'` (measured), and `src/fencing/hook.mjs` -- the
+   0-divergence transcription of the same function -- carries the repr. The settings transcription
+   did not, and no case there read the message. The measurement lane's `--version=x` case does, and
+   asserting it against the merged parser is what surfaced the gap.
+2. **A `choices` action rendered its metavar as `DEST`.** argparse renders `{a,b}` when no metavar is
+   declared, and it is the only place `--help` says what the accepted values ARE. On the settings
+   flags the two agree wherever a metavar is declared, so nothing there ever showed it; consolidating
+   would have turned `--fingerprint {aggregate,content}` into `--fingerprint FINGERPRINT` and taken
+   the list off the screen.
+
+`--help` and the usage line are also **wrapped** now, at the fixed 79 columns the measurement lane's
+parser used -- fixed rather than the terminal's, so that what a case reads does not depend on the
+window it ran in. The settings help strings are short and the measurement ones are paragraphs; merged
+and unwrapped, `continuo measure report --help` was a 260-column usage line and a wall of soft-wrapped
+prose. The rendered usage now matches CPython's on the same command tree exactly.
+
+**What was measured.** A replica of the merged command tree was built in CPython 3.12.3 and driven
+over eighteen argv vectors covering every re-pointed case and every message this port emits: the
+extras-at-the-root behaviour, the child-raised refusals, `invalid int value` for `1.5` / `0x10` / the
+empty string, the underscore spelling being *accepted*, `ignored explicit argument 'x'`, the
+negative-number value, the full-width digits CPython accepts and this port refuses, and the usage
+rendering. Beyond that, the whole suite is the check that matters: **the 106 settings cases, the 92
+sandbox cases and the 18 argparse-behaviour target-only cases pass against the merged parser
+unchanged**, which is the positive evidence that the transcription is the side that did not have to
+move.
+
+**Test-count delta: +1, from three changes.** Two target-only cases added -- one pinning that the root reports extras, one pinning the two help-screen repairs above -- and one case removed from `test/contract/ascii-output-policy.test.ts`, which parametrises one case per scanned source file and now scans one file fewer, because two parser modules became one. No ported case was added, removed or re-dispositioned; the three ledgers record the re-pointings.
 
 ## D-0212 — The rebuild-site enumeration is audited mechanically, and the one site that does not carry states a proof
 

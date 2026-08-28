@@ -154,6 +154,29 @@ function captured(action: () => number): { readonly code: number; readonly out: 
   return { code, out: chunks.join("") };
 }
 
+/**
+ * `capsys` over the TOP-LEVEL parser's own output.
+ *
+ * A second capture, because after `D-0030` there is a second seam: the unified
+ * CLI writes what the top-level parser itself prints -- `--help`, `--version`,
+ * a refusal -- through its own record rather than through the measurement
+ * module's, which is what it did while `measure` was the only thing mounted.
+ * A mounted command still writes its report through `measurementCli.cliSeams`,
+ * so a case that reads a report keeps using {@link captured}; both seams are
+ * replaced here so that either one is visible whichever wrote.
+ */
+function capturedTop(action: () => number): { readonly code: number; readonly out: string } {
+  const chunks: string[] = [];
+  patchSeam(topLevelCli.cliSeams, "out", (text: string) => {
+    chunks.push(text);
+  });
+  patchSeam(measurementCli.cliSeams, "write", (text: string) => {
+    chunks.push(text);
+  });
+  const code = action();
+  return { code, out: chunks.join("") };
+}
+
 // --------------------------------------------------------------------------
 // end to end
 // --------------------------------------------------------------------------
@@ -562,7 +585,7 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     // `measure report --help` with the top-level screen: the one screen that
     // does not list the flags the operator was asking about, and green under any
     // assertion that only checks the exit code.
-    const { code, out } = captured(() => topLevelCli.main(["measure", "report", "--help"]));
+    const { code, out } = capturedTop(() => topLevelCli.main(["measure", "report", "--help"]));
 
     expect(code).toBe(0);
     expect(out).toContain("--fingerprint");
@@ -602,7 +625,9 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
       );
 
       expect(refused.code).toBe(2);
-      expect(refused.text).toContain(`--period-start-ms takes an integer, got '${spelling}'`);
+      expect(refused.text).toContain(
+        `argument --period-start-ms: invalid int value: '${spelling}'`,
+      );
     },
   );
 
@@ -644,23 +669,58 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
         ]),
       );
       expect(refused.code, malformed).toBe(2);
-      expect(refused.text).toContain(`--period-start-ms takes an integer, got '${malformed}'`);
+      expect(refused.text).toContain(
+        `argument --period-start-ms: invalid int value: '${malformed}'`,
+      );
     }
   });
 
   test("target-only -- a nested command's refusal names the nested command", () => {
-    // `error.usage` and the error line have to name the same parser. With the
-    // root's `prog` on the error line, `continuo measure report --bogus` prints
+    // `usage:` and the error line have to name the same parser. With the root's
+    // `prog` on the error line, a refusal raised inside `measure report` prints
     // `usage: continuo measure report` above `continuo: error: ...`, which sends
     // the operator to read the flags of a command that has none of them.
+    //
+    // RE-POINTED by `D-0030`. This case used to drive `--bogus`, which the
+    // purpose-built parser refused in the child. CPython does not: an
+    // unrecognized token is an EXTRA, collected by whichever parser saw it and
+    // reported by the ROOT (`unrecognized arguments: --bogus`, measured against
+    // CPython 3.12.3 on this exact command tree, and pinned by the case below).
+    // So the subject moves to a refusal argparse does raise in the child -- a
+    // value-taking flag with nothing after it -- where the property this case
+    // names is still live and still worth guarding.
     const path = db();
 
-    const errors = captureStderr(() => topLevelCli.main(["measure", ...argvFor(path), "--bogus"]));
+    const errors = captureStderr(() =>
+      topLevelCli.main(["measure", "report", "--db", path, "--period-start-ms"]),
+    );
 
     expect(errors.code).toBe(2);
     expect(errors.text).toContain("usage: continuo measure report");
     expect(errors.text).toContain("continuo measure report: error:");
     expect(errors.text).not.toContain("\ncontinuo: error:");
+  });
+
+  test("target-only -- an unrecognized argument is reported by the root, as CPython does", () => {
+    // The other half of the re-pointing above, and the reason it was a
+    // behaviour change rather than a wording change. argparse's subparser
+    // action hands the tokens it could not place UP to the root, and the root
+    // reports them under its own prog -- which is why an unknown option ahead
+    // of a valid subcommand cannot be silently dropped. Measured against
+    // CPython 3.12.3 on the replica of this command tree:
+    // `continuo: error: unrecognized arguments: --bogus`, under
+    // `usage: continuo`.
+    //
+    // The settings suite pins the same property from the other side (`an
+    // unrecognized option after the subcommand is reported, not ignored`);
+    // this one pins that the consolidated `measure` subtree answers the same
+    // way, which before `D-0030` it did not.
+    const path = db();
+
+    const errors = captureStderr(() => topLevelCli.main(["measure", ...argvFor(path), "--bogus"]));
+
+    expect(errors.code).toBe(2);
+    expect(errors.text).toContain("continuo: error: unrecognized arguments: --bogus");
   });
 
   test("target-only -- an unreadable shadow file refuses rather than throwing raw", () => {
@@ -755,8 +815,12 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     );
 
     expect(refused.code).toBe(2);
-    expect(refused.text).toContain("--fixture-commit expects a value");
-    expect(refused.text).toContain("--format");
+    // argparse's own wording. It names the flag that went without a value and
+    // not the token it declined to swallow, so there is deliberately no
+    // assertion here that `--format` appears: the usage line lists every flag,
+    // so `toContain("--format")` would pass against any refusal at all and
+    // would be protecting nothing (rule 10).
+    expect(refused.text).toContain("argument --fixture-commit: expected one argument");
 
     // ...and the escape hatch for a value that really does begin with a dash,
     // which is the one argparse offers too. The parser takes it, so what refuses
@@ -823,7 +887,13 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
         ]),
       );
       expect(refused.code, spelling).toBe(2);
-      expect(refused.text).toContain(`--period-start-ms takes an integer, got '${spelling}'`);
+      expect(refused.text).toContain(
+        `argument --period-start-ms: invalid int value: '${spelling}'`,
+      );
+      // The refusal says which rule it applied, so the divergence is legible on
+      // the console rather than looking like the parity refusal CPython gives
+      // for `1.5`. CPython accepts all three of these spellings.
+      expect(refused.text, spelling).toContain("ASCII digits only");
     }
   });
 
@@ -894,7 +964,7 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     );
 
     expect(errors.code).toBe(2);
-    expect(errors.text).toContain("--format is given more than once");
+    expect(errors.text).toContain("argument --format: given more than once");
   });
 
   test("target-only -- half a corpus reference is refused for being half", () => {
@@ -924,8 +994,31 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
     expect(noCorpus.message).toContain("--fixture-corpus");
   });
 
+  test("target-only -- the merged help screen keeps the choice list and the wrapping", () => {
+    // Rule 11, on two defects `D-0030` found by merging rather than by a red
+    // case. Both are about the ONE screen an operator reads to learn what a
+    // flag takes, and neither was reachable from either lane's own suite.
+    //
+    // 1. argparse renders a `choices` action's metavar as `{a,b}` when no
+    //    metavar is declared, and that is the only place `--help` says what the
+    //    accepted values ARE. The transcription answered `dest.toUpperCase()`
+    //    for every action; the settings flags all declare a metavar, so nothing
+    //    there could see it, and the merge would have turned
+    //    `--fingerprint {content,aggregate}` into `--fingerprint FINGERPRINT`.
+    // 2. The transcription wrote every help string on one line. Its own are
+    //    short; this module's are paragraphs, and `--db`'s alone is 450
+    //    characters.
+    const { code, out } = capturedTop(() => topLevelCli.main(["measure", "report", "--help"]));
+
+    expect(code).toBe(0);
+    expect(out).toContain("--fingerprint {content,aggregate}");
+    expect(out).toContain("--format {markdown,json}");
+    const tooWide = out.split("\n").filter((line) => line.length > 79);
+    expect(tooWide, `${tooWide.length} help line(s) past 79 columns`).toEqual([]);
+  });
+
   test("target-only -- the top-level CLI reports the build's version", () => {
-    const { code, out } = captured(() => topLevelCli.main(["--version"]));
+    const { code, out } = capturedTop(() => topLevelCli.main(["--version"]));
 
     expect(code).toBe(0);
     expect(out.trim()).toBe("@suisya-systems/continuo 0.0.0");
