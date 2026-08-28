@@ -1,0 +1,358 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. known_holes is the thirteenth file of this lane; query_catalogue remains."
+    },
+    "file": {
+      "path": "tests/measurement/test_known_holes.py",
+      "collected": 19,
+      "inventory": "parity/source-inventory/measurement.test_known_holes.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 19 pass there (measured 2026-08-28, `PYTHONPATH=src python3 -m pytest -q`: 19 passed)."
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/known-holes.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "pkgutil.iter_modules(PACKAGE_ROOT)",
+        "to": "import.meta.glob('../../src/measurement/*.ts'), minus index.ts",
+        "why": "ESM cannot import a specifier computed at run time, so a literal `for entry in listdir` walk is unavailable. Vite expands `import.meta.glob` from the same directory listing at transform time, which keeps the property the source's two discovery tests are built on: a module added to the package is imported without this file being edited. `index.ts` is excluded because `iter_modules` excludes `__init__`. Measured: the namespaces it yields are the same module instances a static import yields, and the walk is cross-checked against `readdirSync` so a stale expansion fails rather than narrowing the scan.",
+        "affects": "every discovery-driven case: the renderer walk, the threshold-name walk, the latency name check"
+      },
+      {
+        "from": "PACKAGE_ROOT.glob('*.py') + ast.parse",
+        "to": "readdirSync(PACKAGE_DIR) + ts.createSourceFile",
+        "why": "The static walk. The file set is defined as EVERY file in the package rather than by extension, and a file the scan cannot read as TypeScript is a failure rather than a skip -- docs/test-translation-conventions.md section 10 records what the other spelling cost the fencing belt, where a `.ts`-only glob silently stopped covering the package's most security-relevant file on the day it shipped as `.mjs`.",
+        "affects": "the write scan, the compared-target scan, the module doc comments"
+      },
+      {
+        "from": "test_known_holes._module_sources / _statements_executed, imported by test_query_catalogue",
+        "to": "test/measurement/module-scan.ts, imported by both test files",
+        "why": "pytest collects a module once however many times it is imported; vitest collects per FILE, so importing known-holes.test.ts from the query-catalogue belt would register its cases a second time and a ledger counting them would count the same coverage twice. The shared half moves to a module the runner does not collect, which is the move test/measurement/report-reading.ts made for the render and CLI belts.",
+        "affects": "the whole static half, and the query_catalogue belt that follows"
+      },
+      {
+        "from": "render_* / not _render*",
+        "to": "/^render[A-Z]/",
+        "why": "The port's spelling of the source's prefix. It excludes `render.render` -- the dispatcher, which the source's underscore excludes for the same reason -- and `renderSeams`, which the source's `callable` check excludes. Discovery finds one renderer the source has no counterpart for, `provenance.renderPythonJson`; it is bound rather than exempted (D-0114).",
+        "affects": "the renderer discovery and every parametrized verdict case"
+      },
+      {
+        "from": "connection.execute / executemany / executescript",
+        "to": "connection.prepare / exec / pragma",
+        "why": "better-sqlite3's complete set of methods handed SQL text. `pragma()` takes the statement without its keyword, so the keyword is restored before the verb is read; without that, `PRAGMA query_only = ON` would not reach the source's pragma-with-assignment branch. Matched on the method name whatever the receiver is, exactly as the source does.",
+        "affects": "the write scan"
+      },
+      {
+        "from": "pytest fixture `db`, create_production_control_plane per case",
+        "to": "suiteTemplate('production.sqlite3').copyInto(caseRoot(...)), per D-0025",
+        "why": "The lane's convention: one migration per file rather than one per case. Eleven parametrized cases each want an empty migrated production database.",
+        "affects": "every case that builds a report"
+      },
+      {
+        "from": "module.__doc__",
+        "to": "the module's column-zero /** */ block (moduleDocComment)",
+        "why": "TypeScript has no runtime docstring. This package's module prose sits after the import list, because NodeNext wants the imports first, so 'the comment the file opens with' finds an import's own note or nothing at all -- measured on every module. Each of the fifteen files has exactly one such block and it is the module's header.",
+        "affects": "the ac9, latency and provenance prose cases"
+      }
+    ],
+    "target_only_tests": {
+      "count": 4,
+      "ids": [
+        "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[provenance.renderPythonJson]",
+        "test/measurement/known-holes.test.ts::target-only -- the port's own machinery carries no warrant from the source > target-only -- the unmatched bucket is reported when it is empty",
+        "test/measurement/known-holes.test.ts::target-only -- the port's own machinery carries no warrant from the source > target-only -- the extra-argument table names only renderers discovery finds",
+        "test/measurement/known-holes.test.ts::target-only -- the port's own machinery carries no warrant from the source > target-only -- a verdict word is exempt only on the line that states the hole"
+      ],
+      "why": "Four, all of them about code this port had to write or about a guard its source leaves loose and which therefore carries no warrant from interlock (rule 11). (1) `provenance.renderPythonJson` is the port's `json.dumps`: Node has no such builtin, so the function exists here and is exported for `render.ts` to share it, and discovery finds it. Binding it rather than naming it out of the walk is D-0114; the eleventh parametrized case is the consequence and it is not a source case, so it is declared here. Measured: with `pythonJsonString(value)` made to append a verdict word, this case goes red alongside the two renderers built on it. (2) `the unmatched bucket is reported when it is empty` closes an inherited blind spot -- see inherited_limitations. (3) `the extra-argument table names only renderers discovery finds` pins `EXTRA_ARGUMENTS`, the one-entry table that supplies `renderPythonJson`'s `depth`. A stale key would be silently ignored and the renderer it was written for would then be called with `depth` undefined, which renders wrongly rather than not at all; measured, with the key misspelled, this case goes red and nothing else does. (4) `a verdict word is exempt only on the line that states the hole` tightens the source's exemption, which spares any verdict word within 240 characters of `Q-0005` -- a NEIGHBOURHOOD rather than a sentence, and every rendering prints a standard Q-0005 note, so the place a verdict is most likely to be added is the place the guard cannot see. Measured: with a `Status: PASS` line pushed immediately before ac9's Q-0005 note, the ported case stays GREEN and this one goes red; with the same line pushed far from the note, both go red. Target-only rather than a tightening of the ported slot, because rule 0 makes an assertion stronger than its source a divergence and a divergence belongs beside the faithful translation."
+    }
+  },
+  "totals": {
+    "source_cases": 19,
+    "ported": 10,
+    "adapted": 9,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "test/measurement/module-scan.ts is a test helper and is not part of the package surface.",
+      "why": "It reads `src/measurement/` from disk and through `import.meta.glob`; nothing in `src/` imports it. It is not a `.test.ts` file, so the runner does not collect it, which is the whole reason it exists."
+    },
+    {
+      "what": "provenance.renderPythonJson is exported from src/measurement/provenance.ts but not from src/index.ts.",
+      "why": "Unchanged by this belt, and recorded here because the belt is what made the export visible to discovery: it is an implementation shared by two renderers, not a rendering a consumer should reach for."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "`the positional caveat reaches the reader of the reconciliation` asserts that the `unmatched_key` bucket is reported 'even at zero', and then reconciles a report that has one episode in that bucket -- so the bucket is non-empty and the assertion cannot see the property it names.",
+      "matches_source": true,
+      "note": "Measured: with `counts()` made to omit the bucket when it is empty, the ported case stays GREEN. Not repaired in the ported slot, which asserts what its source asserts; closed by the target-only case `the unmatched bucket is reported when it is empty`, which reconciles with no episodes at all and goes red under the same mutation.",
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023), so the repair lives in the target-only case."
+    },
+    {
+      "behaviour": "The source's ownership skip -- `getattr(value, '__module__', module.__name__) != module.__name__` -- does not skip an imported CONSTANT, because a str or an int has no `__module__`, and it does skip an imported dataclass INSTANCE, because an instance inherits its class's.",
+      "matches_source": true,
+      "note": "The port reproduces the reachable half: an imported binding is skipped when it resolves to a function or a class, which is what carries `__module__`. The two arcane cases above are not reproduced exactly and cannot be reached today -- no name in the package matches FORBIDDEN_NAME at all, imported or declared (measured over all fourteen modules). The comment the source attaches to the skip states the intent it is approximating: 'imported vocabulary belongs to the module that owns it'.",
+      "where_a_fix_belongs": "nowhere: the divergence is between two ownership models and only bites on a name that would otherwise be reported."
+    },
+    {
+      "behaviour": "The write scan matches a method NAME whatever the receiver is, so a `RegExp.exec` in a measurement module would be reported as an unrecognised statement verb.",
+      "matches_source": true,
+      "note": "The source has the same property: it matches `.execute(` on any receiver. The failure is loud and in the safe direction -- a scan that quietly narrowed itself around a receiver it did not recognise is how a write hides -- and there is no such call in the package today (measured: 42 statements, all classified).",
+      "where_a_fix_belongs": "here, if one is ever written; the fix is a named exemption with a reason, not a receiver test."
+    },
+    {
+      "behaviour": "A write statement hidden behind a read verb -- `SELECT 1; INSERT ...` or `WITH x AS (...) DELETE ...` -- is classified by its leading verb and accepted.",
+      "matches_source": false,
+      "note": "REPAIRED here, not disclosed. Half of it is rule 9 rather than an inherited defect: `sqlite3.Connection.execute` refuses a second statement, so the source's runtime excludes the multi-statement shape and better-sqlite3's `exec` admits it. The CTE half is a hole both runtimes have and is repaired under D-0023. Raised by the codex review gate as two P2s; both are closed by one sweep, and three mutations pin it (see the entry's reason).",
+      "where_a_fix_belongs": "here. interlock is frozen (D-0023), and the multi-statement half has no counterpart there to fix."
+    },
+    {
+      "behaviour": "A verdict word within 240 characters of `Q-0005` is exempt, and every rendering prints a standard Q-0005 note -- so a verdict line placed beside that note leaves the ported case green.",
+      "matches_source": true,
+      "note": "Measured: with `Status: PASS` pushed immediately before ac9's Q-0005 line, all eleven ported verdict cases stay GREEN. Not repaired in the ported slots, which assert what their source asserts; closed by the target-only case `a verdict word is exempt only on the line that states the hole`, which goes red under exactly that mutation.",
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023), so the repair lives in the target-only case."
+    },
+    {
+      "behaviour": "A template's SQL is resolved to its first non-blank literal fragment, so anything an interpolation contributes -- including a second statement -- is never inspected.",
+      "matches_source": false,
+      "note": "REPAIRED. Same family as the multi-statement divergence above and reached the same way: `exec` runs every statement in the string, so an interpolation can append one, where the source's `execute` cannot. The whole text is resolved where it can be; the fragment rule survives only behind a precondition that makes it sound (single-statement call, and a verb that is not `WITH`). Raised by the review gate.",
+      "where_a_fix_belongs": "here."
+    },
+    {
+      "behaviour": "Statement texts are resolved through one map keyed by name over a walk of the whole module, so a name declared in two functions resolves to whichever declaration the walk saw last.",
+      "matches_source": true,
+      "note": "REPAIRED under D-0023, by refusing rather than by scoping: a name with more than one declaration resolves to nothing and its statement is reported uninspectable. A scope chain would be the complete answer and is more machinery than the property needs; the refusal is fail-closed, which is the direction an ambiguity has to fail in a scan whose subject is a hidden write. Measured: no name used as a statement argument in this package is declared twice in its module.",
+      "where_a_fix_belongs": "here. interlock is frozen (D-0023)."
+    },
+    {
+      "behaviour": "A pragma is classified as setting when its text contains `=`, and SQLite accepts `PRAGMA name(value)` as an equivalent setter.",
+      "matches_source": true,
+      "note": "REPAIRED under D-0023, and measured rather than reasoned about: against better-sqlite3 13.0.3, `pragma('user_version(7)')` followed by `pragma('user_version', { simple: true })` reads back 7. The test is inverted -- an argument makes a pragma a setter unless its name is one of SQLite's introspection pragmas -- because parentheses alone do not separate the two: `PRAGMA table_info('run')` is a read. The list is the engine's and fails closed on a name missing from it.",
+      "where_a_fix_belongs": "here. interlock is frozen (D-0023)."
+    },
+    {
+      "behaviour": "A statement built with `.replace(needle, insertion)` is classified from the receiver's text, so what the replacement inserts is never read.",
+      "matches_source": true,
+      "note": "REPAIRED under D-0023. The source's counterpart is its `.format()` branch, which returns the template and never looks at the arguments; the reasoning holds for a bind-parameter list and not for an arbitrary insertion. The replacement is performed when both arguments resolve statically, and the text is unresolvable otherwise. Raised by the review gate.",
+      "where_a_fix_belongs": "here. interlock is frozen (D-0023)."
+    },
+    {
+      "behaviour": "A `pragma()` whose text cannot be resolved whole was classified from its leading fragment, which always reads `PRAGMA` and so always reads as a non-setter.",
+      "matches_source": false,
+      "note": "REPAIRED, and port-specific: the source has no `pragma()` method at all -- it issues pragmas through `execute`, where the whole text is the statement. Only `prepare` may fall back to the fragment rule now. Raised by the review gate.",
+      "where_a_fix_belongs": "here; there is no counterpart upstream."
+    },
+    {
+      "behaviour": "A `sql:` field the resolver could not read was dropped from the set, and the remaining fields still stood for `recordClass.sql`.",
+      "matches_source": true,
+      "note": "REPAIRED under D-0023. Fail-open twice: the unresolved query is never classified, and the scan reports a clean package because the other record classes resolved. One unreadable field now makes the whole `.sql` access unresolvable. Raised by the review gate.",
+      "where_a_fix_belongs": "here. interlock is frozen (D-0023)."
+    },
+    {
+      "behaviour": "Module-level names introduced by a destructuring pattern -- `export const { MIN_SAMPLE_SIZE } = settings` -- are not in the binding set the forbidden-name test walks.",
+      "matches_source": false,
+      "note": "REPAIRED, and port-specific: `vars(module)` holds every module-level name however it was bound, and this port reconstructs the set from the source, so the reconstruction had to learn the spelling. Binding patterns are walked recursively. Raised by the review gate; measured, the destructured constant is reported by name.",
+      "where_a_fix_belongs": "here; the source's namespace has no such gap to fix."
+    },
+    {
+      "behaviour": "A comparison operand wrapped in parentheses or a cast -- `(PROMPT_REDUCTION_TARGET) > measured` -- is not named, so the comparison is permitted.",
+      "matches_source": false,
+      "note": "REPAIRED, and port-specific: `ast.parse` has no node for parentheses and none for a cast, so the source's scan cannot have this gap and the port's inherited it from the node shapes rather than from the code. Rule 9 reached through the AST. Parentheses, `as`, `satisfies`, `!` and the angle-bracket assertion are unwrapped. Raised by the review gate.",
+      "where_a_fix_belongs": "here; there is no counterpart upstream."
+    },
+    {
+      "behaviour": "A statement opening with a block comment reads as a verb of `/*` and is reported as an unrecognised statement.",
+      "matches_source": true,
+      "note": "REPAIRED under D-0023, and it is the one finding on this scan that was a FALSE POSITIVE rather than a fail-open -- it refuses a legitimate query rather than admitting a write. The source skips `--` lines only. The leading comment run is stripped before the verb is read; a `--` or `/*` inside a string literal has something before it and cannot be reached this way, so this needs none of the blanking the hidden-write sweep does. Measured in both directions.",
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023)."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_every_public_renderer_is_bound_here",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > every public renderer is bound here",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED on both sides of the equality, and the adaptation is the belt. (1) The DISCOVERY: `pkgutil.iter_modules` walks the package directory at run time, and ESM cannot import a specifier computed at run time. `import.meta.glob` is the walk Vite expands from the same directory listing at transform time, so a module added to the package is imported without this file being edited -- which is the property the case exists for. Measured: the namespaces it yields are the same module instances a static import yields, so `instanceof` still holds across the two. The runtime walk is cross-checked against a `readdirSync` of the package, so a stale expansion is a failure rather than a narrower scan. Ownership (`__module__`) is read from the module's own source, since ESM has no counterpart. (2) The BOUND SET has eleven entries where the source has ten: `render_header_json` and `render_json` are `json.dumps` calls in Python, and Node has no `json.dumps`, so `provenance.renderPythonJson` is the port's own spelling of it and must be exported for `render.ts` to share it (D-0017 rule 4). Discovery finds it. It is bound and read for a verdict like the other ten rather than named out of the walk -- a renderer that dodges discovery by being spelled differently is exactly what the source's design refuses -- and its parametrized case is declared target-only. See D-0114.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[ac9.render_ac9_report]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[ac9.renderAc9Report]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[canary.render_canary_divergence_report]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[canary.renderCanaryDivergenceReport]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[false_termination.render_false_termination_report]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[false-termination.renderFalseTerminationReport]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[fixtures.render_fixture_report]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[fixtures.renderFixtureReport]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[latency.render_latency_report]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[latency.renderLatencyReport]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[provenance.render_header_json]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[provenance.renderHeaderJson]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED at the fixture, not at the assertion. The source's header factory hands `ImputationRule` three fields; `D-0107` repaired the header's acceptance predicate so that it counts BOTH disqualifying populations, which makes `unconfirmedResponseCount` a required field of this port's rule. The factory therefore passes a fourth value the source has no counterpart for. What is rendered and what is read for a verdict are the source's.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[provenance.render_header_markdown]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[provenance.renderHeaderMarkdown]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED at the fixture, for the reason given on `provenance.render_header_json`: `D-0107` makes `unconfirmedResponseCount` a required field of `ImputationRule`, so the header factory passes one field the source's does not.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[render.render_json]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[render.renderJson]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[render.render_markdown]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[render.renderMarkdown]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_renderer_emits_verdict_vocabulary[shadow.render_shadow_reconciliation]",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no renderer emits verdict vocabulary[shadow.renderShadowReconciliation]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_module_names_a_threshold_or_a_sample_size_minimum",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no module names a threshold or a sample size minimum",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED twice. (1) `vars(module)` is a Python module's namespace -- every module-level name, declarations and imports alike -- and ESM has no such object: a module namespace carries only its exports. The set is recovered from the module's own source instead (`moduleBindings`), which is declarations plus import bindings, and is the same set for the property under test. Type-only declarations and `import type` bindings are excluded because they are erased and are in no namespace at run time. The source's ownership skip is reproduced by resolving the imported binding and skipping it when it is a function or a class, which is what carries `__module__` in Python; it is resolved only for a name that would otherwise be reported, since the reported set is the same either way and resolving costs an import. (2) `DESCRIBES_A_DECLARED_RULE` is `_kind$` in the source and `(_kind|Kind)$` here, because the port's field names are camel case and the name the source spares is `windows.EpisodeWindow.threshold_kind` -- spelled `thresholdKind`. `MISS_RATE_THRESHOLD` is still caught. Measured: with `export const MIN_SAMPLE_SIZE = 5` added to `latency.ts`, this case goes red naming it. (3) Binding PATTERNS are walked, not only plain identifiers: `export const { MIN_SAMPLE_SIZE } = settings` binds a module-level name that is in the namespace at run time and that a scan reading only `declaration.name` as an identifier would never see -- the forbidden name arriving through a spelling the scan did not anticipate, which is the shape this file exists to catch. Raised by the review gate; measured, the destructured constant is reported by name.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_target_constant_is_ever_compared",
+      "target_id": "test/measurement/known-holes.test.ts::hole 1 and hole 3 -- no verdict, no threshold, anywhere > no target constant is ever compared",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED at the node type. `ast.Compare` carries Eq/NotEq/Lt/LtE/Gt/GtE/Is/IsNot/In/NotIn and unfolds a chain; TypeScript writes the same relations as binary operators and has no chained form, so the scan takes `<`, `<=`, `>`, `>=`, `==`, `===`, `!=`, `!==`, `in` and `instanceof`. Operand naming is the source's `ast.Name` / `ast.Attribute` pair -- an identifier or the attribute of a property access. The `Kind` suffix adaptation above is load-bearing here rather than theoretical: `windows.ts` compares `thresholdKind` against `'consecutive_count'` and `'absolute_ms'`, and without it those two comparisons would be reported. Measured: with `PROMPT_REDUCTION_TARGET > 0.5` added to `ac9.ts`, this case goes red naming the file, the line and the constant. ONE MORE from the gate's fourth round, and it is rule 9 on the AST rather than on a type: `ast.parse` has NO node for parentheses -- `(X) > y` and `X > y` are the same tree -- and none for a cast, because Python has no casts. TypeScript keeps all of them, so a scan written against the source's node shapes saw a `ParenthesizedExpression` where the source saw a `Name` and recorded nothing: `(PROMPT_REDUCTION_TARGET) > measured` is the comparison this case exists to reject, wearing a spelling the source could not produce. Parentheses, `as`, `satisfies`, `!` and the angle-bracket assertion are unwrapped before an operand is named, and the same unwrapping is applied in the statement resolvers, where a wrapped identifier would otherwise have been reported uninspectable. Measured: both `(PROMPT_REDUCTION_TARGET) > 0.5` and `(PROMPT_REDUCTION_TARGET as number) > 0.5` are reported by file, line and constant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_no_module_executes_a_write_statement",
+      "target_id": "test/measurement/known-holes.test.ts::hole 5 -- the harness never writes, and ai_invocation least of all > no module executes a write statement",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED at the driver surface, not at the property. The source scans `execute` / `executemany` / `executescript`, which is every `sqlite3` API handed a statement; better-sqlite3's equivalent complete set is `prepare`, `exec` and `pragma` -- everything else on the driver takes bindings rather than text. `pragma()` takes the statement without its keyword, so the keyword is restored before classification, which is what makes `PRAGMA query_only = ON` reach the source's `'=' in text` branch. The resolver gains one form the source has and one it does not: the source's `.format()` is this port's `.replace('{placeholders}', ...)`, and a `sql:` property of a record class's options object is the source's `sql=` keyword. The five read-only-proof exemptions map one for one onto `reader.ts` (`requireQueryOnly`, `measurementSnapshot`, `armAndVerifyBothMechanisms`, `proveReadOnly`, `undoTheProbe`). Measured on the port: 42 statements found, all statically resolved, none unclassified. Three mutations, each red for its own reason -- an `INSERT` in `cohort.ts` reports `cohort.selectCohort: INSERT`; a `prepare(String(Math.random()))` reports `statement not statically inspectable`; and a scan that matches no method at all trips the `seen > 20` guard with `only 0 executed statements found`. See D-0115. REPAIRED BEYOND THE SOURCE, per D-0023 and rule 9, and raised by the review gate: the source reads the LEADING verb and stops, which is sufficient on its runtime because `sqlite3.Connection.execute` refuses a second statement outright. better-sqlite3's `exec` runs every statement in the string, so `exec(\\\"SELECT 1; INSERT INTO ai_invocation ...\\\")` leads with a read verb and writes -- the driver-side spelling of rule 9's widening. The same sweep closes a hole BOTH runtimes have: SQLite accepts a CTE in front of a write, so `WITH x AS (...) DELETE FROM run` leads with `WITH`, which is in the source's READ_VERBS. Every write verb the text carries beyond its leading position is reported, over a copy with string literals, quoted identifiers and comments blanked. Measured: `SELECT 1; INSERT ...` reports `INSERT behind a leading SELECT`; `WITH ... DELETE ...` reports `DELETE behind a leading WITH`; and a statement carrying `replace(...)`, a literal `'DELETE'` and a `-- INSERT INTO run` comment reports nothing, which is the false-positive direction the blanking exists for. THREE MORE REPAIRS, all raised by the review gate's second round and all of the same shape -- a resolver or a classifier that reads part of a statement and treats the rest as absent. (a) The source's template resolver returns the first non-blank literal fragment, so `exec(`SELECT 1; ${suffix}`)` classified as SELECT and the suffix was never looked at. The whole text is resolved now, interpolations included; where it cannot be, the fragment rule is used only when the call compiles a SINGLE statement (measured: `prepare('INSERT ...; INSERT ...')` throws 'The supplied SQL string contains more than one statement') AND the fragment's verb is not `WITH`, because a CTE puts its write after the head. A numeric interpolation is admitted without being computed, because its string form cannot hold a separator, a keyword or a quote -- and it is the one interpolation `reader.ts` writes into an `exec`. (b) The source keys its bindings by name over a walk of the whole tree, so a `const statement = 'INSERT ...'` in one function resolves to another function's `'SELECT ...'`. A name declared more than once now resolves to nothing, which reports the statement as uninspectable; measured, no name used as a statement argument in this package is declared twice in its module, so nothing is lost. (c) The source asks whether a pragma's text contains `=`, and SQLite's other setter spelling is parenthesised -- measured against better-sqlite3 13.0.3: `pragma('user_version(7)')` sets it. A pragma with an argument is a setter unless its name is one of SQLite's introspection pragmas, which is a closed list of the engine's and fails closed on a name missing from it. Measured: `exec(`SELECT 1; ${unresolvable}`)` and `prepare(`WITH x AS (SELECT 1) ${tail}`)` report `statement not statically inspectable`; `exec(`SELECT 1; ${aWriteConstant}`)` reports `INSERT behind a leading SELECT`; a second `const statement` in false-termination.ts reports its own function uninspectable; `pragma('user_version(1)')` reports `sets a pragma`; and `pragma('table_info(\\\"run\\\")')` reports nothing. THREE MORE from the gate's third round, and the family is now named rather than enumerated -- every one of them is a resolver that reads PART of a text and treats the rest as absent. (d) `.replace(needle, insertion)` was resolved to the receiver's text alone, which is what the source's `.format()` branch returns; what a replace INSERTS is SQL too, so `QUERY.replace('{tail}', '; INSERT ...')` was classified from a text the write is not in. The replacement is performed now when both arguments resolve, and the text is unresolvable when the insertion is not. (e) The single-statement fallback is unsound for `pragma`: every statement a pragma call can hold reads `PRAGMA`, and whether it SETS is decided by what FOLLOWS the name, so `pragma(`user_version ${suffix}`)` reduced to its fragment reads as a plain read whatever the suffix does. Only `prepare` may fall back. (f) A `sql:` field that could not be resolved was dropped, and because the module's other record classes still resolved, `recordClass.sql` returned a non-empty list and the scan reported a clean package -- fail-open twice over. One unreadable field makes the whole `.sql` access unresolvable; the fields are also resolved in a second pass, so a field bound to a constant declared further down the file is not reported uninspectable for a reason that is about traversal order. Measured: `'SELECT 1 /*tail*/'.replace('/*tail*/', '; INSERT ...')` on `exec` reports `INSERT behind a leading SELECT` while the same replace inserting a comment reports nothing; an unresolvable insertion and an interpolated pragma both report `statement not statically inspectable`; and an unreadable `sql:` on one record class reports `canary.readInterlockRecords` uninspectable. ONE MORE from the fourth round, and it is the first finding on this scan that was NOT a fail-open: the source's `_leading_verb` skips `--` lines only, so a statement opening with a block comment -- `/* why this query is shaped this way */ SELECT ...` -- read as a verb of `/*` and was reported as an unrecognised statement. Red, and in the safe direction, but it refuses a legitimate query and would have been paid for by whoever next added a commented one. The leading comment run is stripped before the verb is read; only the LEADING run, because a `--` inside a string literal has something before it and cannot be reached that way. Measured in both directions: a read opening with a block comment reports nothing, and `/* harmless */ INSERT ...` still reports `INSERT`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_ac9_states_that_it_never_writes_ai_invocation",
+      "target_id": "test/measurement/known-holes.test.ts::hole 5 -- the harness never writes, and ai_invocation least of all > ac9 states that it never writes ai_invocation",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED at where the sentence lives. TypeScript has no runtime `__doc__`, and this package's module prose sits in a column-zero `/** */` block AFTER the import list, because NodeNext wants the imports first. `moduleDocComment` reads that block. 'the comment the file opens with' was the naive spelling and was measured to be wrong on every module: it finds an import's own explanatory `//` note, or nothing at all. Measured across all fifteen files: each has exactly one such block and it is the module's header. With `D-0003` removed from ac9's header, this case goes red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_the_header_exposes_the_detector_version_set_and_decides_nothing",
+      "target_id": "test/measurement/known-holes.test.ts::hole 2 -- Q-0009 exposed, not decided > the header exposes the detector version set and decides nothing",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED at three assertions, all of them Python builtins with no direct counterpart. (1) `isinstance(..., tuple)` becomes `Array.isArray` AND `Object.isFrozen`: a tuple is an ordered sequence that cannot be edited, and asserting only the first would accept the mutable half of what the source excludes. (2) `str(mapping)` becomes `pythonRepr` of the mapping copied into a real `Map`. `asMapping()` returns a read-only VIEW rather than a `Map`, and `pythonRepr` renders anything it does not recognise through `String` -- the view's `String` form is a listing of its own methods, which contains neither the keys nor the values, so the naive spelling made this assertion about nothing (measured: it read `{'size': 34, 'get': (key) => ...}`). (3) `dir(header)` becomes own properties plus the prototype chain, because a `get` accessor lives on the prototype and `nonHomogeneous` is one; `constructor` is dropped as the counterpart of the `__init__` / `__class__` entries the source's underscore filter removes. The two spared names are the port's spellings, `nonHomogeneityReasons` and `nonHomogeneous`. Measured: with a `crossVersionCompatible` getter added to `ReportHeader`, this case goes red naming it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_latency_states_that_secretary_window_latency_is_not_its_measurement",
+      "target_id": "test/measurement/known-holes.test.ts::hole 3 -- Q-0011 belongs to gate item 8 > latency states that secretary window latency is not its measurement",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED for the same reason as `test_ac9_states_...`: the docstring is the module's doc comment. `dir(latency)` becomes the module namespace's keys -- a module's exports, which is this port's spelling of a module's public names, since a name that is not exported is not reachable from outside the file. Measured: with 'gate item 8' rewritten in latency's header, this case goes red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_the_positional_caveat_reaches_the_reader_of_the_reconciliation",
+      "target_id": "test/measurement/known-holes.test.ts::hole 4 -- the positional escalation key, and its failures kept visible > the positional caveat reaches the reader of the reconciliation",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_known_holes.py::test_a_positional_key_is_marked_positional_on_the_key_itself",
+      "target_id": "test/measurement/known-holes.test.ts::hole 4 -- the positional escalation key, and its failures kept visible > a positional key is marked positional on the key itself",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
