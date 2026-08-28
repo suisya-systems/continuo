@@ -116,7 +116,7 @@ import {
   openControlPlane,
   reconstruct,
 } from "../../src/control_plane/schema.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -138,14 +138,56 @@ const SRC_DIR = fileURLToPath(new URL("../../src/", import.meta.url));
 // fixtures
 // --------------------------------------------------------------------------
 
-/** The source's `db_path` fixture: a name inside a per-test directory. */
+/**
+ * The database's name inside a case root, shared with {@link spikeTemplate} so
+ * that a copy lands exactly where {@link dbPathFixture} says it does.
+ */
+const DATABASE_NAME = "control-plane.sqlite3";
+
+/**
+ * The database every case starts from, built once for this file (D-0029).
+ *
+ * The same template D-0028 introduced for `spike-schema.test.ts`, applied to
+ * the third of the three files that build a *spike* control plane.
+ * `createControlPlane` takes a path and nothing else, so every one of this
+ * file's 50 fixture calls was already asking for a byte-identical database.
+ * Measured N=30 on this box: 97.5ms to create one against 2.70ms to copy and
+ * open one, the cost being fsyncs rather than the DDL.
+ *
+ * The template is the bare schema; this file's two seed rows stay in
+ * {@link cpFixture}, so all three files' template declarations are the same
+ * four lines (D-0027).
+ *
+ * The one `existsSync(dbPath)` assertion in this file is not the absence
+ * assertion that would rule the copy out: it sits directly after the case's own
+ * `unlinkSync`, and asserts the deletion that case performed rather than that
+ * nothing was ever created. Neither does any case patch a `schemaSeams` entry;
+ * the `patchSeam` calls here replace `outboxSeams` and `destinationSeams`.
+ */
+const spikeTemplate = suiteTemplate(DATABASE_NAME, (path) => {
+  createControlPlane(path).close();
+});
+
+/**
+ * The source's `db_path` fixture: a name inside a per-test directory.
+ *
+ * The file at that name now exists -- it is a fresh copy of
+ * {@link spikeTemplate}. The root is the caller's, because several cases put
+ * the dropbox beside the database in the same directory.
+ */
 function dbPathFixture(root: string): string {
-  return join(root, "control-plane.sqlite3");
+  return spikeTemplate.copyInto(root, DATABASE_NAME);
 }
 
-/** The source's `cp` fixture: a spike control plane holding one run and one lease. */
+/**
+ * The source's `cp` fixture: a spike control plane holding one run and one lease.
+ *
+ * Opened rather than created, for D-0027's reason: the same two pragmas either
+ * way, and opening verifies the copy is at head, so a template that built the
+ * wrong thing is a typed refusal at the first case.
+ */
 function cpFixture(dbPath: string): SqliteDatabase {
-  const connection = createControlPlane(dbPath);
+  const connection = openControlPlane(dbPath);
   closeWhenFinished(connection);
   connection
     .prepare(

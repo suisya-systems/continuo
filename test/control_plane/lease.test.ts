@@ -57,7 +57,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -113,7 +112,7 @@ import {
   writeHistory,
 } from "../../src/control_plane/lease.js";
 import { createControlPlane, openControlPlane } from "../../src/control_plane/schema.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -137,14 +136,60 @@ const CONSTRAINT = /^SQLITE_CONSTRAINT/;
 // fixtures
 // --------------------------------------------------------------------------
 
-/** The source's `db_path` fixture: a name inside a per-test directory. */
+/**
+ * The database's name inside a case root, shared with {@link spikeTemplate} so
+ * that a copy lands exactly where {@link dbPathFixture} says it does.
+ */
+const DATABASE_NAME = "control-plane.sqlite3";
+
+/**
+ * The database every case starts from, built once for this file (D-0029).
+ *
+ * The same template D-0028 introduced for `spike-schema.test.ts`, applied to
+ * the second of the three files that build a *spike* control plane.
+ * `createControlPlane` takes a path and nothing else -- no clock, no options --
+ * so every one of this file's 40 fixture calls was already asking for a
+ * byte-identical database, and a copy of one build is exactly what each was
+ * creating for itself. Measured N=30 on this box: 97.5ms to create one against
+ * 2.70ms to copy and open one, the cost being fsyncs rather than the DDL.
+ *
+ * The template is the bare schema. This file's seed row stays in
+ * {@link cpFixture}, so all three files' template declarations are the same
+ * four lines and can be checked against each other by eye (D-0027).
+ *
+ * No case here patches a `schemaSeams` entry -- the one `patchSeam` call in the
+ * file replaces `leaseSeams.uuid4Hex` -- so the lazy build, which runs inside
+ * whichever case copies first, can never run through a replaced connect seam.
+ * A new case that patched `schemaSeams` before taking its fixture would have to
+ * create its own.
+ */
+const spikeTemplate = suiteTemplate(DATABASE_NAME, (path) => {
+  createControlPlane(path).close();
+});
+
+/**
+ * The source's `db_path` fixture: a name inside a per-test directory.
+ *
+ * The file at that name now exists -- it is a fresh copy of
+ * {@link spikeTemplate} -- where it used to be a name {@link cpFixture} created
+ * at. No case in this file asserts the database is absent, which is the
+ * property that would have made the copy wrong (D-0028).
+ */
 function dbPathFixture(): string {
-  return join(caseRoot("s6"), "control-plane.sqlite3");
+  return spikeTemplate.copyInto(caseRoot("s6"), DATABASE_NAME);
 }
 
-/** The source's `cp` fixture: a spike control plane holding one run. */
+/**
+ * The source's `cp` fixture: a spike control plane holding one run.
+ *
+ * Opened rather than created, for D-0027's reason: both entry points end at
+ * `configureConnection`, so the handle carries the same two pragmas either way,
+ * and opening verifies the copy is at head -- so a template that built the
+ * wrong thing is a typed refusal at the first case rather than a case running
+ * against a database nobody checked.
+ */
 function cpFixture(dbPath: string): SqliteDatabase {
-  const connection = createControlPlane(dbPath);
+  const connection = openControlPlane(dbPath);
   closeWhenFinished(connection);
   connection
     .prepare<[string, string, number, number]>(
