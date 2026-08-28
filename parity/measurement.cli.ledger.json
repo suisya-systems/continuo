@@ -1,0 +1,390 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "measurement",
+      "collected": 425,
+      "inventory": "parity/source-inventory/measurement.all.txt",
+      "note": "The G6 harness, interlock tests/measurement, 14 files. One ledger per source file. cli is the twelfth file of this lane; known_holes and query_catalogue remain. The source file is named test_measurement_cli.py, not test_cli.py -- tests/attention/test_cli.py is a different subsystem's."
+    },
+    "file": {
+      "path": "tests/measurement/test_measurement_cli.py",
+      "collected": 25,
+      "inventory": "parity/source-inventory/measurement.test_measurement_cli.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 25 pass there (measured 2026-08-28, `PYTHONPATH=src python3 -m pytest -q`: 25 passed)."
+    }
+  },
+  "target": {
+    "test_file": "test/measurement/cli.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "argparse",
+        "to": "src/cli/parser.ts, a purpose-built parser (D-0112)",
+        "why": "Node's standard library has no argparse, and `node:util`'s parseArgs has neither subcommands nor generated --help, which are the two things the ported CLI is built on. The module carries only the surface the two CLI modules use and is pinned by ten target-only cases, because it is new code with no source to underwrite it (rule 11).",
+        "affects": "every case that drives the command line, and both help-string cases"
+      },
+      {
+        "from": "the whole of claude_org_runtime/cli.py, six mounted subtrees",
+        "to": "src/cli.ts with one mounted subtree, `measure`",
+        "why": "dispatcher, settings, sandbox, attention and migrate mount modules continuo has not ported. Mounting a subcommand for an absent module would put a command in --help that cannot run. The mounting shape is the source's, so each arrives with its own lane.",
+        "affects": "the command is mounted on the top-level CLI; the help of the mounted subcommand"
+      },
+      {
+        "from": "capsys",
+        "to": "the module's `write` seam, replaced with a collector",
+        "why": "The house pattern for an effect a case has to read. The seam is what the module writes through, so a case that spied on process.stdout would keep passing if a later edit wrote elsewhere.",
+        "affects": "every case that reads what the command printed"
+      },
+      {
+        "from": "monkeypatch.setattr(measurement_cli.time, 'time', ...)",
+        "to": "patchSeam(cliSeams, 'nowMs', ...)",
+        "why": "ESM bindings cannot be rebound from outside the module that holds them. `int(time.time() * 1000)` also becomes `Date.now()`, which is already an integer count of milliseconds, so the multiply and its truncation are gone rather than reproduced.",
+        "affects": "the two clock-count cases"
+      },
+      {
+        "from": "argparse.Namespace(period_start_ms=..., ...)",
+        "to": "an options object with camel-case keys",
+        "why": "The port's naming convention; the flag-to-key mapping is done once, in the parser's destinationOf.",
+        "affects": "the three clock-refusal cases, which build the namespace by hand"
+      },
+      {
+        "from": "from .test_render import GENERATED_AT, parse_markdown, walk_json, ...",
+        "to": "test/measurement/report-reading.ts, imported by both test files",
+        "why": "pytest collects a module once however many times it is imported; vitest collects per FILE, so importing render.test.ts from cli.test.ts would register all 71 render cases a second time and a ledger counting them would count the same coverage twice. The helpers move to a module the runner does not collect. Nothing about what they assert changed; render.test.ts still passes its 71 cases (measured). The four clock constants are grouped into one frozen REPORT_CLOCK object because PERIOD_START is T0 and two exported names for one binding is a duplicate export the repository's unused-code gate refuses.",
+        "affects": "every case in both files that reads a rendered report"
+      },
+      {
+        "from": "pytest fixture `db`, create_production_control_plane + a raw insert",
+        "to": "suiteTemplate('production.sqlite3') + rawConnection, per D-0025",
+        "why": "The lane's convention: one migration per file rather than one per case.",
+        "affects": "every case that reports over a database"
+      }
+    ],
+    "target_only_tests": {
+      "count": 10,
+      "ids": [
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the help walk reaches the mounted subcommand's own flags",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- --help after a subcommand is the subcommand's help",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a millisecond flag that is not an integer is refused, not coerced[1.5]",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a millisecond flag that is not an integer is refused, not coerced[0x10]",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a millisecond flag that is not an integer is refused, not coerced[empty]",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a required flag that is absent is refused by name",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a value outside a flag's choices is refused by name",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- a flag given twice is refused rather than silently last-wins",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- half a corpus reference is refused for being half",
+        "test/measurement/cli.test.ts::target-only -- the parser has no source to be underwritten by > target-only -- the top-level CLI reports the build's version"
+      ],
+      "why": "Ten, all of them about `src/cli/parser.ts` and `src/cli.ts` -- code this port had to write because Node has no argparse, and which therefore carries no warrant from interlock (rule 11). Two of the ten exist because a mutation sweep found the ported cases could not see the property they name: `the help walk reaches the mounted subcommand's own flags` closes the hazard that both cp932 cases are a loop over helpStrings and a walk returning nothing makes both vacuously green, and `half a corpus reference is refused for being half` closes an inherited blind spot -- the ported case (and its source) point --fixture-corpus at a directory that does not exist, so loadCorpus refuses with a FixtureRefusal, which IS a ControlPlaneRefusal, and the case stays green with the half-reference guard deleted (measured). The remaining eight pin the parser's own refusals: a required flag, a value outside a flag's choices, a flag given twice, three spellings of a non-integer millisecond value, --help routed to the subcommand rather than the root, and the version flag."
+    }
+  },
+  "totals": {
+    "source_cases": 25,
+    "ported": 20,
+    "adapted": 5,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "notes_on_exports": [
+    {
+      "what": "src/cli.ts and src/cli/parser.ts are not re-exported from src/index.ts.",
+      "why": "D-0002 exports `.` alone, and the CLI is an entry point rather than library surface: it is reached as the `continuo` bin (package.json) or as `node dist/cli.js`. knip is given src/cli.ts as an entry so the modules under it are not read as dead code."
+    },
+    {
+      "what": "cliSeams is exported from src/measurement/cli.ts but not from src/index.ts.",
+      "why": "The house rule for a seam record: reachable by the tests that own the module, absent from the package's surface."
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "`a corpus without its commit is refused` is satisfied by a refusal from loadCorpus rather than by the half-reference guard, because the corpus path it names does not exist.",
+      "matches_source": true,
+      "note": "Measured: with the guard replaced by an always-false condition, the source-shaped case stays green. Not repaired in the ported slot, which asserts what its source asserts; closed by the target-only case named above, which hands over a corpus that loads.",
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023), so the repair lives in the target-only case."
+    },
+    {
+      "behaviour": "The three clock-refusal cases build the namespace by hand and so never exercise the parser, on either side.",
+      "matches_source": true,
+      "note": "They are about buildReportFromArgs's guard, which is below the parser and reachable by a library caller. The parser's own integer handling is pinned separately by a target-only case, which is coverage the source has no counterpart for.",
+      "where_a_fix_belongs": "nowhere: the two are different boundaries and both are now covered."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_subcommand_runs_end_to_end_and_renders_markdown",
+      "target_id": "test/measurement/cli.test.ts::end to end > the subcommand runs end to end and renders Markdown",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_json_rendering_carries_the_same_facts_from_the_command",
+      "target_id": "test/measurement/cli.test.ts::end to end > the JSON rendering carries the same facts from the command",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_command_is_mounted_on_the_top_level_cli",
+      "target_id": "test/measurement/cli.test.ts::end to end > the command is mounted on the top-level CLI",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_command_emits_no_verdict",
+      "target_id": "test/measurement/cli.test.ts::end to end > the command emits no verdict",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_aggregate_mode_is_stamped_weaker_on_the_command_output",
+      "target_id": "test/measurement/cli.test.ts::end to end > aggregate mode is stamped weaker on the command output",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_command_opens_no_writable_connection",
+      "target_id": "test/measurement/cli.test.ts::read-only by capability > the command opens no writable connection",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source records every `sqlite3.connect` the process makes and asserts each was a `file:...?mode=ro` URI opened with `uri=True`. better-sqlite3 accepts no URI filename, so continuo's first read-only mechanism is the driver's `readonly: true` open flag (D-0100), and the assertion is `readonly: true` on every open. The interception moves too: ESM bindings cannot be rebound from outside, so `vi.mock` replaces the driver MODULE for every importer, which preserves the property the source case is built on -- a writable handle opened by anyone under the command fails it. Measured: with openReadOnlyImpl lowered to `readonly: false`, this case goes red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_command_module_imports_no_other_opener",
+      "target_id": "test/measurement/cli.test.ts::read-only by capability > the command module imports no other opener",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The source asks the imported module object two questions -- `not hasattr(measurement_cli, 'sqlite3')` and `open_for_measurement.__module__` -- and an ES module object answers neither: it exposes only what it exports, and an import is not a property of it. The same two questions are put to the module's TEXT, which is where an import lives in this language: the import list must contain `./reader.js` and no opener, and the file must contain no `new Database`. Measured: with openDatabase imported into cli.ts, this case goes red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_database_the_reader_refuses_is_not_reported_over",
+      "target_id": "test/measurement/cli.test.ts::read-only by capability > a database the reader refuses is not reported over",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_clock_is_read_exactly_once_when_it_is_not_given",
+      "target_id": "test/measurement/cli.test.ts::the clock is read once, at the boundary > the clock is read exactly once when it is not given",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_clock_is_not_read_at_all_when_it_is_given",
+      "target_id": "test/measurement/cli.test.ts::the clock is read once, at the boundary > the clock is not read at all when it is given",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_clock_that_is_not_epoch_milliseconds_is_refused[True]",
+      "target_id": "test/measurement/cli.test.ts::the clock is read once, at the boundary > a clock that is not epoch milliseconds is refused[true]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_clock_that_is_not_epoch_milliseconds_is_refused[1.5]",
+      "target_id": "test/measurement/cli.test.ts::the clock is read once, at the boundary > a clock that is not epoch milliseconds is refused[1.5]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_clock_that_is_not_epoch_milliseconds_is_refused[1700000000000]",
+      "target_id": "test/measurement/cli.test.ts::the clock is read once, at the boundary > a clock that is not epoch milliseconds is refused[\"1700000000000\"]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_shadow_input_file_is_read_and_named",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > a shadow input file is read and named",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_object_shape_of_the_shadow_file_is_accepted",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > the object shape of the shadow file is accepted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_an_unreadable_shadow_file_refuses_rather_than_becoming_an_empty_input[{}]",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > an unreadable shadow file refuses rather than becoming an empty input[{}]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_an_unreadable_shadow_file_refuses_rather_than_becoming_an_empty_input[[1, 2]]",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > an unreadable shadow file refuses rather than becoming an empty input[[1, 2]]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_an_unreadable_shadow_file_refuses_rather_than_becoming_an_empty_input[\"run-9\"]",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > an unreadable shadow file refuses rather than becoming an empty input[\"run-9\"]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_corpus_without_its_commit_is_refused",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > a corpus without its commit is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_shipped_corpus_reaches_the_header",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > the shipped corpus reaches the header",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_declared_grace_reaches_the_report",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > a declared grace reaches the report",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_every_help_string_encodes_to_cp932",
+      "target_id": "test/measurement/cli.test.ts::cp932 > every help string is ASCII",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0113. Node has no cp932 encoder, so `text.encode('cp932')` has no counterpart. The source asserts BOTH `encode('cp932')` and `text.isascii()`; ASCII is a subset of cp932, so the port asserts the second and it implies the first. The walk itself is ported to helpStrings in src/cli/parser.ts, and a target-only case pins that the walk reaches the innermost parser -- without it this loop is vacuously green.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_the_help_of_the_mounted_subcommand_encodes_to_cp932",
+      "target_id": "test/measurement/cli.test.ts::cp932 > the help of the mounted subcommand is ASCII",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0113, as above. Here the port asserts STRICTLY MORE than its source, which checks only cp932-encodability for the filtered strings and not isascii(): there is no weaker check available in this runtime. Recorded as adapted rather than passing silently, because rule 0 makes a stronger assertion in a ported slot a divergence like any other. The source's filter (`measure` / `measurement` / `fingerprint` in the text) is carried across unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_help_runs_in_a_real_cp932_console",
+      "target_id": "test/measurement/cli.test.ts::cp932 > help runs in a real console and writes only ASCII bytes",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "D-0113. The source sets PYTHONIOENCODING=cp932 so the child's stdout raises on a character it cannot encode; Node writes UTF-8 whatever the console is, so there is no stream encoding to set and no exception to provoke. The port checks the bytes that actually left the process instead -- `--help` must write only bytes below 0x80, which are the same bytes in cp932 -- and keeps the source's other two assertions (exit 0, `--fingerprint` present) unchanged. It drives the BUILT dist/cli.js, which is why the case asserts that file exists first: section 10 instance 1 is the same subprocess-without-a-build hazard.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/measurement/test_measurement_cli.py::test_a_negative_declared_grace_is_refused_by_the_command",
+      "target_id": "test/measurement/cli.test.ts::the per-report declarations > a negative declared grace is refused by the command",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "mutation_sweep": {
+    "ran": "23 mutations, one per property the cases in this file claim to pin, across src/measurement/cli.ts, src/cli/parser.ts, src/cli.ts and the one line of src/measurement/reader.ts the read-only claim rests on. Harness kept at .sweep/ and not committed.",
+    "caught": 23,
+    "survivors": [],
+    "note": "The FIRST run of this sweep reported 21 of 21 caught, and eight of those verdicts were worthless: six mutations were `if (false)`, which TypeScript refuses, so the build failed and the harness read a failed run as a caught mutation, and two more had their JSON report mis-sliced because vitest prints its pretty failure output to the same stream. That is section 10's own hazard -- red for a reason other than the one being tested -- reached from inside the tool built to check for it. The harness now reports INCONCLUSIVE for a build that refuses a mutation and writes its report to a file rather than to stdout, and every always-false condition is written to survive the type-checker.",
+    "closed_survivors": [
+      {
+        "mutation": "half a corpus reference is accepted",
+        "verdict": "inherited blind spot, closed with a target-only test",
+        "note": "See inherited_limitations above."
+      },
+      {
+        "mutation": "an integer flag keeps only the safe-integer half of its guard",
+        "verdict": "the target-only case could not distinguish the two guards, widened",
+        "note": "`--period-start-ms 1.5` is refused by Number.isSafeInteger alone, and the case matched a message prefix both guards share. Widened to 0x10 (Number gives 16) and the empty string (Number gives 0 -- a period boundary quietly at the epoch), and the assertion now matches the whole message. Whitespace padding is deliberately NOT refused: `int(' 12 ')` is 12 in Python, so refusing it would make the port stricter than what it is a port of."
+      }
+    ]
+  },
+  "divergences": [
+    {
+      "decision": "D-0112",
+      "behaviour": "The CLI is parsed by a purpose-built parser rather than by argparse, and it accepts less than argparse does: long flags only, one value each, no positional arguments, no prefix matching, no nargs. It also refuses two command lines argparse accepts -- a flag given twice (argparse keeps the last) and an integer spelled `0x10` or `` (Python's int() refuses both, so this half is parity, not divergence).",
+      "matches_source": false,
+      "deliberate": true
+    },
+    {
+      "decision": "D-0113",
+      "behaviour": "The two cp932 help-string cases assert ASCII rather than cp932-encodability, and the subprocess case checks the bytes `--help` wrote rather than setting the child's stdout encoding. Node has neither a cp932 encoder nor a PYTHONIOENCODING equivalent.",
+      "matches_source": false,
+      "deliberate": true
+    },
+    {
+      "decision": "D-0100",
+      "behaviour": "`the command opens no writable connection` asserts the driver's readonly open flag rather than a `mode=ro` URI. Recorded here because this case is the one that asserts it on the whole call path.",
+      "matches_source": false,
+      "deliberate": true
+    },
+    {
+      "decision": "-",
+      "behaviour": "The top-level CLI mounts one subtree where interlock's mounts six; the other five name modules continuo has not ported.",
+      "matches_source": false,
+      "deliberate": true
+    }
+  ]
+}

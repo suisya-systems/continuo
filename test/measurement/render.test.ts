@@ -75,13 +75,11 @@ import {
   FingerprintModeRefused,
   FixtureSuiteRef,
   fingerprintDatabase,
-  PythonFloat,
   type ReportHeader,
 } from "../../src/measurement/provenance.js";
 import { openForMeasurement, ReadOnlyCapabilityRefused } from "../../src/measurement/reader.js";
 import {
   buildMeasurementReport,
-  cell,
   DuplicateSectionRefused,
   EMPTY_BLOCK,
   FINGERPRINT_TABLES,
@@ -111,18 +109,15 @@ import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { parametrize } from "../testkit/parametrize.js";
 import { patchSeam } from "../testkit/seams.js";
+import {
+  parseMarkdown,
+  parseReportJson,
+  REPORT_CLOCK,
+  VERDICT_WORDS,
+  walkJson,
+} from "./report-reading.js";
 
-const T0 = 1_700_000_000_000;
-const DAY_MS = 86_400_000;
-const PERIOD_START = T0;
-const PERIOD_END = T0 + DAY_MS;
-const GENERATED_AT = PERIOD_END + 60_000;
-
-/**
- * The vocabulary a verdict would be written in. Word boundaries, because
- * "passed" must fail this and "surpassed" is not the claim being policed.
- */
-const VERDICT_WORDS = /\b(pass|passes|passed|passing|fail|fails|failed|failing|go|no-go|nogo)\b/gi;
+const { GENERATED_AT, PERIOD_END, PERIOD_START, T0 } = REPORT_CLOCK;
 
 /**
  * Section 6's fields, as the document lists them, prefixed with the block the
@@ -302,130 +297,6 @@ function reportOver(
   } finally {
     connection.close();
   }
-}
-
-// --------------------------------------------------------------------------
-// two parsers written here, neither one a copy of the report's field list
-// --------------------------------------------------------------------------
-
-const ROW = /^\| `([^`]+)` \| (.*) \|$/;
-const BLOCK = /^### fact `([^`]+)`$/;
-
-/**
- * Read a rendered Markdown report back into `key -> value`.
- *
- * Knows the table and fence syntax and nothing about which facts exist, which is
- * what makes it usable as one side of an equality assertion.
- *
- * The fence is read off the opening line rather than assumed to be three
- * backticks, because `D-0111` widens it past any run of backticks the value
- * holds. A parser that looked for a literal ``` would stop at the value's own
- * text on exactly the report the widening exists for.
- */
-function parseMarkdown(text: string): Map<string, string> {
-  const facts = new Map<string, string>();
-  const lines = text.split("\n");
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index] as string;
-    const row = ROW.exec(line);
-    if (row !== null && row[1] !== "Fact") {
-      const key = row[1] as string;
-      expect(facts.has(key), `${key} appears twice in the Markdown`).toBe(false);
-      facts.set(key, row[2] as string);
-      index += 1;
-      continue;
-    }
-    const block = BLOCK.exec(line);
-    if (block !== null) {
-      const opening = lines[index + 1] as string;
-      expect(opening.startsWith("```"), opening).toBe(true);
-      const fence = opening.slice(0, opening.length - "text".length);
-      expect(/^`+$/.test(fence), opening).toBe(true);
-      const end = lines.indexOf(fence, index + 2);
-      expect(end, `the block for ${block[1]} is never closed`).toBeGreaterThan(index + 1);
-      facts.set(block[1] as string, lines.slice(index + 2, end).join("\n"));
-      index = end + 1;
-      continue;
-    }
-    index += 1;
-  }
-  return facts;
-}
-
-/**
- * `JSON.parse`, keeping Python's int/float distinction.
- *
- * See the module docstring: `JSON.parse` collapses `1.0` and `1` into one
- * `number`, and the two are two different renderings on both sides of the
- * equality assertion. The reviver reads each number's own source text -- the
- * only place the distinction survives -- and the availability of that text is
- * asserted rather than assumed, because falling back silently turns a missing
- * runtime feature into a rendering-shaped inequality.
- */
-function parseReportJson(text: string): unknown {
-  let sawSource = false;
-  const reviver = (_key: string, value: unknown, context?: { source?: string }): unknown => {
-    if (typeof value === "number") {
-      const source = context?.source;
-      if (source === undefined) {
-        return value;
-      }
-      sawSource = true;
-      return /[.eE]/.test(source) ? new PythonFloat(value) : value;
-    }
-    return value;
-  };
-  const parsed: unknown = JSON.parse(text, reviver as (key: string, value: unknown) => unknown);
-  expect(
-    sawSource,
-    "JSON.parse did not hand the reviver the numbers' source text, so a float " +
-      "cannot be told from an int here; this runtime is too old for this test",
-  ).toBe(true);
-  return parsed;
-}
-
-/**
- * Flatten a parsed JSON report into `dotted key -> rendered value`.
- *
- * Mappings recurse; every other leaf is rendered with the module's own cell
- * formatter, except a multi-line string, which the Markdown carries verbatim in
- * a fenced block and is therefore compared verbatim.
- */
-function walkJson(payload: unknown, prefix = ""): Map<string, string> {
-  const flat = new Map<string, string>();
-  if (isPlainObject(payload)) {
-    const entries = Object.entries(payload);
-    if (entries.length === 0) {
-      flat.set(prefix, cell(null));
-      return flat;
-    }
-    for (const [key, value] of entries) {
-      for (const [nested, rendered] of walkJson(value, prefix === "" ? key : `${prefix}.${key}`)) {
-        flat.set(nested, rendered);
-      }
-    }
-    return flat;
-  }
-  if (typeof payload === "string" && payload.includes("\n")) {
-    // The Markdown carries this in a fenced block, one escaped line per line
-    // (D-0109 applied to a block; see `renderMarkdown`). Compared through the
-    // same escape, so the equality is over the facts and not over which
-    // rendering happened to be given a hostile value.
-    flat.set(prefix, payload.split("\n").map(reportValue).join("\n"));
-    return flat;
-  }
-  flat.set(prefix, cell(payload as ReportValue));
-  return flat;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    !(value instanceof PythonFloat)
-  );
 }
 
 /**

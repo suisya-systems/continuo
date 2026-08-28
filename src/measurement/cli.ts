@@ -1,0 +1,397 @@
+/**
+ * `continuo measure report` -- the harness's only entry point.
+ *
+ * Mounted into the top-level CLI by `src/cli.ts`. Ported from interlock
+ * `src/claude_org_runtime/measurement/cli.py` at `65f36c5`; the case mapping and
+ * every divergence are recorded in `parity/measurement.cli.ledger.json`.
+ *
+ * Four failures shape this module, and each one is closed by a mechanism rather
+ * than by a rule an operator has to remember.
+ *
+ * **1. A report tool that writes.** `measurement-harness.md` section 1 records
+ * where this comes from: v1's `tools/org_metrics_report.py` documents that the
+ * ordinary connect helper applies `journal_mode=WAL` and "would happily run
+ * forward migrations", both of which are writes -- so a report run against
+ * production mutated production. This module therefore imports
+ * {@link openForMeasurement} and **nothing else that opens a database**: it does
+ * not import `better-sqlite3`, does not know the open flags, and has no path
+ * that could ask for a writable handle. `ACCEPTANCE.md` section 3 condition 5
+ * asks for read-only by capability, and a CLI that could construct a writable
+ * connection has a convention instead.
+ *
+ * **2. A clock read below the boundary.** `time-base-policy.md` section 2 rule 2
+ * puts the clock in the caller's hands. It is read **once**, in {@link run}, and
+ * injected downwards; every function under it takes `nowMs`.  A second read
+ * would put two instants in one report -- the cohort selected at one, the
+ * provenance header stamped at another -- and the report would name neither.
+ * {@link requireEpochMs} holds the same line `migrator`'s own guard holds,
+ * because `--now-ms` reaches it from a string an operator typed.
+ *
+ * **3. A per-report declaration silently defaulted.** The grace value, the v1
+ * shadow input, the labelled corpus and the fingerprint mode are declared per
+ * report (sections 3.5, 3.3, 6). Each is an explicit argument here. Where one
+ * can be derived -- grace from the policy revision's reconcile period -- the
+ * derivation is stamped as its source in the report rather than presented as a
+ * declaration, and where one cannot be derived, its absence is stated in words
+ * that travel in the rendered output.
+ *
+ * **ASCII only.** Every string in this file, help text included, reaches
+ * `--help` on a cp932 console. A single em-dash there is a crash on the console
+ * this report is read from, and an in-process capture cannot see it, so the
+ * suite asserts every help string is ASCII *and* runs `--help` in a real
+ * subprocess.
+ *
+ * **4. A report over a database that moved while it was being read.** Every read
+ * this command makes happens inside one snapshot, opened by
+ * {@link buildMeasurementReport} (`measurement-harness.md` section 6): without
+ * it the cohort, the AC-9 aggregation and the `db_fingerprint` would each see
+ * their own state of the database, and the header would attest content the
+ * figures never came from. **The operational cost is real and is stated in
+ * `--help`**: the production databases here are not in WAL, so the report holds
+ * a SQLite SHARED lock and every writer on the control plane -- watcher,
+ * dispatcher, CI ingest -- blocks with "database is locked" until the report
+ * finishes. Run a long period against a copy, or at a quiet moment.
+ *
+ * **No verdict.** `Q-0005` is open (section 7). This command prints measurements
+ * and returns 0 when it produced a report; the exit code is "the report was
+ * produced", never "the numbers were acceptable".
+ */
+
+import { readFileSync } from "node:fs";
+import { ArgumentParser, dispatch, type Namespace, type Subparsers } from "../cli/parser.js";
+import { loadCorpus } from "./fixtures.js";
+import {
+  FINGERPRINT_CONTENT,
+  FINGERPRINT_MODES,
+  FixtureSuiteRef,
+  fixtureSuiteRef,
+} from "./provenance.js";
+import { ControlPlaneRefusal, openForMeasurement } from "./reader.js";
+import {
+  buildMeasurementReport,
+  MARKDOWN,
+  type MeasurementReport,
+  RENDERINGS,
+  render,
+  V1ShadowInput,
+} from "./render.js";
+
+/**
+ * Stated in the report when no labelled corpus was named.
+ *
+ * `FixtureSuiteRef` refuses an unexplained absence for the reason this sentence
+ * exists: a missing corpus reference reads as a report that forgot to record
+ * one.
+ */
+export const NO_CORPUS_REASON =
+  "no labelled corpus was named on the command line (--fixture-corpus), and " +
+  "this report measures no recall figure that one would qualify";
+
+/**
+ * Stated in the report when no v1 shadow input was named.
+ *
+ * `D-0013` leaves no v1-owned run in this database, so an empty `v1_owned`
+ * bucket with no note is a claim about v1 that this database cannot support.
+ */
+export const NO_SHADOW_REASON =
+  "no v1 shadow input was named on the command line (--v1-shadow-run-ids), so " +
+  "the v1_owned exclusion bucket is empty for want of an input rather than " +
+  "because v1 owned no run in this period";
+
+// ASCII only: these reach --help on a cp932 console.
+const DB_HELP =
+  "path to the production control plane database. Opened read-only by " +
+  "capability (the driver's read-only open flag plus PRAGMA query_only) and " +
+  "never migrated. The report is read inside one held transaction so that its " +
+  "figures and its fingerprint come from one state of the database; these " +
+  "databases are not in WAL, so that transaction blocks every writer on the " +
+  "control plane for as long as the report runs. Report a long period against " +
+  "a copy.";
+const PERIOD_START_HELP = "start of the report period, epoch milliseconds, inclusive.";
+const PERIOD_END_HELP =
+  "end of the report period, epoch milliseconds, exclusive. The period is " +
+  "half-open [start, end).";
+const NOW_HELP =
+  "the clock, epoch milliseconds, stamped as generated_at_ms and used to " +
+  "check the period has closed. Read once from the system clock when omitted; " +
+  "nothing below this command reads a clock.";
+const FINGERPRINT_HELP =
+  "database fingerprint mode. 'content' (default) hashes the ordered rows of " +
+  "every table read and establishes identity of content. 'aggregate' is the " +
+  "weaker form: it hashes counts and maxima only, it does NOT establish " +
+  "identity of content (an in-place UPDATE moves no count), and a report made " +
+  "with it is stamped as such in both renderings.";
+const GRACE_HELP =
+  "observation-window grace in milliseconds, declared for this report. " +
+  "Omitted, it is resolved from the policy revision in force as one reconcile " +
+  "period and the report records that this is where it came from. A negative " +
+  "value is refused: it shortens the observation window below the budget the " +
+  "detector is held to.";
+const SHADOW_HELP =
+  "path to a JSON file holding the v1 shadow input: a list of v1-owned run " +
+  "ids, or an object with a 'run_ids' list. Those runs are excluded from the " +
+  "AC-9 cohort as v1_owned. Omitted, the report states that it had no shadow " +
+  "input rather than reporting an empty bucket unexplained.";
+const CORPUS_HELP =
+  "path to the labelled fixture corpus root, recorded in the header as " +
+  "fixture_suite_ref. Requires --fixture-commit.";
+const COMMIT_HELP =
+  "commit of the checkout the labelled corpus came from. Not derived: a " +
+  "commit read from whatever tree this process runs in would name the wrong " +
+  "cases.";
+const FORMAT_HELP =
+  "rendering to write. Both carry the same facts, including the section 6 " +
+  "provenance header; 'markdown' also carries the human narrative as fenced " +
+  "blocks and 'json' as string fields.";
+
+/**
+ * The two effects this module has on the world, as a replaceable record.
+ *
+ * Interlock's suite reaches `measurement_cli.time.time` with `monkeypatch` and
+ * counts the reads; ESM bindings cannot be rebound from outside, so the clock is
+ * reached through this record instead and the cases replace the entry. `write`
+ * is here for the same reason `capsys` exists on the source side -- the ported
+ * cases read what the command printed -- and keeping both on one record means
+ * the module has exactly one place a reader has to check for an effect.
+ *
+ * Not re-exported from `src/index.ts`: a seam for the tests that own this
+ * module, not public API.
+ */
+export const cliSeams = {
+  /**
+   * The only clock read in the harness, in epoch milliseconds.
+   *
+   * Interlock spells this `int(time.time() * 1000)`; `Date.now()` is already an
+   * integer count of milliseconds, so the multiply and the truncation that
+   * could disagree about a boundary are both gone rather than reproduced.
+   */
+  nowMs: (): number => Date.now(),
+  /** Where a rendered report goes. */
+  write: (text: string): void => {
+    process.stdout.write(text);
+  },
+};
+
+/**
+ * Reject a clock value that is not an integer count of milliseconds.
+ *
+ * The same guard `migrator`'s `requireEpochMs` applies to a write, applied here
+ * to a read for the same reason -- and for one more that is the port's own.
+ * Python excludes `float` and `str` by type and has to exclude `bool` by hand,
+ * because `bool` is an `int` there and `now_ms=True` is the instant 1 ms after
+ * the epoch. TypeScript's `number` excludes `bool` and `str` at the type level
+ * and admits `NaN`, `Infinity` and `1.5`, which Python's `int` does not (rule 9
+ * of `docs/test-translation-conventions.md`). `Number.isInteger` is what closes
+ * the three the port opened, and the `typeof` check is what closes the two the
+ * type only closes for callers who type-check.
+ */
+function requireEpochMs(nowMs: number): void {
+  if (typeof nowMs !== "number" || !Number.isInteger(nowMs)) {
+    throw new TypeError(
+      `nowMs must be an int of epoch milliseconds, got ${describeType(nowMs)}; ` +
+        `the clock is read once at this boundary and injected, never read ` +
+        `again below it`,
+    );
+  }
+}
+
+function describeType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+/**
+ * The v1 run ids in `path`, as a list or under a `run_ids` key.
+ *
+ * Both shapes are accepted and neither is guessed at: anything else refuses,
+ * because a file this function could not read as run ids would otherwise become
+ * an empty shadow input, which is the flattering answer arriving as absent data.
+ */
+function readShadowRunIds(path: string): readonly string[] {
+  let payload: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (isPlainObject(payload)) {
+    // The key is this module's own literal, not a caller's, so the inherited-key
+    // hazard rule 9 names for caller-keyed lookups does not arise; `Object.hasOwn`
+    // is used anyway so that a document carrying no `run_ids` cannot be answered
+    // by `Object.prototype`.
+    payload = Object.hasOwn(payload, "run_ids") ? payload["run_ids"] : undefined;
+  }
+  if (!Array.isArray(payload) || !payload.every((item) => typeof item === "string")) {
+    throw new ControlPlaneRefusal(
+      `${path} does not hold the v1 shadow input: expected a JSON list of run ` +
+        `id strings, or an object with a 'run_ids' list of them`,
+    );
+  }
+  return payload as readonly string[];
+}
+
+/** A JSON object, told apart from the array and the null that share its `typeof`. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The arguments this command reads, named as the parser leaves them. */
+export interface ReportArgs extends Namespace {
+  readonly db: string;
+  readonly periodStartMs: number;
+  readonly periodEndMs: number;
+  readonly nowMs?: number | null;
+  readonly fingerprint?: string | null;
+  readonly graceMs?: number | null;
+  readonly v1ShadowRunIds?: string | null;
+  readonly fixtureCorpus?: string | null;
+  readonly fixtureCommit?: string | null;
+  readonly format?: string | null;
+}
+
+function fixtureSuite(args: ReportArgs): FixtureSuiteRef {
+  const corpus = args.fixtureCorpus ?? null;
+  const commit = args.fixtureCommit ?? null;
+  if (corpus === null && commit === null) {
+    return FixtureSuiteRef.absent(NO_CORPUS_REASON);
+  }
+  if (corpus === null || commit === null) {
+    // Half a reference is worse than none: a commit with no corpus names a tree
+    // nothing was read from, and a corpus with no commit names cases nobody can
+    // find again.
+    throw new ControlPlaneRefusal(
+      "--fixture-corpus and --fixture-commit are given together or not at " +
+        "all; a corpus without its commit cannot be found again, and a commit " +
+        "without a corpus names a tree this report read nothing from",
+    );
+  }
+  return fixtureSuiteRef(loadCorpus(String(corpus)), { commit: String(commit) });
+}
+
+function shadowInput(args: ReportArgs): V1ShadowInput {
+  const path = args.v1ShadowRunIds ?? null;
+  if (path === null) {
+    return V1ShadowInput.absent(NO_SHADOW_REASON);
+  }
+  const target = String(path);
+  return V1ShadowInput.observed(target, readShadowRunIds(target));
+}
+
+/**
+ * Open the database read-only, build the report, close the handle.
+ *
+ * `nowMs` is a required option and is never defaulted here: this function is
+ * below the boundary, and the boundary is {@link run}.
+ *
+ * The read snapshot is not opened here: it belongs to
+ * {@link buildMeasurementReport}, which holds it across every read including the
+ * fingerprint. This function only opens and closes the handle, so there is no
+ * ordering for a caller of this module to get wrong -- and no way to obtain the
+ * pre-snapshot behaviour by forgetting something.
+ *
+ * The connection comes from {@link openForMeasurement} and from nowhere else.
+ * That is the whole of condition 5's enforcement in this command: there is no
+ * other opener imported, so there is no code path -- including an error path --
+ * on which this process holds a handle that can write.
+ */
+export function buildReportFromArgs(
+  args: ReportArgs,
+  options: { readonly nowMs: number },
+): MeasurementReport {
+  requireEpochMs(options.nowMs);
+  const connection = openForMeasurement(String(args.db));
+  try {
+    return buildMeasurementReport(connection, {
+      dbPath: String(args.db),
+      periodStartMs: args.periodStartMs,
+      periodEndMs: args.periodEndMs,
+      nowMs: options.nowMs,
+      fixtureSuite: fixtureSuite(args),
+      v1Shadow: shadowInput(args),
+      graceMs: args.graceMs ?? undefined,
+      fingerprintMode: args.fingerprint ?? FINGERPRINT_CONTENT,
+    });
+  } finally {
+    connection.close();
+  }
+}
+
+/**
+ * The clock boundary: read it once here, inject it, render, write.
+ *
+ * Returns 0 when a report was produced. That is a statement about this process
+ * and not about the numbers in the report -- `Q-0005` is open, and an exit code
+ * that meant "acceptable" would answer it (module docstring).
+ */
+export function run(args: ReportArgs): number {
+  // The only clock read in the harness. Everything below takes it as an
+  // argument, so a report cannot be stamped at one instant and selected at
+  // another.
+  const nowMs = args.nowMs ?? cliSeams.nowMs();
+  const report = buildReportFromArgs(args, { nowMs });
+  cliSeams.write(render(report, args.format ?? MARKDOWN));
+  return 0;
+}
+
+/** Mount the `report` flags. Every per-report declaration is explicit. */
+export function addArguments(parser: ArgumentParser): void {
+  parser.addArgument({ flag: "--db", required: true, help: DB_HELP });
+  parser.addArgument({
+    flag: "--period-start-ms",
+    type: "int",
+    required: true,
+    help: PERIOD_START_HELP,
+  });
+  parser.addArgument({
+    flag: "--period-end-ms",
+    type: "int",
+    required: true,
+    help: PERIOD_END_HELP,
+  });
+  parser.addArgument({ flag: "--now-ms", type: "int", help: NOW_HELP });
+  parser.addArgument({
+    flag: "--fingerprint",
+    choices: FINGERPRINT_MODES,
+    fallback: FINGERPRINT_CONTENT,
+    help: FINGERPRINT_HELP,
+  });
+  parser.addArgument({ flag: "--grace-ms", type: "int", help: GRACE_HELP });
+  parser.addArgument({ flag: "--v1-shadow-run-ids", help: SHADOW_HELP });
+  parser.addArgument({ flag: "--fixture-corpus", help: CORPUS_HELP });
+  parser.addArgument({ flag: "--fixture-commit", help: COMMIT_HELP });
+  parser.addArgument({
+    flag: "--format",
+    choices: RENDERINGS,
+    fallback: MARKDOWN,
+    help: FORMAT_HELP,
+  });
+  parser.setDefaults({ func: run as (values: Namespace) => number });
+}
+
+/** Mount `report` under the caller's `measure` subcommand table. */
+export function addSubparsers(sub: Subparsers): void {
+  const reportParser = sub.addParser("report", {
+    help:
+      "Measure one report period against a production control plane and " +
+      "render it. Read-only by capability; states measurements only.",
+  });
+  addArguments(reportParser);
+}
+
+/** The standalone parser, for driving this command without the top-level CLI. */
+export function buildParser(): ArgumentParser {
+  const parser = new ArgumentParser({
+    prog: "continuo measure",
+    description:
+      "Measurement harness for the Interlock control plane " +
+      "(docs/measurement-harness.md). Read-only by capability.",
+  });
+  addSubparsers(parser.addSubparsers());
+  return parser;
+}
+
+/** Parse `argv` and run the named command. */
+export function main(argv: readonly string[]): number {
+  return dispatch(buildParser(), argv, {
+    out: (text) => cliSeams.write(text),
+    err: (text) => {
+      process.stderr.write(text);
+    },
+  });
+}

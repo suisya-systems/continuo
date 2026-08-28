@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["src/index.ts", "scripts/*.mjs", "test/**/*.test.ts", "vitest.config.ts"],
+  "entry": ["src/index.ts", "src/cli.ts", "scripts/*.mjs", "test/**/*.test.ts", "vitest.config.ts"],
   "project": ["src/**/*.ts", "scripts/**/*.mjs", "test/**/*.ts"],
   "ignoreExportsUsedInFile": true,
   "tags": ["-parityonly"],
