@@ -96,6 +96,88 @@ export class PyValueError extends Error {
 }
 
 /**
+ * Python's `KeyError`, for a mapping lookup of a name that is not there.
+ *
+ * Kept distinct from {@link PyValueError} because interlock's callers keep them
+ * distinct and one ported case reads each half: `render_role` raises `KeyError`
+ * for an unknown role and `ValueError` for an unknown `role_kind`, and the
+ * settings CLI catches `(KeyError, ValueError)` together and prints
+ * `exc.args[0]` -- the RAW text, not `str(exc)`.
+ *
+ * That distinction is the reason `args` is modelled at all. CPython's
+ * `str(KeyError("x"))` is `"'x'"` -- the repr of the argument, quotes included,
+ * which is `KeyError`'s single deviation from every other exception -- so a
+ * port that put the message only in `.message` would be reporting the string
+ * CPython would have QUOTED. `args[0]` is the value the source reads, so it is
+ * the value modelled exactly; `message` carries the same text unquoted, because
+ * that is what a JavaScript stack trace prints and no ported case reads it.
+ */
+export class PyKeyError extends Error {
+  /** CPython's `BaseException.args`. */
+  readonly args: readonly [unknown];
+
+  constructor(argument: string) {
+    super(argument);
+    this.name = "PyKeyError";
+    this.args = [argument];
+    // Extending a built-in under a downlevel emit target loses the prototype
+    // chain, and `instanceof` then silently reports false -- which would turn
+    // the CLI's `except (KeyError, ValueError)` into an escaping error where
+    // the source prints `error: ...` and returns 2.
+    Object.setPrototypeOf(this, PyKeyError.prototype);
+  }
+}
+
+/**
+ * `dict.get(key)` on a JSON-parsed object: OWN keys only.
+ *
+ * A plain `obj[key]` walks the prototype chain, and every object these modules
+ * read came out of `JSON.parse`, whose objects inherit from `Object.prototype`.
+ * The concrete failure that motivated this: rendering the role named
+ * `"__proto__"` returned `Object.prototype` from `roles[role]`, which is an
+ * object, so it passed the shape gate and the renderer went on to refuse with
+ * `sandbox-profile-absent` + `hook-absent` + `empty-fence` instead of the
+ * source's single `role-absent`. Reason sets are what the parity ledger
+ * compares, so a wrong-but-still-refusing answer is still a divergence -- and
+ * the same lookup shape one key-rename later (an axis called `constructor`, a
+ * mode field called `toString`) turns into a refusal that fires on every
+ * document, or one that never fires at all.
+ *
+ * The settings generator reads its whole input this way for the same reason: a
+ * role body is caller-supplied JSON, and `raw_role.get("sandbox")` must not
+ * find `Object.prototype.constructor` for a role that never authored one.
+ */
+export function getOwn(obj: unknown, key: string): unknown {
+  if (typeof obj !== "object" || obj === null) {
+    return undefined;
+  }
+  return Object.hasOwn(obj, key) ? (obj as Record<string, unknown>)[key] : undefined;
+}
+
+/**
+ * `out[key] = value` as Python's `dict.__setitem__`: always an own, enumerable
+ * data property.
+ *
+ * Plain assignment to the literal key `"__proto__"` invokes the inherited
+ * accessor instead of creating a property: the key VANISHES from the rebuilt
+ * object (and, if its value is an object, silently repoints the prototype).
+ * Both the fence renderer and the settings generator rebuild caller-authored
+ * bodies key by key -- `stripMeta`, `substitute`, `deepSortKeys`, `_substitute`,
+ * the `sandbox_by_pattern` template copy -- so a dropped key there is a
+ * document rendered without a section its author wrote, which is the
+ * silent-narrowing direction both modules exist to refuse. Python's dict
+ * comprehension keeps `"__proto__"` as an ordinary key; so does this.
+ */
+export function setOwn(out: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(out, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
  * Python's truthiness.
  *
  * False for `None` (here: `undefined`/`null`), `False`, `0`, `-0`, `NaN`,

@@ -210,6 +210,57 @@ changes; the durable check stays `pyjson.number_documents`.
 `D-0211` records why it is a file rather than a number in a commit message, and what a sweep run
 only over the SHIPPED role document failed to see.
 
+### 2e. `os.path`, both namespaces
+
+2d covers the `posixpath` half the FENCE needs -- `normpath` and `expanduser`, the two functions
+`rules._normalize_path` composes. The SETTINGS generator reads far more of `os.path` than that, and
+its decisions turn on the answers rather than merely being implemented with them:
+
+- `_is_inside_root` decides whether a Layer 3 deny entry escaped the sandbox read roots by composing
+  `normpath` with an `os.sep` boundary test. A `normpath` that keeps a trailing separator makes the
+  equality half of that test stop firing, and the entry is then silently kept -- or, one branch
+  over, silently dropped. A dropped deny is a credential file that stopped being denied.
+- `_kept_entry_string` emits `os.path.join(anchor_base, path)` as the literal string that lands in
+  `settings.local.json`, which the bwrap launcher consumes as a concrete path.
+- `_absolute_symlink_in_chain` walks a path with `splitdrive`, `join`, `dirname`, `os.sep` and
+  `os.altsep`, and its answer decides whether a deny path is rewritten to its realpath or left in a
+  form that aborts the sandbox launch. A failed launch is not fail-closed: Claude Code's documented
+  response is to retry the command with `dangerouslyDisableSandbox`.
+
+`os.path` is a **platform choice** -- Python binds the name to `posixpath` or `ntpath` at import
+time -- so `src/fencing/pypath.ts` transcribes both and dispatches on `process.platform` at call
+time, exactly as `expanduser` already did (`D-0200`, `D-0213`).
+
+- `scripts/oracle/dump_ospath.py` asks CPython for `normpath`, `isabs`, `split`, `splitdrive`,
+  `dirname`, `basename` and `join` over every input in `parity/oracle/ospath-corpus.json`, **from
+  both namespaces**, and writes `parity/oracle/ospath-vector.json`.
+- `test/settings/ospath-oracle.test.ts` asserts both halves at every position, **on every matrix
+  cell**. That is the point of dumping both from one interpreter: `ntpath` is importable on Linux
+  and its answers do not depend on the host, so a Windows-only check would leave the half this port
+  ships to Windows unverified on the cells where most runs happen.
+
+The corpus is committed and hand-authored, like 2d's, and carries the shapes where the two
+namespaces disagree -- drive letters, UNC roots, `\\?\` prefixes, mixed separators, the leading
+`//` POSIX reserves -- because a corpus on which they never differ would let one transcription stand
+in for the other. The vector's own vacuity guard asserts exactly that: `ntpath` and `posixpath` must
+disagree somewhere in `normpath`, `splitdrive` and `join`.
+
+Regenerate with, from the repository root:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/oracle/dump_ospath.py \
+  parity/oracle/ospath-vector.json
+```
+
+**What this face deliberately does not cover: `realpath`.** It is a function of the filesystem, and a
+static vector cannot pin one. `posixRealpath` is a transcription of `posixpath.realpath`'s non-strict
+algorithm; `ntRealpath` is an **adaptation**, because `ntpath.realpath` is written on
+`nt._getfinalpathname`, a Win32 API with no user-space equivalent to transcribe -- the structure of
+CPython's non-strict walk-back is reproduced around Node's `fs.realpathSync.native`, and what is not
+reproduced is listed at the function. It is pinned by the settings suite instead, which builds a real
+directory and, where the layout has to be a symlinked one, injects `realpathFn` exactly as
+interlock's own tests do.
+
 ## 3. What is normalised, and why each part is there
 
 The dump is not "whatever the database happens to return". Every element of the shape is a decision

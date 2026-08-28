@@ -892,7 +892,23 @@ describe("pyIterate's array branch drops the record, provably harmlessly (target
     // Walked RECURSIVELY. The directory is flat today, and a proof that holds
     // only while it stays flat is one `src/fencing/helpers/` away from being
     // false with nothing going red.
-    const root = join(import.meta.dirname, "..", "..", "src", "fencing");
+    //
+    // -- WIDENED FROM `src/fencing` TO `src` (D-0213) -- and the reason is the
+    // same hazard one level up. This census bounds "who consumes `pyIterate`",
+    // and it was walking the directory the consumers happened to live in rather
+    // than the directory they could live in. `src/settings/generator.ts` then
+    // landed as an eighth consumer -- the eighth this decision's own proof names
+    // as an expiry condition -- and every assertion here stayed GREEN, because
+    // the new consumer was outside the root. A check that answers "these are all
+    // of them" must not take its own scope from where the answer used to be.
+    //
+    // The settings consumer is the interesting row: unlike the seven in
+    // `src/fencing`, its result DOES reach `pyJsonDumps`. It is safe because it
+    // never uses the bare copy -- `pyList` wraps `pyIterate` in
+    // `carryNumberSpellings` at the call site -- which is the classification
+    // this test exists to force before a call site is added. See the header of
+    // `pyjson.ts`.
+    const root = join(import.meta.dirname, "..", "..", "src");
     const counts: [string, number][] = [];
     const walk = (dir: string, prefix: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
@@ -926,14 +942,19 @@ describe("pyIterate's array branch drops the record, provably harmlessly (target
     // all-string `FenceRule`s. `pysemantics.ts` 3 = the declaration + `pyDict`'s
     // own two, which read each spelling off `items[index]` -- the ORIGINAL
     // element, never the copy -- which is exactly this drop, already handled.
+    // `settings/generator.ts` 2 = one import specifier + `pyList`, the one
+    // consumer whose result reaches a serialiser and which therefore carries
+    // the record itself rather than relying on the copy.
     //
     // A new FILE referencing the name adds a row here, and a new reference in
     // one of these three changes its count; either way the enumeration in
     // `pyjson.ts`'s header has to be re-read before the suite goes green.
     expect(counts).toStrictEqual([
-      ["pysemantics.ts", 3],
-      ["renderer.ts", 5],
-      ["state.ts", 2],
+      ["fencing/pysemantics.ts", 3],
+      ["fencing/renderer.ts", 5],
+      ["fencing/state.ts", 2],
+      // The eighth consumer: one import specifier plus `pyList`'s single call.
+      ["settings/generator.ts", 2],
     ]);
   });
 

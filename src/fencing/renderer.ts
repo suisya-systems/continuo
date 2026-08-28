@@ -32,6 +32,7 @@ import { compilePythonRegex } from "./pyregex.js";
 import { pyRepr } from "./pyrepr.js";
 import {
   carryNumberSpellings,
+  getOwn,
   isPlainObject,
   type PyNumberSpelling,
   pyEntries,
@@ -48,6 +49,7 @@ import {
   pyTypeNameOf,
   rememberKeyOrder,
   rememberNumberSpellings,
+  setOwn,
 } from "./pysemantics.js";
 import {
   Fence,
@@ -1251,50 +1253,6 @@ function deepSortKeys(value: unknown): unknown {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * `dict.get(key)` on a JSON-parsed object: OWN keys only.
- *
- * A plain `obj[key]` walks the prototype chain, and every object this module
- * reads came out of `JSON.parse`, whose objects inherit from
- * `Object.prototype`. The concrete failure that motivated this: rendering
- * the role named `"__proto__"` returned `Object.prototype` from
- * `roles[role]`, which is an object, so it passed the shape gate and the
- * renderer went on to refuse with `sandbox-profile-absent` + `hook-absent` +
- * `empty-fence` instead of the source's single `role-absent`. Reason sets
- * are what the parity ledger compares, so a wrong-but-still-refusing answer
- * is still a divergence -- and the same lookup shape one key-rename later
- * (an axis called `constructor`, a mode field called `toString`) turns into
- * a refusal that fires on every document, or one that never fires at all.
- */
-function getOwn(obj: unknown, key: string): unknown {
-  if (typeof obj !== "object" || obj === null) {
-    return undefined;
-  }
-  return Object.hasOwn(obj, key) ? (obj as Record<string, unknown>)[key] : undefined;
-}
-
-/**
- * `out[key] = value` as Python's `dict.__setitem__`: always an own,
- * enumerable data property.
- *
- * Plain assignment to the literal key `"__proto__"` invokes the inherited
- * accessor instead of creating a property: the key VANISHES from the rebuilt
- * object (and, if its value is an object, silently repoints the prototype).
- * These helpers rebuild the role body -- `stripMeta`, `substitute`,
- * `deepSortKeys` -- so a dropped key there is a fence rendered without a
- * section its author wrote, which is the silent-narrowing direction the
- * whole module exists to refuse. Python's dict comprehension keeps
- * `"__proto__"` as an ordinary key; so does this.
- */
-function setOwn(out: Record<string, unknown>, key: string, value: unknown): void {
-  Object.defineProperty(out, key, {
-    value,
-    writable: true,
-    enumerable: true,
-    configurable: true,
-  });
 }
 
 /**

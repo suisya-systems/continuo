@@ -79,8 +79,8 @@
  *   empty and nothing goes red when one forgets. **Count the BRANCHES that
  *   build a container, not the functions** -- a carried function can hide an
  *   uncarried branch, which is how `pyDict` stayed on the list while half of it
- *   was broken. The ten branches in this port, enumerated by D-0212's
- *   exhaustive sweep of `src/fencing`:
+ *   was broken. The ten branches in `src/fencing`, enumerated by D-0212's
+ *   exhaustive sweep of it (`src/settings` adds thirteen more, below):
  *
  *   Nine CARRY the record. Six do it with `carryNumberSpellings`, next to the
  *   `rememberKeyOrder` call they already made for the same reason --
@@ -109,7 +109,29 @@
  *   the carry would ARM a trap rather than close one, because a caller may
  *   reorder the copy (`renderer.ts` sorts it) and an index-keyed record does
  *   not survive reordering. **The proof expires** if `pysemantics` is exported
- *   or an eighth call site appears; both halves are pinned.
+ *   or an eighth call site appears; both halves are pinned. An eighth HAS
+ *   since appeared, in `src/settings` -- it is classified in the next
+ *   paragraph, and the census that pins the first half was widened to reach
+ *   the directory it lives in.
+ *
+ *   `../settings/generator.ts` is **thirteen** further branches, enumerated in
+ *   that module's own header (D-0213) rather than repeated here, because the
+ *   settings renderer rebuilds a document at every level it touches. Twelve
+ *   carry wholesale; the thirteenth -- the KEPT deny list -- carries ELEMENT BY
+ *   ELEMENT, and it is the one shape where a wholesale carry is not merely
+ *   absent but WRONG: the list is a FILTERED copy, so suppressing element 0
+ *   moves element 1 into its slot and the carried record hands the survivor the
+ *   spelling of the entry that was dropped.
+ *
+ *   That module is also the **eighth `pyIterate` consumer**, and the one the
+ *   proof above has to be read against: unlike the seven in `src/fencing`, its
+ *   result DOES reach `pyJsonDumps` -- a kept deny array is serialised straight
+ *   into `settings.local.json`. It is safe because it does not use the bare
+ *   copy: `pyList` wraps `pyIterate` in `carryNumberSpellings` at the call site,
+ *   which is exactly the classification D-0212 asks of a new call site before it
+ *   is added. Note what this does NOT do -- it does not add the carry inside
+ *   `pyIterate`, which would arm the reordering trap the proof describes for the
+ *   seven that reorder or discard the copy.
  *
  *   **Any new rebuild site has to carry the record, or state a proof like the
  *   one above, and either way has to be pinned.** D-0210 shipped with
@@ -121,7 +143,7 @@
  *   `FenceLedger.append`, which its own decision entry had already counted as
  *   the seventh. Three drafts, three undercounts, each one caught by a wider
  *   sweep than the last: that is why D-0212 enumerated mechanically rather than
- *   by reading this paragraph. See D-0211 and D-0212.
+ *   by reading this paragraph. See D-0211, D-0212 and D-0213.
  * - `pyStr` still renders an integral float as an int, which is visible only
  *   for a role document that spells `role_kind` or `permission_mode` as a
  *   number. Recorded there rather than fixed in passing.

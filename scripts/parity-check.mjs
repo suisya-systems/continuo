@@ -78,6 +78,7 @@ const LEDGERS = [
   "parity/fencing.deny-hook.ledger.json",
   "parity/fencing.restart.ledger.json",
   "parity/fencing.spawn-precondition.ledger.json",
+  "parity/settings.settings-generator.ledger.json",
 ];
 
 /**
