@@ -963,9 +963,33 @@ export class ClaudeCliSessionProvider extends SessionProvider {
    * thread -- so the source gets mutual exclusion from its language. Without
    * this a `readState` could interleave at any `await` inside `stop` and
    * observe a half-finished ladder: signalled, not yet waited for, the group
-   * not yet swept. Neither `probeCapabilities` nor the observer fan-out is
-   * queued: both are synchronous (D-0301 part 2), so there is no turn at which
-   * anything could interleave with them.
+   * not yet swept. **Neither `probeCapabilities` nor the observer fan-out is queued, and
+   * the reason is not the one it looks like.** Both are synchronous (D-0301
+   * part 2), so nothing can interleave *into* them -- but that answers the
+   * wrong question. The hazard a synchronous probe carries is the opposite
+   * one: `start` runs the gate *before* entering this queue, so a `start`
+   * issued while a `stop` is mid-ladder blocks the event loop for up to the
+   * probe timeout, delaying both the ladder's own timer and the child's
+   * `'exit'` event. A child that exited during that window is not observed
+   * until the loop turns again, so the stop can spend its deadline and
+   * escalate to SIGKILL for a child that was already gone -- an outcome the
+   * source cannot produce, because there `stop` simply finishes before `start`
+   * begins.
+   *
+   * It is left this way deliberately, because the obvious repair is worse.
+   * Queueing the gate means `start` can no longer refuse on the calling turn,
+   * and that synchronous refusal is parity: Python raises `SpawnRefused` out
+   * of `start` itself, and the ported case
+   * `test_an_unusable_interpreter_fails_the_probe_and_refuses_the_spawn` pins
+   * it through `expectRefusal`, a synchronous helper. So D-0301's part 2 and
+   * part 3 meet here and cannot both be satisfied; part 2 and the source win,
+   * and this paragraph is the residual rather than a claim there is none.
+   *
+   * Reaching it needs two verbs called concurrently on one instance, which
+   * nothing in this port or its suite does -- and which S1 does not define,
+   * the interface being provisional (`PROVISIONAL`) with no concurrency
+   * contract of its own. If one is ever settled, this is the first place it
+   * lands.
    */
   #queue: Promise<unknown> = Promise.resolve();
 
