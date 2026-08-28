@@ -1,0 +1,367 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "session",
+      "collected": 142,
+      "inventory": "parity/source-inventory/session.all.txt",
+      "note": "The session subsystem is three source files: tests/session/test_provider_contract.py (34, this ledger), tests/session/test_stub_provider.py (43, parity/source-inventory/session.test_stub_provider.txt) and tests/session/test_claude_cli_provider.py (65, parity/source-inventory/session.test_claude_cli_provider.txt). This is the belt's first file: 34 of 142."
+    },
+    "file": {
+      "path": "tests/session/test_provider_contract.py",
+      "collected": 34,
+      "inventory": "parity/source-inventory/session.test_provider_contract.txt",
+      "status": "34 passed. The file carries no `skipif`, no `xfail` and no `pytest.skip`: grepping tests/session/test_provider_contract.py at 65f36c5 for `skipif`, `xfail`, `pytest.skip` and `pytest.mark` returns six lines and all six are `@pytest.mark.parametrize` (lines 156, 317, 356, 364, 373, 425), which is where twelve of the 34 node ids come from -- two expansions each, leaving 22 plain functions; 12 + 22 = 34. So `source_status` is `passed` for all 34, and interlock's suite baseline records none of this file's cases among its 8 skipped or 1 xfailed. Nothing in it touches a process, a clock or a network: its only host dependencies are two file reads (DECISIONS.md and the module under test's own source text), which is why it is the belt's first file."
+    }
+  },
+  "target": {
+    "test_file": "test/session/provider-contract.test.ts",
+    "target_only_tests": {
+      "count": 11,
+      "ids": [
+        "test/session/provider-contract.test.ts::Ok refuses the second nothing, and refuses nothing else (target-only)",
+        "test/session/provider-contract.test.ts::checkSpawnPrecondition reads undefined as unprobed, not as malformed (target-only)",
+        "test/session/provider-contract.test.ts::ABSTRACT_METHODS is consulted, not merely declared (target-only)",
+        "test/session/provider-contract.test.ts::VERB_DOCS quotes this file's own documentation blocks (target-only)",
+        "test/session/provider-contract.test.ts::the closed vocabularies derive their member list from the class (target-only)",
+        "test/session/provider-contract.test.ts::the module's two closed sets refuse mutation rather than sealing nothing (target-only)",
+        "test/session/provider-contract.test.ts::the closed vocabularies cannot be extended at runtime (target-only)",
+        "test/session/provider-contract.test.ts::CapabilityReport neither aliases nor exposes its capability set (target-only)",
+        "test/session/provider-contract.test.ts::a capability set that is not a Set is refused (target-only)",
+        "test/session/provider-contract.test.ts::ContractViolation and SpawnRefused are not catchable as one thing (target-only)",
+        "test/session/provider-contract.test.ts::the mixin bypass is invisible in the leaf class's own properties (target-only)"
+      ],
+      "note": "Eleven cases, none counted as ported coverage. (1) `Ok refuses the second nothing` pins the half of D-0301's typed result that no source case can construct: Python has one nullish value and `Ok` forbids exactly it, JavaScript has two, and `undefined` is what an omitted argument, a missing property and `await undefined` all produce -- so it is refused too. Its second half pins why the guard is two identity comparisons rather than `if (!value)`: `0`, `\"\"`, `false` and `[]` must all still construct, and `test_ok_may_carry_an_empty_collection` alone would not notice a truthiness check, because an empty array is truthy. (2) `checkSpawnPrecondition reads undefined as unprobed` is the same second nothing at the precondition: D-0301 leaves this function synchronous while the five verbs become `Promise`-returning, so a provider whose probe forgot to return hands in `undefined`, and the case requires it to refuse with the SAME message as `null` rather than as a malformed result -- otherwise the reader is sent looking for a corrupted probe when what happened is a missing one. (3) and (4) are the two seam-liveness cases D-0014 requires for the registries that stand in for Python's derived introspection, and they are what lets `test_exactly_the_five_d0009_verbs_and_no_sixth` be `adapted` rather than a waiver: `ABSTRACT_METHODS` is made load-bearing by instantiating a subclass that omits `stop` and requiring the constructor to refuse and name it, and each `VERB_DOCS` sentence is required to appear in the JSDoc block adjacent to the method it names, so deleting a method's documentation turns a case red. `__abstractmethods__` and `__doc__` cannot drift because the interpreter derives them; a hand-maintained registry can, and a registry that has drifted satisfies every assertion made about it. (5) through (11) were added by an adversarial review of this file, and each exists because a mutation proved the property it names was unprotected -- the failure mode rule 10 of docs/test-translation-conventions.md describes, where a case is green because what it watches became unreachable. (5) `the closed vocabularies derive their member list from the class`: Python's `list(s1.WorkspaceVerdict)` is derived by `EnumMeta`, so the source's parametrize axis cannot disagree with the class. A hand-written `members` array can, and did -- adding a third verdict left the axis at two cases and the suite green. `members` is now a walk of the class's own property descriptors, and this case fails if a declared member is missing from it. (6) `the module's two closed sets refuse mutation`: `Object.freeze(new Set([...]))` seals properties and not the Set's internal slots, so `add` and `clear` still worked. That is a mis-description for `REQUIRED_CAPABILITIES` and a disarmable gate for `ABSTRACT_METHODS`, which the constructor consults on every instantiation -- `clear()` made it accept any subclass. Both are now a refusing subclass, and the case pins the refusal. (7) `the closed vocabularies cannot be extended at runtime`: a TypeScript `private constructor` is compile-time only, so a seventh `FailureKind` could be minted through the prototype and was then accepted by `Failure`, where Python's `FailureKind(\"made-up\")` raises. The constructors now require an unexported mint symbol. (8) `CapabilityReport neither aliases nor exposes its capability set`: the defensive copy closed the caller-alias half only; the copy was then handed out mutably, so `report.supported.delete(...)` flipped `compatible` on a report `checkSpawnPrecondition` had already returned -- a state Python's `frozenset` makes unreachable. The case pins both halves, and each was proved by its own reverting mutation. (9) `a capability set that is not a Set is refused`: a port-added guard whose comment claimed a reachability nothing demonstrated; replacing its condition with `false` left the suite green. (10) `ContractViolation and SpawnRefused are not catchable as one thing`: the source's two families are `ValueError` and `RuntimeError`; here both extend `Error`, and collapsing them into one class -- by aliasing or by subclassing, both spellings measured -- left the suite green, so the disjointness the file claimed was unpinned in both directions. (11) `the mixin bypass is invisible in the leaf class's own properties`: this assertion was originally written inside the two ported `test_a_mixin_earlier_in_the_mro_cannot_override_the_gate_away` expansions, where it asserted more than the source does -- the source case is a docstring plus two statements and says nothing about `__dict__`. Rule 0's ceiling makes that wrong in the same way as asserting less, so it was moved out here, where it is allowed to be stronger and is declared as such."
+    },
+    "approved_non_running": [],
+    "notes": [
+      "`approved_non_running` is empty because the file uses no non-running construct. Checked directly against scripts/parity-check.mjs's own NON_RUNNING patterns -- `(test|it|describe).skip`, `(test|it|describe).todo`, `(test|it).fails`, `skipIf(` and `xfail(` -- over test/session/provider-contract.test.ts: no match, comments and string literals included, so there is nothing for the sweep to find and nothing that would become a stale approval. That is expected rather than lucky: the source has no capability gate to carry, since none of its 34 cases needs a process, a symlink or bubblewrap.",
+      "Every target id in this ledger is the source function name verbatim, `parametrize` expansions included, and no case sits inside a `describe`. That is deliberate for a file whose subject is a source-text lint: a translated title would put the same words into the file that the vocabulary lint reads out of the module, and would make the ledger's mapping a judgement rather than a lookup. The twelve parametrize expansions carry pytest's own ids through test/testkit/parametrize.ts, including `bogus1` -- pytest cannot render `object()`, so it falls back to the argument name plus the parameter set's index, and that string is hard-coded in the port because it is a node id and not a description.",
+      "`inherited_limitations` is empty, and that is a finding rather than an omission. This file's subject is the interface's own shape -- a source-text lint, a registry of five verbs, a fail-closed spawn precondition and a fail-closed veto -- and none of it rests on a Python behaviour the port had to reproduce rather than fix. The one place a rule-9 reading found a Python type doing load-bearing work is recorded as an implementation obligation instead: `FailureKind` is an `Enum`, `CapabilityReport` is a class and `frozenset` is not a `set`, so three of the source's refusals are enforced by a type that a string union or a plain object type in the port would make unreachable, leaving the cases that name them permanently green. The implementation brands all three and the ported cases hand in exactly the impostor the source hands in -- `test_an_ok_carrying_something_that_is_not_a_report_refuses_the_spawn` is the clearest of them -- so the branding is under test rather than assumed."
+    ]
+  },
+  "totals": {
+    "source_cases": 34,
+    "ported": 27,
+    "adapted": 7,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_file_marks_itself_provisional_and_names_what_promotes_it",
+      "target_id": "test/session/provider-contract.test.ts::test_file_marks_itself_provisional_and_names_what_promotes_it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "`__doc__` has no runtime form in TypeScript. The source reads `s1.__doc__` and `s1.SessionProvider.__doc__` -- strings the interpreter binds onto the module and the class -- and JSDoc is a comment that is gone before anything runs. So the two docstring halves are re-pointed at the module's own source text, which this file already reads for the vocabulary lint (`S1_SOURCE`, and it must be the `.ts` file rather than a build artefact, because transpiled output has the comments stripped and the assertion would pass no matter what the prose said -- rule 10). `moduleDocBlock` takes the block that opens `src/session/provider.ts` and `docBlockBefore` the block adjacent to `export abstract class SessionProvider`. The three constant assertions -- `PROVISIONAL is True`, `\"D-0021\" in PROMOTION_REQUIRES`, `\"D-\" in PROMOTION_REQUIRES` -- are unchanged. The property is at least as strongly pinned: both reads are bounded to one block, where a file-wide search for `D-0021` would be satisfied by `PROMOTION_REQUIRES` alone with the module documentation saying nothing, and `docBlockBefore` asserts that only whitespace separates the block from the declaration, so it cannot pass by reading an earlier declaration's block. Python's `__doc__` needs neither guard because the interpreter does the binding; the port has to check what the interpreter would have guaranteed.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_no_fact_state_vocabulary_appears_anywhere_in_s1",
+      "target_id": "test/session/provider-contract.test.ts::test_no_fact_state_vocabulary_appears_anywhere_in_s1",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The lint is unchanged; the oracle it reads moved. The source splits interlock's `DECISIONS.md` on the `## D-0005 -` heading (em dash) and collects every `` - `NAME` `` bullet in that entry's body. This repository's D-0005 is a different decision -- the double-green rule -- so a mechanical port would parse an entry with no such bullets and die on the source's own plausibility guard, checking nothing about the vocabulary. D-0302 restates the closed set here for exactly this reason and the parse is re-pointed at `## D-0302 -`. Everything else is carried character for character: the same bullet regex, the same `>= 6` plausibility guard that fails loudly rather than silently checking nothing, and the same pattern construction over the same whole source text -- each `_` becomes the one-character class `[_ -]`, the search is case-insensitive, and there are no word boundaries, so a name matches inside longer English words and the lint reaches prose as well as tokens. The property is at least as strongly pinned: the set is still read out of a decision record rather than copied into the test, so a seventh state added by a future `D-` entry is covered the day it is written, and the split reproduces Python's `str.split(sep, 1)` -- the first occurrence only -- rather than JavaScript's split-all, which would have failed for a second reason (a heading appearing twice) that the source does not ask about.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_no_delivery_verb_and_the_absence_is_documented",
+      "target_id": "test/session/provider-contract.test.ts::test_no_delivery_verb_and_the_absence_is_documented",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_exactly_the_five_d0009_verbs_and_no_sixth",
+      "target_id": "test/session/provider-contract.test.ts::test_exactly_the_five_d0009_verbs_and_no_sixth",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Two Python introspection surfaces have no runtime form in TypeScript: `SessionProvider.__abstractmethods__`, which `ABCMeta` derives, and each method's `__doc__`. `abstract` reads the `ABSTRACT_METHODS` registry and the documentation half reads the `VERB_DOCS` registry. Every assertion the source makes is kept, in the same order: five entries in `D0009_VERBS`, each named method resolving to a callable on the class, each one documented, the verb hooks a subset of the abstract set, the abstract set minus the hooks being exactly `{probeCapabilities}`, `probeCapabilities` documented, `start` NOT abstract because its public half is the gate, and `VERB_IMPLEMENTATION_HOOKS[\"start\"]` naming the hook (`_start_session` there, `_startSession` here under D-0201's camelCase rule; the underscore is kept because it is what holds the hook off the public surface the delivery-verb case walks). The property is at least as strongly pinned, because the two registries are hand-maintained where Python's are derived, and each carries its own target-only liveness case rather than being trusted: `ABSTRACT_METHODS is consulted, not merely declared` instantiates a subclass missing `stop` and requires the constructor to refuse and to name it, and `VERB_DOCS quotes this file's own documentation blocks` requires each recorded sentence to appear in the JSDoc block adjacent to the method it names. Without those two, a registry that had drifted into describing nothing would satisfy every assertion here.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_three_capabilities_each_have_a_named_owner",
+      "target_id": "test/session/provider-contract.test.ts::test_three_capabilities_each_have_a_named_owner",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_ok_cannot_carry_nothing",
+      "target_id": "test/session/provider-contract.test.ts::test_ok_cannot_carry_nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_ok_may_carry_an_empty_collection",
+      "target_id": "test/session/provider-contract.test.ts::test_ok_may_carry_an_empty_collection",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_failure_must_say_why[]",
+      "target_id": "test/session/provider-contract.test.ts::test_failure_must_say_why[]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_failure_must_say_why[   ]",
+      "target_id": "test/session/provider-contract.test.ts::test_failure_must_say_why[   ]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_failure_kind_comes_from_the_closed_vocabulary",
+      "target_id": "test/session/provider-contract.test.ts::test_failure_kind_comes_from_the_closed_vocabulary",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_observed_readout_carries_the_providers_own_state_word",
+      "target_id": "test/session/provider-contract.test.ts::test_observed_readout_carries_the_providers_own_state_word",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_observed_readout_without_a_state_is_refused",
+      "target_id": "test/session/provider-contract.test.ts::test_observed_readout_without_a_state_is_refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_could_not_observe_must_say_why_and_must_not_invent_a_state",
+      "target_id": "test/session/provider-contract.test.ts::test_could_not_observe_must_say_why_and_must_not_invent_a_state",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_compatible_probe_is_the_only_case_that_permits_a_spawn",
+      "target_id": "test/session/provider-contract.test.ts::test_a_compatible_probe_is_the_only_case_that_permits_a_spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_an_unprobed_provider_refuses_the_spawn",
+      "target_id": "test/session/provider-contract.test.ts::test_an_unprobed_provider_refuses_the_spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_failed_probe_refuses_the_spawn",
+      "target_id": "test/session/provider-contract.test.ts::test_a_failed_probe_refuses_the_spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_probe_missing_any_required_capability_refuses_the_spawn",
+      "target_id": "test/session/provider-contract.test.ts::test_a_probe_missing_any_required_capability_refuses_the_spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_an_unidentified_provider_cannot_even_report_capabilities",
+      "target_id": "test/session/provider-contract.test.ts::test_an_unidentified_provider_cannot_even_report_capabilities",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_require_spawnable_is_the_contracts_own_gate_not_each_implementations",
+      "target_id": "test/session/provider-contract.test.ts::test_require_spawnable_is_the_contracts_own_gate_not_each_implementations",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_no_observers_allows_the_transition",
+      "target_id": "test/session/provider-contract.test.ts::test_no_observers_allows_the_transition",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_any_observer_may_veto_and_a_veto_always_says_why",
+      "target_id": "test/session/provider-contract.test.ts::test_any_observer_may_veto_and_a_veto_always_says_why",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_broken_observer_vetoes_rather_than_letting_the_transition_through[raises]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_broken_observer_vetoes_rather_than_letting_the_transition_through[raises]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_broken_observer_vetoes_rather_than_letting_the_transition_through[returns-nonsense]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_broken_observer_vetoes_rather_than_letting_the_transition_through[returns-nonsense]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_start_is_gated_by_the_base_class_not_by_the_implementation",
+      "target_id": "test/session/provider-contract.test.ts::test_start_is_gated_by_the_base_class_not_by_the_implementation",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_subclass_cannot_override_the_gate_away[start]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_subclass_cannot_override_the_gate_away[start]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The refusal moves from class-definition time to first-instantiation time, and that move is the whole of the adaptation. The source hooks `__init_subclass__`, so `type(\"_Ungated\", (_Provider,), {gate: ...})` raises `ContractViolation` while the class statement is still executing; JavaScript has no class-definition hook at all, so `SessionProvider`'s constructor performs the check and `new Ungated(...)` is what raises. Building the subclass is the same move on both sides: `type(...)` puts the override in the new class's own dictionary, and `Object.defineProperty` on the subclass prototype puts it there too -- and it is the only way to name the member from a parametrized argument rather than writing two hand-copied cases. What is checked is unchanged: overriding `start` is refused with `ContractViolation`, via `expectRefusal`. The property is at least as strongly pinned in the sense that matters -- no ungated provider is reachable on either side, because neither an instance nor a call can exist before the check runs -- and the port is weaker only in a window Python does not have and this port cannot close: a class object that is never instantiated is not refused here. That window is unreachable by any caller, since the gate can only be bypassed by calling it on an instance.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_subclass_cannot_override_the_gate_away[require_spawnable]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_subclass_cannot_override_the_gate_away[require_spawnable]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "The refusal moves from class-definition time to first-instantiation time, and that move is the whole of the adaptation. The source hooks `__init_subclass__`, so `type(\"_Ungated\", (_Provider,), {gate: ...})` raises `ContractViolation` while the class statement is still executing; JavaScript has no class-definition hook at all, so `SessionProvider`'s constructor performs the check and `new Ungated(...)` is what raises. Building the subclass is the same move on both sides: `type(...)` puts the override in the new class's own dictionary, and `Object.defineProperty` on the subclass prototype puts it there too -- and it is the only way to name the member from a parametrized argument rather than writing two hand-copied cases. What is checked is unchanged: overriding `require_spawnable (requireSpawnable here, D-0201)` is refused with `ContractViolation`, via `expectRefusal`. The property is at least as strongly pinned in the sense that matters -- no ungated provider is reachable on either side, because neither an instance nor a call can exist before the check runs -- and the port is weaker only in a window Python does not have and this port cannot close: a class object that is never instantiated is not refused here. That window is unreachable by any caller, since the gate can only be bypassed by calling it on an instance.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_mixin_earlier_in_the_mro_cannot_override_the_gate_away[start]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_mixin_earlier_in_the_mro_cannot_override_the_gate_away[start]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted twice over. The refusal moves to first instantiation for the same reason as `test_a_subclass_cannot_override_the_gate_away` -- JavaScript has no `__init_subclass__` -- and the bypass itself has no direct analogue: `class _Bypassing(_Mixin, _Provider)` hides the override from `cls.__dict__` by putting it earlier in the C3 linearisation, and JavaScript has one prototype chain and no linearisation to hide in. The shape here is a mixin FUNCTION that derives an intermediate class from `Provider` and defines `start` on it, so the override lands on a link of the chain that `Bypassing` itself does not own -- which is the case's actual subject, and the reason a check reading own properties would wave it through while the source's `getattr(cls, gate)` and the port's `newTarget.prototype[gate]` both resolve through the chain and catch it. The property is at least as strongly pinned: the port asserts the premise the source only states in prose, requiring `Object.getOwnPropertyNames(Bypassing.prototype)` not to contain the gate before demanding the `ContractViolation`, so a refactor that accidentally put the override back on the subclass's own prototype would turn this case red instead of letting it pass for the wrong reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_mixin_earlier_in_the_mro_cannot_override_the_gate_away[require_spawnable]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_mixin_earlier_in_the_mro_cannot_override_the_gate_away[require_spawnable]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted twice over. The refusal moves to first instantiation for the same reason as `test_a_subclass_cannot_override_the_gate_away` -- JavaScript has no `__init_subclass__` -- and the bypass itself has no direct analogue: `class _Bypassing(_Mixin, _Provider)` hides the override from `cls.__dict__` by putting it earlier in the C3 linearisation, and JavaScript has one prototype chain and no linearisation to hide in. The shape here is a mixin FUNCTION that derives an intermediate class from `Provider` and defines `require_spawnable (requireSpawnable here, D-0201)` on it, so the override lands on a link of the chain that `Bypassing` itself does not own -- which is the case's actual subject, and the reason a check reading own properties would wave it through while the source's `getattr(cls, gate)` and the port's `newTarget.prototype[gate]` both resolve through the chain and catch it. The property is at least as strongly pinned: the port asserts the premise the source only states in prose, requiring `Object.getOwnPropertyNames(Bypassing.prototype)` not to contain the gate before demanding the `ContractViolation`, so a refactor that accidentally put the override back on the subclass's own prototype would turn this case red instead of letting it pass for the wrong reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_probe_result_that_is_neither_ok_nor_failure_refuses_the_spawn[not a result at all]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_probe_result_that_is_neither_ok_nor_failure_refuses_the_spawn[not a result at all]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_probe_result_that_is_neither_ok_nor_failure_refuses_the_spawn[bogus1]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_probe_result_that_is_neither_ok_nor_failure_refuses_the_spawn[bogus1]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_an_ok_carrying_something_that_is_not_a_report_refuses_the_spawn",
+      "target_id": "test/session/provider-contract.test.ts::test_an_ok_carrying_something_that_is_not_a_report_refuses_the_spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_every_observer_is_asked_even_after_a_veto",
+      "target_id": "test/session/provider-contract.test.ts::test_every_observer_is_asked_even_after_a_veto",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_non_string_reason_is_this_interfaces_own_error[WorkspaceVerdict.ALLOW]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_non_string_reason_is_this_interfaces_own_error[WorkspaceVerdict.ALLOW]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/session/test_provider_contract.py::test_a_non_string_reason_is_this_interfaces_own_error[WorkspaceVerdict.VETO]",
+      "target_id": "test/session/provider-contract.test.ts::test_a_non_string_reason_is_this_interfaces_own_error[WorkspaceVerdict.VETO]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": []
+}

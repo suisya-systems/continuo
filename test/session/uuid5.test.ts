@@ -1,0 +1,459 @@
+import { expect, test } from "vitest";
+
+import {
+  claudeSessionUuid,
+  NAMESPACE_URL,
+  parsePythonUuid,
+  SESSION_UUID_NAMESPACE,
+  SESSION_UUID_NAMESPACE_NAME,
+  uuid5,
+} from "../../src/session/uuid5.js";
+import { expectRefusal } from "../testkit/errors.js";
+
+/**
+ * The differential pin under `claude_session_uuid`. **Every case here is
+ * target-only**; not one maps to a source node id, and the file declares that
+ * about itself rather than leaving it to the ledger.
+ *
+ * Interlock's suite reaches this code through exactly two cases --
+ * `test_a_uuid_session_id_is_honoured_verbatim` and
+ * `test_a_non_uuid_session_id_derives_the_same_uuid_every_time` -- which live
+ * in the CLI provider's own test file and are translated there, not here. Those
+ * two are the right cases *for interlock*, where `uuid` is the standard
+ * library and needs no pinning. They are nowhere near enough for a port,
+ * because both of them pass against an implementation that is wrong in the same
+ * way twice: "honoured verbatim" only checks that a canonical UUID comes back
+ * unchanged, and "the same UUID every time" only checks self-consistency. A
+ * hand-rolled hash would satisfy both and would name a different CLI session
+ * than interlock names for the same id -- silently, because its answers are
+ * well-formed UUIDs and are stable.
+ *
+ * So this file asserts against **CPython**, not against continuo.
+ *
+ * ## Where the expected values come from
+ *
+ * Every UUID literal below was produced by the interpreter, before this file
+ * was written, and pasted in. None was produced by the implementation under
+ * test, which would prove only that it agrees with itself. The generator was
+ *
+ * ```
+ * python3 -c 'import uuid; ns = uuid.uuid5(uuid.NAMESPACE_URL,
+ *     "https://github.com/suisya-systems/interlock/session-uuid");
+ *     print(uuid.uuid5(ns, "session-1"))'
+ * ```
+ *
+ * on `Python 3.12.3 (main, Jun 19 2026, 12:46:00) [GCC 13.3.0]`, whose
+ * `unicodedata.unidata_version` is `15.0.0` -- the version the two Unicode
+ * tables in `src/session/uuid5.ts` are pinned to. Two of the vectors come from
+ * further away still, and are the strongest thing in the file: they are
+ * published outside this repository and outside CPython, so they check the
+ * algorithm rather than the port's agreement with one interpreter.
+ *
+ * The whole spread was additionally run through both runtimes side by side --
+ * 77 inputs, 74 identical, the 3 differences being exactly the lone-surrogate
+ * narrowing documented on `uuid5` -- and the tables below are that run's rows.
+ *
+ * ## Rule 10: what was broken on purpose, and what went red
+ *
+ * Nine mutations were applied to `src/session/uuid5.ts` one at a time, the file
+ * re-run, and each failure read to confirm it was the failure the case names.
+ * All nine went red; the informative part is *which* case, and *how*.
+ *
+ * - Drop the `'uuid:'` half of the prefix strip -> the three `uuid:` rows of
+ *   "every punctuation spelling..." and nothing else, reported as `undefined`:
+ *   the parse refused them. That is the shape this whole file exists to make
+ *   visible -- in production a refusal here is not an error, it is a different
+ *   UUID -- which is why that table is asserted a second time through
+ *   `claudeSessionUuid`.
+ * - `codePoints.length` -> `stripped.length` (UTF-16 units) -> the astral digit
+ *   case alone.
+ * - Allow a doubled underscore -> the `1__...` row of the refusal table alone,
+ *   and it failed the other way round: the id was *honoured* as `00134567-...`
+ *   rather than hashed.
+ * - Stop folding Unicode decimal digits to ASCII -> the base-16 literal table
+ *   and the code-point budget case, and nothing else.
+ * - Stop accepting a leading `+` -> the base-16 literal table alone.
+ * - Add `U+FEFF` to the `int()` whitespace table -> the `U+FEFF` row of the
+ *   refusal table alone. Drop `U+00A0` from it -> the NBSP row of the accepted
+ *   table alone.
+ * - `codePoint < 127` -> `codePoint < 32` in the ASCII fold -> three cases.
+ *   That is the measurement saying the `U+001C` row is guarded by *that*
+ *   boundary and not by the whitespace table; making `isAsciiSpace` accept
+ *   `U+001C` directly reddens that row alone, which is the row's own claim.
+ * - Delete `value |= 5n << 76n` -> six of the thirteen cases, and the
+ *   distribution is the result: everything that hashes went red, the two
+ *   published RFC vectors among them, while "honoured verbatim" stayed green
+ *   because nothing in it passes through `uuid5` at all.
+ *
+ * A tenth edit is recorded because it is the mistake this rule is about:
+ * adding `U+001C` to `INT_WHITESPACE` left the suite green, and that is not
+ * evidence of anything, because the table is consulted only for code points at
+ * or above 127 -- the edit changed no behaviour to detect.
+ */
+
+// --------------------------------------------------------------------------
+// Values generated by CPython, pasted in
+// --------------------------------------------------------------------------
+
+/**
+ * RFC 4122's DNS namespace. Written here rather than exported from the module:
+ * interlock never uses it, so the module has no business carrying it, and its
+ * only job in this file is to address the two published vectors below.
+ */
+const NAMESPACE_DNS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
+/** `uuid.uuid5(uuid.NAMESPACE_URL, SESSION_UUID_NAMESPACE_NAME)`. */
+const EXPECTED_SESSION_NAMESPACE = "3bb904ec-a06b-59ea-ae26-ab936ed73de5";
+
+/**
+ * Thirty-one hex digits: one short of a UUID, so that a single extra character
+ * decides whether the id is honoured or hashed. Every row in the integer
+ * literal table is this string plus exactly one character.
+ */
+const H31 = "1234567890abcdef1234567890abcde";
+
+/** What all twelve punctuation spellings of one UUID canonicalise to. */
+const CANONICAL = "12345678-1234-5678-1234-567812345678";
+
+/** What `H31` plus one leading or trailing character canonicalises to. */
+const H31_CANONICAL = "01234567-890a-bcde-f123-4567890abcde";
+
+// --------------------------------------------------------------------------
+// The algorithm, pinned from outside this repository
+// --------------------------------------------------------------------------
+
+test("the two published RFC 4122 v5 vectors are reproduced (target-only)", () => {
+  // These two are the only assertions in the file whose expected value does not
+  // ultimately come from a Python interpreter, which is exactly why they are
+  // here: an interpreter and a port can agree and both be wrong about SHA-1
+  // over the namespace bytes, and no other case in this file would notice.
+  //
+  //   886313e1-... is the worked example in CPython's own `uuid` module
+  //   documentation (`uuid.uuid5(uuid.NAMESPACE_DNS, 'python.org')`).
+  //   2ed6657d-... is the v5 test vector in RFC 9562 appendix A.4
+  //   (namespace DNS, name "www.example.com").
+  //
+  // Both were also regenerated on this host and agreed; the value of writing
+  // them down is that they were published before this port existed.
+  expect(uuid5(NAMESPACE_DNS, "python.org")).toBe("886313e1-3b8a-5372-9b90-0c9aee199e5d");
+  expect(uuid5(NAMESPACE_DNS, "www.example.com")).toBe("2ed6657d-e927-568b-95e1-2665a8aea6a2");
+});
+
+test("the session namespace is computed, not transcribed (target-only)", () => {
+  // Three separate claims, because a single equality would let two of them
+  // fail unnoticed: the RFC constant is the RFC's, the name is interlock's
+  // spelling of it character for character, and the derivation of one from the
+  // other lands where CPython lands.
+  expect(NAMESPACE_URL).toBe("6ba7b811-9dad-11d1-80b4-00c04fd430c8");
+  expect(SESSION_UUID_NAMESPACE_NAME).toBe(
+    "https://github.com/suisya-systems/interlock/session-uuid",
+  );
+  expect(SESSION_UUID_NAMESPACE).toBe(EXPECTED_SESSION_NAMESPACE);
+  expect(uuid5(NAMESPACE_URL, SESSION_UUID_NAMESPACE_NAME)).toBe(EXPECTED_SESSION_NAMESPACE);
+});
+
+test("a derived id carries version 5 and the RFC variant (target-only)", () => {
+  // The bit surgery is four lines that all look alike, and three of the four
+  // can be dropped without any *literal* in this file changing -- because the
+  // literals were generated from a correct implementation, so they already
+  // carry the right bits. This case names the bits themselves so a dropped
+  // line is reported as "version nibble is 7" rather than as a mismatched
+  // opaque string.
+  const names = ["", "a", "session-1", "\u30bb\u30c3\u30b7\u30e7\u30f3-1", "A".repeat(200)];
+  const nibbles = names.map((name) => {
+    const derived = claudeSessionUuid(name);
+    return [name.slice(0, 12), derived[14], derived[19]] as const;
+  });
+  expect(nibbles).toEqual([
+    ["", "5", "9"],
+    ["a", "5", "9"],
+    ["session-1", "5", "9"],
+    ["\u30bb\u30c3\u30b7\u30e7\u30f3-1", "5", "9"],
+    ["AAAAAAAAAAAA", "5", "b"],
+  ]);
+  // And the variant nibble is one of the four the RFC permits, for a wider
+  // spread than the five above -- stated as a set membership because that is
+  // the property, where the five literals above are a sample.
+  for (let index = 0; index < 64; index += 1) {
+    const derived = claudeSessionUuid(`probe-${index}`);
+    expect(derived[14]).toBe("5");
+    expect("89ab").toContain(derived[19] as string);
+  }
+});
+
+// --------------------------------------------------------------------------
+// uuid.UUID()'s leniency: what is honoured verbatim
+// --------------------------------------------------------------------------
+
+test("every punctuation spelling CPython accepts is honoured verbatim (target-only)", () => {
+  // The load-bearing word is *honoured*. A port that refuses one of these
+  // spellings does not report an error: it falls into the `except ValueError`
+  // branch and returns a perfectly well-formed UUID that interlock would never
+  // have chosen. So each row asserts the canonical form, not merely that
+  // something was parsed.
+  const spellings: readonly (readonly [string, string])[] = [
+    // The three spellings CPython's own docstring names.
+    [CANONICAL, CANONICAL],
+    ["12345678123456781234567812345678", CANONICAL],
+    ["{12345678-1234-5678-1234-567812345678}", CANONICAL],
+    ["urn:uuid:12345678-1234-5678-1234-567812345678", CANONICAL],
+    // ...and the ones it does not, all of which fall out of `strip('{}')` and
+    // two unanchored `replace`s rather than out of any deliberate design.
+    ["{{12345678123456781234567812345678}}", CANONICAL],
+    ["}12345678123456781234567812345678{", CANONICAL],
+    ["{12345678123456781234567812345678", CANONICAL],
+    ["urn:uuid:{12345678-1234-5678-1234-567812345678}", CANONICAL],
+    ["urn:12345678123456781234567812345678", CANONICAL],
+    ["uuid:12345678123456781234567812345678", CANONICAL],
+    ["12345678urn:123456781234567812345678", CANONICAL],
+    ["-12345678123456781234567812345678-", CANONICAL],
+    // Hyphens are removed wherever they are, not checked for position.
+    [
+      "1-2-3-4-5-6-7-8-9-0-a-b-c-d-e-f-1-2-3-4-5-6-7-8-9-0-a-b-c-d-e-f",
+      "12345678-90ab-cdef-1234-567890abcdef",
+    ],
+    // Case is folded down, which is the half of "verbatim" that is not verbatim.
+    ["12345678-1234-5678-1234-56781234567A", "12345678-1234-5678-1234-56781234567a"],
+    ["ABCDEF12-3456-7890-ABCD-EF1234567890", "abcdef12-3456-7890-abcd-ef1234567890"],
+    // No version or variant normalisation: neither of these is a valid v5 and
+    // both are returned unchanged. A parser that "repaired" the nibbles would
+    // rewrite an id its caller chose.
+    ["ffffffffffffffffffffffffffffffff", "ffffffff-ffff-ffff-ffff-ffffffffffff"],
+    ["00000000000000000000000000000000", "00000000-0000-0000-0000-000000000000"],
+  ];
+
+  expect(spellings.map(([input]) => [input, parsePythonUuid(input)])).toEqual(
+    spellings.map(([input, expected]) => [input, expected]),
+  );
+  expect(spellings.map(([input]) => [input, claudeSessionUuid(input)])).toEqual(
+    spellings.map(([input, expected]) => [input, expected]),
+  );
+});
+
+test("CPython's base-16 literal is wider than thirty-two hex digits (target-only)", () => {
+  // `int(hex, 16)` parses a *literal*, and every part of that literal fits in
+  // the 32-character budget `uuid.UUID` has already imposed. The first three
+  // rows are spellable in `[A-Za-z0-9._-]`, which is the alphabet a session id
+  // needs anyway in order to name a state directory -- so they are reachable,
+  // not curiosities.
+  const spellings: readonly (readonly [string, string])[] = [
+    [`1_${H31.slice(1)}`, H31_CANONICAL],
+    [`0x${H31.slice(1)}`, "00234567-890a-bcde-f123-4567890abcde"],
+    [`0x_${H31.slice(2)}`, "00034567-890a-bcde-f123-4567890abcde"],
+    [`+${H31}`, H31_CANONICAL],
+    [` +${H31.slice(1)}`, "00234567-890a-bcde-f123-4567890abcde"],
+    // Surrounding whitespace, in every spelling `int()` strips.
+    [` ${H31}`, H31_CANONICAL],
+    [`\t${H31}`, H31_CANONICAL],
+    [`\n${H31}`, H31_CANONICAL],
+    [`\v${H31}`, H31_CANONICAL],
+    [`\f${H31}`, H31_CANONICAL],
+    [`\r${H31}`, H31_CANONICAL],
+    [`${H31} `, H31_CANONICAL],
+    [`${H31}\t`, H31_CANONICAL],
+    // Unicode whitespace, which is folded to a space before parsing. NBSP,
+    // FIGURE SPACE, NEL, LINE SEPARATOR, OGHAM SPACE MARK, IDEOGRAPHIC SPACE.
+    [`\u00a0${H31}`, H31_CANONICAL],
+    [`\u2007${H31}`, H31_CANONICAL],
+    [`\u0085${H31}`, H31_CANONICAL],
+    [`\u2028${H31}`, H31_CANONICAL],
+    [`\u1680${H31}`, H31_CANONICAL],
+    [`\u3000${H31}`, H31_CANONICAL],
+    // Unicode decimal digits, which are folded to their ASCII value. Arabic-
+    // Indic zero, Devanagari, fullwidth one.
+    ["\u0660".repeat(32), "00000000-0000-0000-0000-000000000000"],
+    [`${"\u0966".repeat(31)}\u0967`, "00000000-0000-0000-0000-000000000001"],
+    [`\uff11${H31}`, "11234567-890a-bcde-f123-4567890abcde"],
+  ];
+
+  expect(spellings.map(([input]) => [JSON.stringify(input), parsePythonUuid(input)])).toEqual(
+    spellings.map(([input, expected]) => [JSON.stringify(input), expected]),
+  );
+});
+
+// --------------------------------------------------------------------------
+// ...and what is refused, and therefore derived
+// --------------------------------------------------------------------------
+
+test("a near miss of each accepted spelling is derived, not honoured (target-only)", () => {
+  // The ceiling of the two tables above. Each row here is one character away
+  // from a row that parses, and the expected value is CPython's *derived*
+  // UUID -- so the case fails both if the id is wrongly honoured and if it is
+  // hashed differently.
+  const refused: readonly (readonly [string, string])[] = [
+    ["", "76bfa540-ee6e-5ecd-948d-2337003bdab0"],
+    ["session-1", "71afcfde-c0db-5fcf-98af-6a751b2962c7"],
+    ["not-a-uuid", "0b26be76-a1de-5996-a0c2-609017565085"],
+    ["g".repeat(32), "530eacea-edcc-591f-ad3a-a4ab34e0ff2e"],
+    // The prefix strip is case-sensitive.
+    ["URN:UUID:12345678-1234-5678-1234-567812345678", "2bfa83ca-061b-533f-a523-8f036c3e4320"],
+    // Whitespace outside the 32-character budget is never reached, because the
+    // length check runs before `int()` does. Both of these are one character
+    // too long, and both would parse if the budget were counted after the
+    // strip that `int()` performs.
+    [`${CANONICAL} `, "885ed6f5-5744-51e3-8184-3f070e48e3b5"],
+    [" 12345678123456781234567812345678", "bc6219a1-e6ee-5c6b-a43a-630208a506af"],
+    // The underscore rule, in each of the three ways it is easy to loosen.
+    [`_${H31}`, "373605c4-0f0b-517a-9265-8fced75c7f2a"],
+    [`${H31}_`, "2c5e4dc6-2fa9-5dad-95a5-df934297ccdd"],
+    [`1__${H31.slice(2)}`, "854f433d-6434-55a4-92fe-98ba002e86b4"],
+    [`0x${H31.slice(2)}_`, "4df317e5-7c3d-5135-aa7a-e44e5a4e636d"],
+    // The base prefix is only a prefix.
+    [`00x${H31.slice(2)}`, "0fc824e0-abef-58ba-a80c-b0facc38de31"],
+    // U+001C is whitespace to `str.isspace()` and is *not* whitespace to
+    // `int()`; U+FEFF is whitespace to neither, despite reading as one. Both
+    // are the fingerprint of a table built from the wrong predicate.
+    [`\u001c${H31}`, "8c9bda61-9112-5a80-b3dc-7ea6831c1985"],
+    [`\ufeff${H31}`, "5827a012-e4c9-5992-b731-077a62056b86"],
+    // Thirty of the thirty-two hex digits.
+    ["12345678-1234-5678-1234-5678123456", "f6894474-364b-5b88-b912-0459243de3de"],
+  ];
+
+  expect(refused.map(([input]) => [JSON.stringify(input), parsePythonUuid(input)])).toEqual(
+    refused.map(([input]) => [JSON.stringify(input), undefined]),
+  );
+  expect(refused.map(([input]) => [JSON.stringify(input), claudeSessionUuid(input)])).toEqual(
+    refused.map(([input, expected]) => [JSON.stringify(input), expected]),
+  );
+  // And the derived branch really is the namespaced hash, not some other
+  // stable function that happens to agree on these fifteen rows.
+  expect(refused.map(([input]) => uuid5(SESSION_UUID_NAMESPACE, input))).toEqual(
+    refused.map(([, expected]) => expected),
+  );
+});
+
+test("a name is hashed as UTF-8, and is not normalised first (target-only)", () => {
+  // Three encodings a port could reach for instead -- UTF-16, Latin-1, and
+  // "UTF-8 after NFC" -- and each of them changes the answer for a row here.
+  // The two spellings of "cafe" are the same text under NFC and hash
+  // differently, which is the property that says no normalisation happens: the
+  // first is U+00E9, the second is "e" + U+0301.
+  const names: readonly (readonly [string, string])[] = [
+    ["caf\u00e9", "ed41f89d-b3a1-56a0-869f-d90c4f98a21b"],
+    ["cafe\u0301", "0653c27f-8453-5e9d-9d07-4b5d3efba166"],
+    ["\u30bb\u30c3\u30b7\u30e7\u30f3-1", "9cb88584-76ad-5eb3-96d4-2c5bad86a82e"],
+    ["\u{1f422}", "45b790b4-6f2b-5ac1-9740-70a10bc32380"],
+    ["\ufffd", "93b702b6-5408-5235-9beb-c79584ef88bf"],
+    ["worker/alpha", "8d4a96b2-e48d-5cc6-b93a-41cb64653920"],
+    ["A".repeat(200), "36821148-6cd8-51f6-bb6d-e99c956948d3"],
+  ];
+  expect(names.map(([name]) => [JSON.stringify(name), claudeSessionUuid(name)])).toEqual(
+    names.map(([name, expected]) => [JSON.stringify(name), expected]),
+  );
+});
+
+test("the derivation is a pure function of the id (target-only)", () => {
+  // The property the whole design rests on, and the one thing interlock's two
+  // cases do assert. Kept here as well because it is cheap and because the
+  // second half -- distinct ids give distinct UUIDs -- is not something either
+  // source case checks, and a port that returned a constant would satisfy the
+  // first half alone.
+  const ids = ["", "a", "session-1", CANONICAL, `${H31}_`, "\u{1f422}"];
+  expect(ids.map((id) => claudeSessionUuid(id))).toEqual(ids.map((id) => claudeSessionUuid(id)));
+  expect(new Set(ids.map((id) => claudeSessionUuid(id))).size).toBe(ids.length);
+});
+
+// --------------------------------------------------------------------------
+// Rule 9: what TypeScript admits that Python's types excluded
+// --------------------------------------------------------------------------
+
+test("the thirty-two character budget is counted in code points (target-only)", () => {
+  // `len()` counts code points; `String.prototype.length` counts UTF-16 units.
+  // The difference is only observable for an astral character, and astral
+  // *decimal digits* exist -- U+1D7CE and its block are `Nd` -- so a run of
+  // them is a string CPython parses and `stripped.length` measures as 64.
+  //
+  // The two rows are one code point apart and land on opposite sides of the
+  // budget, so neither a `>=` nor a `<=` mistake survives them.
+  const thirtyTwo = "\u{1d7ce}".repeat(32);
+  const thirtyThree = "\u{1d7ce}".repeat(33);
+  expect(thirtyTwo.length).toBe(64);
+  expect(parsePythonUuid(thirtyTwo)).toBe("00000000-0000-0000-0000-000000000000");
+  expect(parsePythonUuid(thirtyThree)).toBeUndefined();
+});
+
+test("a lone surrogate is refused, not folded onto U+FFFD (target-only)", () => {
+  // **The one deliberate divergence in this module.** Python's
+  // `bytes(name, "utf-8")` raises `UnicodeEncodeError`; JavaScript's encoders
+  // substitute U+FFFD instead, which would give three distinct session ids one
+  // CLI identity. The case pins the refusal *and* pins that U+FFFD itself is
+  // still an ordinary name, so the guard cannot be widened into "reject
+  // anything that looks replaced".
+  expectRefusal(() => claudeSessionUuid("\ud800"), TypeError, /lone high surrogate/);
+  expectRefusal(() => claudeSessionUuid("\udc00"), TypeError, /lone low surrogate/);
+  expectRefusal(() => claudeSessionUuid("a\ud83d"), TypeError, /lone high surrogate at index 1/);
+  expect(claudeSessionUuid("\ufffd")).toBe("93b702b6-5408-5235-9beb-c79584ef88bf");
+  expect(claudeSessionUuid("\u{1f600}")).toBe("2cd0dff8-f52d-5b0c-b80c-ef1f1b9ea5a6");
+});
+
+test("a session id that is not a string is refused (target-only)", () => {
+  // A non-string already fails in Python, just less tidily: `uuid.UUID(1)`
+  // raises `AttributeError` and `uuid.UUID(None)` a `TypeError`, and
+  // `claude_session_uuid` catches neither, so interlock fails here too. What
+  // this port has to add on top is the boxed
+  // `String` and the object with a `toString`: `new String(x)` behaves like a
+  // string almost everywhere, and a `Symbol.toPrimitive` that answers
+  // differently on successive reads would make this function impure.
+  const impure = {
+    reads: 0,
+    toString(): string {
+      this.reads += 1;
+      return this.reads > 1 ? "second" : CANONICAL;
+    },
+  };
+  for (const value of [
+    1,
+    undefined,
+    null,
+    // The boxed String is the hazard rule 9 names, not a style slip.
+    new String(CANONICAL),
+    impure,
+    ["a"],
+  ]) {
+    expectRefusal(
+      () => claudeSessionUuid(value as unknown as string),
+      TypeError,
+      /must be a string/,
+    );
+  }
+  expect(impure.reads).toBe(0);
+});
+
+test("the 128-bit value survives as a bigint, high bits and all (target-only)", () => {
+  // The rule 9 question "which `number` parameters does the source type as
+  // `int`" has one answer in this module: the UUID's own 128-bit value, which
+  // `number` cannot hold. A `Number` round trip would quietly zero the low
+  // bits of every one of these; `parseInt` would stop at 2**53.
+  expect(parsePythonUuid("ffffffffffffffffffffffffffffffff")).toBe(
+    "ffffffff-ffff-ffff-ffff-ffffffffffff",
+  );
+  expect(parsePythonUuid("fffffffffffffffffffffffffffffffe")).toBe(
+    "ffffffff-ffff-ffff-ffff-fffffffffffe",
+  );
+  expect(parsePythonUuid("00000000000000000000000000000001")).toBe(
+    "00000000-0000-0000-0000-000000000001",
+  );
+  // Zero padding: the value is rendered `%032x`, so a small integer keeps its
+  // leading zeros rather than collapsing to a short string.
+  expect(parsePythonUuid("0x1")).toBeUndefined();
+  expect(parsePythonUuid(`${"0".repeat(31)}1`)).toBe("00000000-0000-0000-0000-000000000001");
+});
+
+test("uuid5 refuses a namespace that is not already canonical (target-only)", () => {
+  // The namespace is this port's own datum, never a caller's id, so it does
+  // not get `uuid.UUID`'s leniency. Refusing here rather than accepting the
+  // lenient spellings keeps the leniency confined to the one place the source
+  // has it, which is the difference between a transcription and a
+  // generalisation (D-0208).
+  for (const namespace of [
+    "6BA7B811-9DAD-11D1-80B4-00C04FD430C8",
+    "6ba7b8119dad11d180b400c04fd430c8",
+    "{6ba7b811-9dad-11d1-80b4-00c04fd430c8}",
+    "urn:uuid:6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "",
+    "not-a-uuid",
+  ]) {
+    expectRefusal(() => uuid5(namespace, "x"), TypeError, /canonical lowercase UUID/);
+  }
+  expect(uuid5(NAMESPACE_URL, "x")).toBe(uuid5(NAMESPACE_URL, "x"));
+});
