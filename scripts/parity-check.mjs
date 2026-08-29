@@ -150,18 +150,35 @@ const LEDGERS = [
   "parity/gate_item11.no-provider-detail-leaks.ledger.json",
   "parity/gate_item11.registry-availability.ledger.json",
   "parity/gate_item11.substitution-scenarios.ledger.json",
-  // lane K -- attention, sub-belt A2 (dedup and config). The subsystem ports in
-  // three sub-belts sharing one D-range (D-0034): A1 (facts, 90 cases),
-  // A2 (dedup and config, 44) and A3 (notify and pipeline, 60). A1 holds
-  // `D-0901`..`D-0903` and registers `attention.classifier` and
-  // `attention.readers` in this same lane; A2 mints from `D-0904`. One ledger
-  // per source test file, as everywhere else.
+  // lane K -- attention. The subsystem ports in three sub-belts sharing one
+  // D-range (D-0034): A1 (facts, 90 cases, `D-0901`..`D-0903`), A2 (dedup and
+  // config, 44, `D-0904`..`D-0905`) and A3 (notify and pipeline, 60). One
+  // ledger per source test file, as everywhere else, and the sub-belts share
+  // one lane block rather than taking a letter each -- they are one subsystem
+  // and one D-range, and three blocks would invite the letter collision the
+  // comment below describes.
+  //
+  // The letter is `K` and was drafted as `J`: gate_item11 above was reaching
+  // for the same one concurrently and landed on `main` first (PR #69), so this
+  // lane takes the letter that was actually free at merge time. That is the
+  // rule the session and fault_injection blocks above state, exercised again --
+  // and it is worth reading this list before picking, because assuming a letter
+  // is exactly how each of these collisions happened.
   //
   // `parity/attention.broker-journal-contract.ledger.json` is deliberately NOT
-  // in this list, and A1's block above is where that is said. In short:
-  // `tests/attention/test_broker_journal_contract.py` is quarantined upstream by
-  // a module-level `pytest.importorskip`, so pytest collects no node id from it
-  // and it has no inventory file for the loop below to read.
+  // in this list, and this comment is where that is said rather than being left
+  // for a reader to infer from its absence. `tests/attention/
+  // test_broker_journal_contract.py` is quarantined upstream by a module-level
+  // `pytest.importorskip`, so pytest collects no node id from it and it has no
+  // inventory file -- and the first thing the loop below does with a ledger is
+  // read the inventory its `source.file.inventory` names. D-0034 ratified that
+  // the file still gets a standalone, metadata-only ledger recording ZERO
+  // entries, outside this checker's file-to-inventory linkage, so that its
+  // absence from every attention ledger is a checked-in statement rather than
+  // something a later reader has to decide was an oversight. That file explains
+  // itself and points back here.
+  "parity/attention.classifier.ledger.json",
+  "parity/attention.readers.ledger.json",
   "parity/attention.dedup.ledger.json",
   "parity/attention.config.ledger.json",
 ];

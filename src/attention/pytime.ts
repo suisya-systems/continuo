@@ -305,14 +305,34 @@ function weeksInIsoYear(year: number): number {
  * a durable dedup file is a key whose cooldown can never be evaluated again.
  */
 export function pyIsoUtc(now: Date): string {
-  if (!isRepresentableInstant(now)) {
+  const rendered = renderIsoUtc(now, now.getUTCMilliseconds() * 1000);
+  if (rendered === null) {
     throw new PyValueError(
       `attention dedup cannot render ${String(now)} as an ISO-8601 UTC timestamp`,
     );
   }
-  const rendered = now.toISOString();
-  const micros = now.getUTCMilliseconds() * 1000;
-  const seconds = rendered.slice(0, 19);
+  return rendered;
+}
+
+/**
+ * `datetime.isoformat()` on a UTC value, with the `+00:00` suffix spelled `Z`.
+ *
+ * `whole` supplies the seconds and `micros` the fraction, because the two callers arrive with the
+ * fraction in different places: `pyIsoUtc` reads it off a `Date`'s milliseconds, and
+ * `isoFromEpoch` computes it from an epoch that carries more precision than a `Date` can hold. The
+ * RULE is the same for both and is the whole reason this is one function -- CPython prints **no**
+ * fractional part when the microsecond field is zero and **six** digits when it is not, where
+ * `Date#toISOString` always prints three. Two spellings of one rendering rule inside one directory
+ * is rule 11's drift shape, and this belt has now met that shape three times.
+ *
+ * `null` for an instant outside `datetime`'s own domain: it renders in the expanded `+275760-...`
+ * form, which is not an ISO string anything downstream would accept, and CPython raises there.
+ */
+export function renderIsoUtc(whole: Date, micros: number): string | null {
+  if (!isRepresentableInstant(whole)) {
+    return null;
+  }
+  const seconds = whole.toISOString().slice(0, 19);
   return micros === 0 ? `${seconds}Z` : `${seconds}.${String(micros).padStart(6, "0")}Z`;
 }
 

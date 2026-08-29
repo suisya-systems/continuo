@@ -1,0 +1,720 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "attention",
+      "collected": 194,
+      "inventory": "parity/source-inventory/attention.all.txt",
+      "note": "The attention belt ports in three sub-belts sharing one D-range (D-0034): A1 (facts, 90 cases -- this ledger and parity/attention.readers.ledger.json), A2 (dedup and config, 44) and A3 (notify and pipeline, 60). tests/attention/test_broker_journal_contract.py is NOT one of the 194 -- it has no node ids -- and has its own zero-entry ledger, parity/attention.broker-journal-contract.ledger.json, outside this checker's file-to-inventory linkage."
+    },
+    "file": {
+      "path": "tests/attention/test_classifier.py",
+      "collected": 61,
+      "inventory": "parity/source-inventory/attention.test_classifier.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; the eight parametrize expansions are node ids in their own right and each has its own entry."
+    }
+  },
+  "target": {
+    "test_file": "test/attention/classifier.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`classify_pending(entry, now, pending_decision_min, user_replied_min, notify_map=None, *, pending_decision_max=1440, pending_decision_drop=10080)`",
+        "to": "`classifyPending(entry, now, { pendingDecisionMin, userRepliedMin, notifyMap?, pendingDecisionMax?, pendingDecisionDrop? })`",
+        "why": "TypeScript has neither keyword arguments nor keyword-only parameters, so a transcription would have made five positional parameters where the source has two positional, one optional and two keyword-only -- and a caller that swapped `min` for `max` would type-check. The defaults are the source's and are applied in the same place.",
+        "affects": "the pending and classify_all cases"
+      },
+      {
+        "from": "`datetime` / `timedelta` / `.isoformat().replace(\"+00:00\", \"Z\")`",
+        "to": "`Date` and `minutesAgo(n)`, which renders the same instant in the same spelling",
+        "why": "One instant, one spelling, so the TTL ladder's boundaries are compared against the same strings the source compares. The parse on the production side is deliberately NOT `new Date(...)`: `Date.parse` accepts shapes `fromisoformat` rejects and reads a naive timestamp as LOCAL time, which would move a row across the 15-minute threshold by the runner's timezone offset. Two target-only cases pin the naive-is-UTC rule and the refusal of an impossible date.",
+        "affects": "the pending and classify_all cases"
+      },
+      {
+        "from": "`dict` lookups on `_NOTIFY_SUBKIND_TO_KIND`, `_DEFAULT_TEMPLATES` and `DEFAULT_NOTIFY`, keyed by strings the payload supplies",
+        "to": "`Object.create(null)` maps read with `Object.hasOwn` (`getOwn`)",
+        "why": "`docs/test-translation-conventions.md` rule 9: Python's `dict` has no inherited keys and an object literal carries `Object.prototype`, so a payload whose `kind` is `constructor` would be classified as something nobody wrote. A target-only case pins it; measured, an ordinary object literal plus a plain index turns that case red. The one place this is NOT what closes the hole is the notify-map lookup, where the two-value severity check already rejects anything the prototype could return -- said out loud in the code rather than left to look load-bearing.",
+        "affects": "the subkind and severity cases, and one target-only case"
+      },
+      {
+        "from": "`@dataclass(frozen=True)`, enforced at runtime",
+        "to": "a class with `readonly` fields plus `Object.freeze(this)`",
+        "why": "`readonly` is erased at emit, so a plain JavaScript caller could downgrade a severity in place -- the same gap the session belt found for `Enum` and `frozenset` and closed the same way. A target-only case pins it; measured, removing the freeze turns it red.",
+        "affects": "every case, and one target-only case"
+      },
+      {
+        "from": "`len(text)` and `text[:limit - 1]`, which count and slice CODE POINTS",
+        "to": "`[...text]` spread to code points before the length test and the slice",
+        "why": "JavaScript's `String#length` and `slice` count UTF-16 code units. A `raw_message` carrying an astral character -- an emoji in an operator's own message is the ordinary case -- would be cut early, and a cut landing inside a surrogate pair would put a lone surrogate into text an operator reads. The source's summary is untested in both repositories, which is exactly why the target-only case exists. Found by codex self-review, round 3.",
+        "affects": "the 120-character summary, and one target-only case"
+      }
+    ],
+    "target_only_tests": {
+      "count": 8,
+      "ids": [
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an attention event cannot be rewritten after construction",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a payload key that names an Object.prototype member is not a subkind",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an ISO created_at keeps Python's fractional-second spelling",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a naive received_at is read as UTC, not as the runner's local time",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an out-of-range date is malformed rather than rolled forward",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a non-finite pr does not take the classifier down",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an unknown kind falls back to the generic template"
+      ],
+      "why": "Each defends something the PORT had to write and the source therefore carries no warrant for: the runtime freeze, the `Object.create(null)` lookups, the hand-built ISO rendering, the explicit ISO grammar and its domain checks, and the `int()` repair. One is different in kind -- the 120-character summary cut is a branch the SOURCE leaves untested and a transcription loses silently, since the cut character is U+2026 and the `rstrip` runs before it is appended.",
+      "mutation_probes": [
+        {
+          "probe": "remove `Object.freeze(this)` from the event constructor",
+          "against": "target-only -- an attention event cannot be rewritten after construction",
+          "measured": "red"
+        },
+        {
+          "probe": "build the subkind table as an ordinary object literal and index it directly",
+          "against": "target-only -- a payload key that names an Object.prototype member is not a subkind",
+          "measured": "red"
+        },
+        {
+          "probe": "append the ellipsis without `rstrip`",
+          "against": "target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+          "measured": "red"
+        },
+        {
+          "probe": "append three dots instead of U+2026",
+          "against": "target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+          "measured": "red"
+        },
+        {
+          "probe": "count the summary in UTF-16 code units instead of code points, so 119 emoji read as 238 characters",
+          "against": "target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+          "measured": "red"
+        },
+        {
+          "probe": "read a naive timestamp with `new Date(text)` instead of the explicit ISO grammar",
+          "against": "target-only -- a naive received_at is read as UTC, not as the runner's local time",
+          "measured": "red"
+        },
+        {
+          "probe": "drop the `datetime.MINYEAR` bound, so `0000-01-01T00:00:00Z` parses as a real date",
+          "against": "target-only -- an out-of-range date is malformed rather than rolled forward",
+          "measured": "red"
+        },
+        {
+          "probe": "drop the strict 24-hour UTC-offset bound, so `+24:00` parses as a real offset",
+          "against": "target-only -- an out-of-range date is malformed rather than rolled forward",
+          "measured": "red"
+        },
+        {
+          "probe": "return the coerced integer without the safe-integer guard, so a 400-digit `pr` string becomes `Infinity`",
+          "against": "target-only -- a non-finite pr does not take the classifier down",
+          "measured": "red"
+        }
+      ],
+      "withdrawn_by_D_0906": {
+        "ids": [
+          "test/attention/classifier.test.ts::attention classifier > target-only -- every fact-state row has a pinned expectation",
+          "test/attention/classifier.test.ts::attention classifier > target-only -- the classifier carries the fact it was given[<each of the six states>]",
+          "test/attention/classifier.test.ts::attention classifier > target-only -- the same row under a different fact state classifies identically"
+        ],
+        "why": "Eight cases (the guard, its six parametrized carry-through expansions, and the no-mapping assertion) went with the shape `D-0903` introduced and `D-0906` withdrew. Their probes were measured red while the shape stood -- emptying the vocabulary, removing or adding a pinned row, pointing one at the wrong state, deriving the fact from the row's kind, and dropping `fact_state` from the wire shape -- and the record of that is kept here rather than deleted, because it is the evidence that the shape was genuinely load-bearing while it existed rather than decoration nobody had tested."
+      }
+    },
+    "deliberate_divergences": [
+      {
+        "behaviour": "`coerceInt` returns `null` for any value that is not a safe integer, so a `pr` above 2^53 -- reached from a float, or from a digit string Python would have parsed exactly -- is absent from the event rather than present as a rounded or infinite number.",
+        "source": "`classifier._coerce_int` catches only `TypeError` and `ValueError`, so `int(float('inf'))` raises `OverflowError` past it, and Python's arbitrary-precision `int` parses a 400-digit string exactly.",
+        "why": "Two halves of one hole, both reachable here and only one of them reachable there. The `OverflowError` escape is an inherited defect that takes the watcher down (D-0023 repairs it at this belt); the precision half is this runtime's own -- `Number('9'.repeat(400))` is `Infinity`, which renders as `PR #Infinity` in an operator's notification, a numeral that is not a number. `null` is the answer the two caught exceptions already give for every other unusable input, and the field is simply absent. Narrower than the source above 2^53, which is not a PR number.",
+        "pinned_by": "test/attention/classifier.test.ts::attention classifier > target-only -- a non-finite pr does not take the classifier down",
+        "found_by": "the OverflowError half by the rule-9 sweep during translation; the precision half by codex self-review, round 2"
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 61,
+    "ported": 32,
+    "adapted": 29,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "`_severity_for` falls back to `normal` for any kind `DEFAULT_NOTIFY` does not name, so a typo in an attention kind produces a quiet `normal` notification rather than a refusal.",
+      "why": "The source's behaviour, and the source's reason: the map is a default table that ja-side config may extend, so an unknown kind is expected rather than exceptional. Repairing it would change what the runtime does for every downstream caller, which is an upstream decision."
+    },
+    {
+      "behaviour": "`_default_text` falls back to `(\"Attention\", \"{kind} event\")` for an unknown kind, so a kind added to `_NOTIFY_SUBKIND_TO_KIND` and forgotten in `_DEFAULT_TEMPLATES` notifies with a placeholder title instead of failing.",
+      "why": "The source's fallback, carried. A target-only case pins the fallback's shape so it cannot drift, but the fallback itself is not repaired: making it raise would take the watcher down on a config the source tolerates."
+    },
+    {
+      "behaviour": "`classify_pending` reads `status`, `task_id` and the timestamps out of an untyped register and coerces rather than validating; an entry whose `received_at` is a number, not a string, reads as malformed and therefore urgent.",
+      "why": "The source's posture, stated in its own docstring: false positives are preferable to false negatives for a relay-gap watcher. Carried unchanged, including for the shapes only the wider TypeScript type admits."
+    },
+    {
+      "behaviour": "`parseIso` builds a `Date`, whose resolution is one millisecond, and rounds the parsed microsecond field into it. A timestamp with six fractional digits therefore lands on the nearest millisecond, so an age within a fraction of a millisecond of a TTL threshold can be classified on the other side of it from the source. Concretely, with `now = 12:00:00` and `pendingDecisionMin = 15`, `received_at = 11:45:00.000001` is one microsecond too fresh for Python and emits no event, while this port rounds it down to 11:45:00.000 and emits the urgent alert; `.999999` rounds up and flips the inverse case.",
+      "why": "NOT inherited -- this one is the port's own, and it is disclosed rather than repaired. Python's `datetime` carries microseconds and JavaScript's `Date` does not, so preserving them means `parseIso` returning an epoch in microseconds rather than a `Date` and `minutesSince` doing its arithmetic there. That is a contained change (one caller) and is the fix if this is ever wanted; it was NOT made in this belt because the window's standing instruction for this review round was to record a P2 rather than start another change-and-re-review cycle, and because the divergence needs a timestamp specified to sub-millisecond precision within a fraction of a millisecond of an integer-minute threshold -- no case in either repository constructs one, and no producer of `pending_decisions.json` writes one. Found by codex self-review, round 4, on the tip integrated with origin/main. STILL OPEN AFTER A2 (2026-08-29). A2 moved this function into `src/attention/pytime.ts` and re-derived its GRAMMAR against CPython 3.12.3, which recovered the sibling entry below; it did not change the return type. `parseIso` still hands back a `Date`, so the millisecond rounding is unchanged and this entry stands exactly as written. The fix is the same one it names -- an epoch in microseconds through every consumer -- and it is now a change to two modules rather than one, which is why A2 did not take it either.",
+      "where_a_fix_belongs": "This module, as `parseIso` returning `number` (epoch microseconds) with a `Number.isSafeInteger` guard -- 2026 is about 1.77e15 microseconds, well inside the safe range -- and `minutesSince` dividing by 60e6. A2 or A3 may take it if either touches this code first."
+    },
+    {
+      "behaviour": "`parseIso`'s UTC-offset grammar accepts `+HH:MM` and `+HH:MM:SS` but not a FRACTIONAL offset such as `+01:02:03.5`, which `datetime.fromisoformat` accepts on Python 3.11 and later. Such a timestamp is treated as malformed here, so `minutesSince` returns infinity and the TTL ladder short-circuits to `urgent` -- an entry that is below the notification threshold for the source is escalated by this port.",
+      "why": "The port's own divergence, disclosed rather than repaired, and it is the same family as the microsecond entry above: `datetime`'s ISO domain is both wider and finer than this grammar and than `Date`. Three things decided it. **The error direction is the safe one and is the module's own stated posture** -- a value it cannot date is treated as stale and alerts, which the source's `_minutes_since` docstring argues for explicitly ('false-positives are preferable to false-negatives for a relay-gap watcher'), so this fails toward noise rather than toward silence. **No producer writes one**: a fractional UTC offset corresponds to no real timezone and is a Python 3.11 grammar allowance rather than a shape `pending_decisions.json` carries. And a fix would be **partial anyway** -- `.5` of a second is representable in a `Date` and `.000001` is not, so the offset grammar cannot be made to agree with the source until the microsecond entry above is also taken. Found by codex self-review, round 5. RECOVERED BY A2 (2026-08-29), so this entry is CLOSED. `parseIso` moved to `src/attention/pytime.ts` under `D-0904`, where the attention belt's `datetime` transcriptions share one home, and the codex review gate then had A2 re-derive the whole grammar by MEASUREMENT rather than by recall: 104 inputs run through `datetime.fromisoformat` on CPython 3.12.3 and against the port. A fractional offset is accepted now -- `+01:02:03.5` parses, and so does the quirk beside it (CPython discards the fraction when the hour, minute and second components are all zero, so `+00:00:00.5` is plain UTC while `+00:00:02.25` is 2.25 seconds). The same pass widened the grammar to basic format, ISO week dates, an hour-only time, any single character as the separator and a two-digit-hour offset, all of which this entry's family had also left out. Everything below the millisecond still rounds, which is entry 3's standing disclosure and not this one's: the WHOLE-second part of an offset is exact. `test/attention/dedup.test.ts`'s `the stored-timestamp grammar is fromisoformat's, measured against CPython (target-only)` is where the measurement is pinned, and A1's own 90 cases were re-run green against the widened grammar -- it only ever ADMITS more, and every form it now admits is one the source admits too.",
+      "where_a_fix_belongs": "This module, taken together with the microsecond entry above rather than separately: extend the offset group to `(?:\\.\\d{1,6})?` and fold the fraction into `offsetSeconds` at the same time as `parseIso` moves to epoch microseconds. Doing only the grammar half would trade a refusal for a silently rounded offset, which is the worse of the two."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_approval_blocked_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent approval_blocked is urgent",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_relay_gap_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent relay_gap_suspected is normal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_silent_worker_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent silent worker output is normal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_unknown_subkind_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent with an unknown subkind is ignored",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_failure_urgent[failed]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a failing status is urgent[failed]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_failure_urgent[canceled]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a failing status is urgent[canceled]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_failure_urgent[incomplete]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a failing status is urgent[incomplete]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_success_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a successful status is ignored",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_worker_completed_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > worker_completed is normal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pr_merged_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pr_merged is normal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_progress_event_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a progress or unknown event is ignored",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_stale_pending_decision_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a stale pending decision is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_fresh_pending_decision_not_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a fresh pending decision is not urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_below_min_no_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: below min produces no event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_min_to_max_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: min to max is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_max_to_drop_demoted_to_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: max to drop is demoted to normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_above_drop_suppressed_for_notify",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: above drop is suppressed for notify",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged. `to_dict()['suppressed']` becomes `toDict()['suppressed']`, over the same wire-shaped snake_case object.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_demotion_respects_notify_map_override",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision demotion respects a notify map override",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_below_min_no_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: below min produces no event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_min_to_max_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: min to max is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_max_to_drop_demoted_to_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: max to drop is demoted to normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_above_drop_suppressed_for_notify",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: above drop is suppressed for notify",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_skipped_when_resolution_is_to_worker",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply is skipped once the resolution is to_worker",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_fires_for_other_resolution_kinds",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply fires for other resolution kinds",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a user reply that was never forwarded is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_recent_no_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a recent user reply produces no event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_resolved_pending_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a resolved pending entry is ignored",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_combines_inputs",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll combines its inputs",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_event_default_title_uses_runtime_text",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the default title uses the bundled runtime text",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. `\"99\" in ev.body` becomes `toContain`, the same substring question.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_missing_id_returns_none",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a row with no id returns null",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `row.pop(\"id\")` becomes a row literal written without the key. Mutating a shared fixture object would be a different assertion about a different object, and the property under test is that a row lacking an id yields nothing.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_missing_task_id_returns_none",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a pending entry with no task id returns null",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_map_overrides_severity_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a notify map override reaches the emitted event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `notify_map=` becomes the `notifyMap` option, because TypeScript has no keyword arguments. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_map_overrides_severity_pending",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a notify map override reaches a pending event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_map_unknown_value_falls_back_to_default",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > an unknown notify map value falls back to the default",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `notify_map=` becomes the `notifyMap` option, because TypeScript has no keyword arguments. The assertions are the source's, unchanged. The source needs a `# type: ignore[dict-item]` to write an invalid severity; the port's `NotifyMap` is typed `Record<string, string>` for the same reason -- the value being invalid is the point of the case, so the type must admit it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_malformed_received_at_treated_as_stale",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a malformed received_at is treated as stale",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged. The parse behind it is an explicit ISO grammar rather than `new Date(...)`, which accepts shapes `fromisoformat` rejects; two target-only cases pin the difference.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_missing_received_at_treated_as_stale",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a missing received_at is treated as stale",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[pane_silent-pane_silent-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[pane_silent-pane_silent-normal]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[pane_crashed-pane_crashed-urgent]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[pane_crashed-pane_crashed-urgent]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[worker_stalled-worker_stalled-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[worker_stalled-worker_stalled-normal]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[worker_not_reported-worker_not_reported-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[worker_not_reported-worker_not_reported-normal]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[error-worker_error-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[error-worker_error-normal]",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_subkind_table_includes_awaiting_user",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the notify subkind table includes awaiting_user",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: a lookup in the subkind table. The table is a module-private name in the source (`_NOTIFY_SUBKIND_TO_KIND`) and is exported here because the case reads it, which is D-0101's rule.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_awaiting_user_classifies_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent awaiting_user classifies as urgent",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_secretary_awaiting_user_default_text_non_empty",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the secretary_awaiting_user default text is non-empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: `_default_text` returns a `(title, body)` pair and the case asserts both are non-empty and that the task id reaches the body. `assert title` becomes `toBeTruthy()`, which is Python's truth test on a string.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_names_owner_and_both_instances",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > duplicate_sidecar names the owner and both instances",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_is_cooldown_gated_not_write_once",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > duplicate_sidecar is cooldown-gated rather than write-once",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_key_is_per_contesting_pair",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the duplicate_sidecar key is per contesting pair",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_ts_becomes_iso_created_at",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a duplicate_sidecar ts becomes an ISO created_at",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The ISO rendering behind it is hand-built rather than `Date#toISOString`, which always prints three fractional digits; that is an implementation detail of the module and a target-only case pins both spellings.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_malformed_fields_still_notify",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > duplicate_sidecar with malformed fields still notifies",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_severity_override_applies",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a duplicate_sidecar severity override applies",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `notify_map=` becomes the `notifyMap` option, because TypeScript has no keyword arguments. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_broker_duplicates_collapses_repeats_per_pair",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyBrokerDuplicates collapses repeats per pair",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. `{ev.summary: ev for ev in out}` becomes a `Map`, so a `null` summary cannot collide with a missing key the way an object literal's would.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_appends_broker_duplicates",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll appends broker duplicates",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_without_broker_duplicates_is_unchanged",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll without broker duplicates is unchanged",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_adopt_expired_names_the_adoption_that_failed",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > delivery_adopt_expired names the adoption that failed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_adopt_expired_body_separates_restored_from_orphaned",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the delivery_adopt_expired body separates restored from orphaned",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The `restored` branch is taken through `pyTruthy`, not `||`: Python's falsy set includes `[]` and `{}` where JavaScript's does not.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_superseded_keys_on_the_instance_that_went_mute",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > delivery_superseded keys on the instance that went mute",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_unrecognised_delivery_event_is_never_invented_into_an_alert",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > an unrecognised delivery event is never invented into an alert",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_signal_with_missing_identifiers_still_notifies",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a delivery signal with missing identifiers still notifies",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. The whitespace-only owner is stripped through `pyStrip`, whose whitespace set is `str.isspace()`'s rather than `String#trim`'s -- the case's `\"   \"` is exactly a strip test.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_broker_delivery_signals_collapses_repeats_per_incident",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyBrokerDeliverySignals collapses repeats per incident",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_appends_broker_delivery_signals",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll appends broker delivery signals",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_without_delivery_signals_is_unchanged",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll without delivery signals is unchanged",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the thresholds move from positional and keyword-only parameters to one options object, because TypeScript has neither, and `datetime` becomes `Date` on the same instant. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
