@@ -122,6 +122,7 @@ spaces distinct.
 | D-0603 | The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types` | accepted |
 | D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
+| D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
 
 ---
 
@@ -7085,3 +7086,108 @@ or does not reproduce the source's comparison faithfully, the belt's approach to
 **Source.** Task `continuo-gate-item11-p1`, 2026-08-29, porting
 `tests/gate_item11/test_no_provider_detail_leaks.py`, `test_registry_availability.py` and
 `test_substitution_scenarios.py` from interlock `65f36c5`, under the belt start D-0034 ratified.
+
+---
+
+## D-1002 -- The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional
+
+**Context.** D-1001's Decision 3 deferred `tests/gate_item11/test_suite_runs_unchanged.py`'s 13
+cases -- the operational half of item 11's claim, run the control-plane suite twice (once with a
+live session bound before collection, once without) and diff the outcomes, the collected ids and a
+digest of every collected file -- pending a spike into whether continuo's own suite runner supports
+the same shape. This task is that spike plus the port.
+
+**Decision 1 -- the spike confirms the shape and finds it needs no pytest-plugin analogue: vitest's
+own `--reporter=json` already carries what `outcome_recorder.py` had to be written to collect.**
+Measured directly (`node_modules/.bin/vitest run <file> --reporter=json --outputFile=<path>`,
+vitest 4.1.11): the JSON reporter's `testResults[]` gives, per file, a `status` (`"passed"` /
+`"failed"`) and a `name` (the file's own path, usable for both a digest and an outcome key), and per
+test inside it an `assertionResults[].status`. Two further measurements this decision rests on:
+
+- **Hook failures are distinguishable from test failures without a custom reporter.** A `beforeAll`
+  throw sets every contained test's `status` to `"skipped"` and the *file's* `status` to `"failed"`;
+  an `afterAll` throw leaves every contained test `"passed"` and only the file `"failed"`. That is
+  enough to tell "a test started passing only because its fixture stopped running" (source's own
+  worry, `test_every_test_reaches_the_same_verdict_either_way`'s docstring) from "the suite's own
+  results are unchanged but teardown broke" -- not the same setup/call/teardown vocabulary pytest's
+  plugin recorded, but a strictly comparable pair (`{test, file}` per id) for the same purpose. See
+  `test/gate_item11/support/run.ts`'s own module doc.
+- **A `globalSetup` module that throws aborts the run, but the JSON reporter still writes a report**
+  (`{success: false, testResults: []}`), unlike pytest where a failed `pytest_configure` leaves no
+  report file at all. `support/run.ts` checks `testResults.length > 0` (via the `outcomes` map
+  built from it) rather than the source's `report.exists()`, which is the direct translation of the
+  same fail-closed intent (D-0010): a provider that could not qualify must not produce a
+  measurement that looks like anything ran.
+
+Consequence: `outcome_recorder.py` has no port. `test/gate_item11/support/run.ts` reads vitest's
+JSON reporter output directly and builds the outcome/artifact maps `suite-runs-unchanged.test.ts`
+compares, which is a re-derivation against continuo's own test runner rather than a line-for-line
+port of a pytest plugin whose whole reason to exist was that pytest did not expose this by default.
+
+**Decision 2 -- the "provider fixture" is a `globalSetup` module read by a dedicated vitest config
+(`support/suite-runs-unchanged.config.ts`), not a flag on the main config.** Vitest has no
+per-invocation plugin flag analogous to pytest's `-p`, so the source's `argv += ["-p",
+"tests.gate_item11.provider_plugin"]` (present only for the bound run) has no direct target. The
+config file's `globalSetup` entry is always present; what varies between the two runs is whether
+`support/provider-plugin.ts`'s `globalSetup` finds `CONTINUO_ITEM11_PROVIDER` in the subprocess
+environment `support/run.ts` builds -- absent, it returns immediately and is inert, the same
+"harmless when unset" contract the source's own `outcome_recorder.py` documents for `REPORT_ENV`.
+Measured (nested-vitest spike): a `vitest run` subprocess spawned from inside a running vitest
+worker works cleanly with no environment-variable interference once `VITEST`/`VITEST_POOL_ID`/
+`VITEST_WORKER_ID` are not force-inherited by accident, and `test/control_plane`'s 605 cases run in
+~7s either way -- three such runs (unbound, `[S3]` bound, `[S2]` bound) comfortably inside a single
+outer test's budget, which is why `CASE_TIMEOUT_MS` is generous (900s) rather than tuned to the
+measured figure: the same asymmetry `vitest.config.ts`'s own `testTimeout` comment gives for a slow
+CI cell. The config is spawned via `node <repo>/node_modules/vitest/vitest.mjs run --config <path>`
+(`process.execPath` plus the package's own `bin` target) rather than `node_modules/.bin/vitest`, so
+the subprocess launch does not depend on a POSIX shebang shim continuo's own Windows cell lacks.
+
+The double-run's own config deliberately does not reuse `vitest.config.ts`: that file's
+`resolveSeed()` throws under CI without `CONTINUO_TEST_SEED` (D-0005), which has nothing to do with
+item 11, and this measurement compares *outcomes and artifact digests*, not order-sensitivity --
+the main config's own job, D-0005's double-green rule already covers it. `support/suite-runs-
+unchanged.config.ts` runs in collection order, no shuffle.
+
+**Decision 3 -- `driveOnce` (the source's `drive_once`) is added to `test/gate_item11/
+substitution.ts` rather than to a new file.** Part 1 (D-1001) did not need it, since nothing in the
+51 cases it ported drove a full lease-to-outbox round trip to *qualify* a provider before a
+measurement -- that is `provider_plugin.py`'s job alone in the source, and its TypeScript home is
+the module already documented as "the one file in this fixture package that turns a provider's own
+words into a `session` row", which `driveOnce` also does, just as a precondition rather than as an
+assertion. Async because every `SessionProvider` verb it calls is `Promise`-returning (D-0301); the
+sqlite operations inside it stay synchronous, as `bindSession` already was.
+
+**Decision 4 (continuo#70) -- `test_substitution_scenarios.py`'s (and its port's) never calling
+`registry.disqualified()` is the source's own design, not a gap this belt should close.** Verified
+directly against interlock at `65f36c5`: `grep -n disqualified tests/gate_item11/
+test_substitution_scenarios.py` returns nothing -- the source's own `entry` fixture skips on
+`unavailable()` only, never calls `disqualified()`. The only source call site is
+`provider_plugin.py`'s `bind()`, now ported as `support/provider-plugin.ts`'s `globalSetup` in this
+task. The reason is the shape of what each file measures: `test_substitution_scenarios.py` exercises
+the control-plane binding path itself, case by case, so a session whose readout would disqualify it
+is exactly a case worth having (the binding logic still has to translate whatever state a provider
+reports, disqualifying or not -- `sessionRow`'s `OBSERVATION_WORD` mapping has no third case for
+"disqualified"). `test_suite_runs_unchanged.py` instead spends an entire double-suite-run measuring
+against one bound session, and `disqualified()` is the fail-closed gate (D-0010) that stops it from
+spending that cost on a backend already known to be broken, *before* either subprocess starts.
+Nothing here changes; `test/gate_item11/substitution-scenarios.test.ts` is unmodified by this task.
+
+**Totals.** `parity/gate_item11.suite-runs-unchanged.ledger.json` records 13 (0 `ported`, 13
+`adapted`, 0 `not-ported`, 0 waivers) -- all `adapted`, since every case reads `support/run.ts`'s
+`{test, file}` outcome pair or the `globalSetup`-printed stdout rather than pytest's own per-phase
+dict, per Decision 1. The six `[S2]` cases are `conditionally_collected`, the same premise
+`parity/gate_item11.substitution-scenarios.ledger.json`'s six declarations and
+`parity/gate_item2.mediated-real-provider.ledger.json`'s two capability gates already document.
+`parity/source-inventory.belts.md` moves `gate_item11` from `retarget` to `in-scope` (ratified
+2026-08-30, D-0034; completed 2026-08-29), the belt's own precedent from D-1001's text. The belt is
+now 64/64.
+
+**Falsifier.** If a future continuo test runner migration removes `--reporter=json` or `globalSetup`
+support, or changes either's semantics around hook-failure status or an aborted run's report
+contents, `support/run.ts` and `support/provider-plugin.ts` need re-verification against the new
+runner before this measurement can be trusted again -- this decision rests on vitest 4.1.11's
+measured behaviour, not on a documented contract either module promises to keep.
+
+**Source.** Task `continuo-gate-item11-p2`, 2026-08-29, porting
+`tests/gate_item11/test_suite_runs_unchanged.py` from interlock `65f36c5`, completing the belt D-0034
+started and D-1001 began, per the spike-first approach that task's brief required.

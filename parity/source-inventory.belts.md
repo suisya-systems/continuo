@@ -237,33 +237,41 @@ The *technique* is worth keeping and continuo already uses it -- `test/contract/
 polices carried prose the same way -- so this is a case of the property being held natively rather
 than of it being dropped.
 
-### `gate_item11` -- `retarget` -- 64 cases -- **ported so far: 51 of 64 cases**
+### `gate_item11` -- `in-scope` (ratified 2026-08-30, D-0034) -- **ported: 64 of 64 cases**
 
 Belt start ratified at the human gate on 2026-08-30 (D-0034), D-range `D-10xx`. `D-0504`'s testkit
 extraction is a precondition, run first as its own PR (`PR-0`). `src/index.ts`'s two re-exported
 vocabularies are carried as an allowlist exception to the leak check (a subpath-exports split is a
-falsifier-bearing future move, not this belt's). The thirteen `test_suite_runs_unchanged` cases are
-ported by a scoped subprocess double-run, with a spike required before the belt commits to that
-shape. The status keeps its `retarget` spelling; it moves to `in-scope` at completion.
+falsifier-bearing future move, not this belt's). The status keeps its `in-scope` spelling across both
+steps for the reason the `gate_item2` section above gives: the vocabulary this document is checked
+against records **porting intent** (D-0031), and Part 2 completing the belt does not retract the
+decision to take it on.
 
-**Part 1 (task `continuo-gate-item11-p1`): 51 of 64 cases**, across `test_no_provider_detail_leaks.py`
-(35), `test_registry_availability.py` (4) and `test_substitution_scenarios.py` (12) -- 0 `ported`,
-48 `adapted`, 3 `not-ported`, 0 waivers. `test_suite_runs_unchanged.py`'s 13 cases (the double-suite-run
-measurement) are the declared follow-on named above; see D-1001.
+**Part 1 (task `continuo-gate-item11-p1`, D-1001): 51 of 64 cases**, across
+`test_no_provider_detail_leaks.py` (35), `test_registry_availability.py` (4) and
+`test_substitution_scenarios.py` (12) -- 0 `ported`, 48 `adapted`, 3 `not-ported`, 0 waivers.
+`test_suite_runs_unchanged.py`'s 13 cases (the double-suite-run measurement) were the declared
+follow-on named there.
+
+**Part 2 (task `continuo-gate-item11-p2`, D-1002): the remaining 13 of 64**, `test_suite_runs_unchanged.py`
+-- 0 `ported`, 13 `adapted`, 0 `not-ported`, 0 waivers, completing the belt. Ported by a scoped
+subprocess double-run of `vitest run` against `test/control_plane`, spiked first per the belt's own
+guidance; see D-1002.
 
 | source file | cases | ledger |
 |---|---|---|
 | `tests/gate_item11/test_no_provider_detail_leaks.py` | 35 | `parity/gate_item11.no-provider-detail-leaks.ledger.json` |
 | `tests/gate_item11/test_registry_availability.py` | 4 | `parity/gate_item11.registry-availability.ledger.json` |
 | `tests/gate_item11/test_substitution_scenarios.py` | 12 | `parity/gate_item11.substitution-scenarios.ledger.json` |
-| `tests/gate_item11/test_suite_runs_unchanged.py` | 13 | not yet started -- declared follow-on, D-1001 |
+| `tests/gate_item11/test_suite_runs_unchanged.py` | 13 | `parity/gate_item11.suite-runs-unchanged.ledger.json` |
 
 The property is real and worth having: no session-backend detail may leak into the
 control plane, asserted structurally so a leak fails the build the day it is introduced. But
 `test_no_provider_detail_leaks.py` asserts it over Python imports of a Python package, and
-`test_suite_runs_unchanged.py` measures it by running interlock's suite. Both need re-derivation
-against continuo's module graph before any of the 64 cases mean anything. Continuo has the machinery
-for that already -- `import.meta.glob` package walks (D-0114) and the write-scan (D-0115).
+`test_suite_runs_unchanged.py` measures it by running interlock's suite. Both needed re-derivation
+against continuo's module graph before any of the 64 cases meant anything. Continuo had the machinery
+for that already -- `import.meta.glob` package walks (D-0114) and the write-scan (D-0115) for Part 1;
+vitest's own `--reporter=json` and a `globalSetup` module for Part 2's double-run (D-1002).
 
 ### `gate_item2` -- `in-scope` (ratified 2026-08-29) -- **ported: 34 of 34 cases**
 
@@ -503,8 +511,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29) | 1,715 |
-| `retarget` | `attention`, `gate_item11`, `broker` | 312 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `gate_item11` (ratified and **ported** 2026-08-29) | 1,779 |
+| `retarget` | `attention`, `broker` | 248 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
 | | **18** | **2,194** |
