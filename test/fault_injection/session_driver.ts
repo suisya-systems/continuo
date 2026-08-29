@@ -40,8 +40,9 @@
  * child" window `#refuseAndTerminate` and `recover()`'s adoption path are
  * about). Nothing here or in `controller.ts` ever kills the destination on
  * purpose. The four session cases are single-role, non-combination, and
- * `bootstrap` never repeats within a case, so the fake CLI's own bounded hold
- * (`HOLD_MS` below) is what ends it -- the same reasoning `controller.ts`'s
+ * `bootstrap` never repeats within a case, so the fake CLI's own release
+ * (see {@link stopFilePath}, a condition rather than a fixed sleep, plus a
+ * bounded safety cap) is what ends it -- the same reasoning `controller.ts`'s
  * `teardown()` docstring gives for why *that* ladder reaps role processes but
  * not their detached grandchildren: the destination's lifetime is its own
  * concern, bounded and self-terminating, and a harness-side reaper would be
@@ -129,18 +130,18 @@ const SEAM_ANCHORS: Readonly<Record<string, { anchor: string; kind: string }>> =
 });
 
 /**
- * How long the fake CLI holds after announcing its identity, before it emits
- * its result and exits on its own.
+ * The upper bound on how long the fake CLI will hold, if nothing ever tells
+ * it to stop.
  *
- * Bounded and self-terminating (see the file header's reaper note), and
- * chosen only to outlast the barrier/kill/restart sequence a case actually
- * runs -- never a figure any assertion reads. Long enough that the P3
- * "surviving child" window (recovery adopts a live process rather than
- * spawning a duplicate) is genuinely exercised when the case kills after the
- * effect window; short enough that four cases times two seeds do not make the
- * suite slow.
+ * Not the figure that ends the hold on the path any of the four cases
+ * actually take -- {@link stopFilePath} is -- but a safety net against an
+ * orphaned child outliving a run that failed before reaching the point that
+ * writes the stop file (an assertion failure between the kill and the
+ * cleanup, say). Held well under `RUNNER_BUDGET_CEILING_S` so a leaked
+ * process still exits before the suite's own watchdogs would have reason to
+ * suspect one.
  */
-const HOLD_MS = 3_000;
+const HOLD_SAFETY_CAP_MS = 45_000;
 
 function fakeCliPath(workdir: string): string {
   return join(workdir, "fake-claude-session.mjs");
@@ -152,6 +153,24 @@ function spawnLogPath(workdir: string): string {
 
 function stateRootPath(workdir: string): string {
   return join(workdir, "session-state");
+}
+
+/**
+ * The file whose *existence* releases a holding fake CLI (see
+ * {@link FAKE_CLI_SOURCE}).
+ *
+ * A condition on the filesystem, not a fixed sleep: the P3 "surviving child"
+ * window -- recovery adopts a live process rather than spawning a duplicate --
+ * is only genuinely exercised if the child is provably still alive at the
+ * instant `recover()` looks for it, on every runner speed, not merely on one
+ * fast enough to beat a guessed timeout. `runWalk` creates this file in a
+ * `finally` once a generation's own walk is over (success or failure),
+ * releasing whatever earlier generation's child is still waiting -- there is
+ * at most one live child across these single-role, non-combination cases, so
+ * one shared path is unambiguous.
+ */
+function stopFilePath(workdir: string): string {
+  return join(workdir, "session-driver-stop");
 }
 
 /**
@@ -196,7 +215,7 @@ function sleepSync(ms: number): void {
  * built for the session belt's own 65 cases would risk it for both.
  */
 const FAKE_CLI_SOURCE = `
-import { appendFileSync, writeSync } from "node:fs";
+import { appendFileSync, existsSync, writeSync } from "node:fs";
 import process from "node:process";
 
 const args = process.argv.slice(2);
@@ -246,7 +265,15 @@ function emit(payload) {
 
 emit({ type: "system", subtype: "init", session_id: claimed });
 
-const holdMs = Number(process.env.SESSION_DRIVER_HOLD_MS ?? "0");
+// Holds until \`stopFile\` appears, polling rather than sleeping a fixed
+// duration: the surviving-child window has to be true AT THE INSTANT a
+// restarted generation looks for it, on every runner speed, not merely on
+// one that beats a guessed timeout. The safety cap bounds an orphan if
+// nothing ever writes the stop file (a run that failed before its own
+// cleanup, say).
+const stopFile = process.env.SESSION_DRIVER_STOP_FILE;
+const safetyCapMs = Number(process.env.SESSION_DRIVER_SAFETY_CAP_MS ?? "0");
+const pollMs = 20;
 
 function sleep(ms) {
   return new Promise((resolve) => {
@@ -255,8 +282,12 @@ function sleep(ms) {
 }
 
 async function main() {
-  if (holdMs > 0) {
-    await sleep(holdMs);
+  if (stopFile) {
+    let waitedMs = 0;
+    while (!existsSync(stopFile) && (safetyCapMs <= 0 || waitedMs < safetyCapMs)) {
+      await sleep(pollMs);
+      waitedMs += pollMs;
+    }
   }
   emit({
     type: "result",
@@ -764,23 +795,20 @@ async function runWalk(options: {
     barrier.hit(mapped.anchor, { operation: contract.OPERATION_SESSION_START, kind: mapped.kind });
   };
 
-  let holdMs = 0;
-  if (generation === 0) {
-    // Children announce their identity and then hold, so a kill leaves a live
-    // child for the restarted generation to find and adopt (the shape U32's
-    // mediation is about); they exit on their own afterwards. Nothing under
-    // test waits on this figure and no timestamp derives from it.
-    holdMs = HOLD_MS;
-  }
   const provider = new ClaudeCliSessionProvider(stateRootPath(workdir), {
     claudeCommand: [process.execPath, fakeCliPath(workdir)],
     stopTimeout: 2.0,
   });
-  // The provider's own spawn forwards `process.env`; the fake CLI reads the
-  // two switches below through it. Set here (once, before the walk) rather
-  // than at bootstrap, so a restart's own provider instance still sees them.
+  // The provider's own spawn forwards `process.env`; the fake CLI reads these
+  // switches through it. Set here (once, before the walk) rather than at
+  // bootstrap, so a restart's own provider instance still sees them. Every
+  // generation's spawn gets the same stop-file path: at most one live child
+  // exists at a time across these single-role, non-combination cases, so one
+  // shared path is unambiguous, and a fresh spawn checking a not-yet-written
+  // file behaves exactly like a first spawn would.
   process.env["SESSION_DRIVER_SPAWN_LOG"] = spawnLogPath(workdir);
-  process.env["SESSION_DRIVER_HOLD_MS"] = String(holdMs);
+  process.env["SESSION_DRIVER_STOP_FILE"] = stopFilePath(workdir);
+  process.env["SESSION_DRIVER_SAFETY_CAP_MS"] = String(HOLD_SAFETY_CAP_MS);
 
   const orchestrator = new SessionOrchestrator(connection, provider, {
     runId: RUN_ID,
@@ -800,27 +828,41 @@ async function runWalk(options: {
     seam,
   });
 
-  if (generation === 0) {
-    await orchestrator.start();
-    return;
-  }
-
-  // Recovery: the predecessor was SIGKILLed holding the lease, and a lease
-  // cannot tell dead from slow -- the retry waits out the TTL. The wait is
-  // the injected clock's, never the wall's.
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      await orchestrator.recover();
-      emit({ event: EVENT_RECOVERY_COMPLETE, now_ms: clock.nowMs() });
+  try {
+    if (generation === 0) {
+      await orchestrator.start();
       return;
-    } catch (error) {
-      if (!(error instanceof LeaseHeld)) {
-        throw error;
+    }
+
+    // Recovery: the predecessor was SIGKILLed holding the lease, and a lease
+    // cannot tell dead from slow -- the retry waits out the TTL. The wait is
+    // the injected clock's, never the wall's.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await orchestrator.recover();
+        emit({ event: EVENT_RECOVERY_COMPLETE, now_ms: clock.nowMs() });
+        return;
+      } catch (error) {
+        if (!(error instanceof LeaseHeld)) {
+          throw error;
+        }
+        clock.advance(ttlMs + 1_000);
       }
-      clock.advance(ttlMs + 1_000);
+    }
+    throw new ContractViolation("the dead claimant's lease never expired");
+  } finally {
+    // Release any fake CLI still holding, whatever generation spawned it. A
+    // SIGKILLed generation 0 never reaches this (the signal tears the process
+    // down before any `finally` runs, exactly like the barrier's own kill
+    // path), so in every one of these four cases it is generation 1 that
+    // writes this -- on both its success and its failure path, since an
+    // assertion failure downstream must not leak a live process either.
+    try {
+      writeFileSync(stopFilePath(workdir), "");
+    } catch {
+      // Best effort: a workdir already gone is nothing to release into.
     }
   }
-  throw new ContractViolation("the dead claimant's lease never expired");
 }
 
 function attemptIds(caseId: string, generation: number): () => string {

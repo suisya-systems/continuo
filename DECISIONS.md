@@ -6836,13 +6836,21 @@ detached, its own session/process group -- the same shape the session belt's own
 tests already exercise, so a `SIGKILL` of the `sup` role process never touches it; that is the
 point, since it is what lets `recover()`'s adoption path find a live child rather than a corpse).
 Evaluated and found **not needed**: the four session-start manifest cases are single-role,
-non-combination, and never repeat `bootstrap()` within a case, so the fake CLI's own bounded hold
-(a fixed `HOLD_MS`, chosen only to outlast the barrier/kill/restart sequence a case actually runs)
-is what ends the process on every path -- normal completion, or the parent's absence changing
-nothing about it, since it is detached. `vitest`'s own worker teardown is the backstop for an
-aborted run, exactly as it already is for the session belt's own fake-CLI fixture. A reaper would
-be solving a problem this fixture does not have; the observation is recorded here rather than left
-implicit, per the fault belt's own request to have this question actually evaluated.
+non-combination, and never repeat `bootstrap()` within a case, so the fake CLI's own release is
+what ends the process on every path. That release is a *condition on the filesystem*, not a fixed
+sleep (a first draft used a fixed hold and a codex review round correctly flagged it: on a slow
+enough runner the child could exit before a restarted generation's `recover()` looked for it,
+making the P3 "surviving child" adoption path timing-dependent rather than reliably exercised) --
+the fake CLI polls for a stop-file's existence, and `session_driver.ts`'s `runWalk` writes that
+file in a `finally` once a generation's own walk is over, on both its success and its failure path
+(a `SIGKILL`ed generation 0 never reaches its own `finally` -- the signal tears the process down
+first, exactly like the barrier's own kill path -- so in every one of the four cases it is
+generation 1 that releases generation 0's still-living child). A bounded safety cap
+(`HOLD_SAFETY_CAP_MS`, well under `RUNNER_BUDGET_CEILING_S`) is the backstop if nothing ever writes
+the file, and `vitest`'s own worker teardown is the backstop beyond that for an aborted run, exactly
+as it already is for the session belt's own fake-CLI fixture. A dedicated harness-side reaper would
+still be solving a problem this fixture does not have; the observation is recorded here rather than
+left implicit, per the fault belt's own request to have this question actually evaluated.
 
 **Decision 3 -- per-case budgets route through D-0602's scaling, not literal numbers.** The source's
 `barrier_timeout_s=20.0, case_timeout_s=60.0` become `barrierTimeoutS(PROFILE)` /
