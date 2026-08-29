@@ -268,12 +268,17 @@ ledgers -- one per source file, per D-0019:
 | `tests/messagebus/test_carried_specifications.py` | 7 | `parity/messagebus.carried-specifications.ledger.json` |
 | `tests/messagebus/test_stale_readout.py` | 2 | `parity/messagebus.stale-readout.ledger.json` |
 
-One further target-only case sits beside them -- a probe that writes a file naming every route
+Two further target-only cases sit beside them, each defending something the port had to write and
+the source therefore carries no warrant for. One is a probe that writes a file naming every route
 around the import scan (a type-only import, an `export ... from`, a `require()` and a dynamic
 `import()` inside function bodies) and asserts the scan sees all four and judges all four session
-edges. The source's import-graph file has no probe; this port had to rewrite the scan in another
+edges: the source's import-graph file has no probe, and this port had to rewrite the scan in another
 language with two extra escape routes in it, so the machinery is defended in the target the way
-`canary` and `secretary` defend theirs.
+`canary` and `secretary` defend theirs. The other pins the endpoint's epoch parser against Python's
+`int()` grammar, acceptances and refusals both -- the source reads the epoch with `int()` inside a
+`try`, so the grammar *is* its validation and no source case drives a malformed value, while here the
+epoch is a fencing token and a spelling that wrongly parses starts an endpoint fenced under a number
+nobody wrote.
 
 **The two `not-ported` cases are both parametrizations over a file that does not exist here.** The
 suite-side confinement check is parametrized over a **directory listing**, and interlock's

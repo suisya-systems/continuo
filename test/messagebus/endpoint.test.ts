@@ -346,6 +346,38 @@ describe("the worker-outbound MCP endpoint", () => {
     );
   });
 
+  test("target-only -- the epoch env value is `int()`, not `Number()`", () => {
+    // The source reads the epoch with `int(env.get(...))` inside a `try`, so
+    // Python's integer grammar IS its validation and there is no source case to
+    // port: nothing in `tests/messagebus/` drives a malformed epoch. This port
+    // had to write that grammar out, which is why it gets a case of its own.
+    //
+    // The epoch is a fencing token. A spelling `int()` refuses that this parser
+    // accepted would start an endpoint whose writes are fenced under a number
+    // nobody wrote, where `missing()` should have refused to start at all -- so
+    // the rejections matter more here than the acceptances, and both are pinned.
+    const epochOf = (value: string): number | null =>
+      config({ INTERLOCK_MESSAGEBUS_EPOCH: value }).epoch;
+
+    for (const accepted of [
+      ["7", 7],
+      [" 7 ", 7],
+      ["+7", 7],
+      ["-7", -7],
+      ["1_000", 1000],
+    ] as const) {
+      expect(epochOf(accepted[0]), `int(${JSON.stringify(accepted[0])})`).toBe(accepted[1]);
+    }
+
+    for (const refused of ["", "  ", "_1", "1_", "1__0", "1.5", "0x10", "7f", "1e3", "NaN"]) {
+      expect(epochOf(refused), `int(${JSON.stringify(refused)}) raises`).toBeNull();
+      expect(
+        config({ INTERLOCK_MESSAGEBUS_EPOCH: refused }).missing(),
+        "a refused epoch is reported by missing(), which is what stops the endpoint starting",
+      ).toContain("INTERLOCK_MESSAGEBUS_EPOCH (unset or not an integer)");
+    }
+  });
+
   // ------------------------------------------------------------- end to end
 
   test("an unregistered recipient refuses to start", () => {

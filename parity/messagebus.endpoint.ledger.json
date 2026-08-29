@@ -63,9 +63,11 @@
       }
     ],
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "why": "None: every collected test in this file translates one source case."
+      "count": 1,
+      "ids": [
+        "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > target-only -- the epoch env value is `int()`, not `Number()`"
+      ],
+      "why": "The source reads the lease epoch with `int(env.get(...))` inside a `try`, so Python's integer grammar IS its validation and no source case drives a malformed epoch -- there is nothing to translate. This port had to write that grammar out, and the epoch is a FENCING TOKEN: a spelling `int()` refuses but a hand-written parser accepts would start an endpoint whose writes are fenced under a number nobody wrote, where `missing()` should have refused to start at all. The case pins the refusals (`_1`, `1_`, `1__0`, a float spelling, a hex spelling, `1e3`) as well as the acceptances (surrounding whitespace, a sign, `1_000`), and asserts each refusal reaches `missing()`. Target-only because it defends what the port had to invent, not a property of the source."
     }
   },
   "totals": {

@@ -121,14 +121,20 @@ function envelopeToWire(envelope: DeliveredEnvelope): Record<string, unknown> {
 
 /** `int(...)` over an env value: the whole string, or nothing. */
 function parseEpoch(raw: string): number | null {
-  // Python's `int()` accepts surrounding whitespace, a sign and `_` separators,
-  // and rejects everything else -- notably a float spelling, which
-  // `Number("1.5")` would accept and silently truncate elsewhere.
-  const text = raw.trim().replace(/_/g, "");
-  if (!/^[+-]?\d+$/.test(text)) {
+  // Python's `int()` accepts surrounding whitespace, a sign, and `_` separators
+  // **between digits**; it rejects everything else -- notably a float spelling,
+  // which `Number("1.5")` would accept and silently truncate elsewhere.
+  //
+  // The separator rule is checked BEFORE the underscores are removed, not after.
+  // Stripping first would turn `_1`, `1_` and `1__0` -- all of which `int()`
+  // refuses -- into valid epochs, and an epoch is a fencing token: a malformed
+  // one that parses is a writer fenced under a number nobody wrote, where
+  // `missing()` should have refused to start at all.
+  const text = raw.trim();
+  if (!/^[+-]?\d+(?:_\d+)*$/.test(text)) {
     return null;
   }
-  const value = Number(text);
+  const value = Number(text.replace(/_/g, ""));
   return Number.isSafeInteger(value) ? value : null;
 }
 
