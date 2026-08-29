@@ -606,6 +606,33 @@ describe("attention readers", () => {
     expect(reached, "the tail walk did not go through readersSeams.chunkReachesCutoff").toBe(true);
   });
 
+  test("target-only -- a journal that is not a regular file refuses the same way on every platform", () => {
+    // The two ported `unreadable journal warns` cases assert the source's substring, and both were
+    // green on Linux for a reason that does not hold everywhere: a directory reports a non-zero
+    // size, so the walk enters its loop and `readSync` raises `EISDIR`. On Windows a directory
+    // reports size 0, the loop never runs, nothing is read, and the reader returns an empty list
+    // SILENTLY -- caught by CI on `windows-latest` for both node 22 and node 24, and precisely the
+    // "indistinguishable from nothing is wrong" outcome those cases exist to forbid.
+    //
+    // So the refusal is now the reader's own, taken from `fstat` before the walk, and this case
+    // pins the reason text rather than only the fact of a warning. Asserting the REASON is what
+    // makes the case falsifiable on a platform where the accidental path would also have passed:
+    // measured, dropping the `isFile` check turns this red on Linux while both ported cases stay
+    // green.
+    const root = caseRoot("readers");
+    mkdirSync(join(root, "broker", "queue.jsonl"), { recursive: true });
+
+    const { value, err } = capturedStderr(() =>
+      readers.readBrokerDuplicates(join(root, "broker"), { nowEpoch: 1000, windowSec: 300 }),
+    );
+
+    expect(value).toEqual([]);
+    expect(err, "the refusal quoted a host syscall instead of the reader's own reason").toContain(
+      "not a regular file",
+    );
+    expect(err).toContain("treating as no duplicate-sidecar signals");
+  });
+
   test("target-only -- a chunk larger than the remaining budget is clamped to it", () => {
     // D-0023 repair, and a divergence from the source. Its walk sizes each read from `chunk_bytes`
     // alone and only re-checks the cap at the top of the next iteration, so an oversized chunk is

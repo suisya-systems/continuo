@@ -19,7 +19,7 @@
  *   (`docs/test-translation-conventions.md` rule 5).
  */
 
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -352,7 +352,22 @@ function tailLinesBackTo(
   let pos: number;
   let capped = false;
   try {
-    const size = statSync(path).size;
+    const stats = fstatSync(fd);
+    // Refuse anything that is not a regular file, BEFORE the walk and by asking the descriptor
+    // rather than the path. `Path.open("rb")` raises `IsADirectoryError` in the source, and the
+    // temptation is to let the first `readSync` raise `EISDIR` instead -- which is what happens on
+    // Linux, where a directory reports a non-zero size, so the walk enters its loop and the read
+    // fails. **On Windows a directory reports size 0**, so `pos` starts at 0, the loop never runs,
+    // nothing is ever read, and the reader hands back an empty list with no warning at all. That
+    // is the exact outcome the two `unreadable journal warns` cases exist to forbid: a degraded
+    // read that is indistinguishable from "nothing is wrong", for a consumer whose whole job is
+    // reporting silence. Asking `fstat` first also closes the gap between the open and the stat,
+    // and makes the warning identical on every platform rather than quoting whichever syscall the
+    // host happened to fail at.
+    if (!stats.isFile()) {
+      throw new Error(`cannot read ${path}: not a regular file`);
+    }
+    const size = stats.size;
     pos = size;
     while (pos > 0) {
       if (size - pos >= bounds.maxScanBytes) {

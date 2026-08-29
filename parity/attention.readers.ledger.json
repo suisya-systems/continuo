@@ -57,14 +57,15 @@
       }
     ],
     "target_only_tests": {
-      "count": 4,
+      "count": 5,
       "ids": [
         "test/attention/readers.test.ts::attention readers > target-only -- production routes the walk through the seam",
         "test/attention/readers.test.ts::attention readers > target-only -- a chunk larger than the remaining budget is clamped to it",
         "test/attention/readers.test.ts::attention readers > target-only -- a ts JSON.parse renders as Infinity is skipped",
-        "test/attention/readers.test.ts::attention readers > target-only -- a journal line split by a Python line boundary is unparseable"
+        "test/attention/readers.test.ts::attention readers > target-only -- a journal line split by a Python line boundary is unparseable",
+        "test/attention/readers.test.ts::attention readers > target-only -- a journal that is not a regular file refuses the same way on every platform"
       ],
-      "why": "Each defends machinery the PORT wrote and the source therefore carries no warrant for. The seam is required by the ESM constraint and would rot into a decoration without a liveness case (measured red by calling `chunkReachesCutoff` directly). The other two close the two places where `JSON.parse` and `String#split` are narrower than `json.loads` and `str.splitlines()`: without them the finiteness guard would be unreachable from any ported case, and the line-boundary list would be uncheckable (measured red by returning `ts` unchecked, and by splitting on `\\n` alone). The fourth is a D-0023 repair rather than a defence of the port's own machinery, and is described in `deliberate_divergences` below.",
+      "why": "Each defends machinery the PORT wrote and the source therefore carries no warrant for. The seam is required by the ESM constraint and would rot into a decoration without a liveness case (measured red by calling `chunkReachesCutoff` directly). The other two close the two places where `JSON.parse` and `String#split` are narrower than `json.loads` and `str.splitlines()`: without them the finiteness guard would be unreachable from any ported case, and the line-boundary list would be uncheckable (measured red by returning `ts` unchecked, and by splitting on `\\n` alone). The fourth is a D-0023 repair rather than a defence of the port's own machinery, and is described in `deliberate_divergences` below. The fifth was added after CI: the two ported `unreadable journal warns` cases were passing on Linux for a reason that does not hold on Windows, and only a case asserting the REASON in the warning -- rather than the mere fact of one -- is falsifiable on the platform where the accidental path also passes.",
       "mutation_probes": [
         {
           "probe": "call `chunkReachesCutoff` directly instead of through `readersSeams`",
@@ -95,6 +96,11 @@
           "probe": "publish the whole journal record instead of the three-key projection",
           "against": "read broker duplicates: the projection is exactly three keys",
           "measured": "red"
+        },
+        {
+          "probe": "drop the `fstat`/`isFile` refusal and let the first `readSync` raise instead, which is what the source's own shape does",
+          "against": "test/attention/readers.test.ts::attention readers > target-only -- a journal that is not a regular file refuses the same way on every platform",
+          "measured": "red -- and, importantly, the two ported `unreadable journal warns` cases stay GREEN under the same mutation on Linux, which is exactly why this case exists"
         }
       ]
     },
@@ -106,6 +112,14 @@
         "pinned_by": "test/attention/readers.test.ts::attention readers > target-only -- a chunk larger than the remaining budget is clamped to it",
         "found_by": "codex self-review, round 2",
         "no_ported_case_changes": "Every source case passes a `chunk_bytes` at or below its `max_scan_bytes`, so the clamp never binds in any of the 29 and none of their assertions move."
+      },
+      {
+        "behaviour": "`tailLinesBackTo` refuses a journal path that is not a regular file, by asking `fstat` on the open descriptor before the walk, rather than letting the first read fail.",
+        "source": "`readers._tail_lines_back_to` opens with `Path.open('rb')`, which raises `IsADirectoryError` on any platform; the port's `openSync` succeeds on a directory and leaves the failure to the read.",
+        "why": "Found by CI on `windows-latest` (node 22 and node 24) after the belt was otherwise complete, and it is a genuine defect rather than test mechanics. A directory reports a non-zero size on Linux, so the walk enters its loop and `readSync` raises `EISDIR` -- the warning appears and the ported cases pass. **On Windows a directory reports size 0**, so `pos` starts at 0, the `while (pos > 0)` loop never runs, nothing is read, no error is raised, and the reader hands back an empty list with NO warning. That is the outcome those two cases exist to forbid, stated in the source's own docstring: a degraded read that is indistinguishable from 'nothing is wrong', for a consumer whose entire job is reporting silence. Asking the descriptor first also closes the window between the open and the stat, and makes the warning text identical on every platform instead of quoting whichever syscall the host happened to fail at.",
+        "pinned_by": "test/attention/readers.test.ts::attention readers > target-only -- a journal that is not a regular file refuses the same way on every platform",
+        "found_by": "CI, PR #71, double-green (windows-latest, node 22) and (windows-latest, node 24)",
+        "no_ported_case_changes": "Both ported cases keep the source's own assertion (`broker journal` appears on stderr) unchanged; what moved is that they now hold for the reader's own reason on every platform rather than for the host's."
       }
     ]
   },
@@ -304,7 +318,7 @@
       "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here. The directory-where-a-file-should-be raises at a different syscall in the two runtimes -- `Path.open('rb')` raises `IsADirectoryError` immediately, while POSIX `open(2)` on a directory succeeds and Node's `readSync` is what fails -- so the try block wraps the whole walk rather than only the open. Both degrade to no signals with the source's warning substring.",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here. The directory-where-a-file-should-be raises at a different syscall in the two runtimes -- `Path.open('rb')` raises `IsADirectoryError` immediately, while POSIX `open(2)` on a directory succeeds and Node's `readSync` is what fails -- so the try block wraps the whole walk rather than only the open. Both degrade to no signals with the source's warning substring. Refined after CI: the refusal is now the reader's own, taken from `fstat` before the walk, because on Windows a directory reports size 0 and the walk would otherwise read nothing and warn about nothing -- see `deliberate_divergences`. The assertion is still the source's.",
       "source_revision": "65f36c5"
     },
     {
@@ -367,7 +381,7 @@
       "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here.",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here. Refined after CI: the refusal is now the reader's own, taken from `fstat` before the walk, because on Windows a directory reports size 0 and the walk would otherwise read nothing and warn about nothing -- see `deliberate_divergences`. The assertion is still the source's.",
       "source_revision": "65f36c5"
     },
     {
