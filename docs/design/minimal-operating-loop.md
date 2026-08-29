@@ -101,13 +101,22 @@ The rest of this document is about the other half.
 |---|---|---|
 | L0 | Substrate | A production control-plane database exists at head. |
 | L1 | Admission | An operator names a task and a project; a `run` row is created; a delegation record is persisted. |
-| L2 | Workspace | A git worktree is cut from a named base ref; the worker's fenced configuration is rendered into it. |
+| L2 | Workspace | A git worktree is cut from a named base **branch**; the worker's fenced configuration is rendered into it. |
 | L3 | Spawn | A lease is acquired, a session is bound, a `claude -p` child starts in that workspace with the brief as its prompt. |
 | L4 | Report | The worker's outcome reaches the control plane as an event on the spine. |
 | L5 | Gate out | A gate is opened on that event and relayed to somewhere a person reads. |
 | L6 | Gate in | The person's decision comes back with a verbatim body, the relay is acked, and the gate advances to `answered`. |
-| L7 | Publish | The branch is pushed, a PR is opened against the same ref the worktree was cut from, the PR is merged. |
+| L7 | Publish | The branch is pushed, a PR is opened against the same base branch the worktree was cut from, the PR is merged. |
 | L8 | Close | The merge is observed, the run reaches `completed`. |
+
+**One constraint the table states deliberately: the base is a *branch*, not a ref.** A worktree can be
+cut from a tag or a commit SHA and a naive design would allow it, because L2 only needs something
+resolvable. But L7 requires the base to name a branch -- a PR cannot target a tag or a bare SHA -- so
+a lap that accepted an arbitrary ref at L2 would reach L7 with no valid target and no way to satisfy
+the "same base" invariant that keeps unrelated commits out of the PR. **Require a base branch at
+admission, persist it in the delegation record (6.3), and record the resolved commit separately if
+the lap wants provenance.** Cadenza's G1 already validates a base branch as a distinct value type,
+which is one reason it is the natural supplier once it is callable (4.8).
 
 **What makes this minimal.** One project, one worker at a time, one gate, git worktrees as the only
 isolation strategy, an operator present throughout, and no CI observation. It is the smallest thing
@@ -144,7 +153,7 @@ terminal multiplexer.
 | `incident` writing | `grep "INTO incident" src/` returns nothing, and `incident` is in `PROTECTED_TABLES` (`src/control_plane/lease.ts:1267-1274`). Every "On a hit -> raise an incident" cell in the reconcile table (`docs/production-schema.md:546-553`) has no landing place. Deferring the sweep and deferring the incident writer are the same deferral; do not count them twice. |
 | Durable secretary intake | Zero cost, **provided** the design says outright that the admission command *is* the intake. The cost of not saying it is a second answer to "where does a task come from" appearing beside the run table. |
 | Retargeting `continuo attention` at the successor spine | See 3.2 -- this is currently pointed backwards, and the note belongs in the plan. |
-| Lease renewal | `SessionOrchestrator` defaults `ttlMs` to `30_000` (`src/supervisor.ts:296`) and nothing calls `renew`. If renewal is excluded, the lap's TTL must be set explicitly beyond the lap's duration **and written down**; otherwise the lap silently loses write authority mid-flight and every later fenced write is refused as a stale writer -- a configuration failure that reads like a bug. |
+| Lease renewal | Excludable, and section 4.9 says why the obvious alternative -- a longer TTL -- is not an answer. What must be written down instead is that **the lease does not span the human wait.** |
 
 ### 3.2 Not needed, rather than not yet ported
 
@@ -371,7 +380,17 @@ Three ways to close it, and the choice is genuinely open:
 
 **Recommendation: (1).** It gets the durable event with no new surface, and it keeps the worker's
 prose report -- ja's "Human Understanding Summary", the most transferable idea in ja's whole lap --
-inside the gate's answer body rather than requiring the approver to read a diff.
+in the record rather than requiring the approver to read a diff.
+
+**Where the report goes, and where it must not.** It goes in the **origin event's payload**, and from
+there into **`gate.rationale`**, which is `NOT NULL` with `length(rationale) > 0`
+(`migrations/0001_initial.sql:1271`, `:1285`) and is exactly the field that says why the gate exists.
+It must **not** go in `gate_transition.body`. That column carries the verbatim answer on the
+`presented -> answered` advance -- an edge `ADMISSIBLE` opens to `human` and to no other actor
+(`src/control_plane/gates.ts:199-221`), and one `advanceOnAck` refuses with `AnswerBodyRequired` when
+the body is null. Putting worker prose there would record worker-authored text as the human's
+approval, which destroys the single property this lap is being built to gain. The two fields are the
+question and the answer, and the design must keep them apart.
 
 *Required.*
 
@@ -387,8 +406,45 @@ rather than optional hardening.
 `config/projects.toml` registers exactly two projects, `interlock` and `cadenza`. **Neither continuo
 nor claude-org-ja is in the catalog.**
 
-*Deferrable for lap 1 -- the workspace can be cut from an operator-named path and ref. Not
+*Deferrable for lap 1 -- the workspace can be cut from an operator-named path and base branch. Not
 deferrable if the lap is to use cadenza at all, and the packaging decision is cadenza's.*
+
+### 4.9 The lease must not span the human wait, and a longer TTL is not the fix
+
+`SessionOrchestrator` defaults `ttlMs` to `30_000` (`src/supervisor.ts:296`), and nothing in `src/`
+calls `renew`. The tempting response -- configure a TTL longer than the lap -- **does not work, and
+the reason is worth stating rather than discovering.** L6 is an unbounded wait on a person. No finite
+TTL is guaranteed to outlast it, so "set it large enough" is not a property, it is a hope; and when
+it fails, the lap loses write authority mid-flight and every later fenced write is refused as a stale
+writer, which is a configuration failure that reads like a bug.
+
+The lap does not have this problem, provided the design says so explicitly, because
+**`SessionOrchestrator` already acquires per verb rather than per lap**: `start()` and `recover()`
+each call `#acquire()` at their own entry (`src/supervisor.ts:629`, `:695`), and the lease's scope is
+the spawn-admission critical section. So the correct statement is not "renewal is deferred" but
+**"the lease is never held across the gate"**.
+
+Two facts from `src/control_plane/lease.ts` make that safe rather than merely convenient, and they
+point the opposite way to renewal:
+
+- **An expired lease is not renewable by design.** "a lease that expired while the holder was paused
+  is not renewable -- the holder has to re-acquire, and re-acquiring hands it a new epoch"
+  (`:490-492`). Building the lap around `renew` would be building it around the one verb that refuses
+  the case the lap actually has.
+- **Re-acquisition raises the epoch, and that is the wanted behaviour.** "Every takeover raises the
+  epoch, including a re-acquisition by the same" holder (`:411`), and every fenced write validates
+  the epoch inside the write (`:113-114`). So any write still in flight under the pre-gate epoch is
+  refused rather than silently landing after the answer.
+
+**What the design must therefore record**, and it is a plan line rather than a decision: each
+control-plane operation after the answer re-acquires and proceeds under the new epoch; nothing holds
+a lease across L5-L6. **Renewal becomes required only if a later lap introduces a long-running
+holder that must keep one identity across the wait** -- and that is the point at which to build it,
+against a case that exists.
+
+*An earlier draft of this document said the lap should "set the TTL explicitly beyond the lap's
+duration". That was wrong twice over -- no such value exists for an unbounded wait, and the claim
+that the 30-second default expires mid-lap misread a per-verb lease as a per-lap one.*
 
 ---
 
@@ -717,7 +773,7 @@ DDL to be written by "the first Issue that needs them". G2 remains cadenza's lat
 authority and permission modelling -- not the lap's field list.
 
 **Recommendation:** continuo owns a small, explicitly non-normative record --
-`{ runId, holder, workspace, role, prompt, cliArgs? }` -- produced by the admission command and
+`{ runId, holder, workspace, role, baseBranch, prompt, cliArgs? }` -- produced by the admission command and
 persisted through the existing `appendEvent` as an event row with `subject_kind = 'run'`, so the work
 statement is durable rather than living only in the child's transcript. The entry must state that it
 is lap-scoped, that `holder` is a lease claimant and **not** an authority, and that it is superseded by
@@ -740,14 +796,15 @@ Each step names what it unblocks. Steps 1-3 are strictly ordered; 4-8 have some 
    into existence at head, which the re-pointed endpoint's startup check requires.*
 3. **Write the run-lifecycle writer and name the lap's event types (6.2).** *Unblocks: the session
    foreign key, the gate foreign key, and the close.*
-4. **Decide lease ownership, TTL and renewal for a whole lap (3.1).** *Unblocks: every fenced write
-   surviving past thirty seconds; gives the endpoint's lease env vars determinate values.*
+4. **Record the lease's scope: acquired per verb, never held across the gate (4.9).** *Unblocks: a
+   correct answer to "what TTL" -- which is that the question does not arise -- and gives the
+   endpoint's lease environment variables determinate values.*
 5. **Align the outbox with 0003's `cancelled`, then re-point the endpoint (5.1).** *Unblocks: the
    human gate. It is unreachable until this lands.*
 6. **Decide the delegation record (6.3), and pair it with cadenza's condition replacement (5.4).**
    *Unblocks: a producer for `SessionOrchestratorOptions`, and a durable work statement.*
 7. **Materialise the workspace and render the fence -- one artifact-first step (4.5).** Use
-   `src/fencing/renderer.ts`, not `src/settings/generator.ts`. Adopt ja's ordering in spirit --
+   `src/fencing/renderer.ts`, not `src/settings/generator.ts`. Require and persist a base branch here, not an arbitrary ref (section 2). Adopt ja's ordering in spirit --
    materialise every artifact, commit the reservation last, so a committed reservation always has a
    sendable payload behind it -- without ja's base-clone reservation, which protects a slot a
    worktree-only lap does not have. *Unblocks: a worker that can both work and poll.*
@@ -758,7 +815,7 @@ Each step names what it unblocks. Steps 1-3 are strictly ordered; 4-8 have some 
    *Unblocks: `openGate`, which cannot fire without a prior event.*
 10. **Gate verbs, both relays, and an ack path (4.2, 4.4).** *Unblocks: an approval that closes as
     `answered_and_forwarded` rather than `withdrawn`.*
-11. **Push, PR against the recorded base ref, merge, close the run.** *Ends the lap.*
+11. **Push, PR against the recorded base branch, merge, close the run.** *Ends the lap.*
 
 **Off this chain, decidable in any order:** `migrate` (5.2, ratify `not-porting`), `curator` (5.3,
 errata only), S1 (5.5, record that lap 1 evaluates rather than promotes). None of them blocks anything.
