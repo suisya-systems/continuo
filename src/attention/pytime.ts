@@ -70,8 +70,13 @@ export function parseIso(text: string): Date | null {
   const rest = text.slice(date.length);
   if (rest !== "") {
     // Any single character separates the date from the time, measured: CPython checks only that
-    // one character is there, so `"2026-05-12x11:59:00"` is a real timestamp to the source.
-    const time = matchTime(rest.slice(1));
+    // one character is there, so `"2026-05-12x11:59:00"` is a real timestamp to the source -- and
+    // so is one whose separator is an emoji, which is why it is consumed as a CODE POINT. Python
+    // indexes a `str` by code point and this runtime by UTF-16 unit, so `slice(1)` on an astral
+    // separator removes half a surrogate pair and leaves the other half in front of the time,
+    // turning a timestamp CPython reads into a garbled one.
+    const separator = String.fromCodePoint(rest.codePointAt(0) as number);
+    const time = matchTime(rest.slice(separator.length));
     if (time === null) {
       return null;
     }
@@ -203,15 +208,19 @@ function offsetOf(zone: string): number {
     return Number.NaN;
   }
   const fraction = match[5] ?? "";
-  const seconds =
-    Number(match[2]) * 3600 +
-    Number(match[3] ?? "0") * 60 +
-    Number(match[4] ?? "0") +
-    // A sub-second offset is a real `timedelta` in CPython (`+23:59:59.999999` parses), and
-    // dropping it puts the instant a whole second away rather than a microsecond. What this
-    // runtime cannot carry below a millisecond is the same disclosed rounding the module header
-    // records for the timestamp itself.
-    (fraction === "" ? 0 : Number(`0.${fraction}`));
+  const whole = Number(match[2]) * 3600 + Number(match[3] ?? "0") * 60 + Number(match[4] ?? "0");
+  // A sub-second offset is a real `timedelta` in CPython (`+23:59:59.999999` parses), and dropping
+  // it puts the instant a whole SECOND away rather than a microsecond -- which is what an earlier
+  // draft did, caught by the differential check this module's target-only case now carries. What
+  // this runtime cannot carry below a millisecond is the same disclosed rounding the module header
+  // records for the timestamp itself.
+  //
+  // The `whole === 0` arm is a CPython QUIRK, measured rather than reasoned: when the hour, minute
+  // and second components are all zero the fraction is discarded and the value is plain UTC, so
+  // `+00:00:00.5` is an offset of ZERO while `+00:00:02.25` is 2.25 seconds and `+00:01:00.5` is
+  // 60.5. Reading `+00:00:00.5` as half a second would move the instant 500ms, three orders of
+  // magnitude past the sub-millisecond rounding this module discloses.
+  const seconds = whole === 0 || fraction === "" ? whole : whole + Number(`0.${fraction}`);
   return seconds >= 24 * 3600 ? Number.NaN : (match[1] === "-" ? -1 : 1) * seconds;
 }
 
@@ -228,24 +237,39 @@ function fromIsoWeek(
   week: number,
   day: number,
 ): { year: number; month: number; day: number } | null {
-  if (year < 1 || week < 1 || week > weeksInIsoYear(year) || day < 1 || day > 7) {
+  if (year < 1 || year > 9999 || week < 1 || week > weeksInIsoYear(year) || day < 1 || day > 7) {
     return null;
   }
-  const jan4 = Date.UTC(year, 0, 4);
+  const jan4 = utcYearMonthDay(year, 1, 4);
   const jan4Weekday = ((new Date(jan4).getUTCDay() + 6) % 7) + 1; // Monday = 1
-  const ms = jan4 + ((week - 1) * 7 + (day - jan4Weekday)) * 86_400_000;
-  const resolved = new Date(ms);
-  return {
-    year: resolved.getUTCFullYear(),
-    month: resolved.getUTCMonth() + 1,
-    day: resolved.getUTCDate(),
-  };
+  const resolved = new Date(jan4 + ((week - 1) * 7 + (day - jan4Weekday)) * 86_400_000);
+  const resolvedYear = resolved.getUTCFullYear();
+  // CPython builds a `date` from the RESOLVED calendar day, so a week running off either end of
+  // `datetime`'s own range is a `ValueError` there: `9999-W52-7` is "year 10000 is out of range",
+  // measured. Without this the day becomes a real timestamp in year 10000 -- and in `shouldNotify`
+  // a FUTURE one, which suppresses the notification instead of taking the garbled path.
+  if (resolvedYear < 1 || resolvedYear > 9999) {
+    return null;
+  }
+  return { year: resolvedYear, month: resolved.getUTCMonth() + 1, day: resolved.getUTCDate() };
+}
+
+/**
+ * `Date.UTC` with the two-digit-year remapping undone.
+ *
+ * `Date.UTC(50, 0, 4)` is 1950, not the year 50, and `fromisoformat` has no such rule -- so an ISO
+ * week date in the first century would be resolved against the wrong January and land on the wrong
+ * calendar day.
+ */
+function utcYearMonthDay(year: number, month: number, day: number): number {
+  const ms = Date.UTC(year, month - 1, day);
+  return year < 100 ? new Date(ms).setUTCFullYear(year) : ms;
 }
 
 /** 53 when 1 January is a Thursday, or a leap year's 1 January is a Wednesday; 52 otherwise. */
 function weeksInIsoYear(year: number): number {
   const weekdayOfJan1 = (y: number): number =>
-    ((new Date(Date.UTC(y, 0, 1)).getUTCDay() + 6) % 7) + 1;
+    ((new Date(utcYearMonthDay(y, 1, 1)).getUTCDay() + 6) % 7) + 1;
   return weekdayOfJan1(year) === 4 || (isLeapYear(year) && weekdayOfJan1(year) === 3) ? 53 : 52;
 }
 

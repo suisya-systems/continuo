@@ -7175,7 +7175,18 @@ still not parity. The grammar was re-derived by running 68 inputs through `datet
 on CPython 3.12.3 (the interpreter interlock's suite runs on at `65f36c5`) and against `parseIso`;
 all 68 now agree, and 26 of them are pinned in a target-only case. The measurement also caught a
 defect the reviewer had not named: a sub-second offset whose fraction was being stripped put the
-instant a whole **second** away, not a microsecond. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+instant a whole **second** away, not a microsecond.
+
+**A second review round found four more, and the set grew to 90 inputs.** An ISO week can resolve
+*outside* `datetime`'s own year range (`9999-W52-7` is "year 10000 is out of range"), and letting it
+through was the one divergence here in the dangerous direction -- a garbled stored value read as a
+**future** instant, which suppresses a notification rather than letting it through. `Date.UTC`'s
+two-digit-year remapping had been undone for calendar dates and not for the week resolver, which is
+rule 11's own shape: a repair applied at one entry point and not at its sibling. A UTC offset whose
+hour, minute and second are all zero discards its fraction in CPython, so `+00:00:00.5` is plain UTC
+while `+00:00:02.25` is 2.25 seconds. And the date/time separator is one character to Python, which
+indexes a `str` by code point, and two UTF-16 units here when it is astral. All 90 inputs now agree,
+and each of the four carries its own probe. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written
