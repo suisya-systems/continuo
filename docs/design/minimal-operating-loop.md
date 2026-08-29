@@ -466,19 +466,17 @@ TTL is guaranteed to outlast it, so "set it large enough" is not a property, it 
 it fails, the lap loses write authority mid-flight and every later fenced write is refused as a stale
 writer, which is a configuration failure that reads like a bug.
 
-The lap does not have this problem, provided the design says so explicitly, because
-**`SessionOrchestrator` already acquires per verb rather than per lap**: `start()` and `recover()`
-each call `#acquire()` at their own entry (`src/supervisor.ts:629`, `:695`), and the lease's scope is
-the spawn-admission critical section. So the correct statement is not "renewal is deferred" but
-**"the lease is never held across the gate"**.
+**There are two lease holders in the lap, and they need different answers.** The first is the
+orchestrator, and it is already fine: **`SessionOrchestrator` acquires per verb rather than per lap**
+-- `start()` and `recover()` each call `#acquire()` at their own entry (`src/supervisor.ts:629`,
+`:695`), so the lease's scope is the spawn-admission critical section and never the wait.
 
-Two facts from `src/control_plane/lease.ts` make that safe rather than merely convenient, and they
-point the opposite way to renewal:
+Two facts from `src/control_plane/lease.ts` make that safe rather than merely convenient:
 
 - **An expired lease is not renewable by design.** "a lease that expired while the holder was paused
   is not renewable -- the holder has to re-acquire, and re-acquiring hands it a new epoch"
   (`:490-492`). Building the lap around `renew` would be building it around the one verb that refuses
-  the case the lap actually has.
+  the case an orchestrator that paused across a gate would actually have.
 - **Re-acquisition raises the epoch, and that is the wanted behaviour.** "Every takeover raises the
   epoch, including a re-acquisition by the same" holder (`:411`), and every fenced write validates
   the epoch inside the write (`:113-114`). So any write still in flight under the pre-gate epoch is
@@ -488,8 +486,8 @@ So for the **orchestrator's** lease the rule is a plan line, not a decision: eac
 operation after the answer re-acquires and proceeds under the new epoch, and nothing holds an
 orchestrator lease across L5-L6.
 
-**The endpoint is a different holder, and it is a real open question.** The re-pointed messagebus
-endpoint is a long-running process, and it does not manage its own lease at all:
+**The endpoint is the other holder, and it is where renewal becomes unavoidable.** The re-pointed
+messagebus endpoint is a long-running process, and it does not manage its own lease at all:
 
 > `INTERLOCK_MESSAGEBUS_RESOURCE` / `INTERLOCK_MESSAGEBUS_HOLDER` / `INTERLOCK_MESSAGEBUS_EPOCH` --
 > the lease identity this endpoint's writes are fenced under. **The endpoint does not acquire or
@@ -499,7 +497,7 @@ endpoint is a long-running process, and it does not manage its own lease at all:
 (`src/messagebus/endpoint.ts:42-46`.) The epoch is fixed at startup from the environment, and every
 `poll` write is fenced on both that epoch and the lease still being live. So an endpoint left running
 across an unbounded human wait stops being able to write, whether or not anyone took the lease over.
-**This must be decided for lap 1; it is not covered by the per-verb rule above.**
+**This is not covered by the per-verb rule above, and it must be settled for lap 1.**
 
 **Scoping the endpoint's life does not remove the problem, and it is worth saying why the obvious
 scoping fails.** The tempting answer is to run the endpoint only while a worker turn is live -- start
