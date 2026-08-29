@@ -172,8 +172,9 @@ executable, and `access(X_OK)` on Windows is only an existence check, so the ren
 while `cmd` could not launch the hook at all -- an unfenced child with the spawn recorded as
 admitted. `D-0208` records the divergence, the amendment and the measurements.
 
-**Not yet landed.** Which runtime resolves the hook command is one of interlock#74's named open
-questions, and it is settled in the pull request that ports `hook.ts`, not here. The renderer already
-carries one consequence of the expected answer: its check that a hook command's script token names an
-existing file recognises `.mjs`, `.js` and `.cjs` in addition to interlock's `.sh` and `.py`, which
-is strictly more that must resolve, never less.
+**Not yet landed.** Which runtime resolves the hook command is one of the questions interlock#74
+named and interlock never answered; **continuo answers it**, in the pull request that ports
+`hook.ts`, and not here (`D-0036` -- interlock is frozen and no answer is coming from it). The
+renderer already carries one consequence of the answer this repository will give: its check that a
+hook command's script token names an existing file recognises `.mjs`, `.js` and `.cjs` in addition
+to interlock's `.sh` and `.py`, which is strictly more that must resolve, never less.

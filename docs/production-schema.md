@@ -45,9 +45,9 @@ reads these tables.
 It decides: where the production DDL lives, how a live database is migrated, which component may
 write each state item, and the columns/keys/indices/constraints for the entities G3 and G4 need.
 
-It does **not** decide retention or scrubbing of any row below (`Q-0006`, open — every table here is
-append-or-mark, never delete, which is the same posture the spike takes and is not an answer to
-`Q-0006`), and it does **not** decide incident collapse semantics (`Q-0002`, open — `incident` is
+It does **not** decide retention or scrubbing of any row below (`Q-0006`, unanswered — every table
+here is append-or-mark, never delete, which is the same posture the spike takes and is not an answer
+to `Q-0006`), and it does **not** decide incident collapse semantics (`Q-0002`, unanswered — `incident` is
 reproduced below with its dedup key still non-unique, exactly as the spike has it, so both collapse
 rules stay expressible).
 
@@ -73,7 +73,7 @@ re-derived".
 | `session` | **carried verbatim** | The staged binding (`prepared` → `spawned` → `identity_confirmed`), the one-active-binding-per-run partial unique index, and the observation/`provider_state` equality pair are re-confirmed unchanged. They were derived from gate item 2 under injection (`docs/crash-window-orchestration.md`), not from convenience. |
 | `lease` | **carried verbatim** | Epoch monotonicity, holder-change raising the epoch, resource immutability, no-delete. `docs/lease-fencing.md` is the derivation and it is unaffected by anything here. |
 | `outbox` | **carried verbatim, then extended** | Carried including the deliberate non-uniqueness of `dedup_key`; §9.4 adds gate relay identity in a separate table rather than by tightening this one. Extended once since: `0003_outbox_cancelled_status.sql` adds the terminal `cancelled` status (§5.7), which the spike vocabulary has no counterpart for and which is therefore the one place this table is **not** what the spike says. |
-| `incident` | **carried verbatim** | `Q-0002` is still open; nothing here narrows it. |
+| `incident` | **carried verbatim** | `Q-0002` is unanswered (§12); nothing here narrows it. |
 | `action` | **carried verbatim** | `exactly_once_mechanism` and the one-effect-per-key partial unique index are the `ACCEPTANCE.md` §2 clause and are unchanged. |
 | `task` | **new** | Named by `D-0001` but absent from the spike (the gate items did not exercise it). Out of scope for G3/G4; §12 records it as a known hole rather than inventing it here. |
 | `assessment` | **new** | Same: named by `D-0001`, absent from the spike, not exercised by G3/G4. §12. |
@@ -1702,13 +1702,18 @@ implementation carries.
 
 ## 12. Known holes, stated rather than filled
 
+The `Q-` items below are questions **interlock recorded and never answered**. interlock is frozen
+(`D-0036`), so none of them is pending upstream: each is unanswered, and each is continuo's to settle
+at its own human gate when a change needs it settled. Listing one here means this document declines
+to answer it by inertia -- not that it is waiting on anyone.
+
 - **`task` and `assessment`.** `D-0001` names both and neither has DDL, here or in the spike,
   because neither G3 nor G4 exercises them. They are not designed by implication: the first Issue
   that needs them writes their DDL as a migration step, against this document's conventions.
-- **`Q-0002` (incident collapse, re-notification window)** stays open. `incident.dedup_key` remains
+- **`Q-0002` (incident collapse, re-notification window)** is unanswered. `incident.dedup_key` remains
   non-unique and no window appears in any table above, so both collapse rules remain expressible and
   `ACCEPTANCE.md` §2's requirement that tests parameterise the choice still holds.
-- **`Q-0006` (retention and scrubbing)** stays open. Every table here forbids `DELETE`, which is a
+- **`Q-0006` (retention and scrubbing)** is unanswered. Every table here forbids `DELETE`, which is a
   posture, not a retention policy; when `Q-0006` is settled it will need a migration step and
   probably an archival table, and the no-delete triggers are the thing it will have to change on
   purpose.

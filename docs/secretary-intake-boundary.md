@@ -19,13 +19,16 @@ comparison against a threshold.
 
 **This is the structural half of a rehearsal, and it is not the discharge.** interlock D-0022 defers
 item 8 to its own discharge point: the same absence of blocking, shown against the *real* Secretary
-under *genuine* worker load, before the canary starts, against a threshold settled by interlock
-`Q-0011`.
+under *genuine* worker load, before the canary starts, against a threshold interlock filed as
+`Q-0011` and never settled.
 
-**`Q-0011` is open, and nothing here invents an answer to it.** No numeric latency threshold appears
-in `src/secretary/`, in `test/secretary/`, or in this document. A rehearsal that quietly supplied
-the number the project has not agreed would be worse than no rehearsal, because the number would
-then arrive as settled.
+**`Q-0011` was left unanswered in interlock, and nothing here invents an answer to it.** interlock is
+frozen (`D-0036`), so no threshold is in transit from it; the question is worth keeping because it
+records what would have to be agreed, and continuo's human gate is now the only place that agreement
+can happen. No numeric latency threshold appears in `src/secretary/`, in `test/secretary/`, or in
+this document. A rehearsal that quietly supplied a number nobody has agreed would be worse than no
+rehearsal, because the number would then arrive as settled. Supplying one deliberately is a decision
+to take to the gate -- not something to wait for.
 
 ## The contract
 

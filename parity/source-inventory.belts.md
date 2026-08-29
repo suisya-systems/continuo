@@ -19,9 +19,18 @@ The status vocabulary:
 |---|---|
 | `in-scope` | a belt is porting it now or has -- either named by interlock#74's acceptance criteria, or ratified into scope at the human gate |
 | `candidate-lane` | a coherent belt of its own; the cases would port largely as they stand |
-| `retarget` | the invariants carry, but they are written against a mechanism continuo does not have, so a port has to re-point them first |
-| `decision-pending` | whether continuo carries this surface at all is undecided upstream; porting the tests presupposes the answer |
+| `retarget` | the invariants carry, but they are written against a mechanism continuo does not have, so a port has to re-point them onto a continuo mechanism first. The re-pointing is continuo's work; nothing about the status is contingent on interlock |
+| `decision-pending` | whether continuo carries this surface at all is undecided **in this repository**: the question has not been taken to continuo's human gate, and porting the tests presupposes an answer only the gate can give |
 | `not-porting` | no port, with a reason -- a proposal until marked ratified |
+
+**No status in this document is waiting on interlock, and none can be.** interlock is the port's
+source and is frozen (`D-0023`, `D-0036`): it decides nothing about continuo and answers no question
+continuo asks. Where a status turns on a question inherited from interlock -- `Q-0023` for `broker`,
+`Q-0011` for the secretary window -- that question is one interlock left unanswered, not one with an
+answer in transit. The question itself is worth keeping, because it records what has to be settled;
+what does not follow from it is waiting. If continuo needs it settled, it is settled at continuo's
+human gate, and until it is, the honest reading of the status is "undecided here", never "blocked
+there".
 
 Where interlock's own `PORTING_LEDGER.md` has already classed a file, that class is cited: it is the
 stronger evidence, because it was written by the people deciding what v2 keeps. Where it has not --
@@ -456,8 +465,20 @@ re-target them onto the MessageBus rewrite (`Q-0023`). They are recorded in
 gives, and they have **no node ids** -- pytest never collected them, so there is nothing to
 inventory and nothing may be invented.
 
-Whatever continuo decides about them, it decides after interlock does. They are `retarget` upstream
-first.
+**`Q-0023` is a question interlock left unanswered, not one it is going to answer.** interlock is
+frozen (`D-0023`, `D-0036`), so the MessageBus rewrite its instruction points at will never happen
+there and no re-targeting instruction is coming. `retarget` here therefore names work that belongs
+to this repository, and the two things still to decide are decided at continuo's human gate:
+
+- **The collected 54 (`test_residents.py`).** Whether continuo makes `residents._hostname` and
+  `residents._clock_ticks` injectable seams -- the twelve `monkeypatch.setattr` calls have no
+  continuo equivalent, so the seams are the port rather than a detail of it. Nothing external
+  settles this; it is a design decision for whichever belt takes the subsystem.
+- **The five uncollected modules.** Whether continuo grows a `broker/server.py` equivalent at all,
+  or re-points those files onto the messagebus package this repository already has (`D-05xx`,
+  ported 2026-08-29) -- which is exactly what `Q-0023` asked and interlock never answered. Their
+  having no node ids constrains the *evidence* (nothing may be invented for cases pytest never
+  collected); it does not make the decision someone else's.
 
 ### `messagebus` -- `in-scope` (ratified 2026-08-28) -- **ported: 43 of 43 cases**
 
@@ -565,8 +586,9 @@ from intent.
 
 An observation / human-gate belt, most likely alongside `attention`. Gate item 8's
 behavioural half: the intake answers while every consumer stalls, with the stall made *verifiable*
-rather than assumed and no latency threshold invented (`Q-0011` is open). Small, and it depends on
-nothing else in this list -- which made it a reasonable first port for anyone wanting the shape of
+rather than assumed and no latency threshold invented (`Q-0011` is unanswered, and interlock is
+frozen, so no answer is coming from it; continuo would set one at its own gate or not at all).
+Small, and it depends on nothing else in this list -- which made it a reasonable first port for anyone wanting the shape of
 this belt before committing to `attention`'s 194.
 
 Ported to `src/secretary/` (`intake.ts`, `index.ts`) with the written record at
@@ -595,9 +617,11 @@ therefore carries no warrant for: the two AST scans are probed against their own
 type-only import, a relative specifier climbing out of the package, `require()` and dynamic
 `import()` in a function body, an aliased blocking call, an element-access blocking call).
 
-**No numeric latency threshold is stated or used anywhere in the belt.** `Q-0011` is open, this is
-item 8's *rehearsal* and not its discharge, and the runner's timeouts bound how long a failing run
-hangs rather than how fast a passing one must be.
+**No numeric latency threshold is stated or used anywhere in the belt.** `Q-0011` -- what latency
+the secretary window must hold under load -- is a question interlock left unanswered and, being
+frozen, will never answer; this is item 8's *rehearsal* and not its discharge, and the runner's
+timeouts bound how long a failing run hangs rather than how fast a passing one must be. If continuo
+ever needs the number, it is decided here (`D-0036`), not collected from upstream.
 
 ### `migrate` -- `decision-pending` -- 11 cases
 

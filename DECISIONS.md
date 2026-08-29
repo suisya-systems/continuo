@@ -68,6 +68,7 @@ spaces distinct.
 | D-0033 | A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test | accepted |
 | D-0034 | The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named | accepted |
 | D-0035 | `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending` | accepted |
+| D-0036 | interlock is an archived source, not a decision-maker: every question continuo has open is settled at continuo's own human gate | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -8136,3 +8137,94 @@ refused, would let half the transcription be wrong with the oracle green.
 
 **Source.** Task `continuo-attention-a3`, 2026-08-29, porting `tests/attention/test_notify.py` (34
 cases) from interlock `65f36c5`.
+---
+
+## D-0036 -- interlock is an archived source, not a decision-maker: every question continuo has open is settled at continuo's own human gate
+
+**Context.** `D-0023` established one consequence of interlock being frozen -- an inherited defect is
+repaired here, because no upstream repair is coming. The premise is broader than the consequence
+`D-0023` drew from it, and the rest of the repository had not caught up. Documents written earlier
+still described interlock as an active party: a subsystem's status was "undecided upstream", an
+inherited `Q-` number "stays open" in a tense that implies someone is working on it, and
+`source-inventory.belts.md`'s `broker` section said in terms that "whatever continuo decides about
+them, it decides after interlock does. They are `retarget` upstream first."
+
+That is not a wording problem. On 2026-08-30 the window read those sentences and reported continuo's
+remaining `broker` work to the owner as **blocked on upstream `Q-0023`**, which is not a state that
+exists: `Q-0023` is a question interlock recorded and never answered, in a repository that is now
+frozen. A reader -- human or agent -- who takes "pending upstream" at face value concludes that
+waiting is the correct behaviour, and waiting is unbounded here. The text produced the mistake, so
+the text is what gets fixed.
+
+**Decision.** interlock is the **archived source** of this port. It supplies test cases, prior
+design reasoning, and `PORTING_LEDGER.md` classifications, and it is cited as the design lineage of
+record. It supplies **no decisions and no answers**. Concretely:
+
+1. **No continuo status, belt, or document is ever "blocked upstream" or "pending upstream".** There
+   is no upstream process left to be pending on. Where such a phrase appears it is wrong, not merely
+   imprecise, and it is rewritten rather than annotated.
+2. **An interlock `Q-` number names a question interlock left unanswered.** It is not a request in
+   flight and no answer is in transit. The reference stays -- it is the record of what the question
+   asked and where it came from, and that is worth keeping -- but its status is stated as
+   *unanswered*, never as *open pending upstream*.
+3. **If continuo needs one of those questions answered, continuo answers it**, at this repository's
+   human gate, as a `D-` entry, on continuo's own terms. Declining to answer stays a legitimate
+   position: this decision does not force `Q-0005`, `Q-0011` or `Q-0023` to be settled now. What it
+   forbids is recording the decline as *waiting*.
+4. **The human gate this file already relies on (`D-0031`, `D-0032`, `D-0034`, `D-0035`) is the only
+   decision-making body over continuo.** `decision-pending` means undecided *here*.
+
+**Consequences.**
+
+- `parity/source-inventory.belts.md` loses the "retarget upstream first" sentence in the `broker`
+  section and states instead what actually has to be decided about the 54 collected cases and the 5
+  uncollected modules, and who decides it. The problem statement is kept in full; only the
+  instruction to wait is removed.
+- The `retarget` and `decision-pending` definitions in the same document's status vocabulary are
+  re-worded to locate the decision here.
+- `docs/measurement-harness.md`, `docs/production-schema.md`, `docs/canary-routing-rehearsal.md`,
+  `docs/secretary-intake-boundary.md`, `docs/lease-fencing.md` and
+  `docs/test-translation-conventions.md` say "unanswered" where they said "open" or "settled
+  upstream", with one framing sentence per known-holes list; `docs/per-role-fencing.md` says the
+  hook-runtime question is one continuo answers rather than one with an expected answer. `README.md`
+  states the same thing about interlock in its design-lineage section.
+- **Entries already in this file are not rewritten**, per this file's own rule that an ID is never
+  rewritten. `D-0035`'s "undecided upstream", `D-0901`'s "had to be answered upstream first", and
+  similar phrasings in earlier entries stay as written and are read through this entry: they record
+  what was believed when they were taken, and the authority they describe is now here.
+- `parity/attention.broker-journal-contract.ledger.json`'s `where_the_status_lives` said the broker
+  is "`retarget` upstream first" and that continuo decides after interlock does. It is the status
+  pointer a reader reaches the uncollected `test_broker_journal_contract.py` through, so it
+  recreated the same wait from a second entrance; it now says what the belts document says.
+- **The `where_a_fix_belongs: "upstream"` fields already in the parity ledgers are not rewritten in
+  this sweep**, and `docs/test-translation-conventions.md` says how to read them instead. Each is
+  one of two different things -- a repair `D-0023` sends to the next belt that touches the
+  behaviour, or a fix that is structurally impossible here (it needs a v1 store, an interlock
+  module, or a decision this port has no standing to take) -- and telling them apart is a judgement
+  per entry against that entry's `note`. A blanket rewrite would assert repairs continuo cannot
+  make. The per-entry pass is proposed as its own change, at the human gate, and is named here so it
+  is not mistaken for something this decision already did.
+- Nothing about the port's *evidence* rules changes. The five uncollected broker modules still have
+  no node ids and nothing may be invented for them (`D-0031`); that is a constraint on evidence, and
+  this entry does not license filling it in from judgement.
+
+**Rejected alternative: leave the text and record the correction as an operating rule** (a memory, a
+window convention, a line in a runbook). Rejected because the failure mode is a *reader* forming a
+false belief from the document in front of them. Every new agent and every new reader starts from
+the text; a convention held somewhere else is not in the path. The owner's instruction on 2026-08-30
+was explicit that the text producing the misreading has to go, or the problem recurs indefinitely.
+
+**Rejected alternative: delete the interlock `Q-` references entirely.** Rejected because they carry
+real information -- what was asked, why it was not answered, and what a continuo answer would have
+to cover. Deleting them would trade one wrong reading ("someone will answer this") for another
+("nobody ever noticed this"). The reference is kept and its status is corrected.
+
+**Falsifier.** If interlock is un-frozen and someone resumes answering its open questions, the
+premise returns and this entry should be revisited -- as should `D-0023`, which rests on the same
+fact. Short of that: if a later reader is found treating a continuo `decision-pending` or `retarget`
+status as an external blocker despite this sweep, the rewrite did not reach the text they read, and
+the answer is to find that text rather than to restate the rule.
+
+**Source.** Task `continuo-upstream-authority-sweep`, 2026-08-30. Prompted by the window reporting
+`broker` as blocked on upstream `Q-0023` on the same date, and the owner's correction that the
+misleading text -- not the misreading -- is the thing to remove.
