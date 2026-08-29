@@ -105,13 +105,13 @@ const LEDGERS = [
   "parity/secretary.behaviour.ledger.json",
   "parity/secretary.structural.ledger.json",
   // lane G -- gate_item2 (issue #18's crash-and-retry proof). Downstream of
-  // the session belt above; the D-range is `D-08xx` (D-0801). Two of the
-  // three source files so far -- test_session_driver_harness.py (6 cases)
-  // is deferred, pending the fault_injection belt it drives through; see
-  // that file's absence from this list and parity/gate_item2.orchestrator-
-  // walk.ledger.json's subsystem note.
+  // the session belt above; the D-range is `D-08xx` (D-0801). All three
+  // source files are ledgered: the third, test_session_driver_harness.py,
+  // is entirely `not-ported` (deferred to a follow-on task -- see D-0801
+  // and that ledger's per-entry reason).
   "parity/gate_item2.orchestrator-walk.ledger.json",
   "parity/gate_item2.mediated-real-provider.ledger.json",
+  "parity/gate_item2.session-driver-harness.ledger.json",
 ];
 
 /**

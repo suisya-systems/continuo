@@ -209,7 +209,7 @@ control plane, asserted structurally so a leak fails the build the day it is int
 against continuo's module graph before any of the 64 cases mean anything. Continuo has the machinery
 for that already -- `import.meta.glob` package walks (D-0114) and the write-scan (D-0115).
 
-### `gate_item2` -- `candidate-lane` -- 34 cases, **28 ported (2026-08-29)**
+### `gate_item2` -- `candidate-lane` -- 34 cases, **28 ported, 6 deferred (2026-08-29)**
 
 Downstream of `session`. Every case runs a crash-and-retry through the control
 plane and asserts a durable row rather than an exit code, which is a shape that translates directly.
@@ -221,21 +221,32 @@ Belt started 2026-08-29, D-range `D-08xx` (`D-0801`). Ported to `src/control_pla
 spawn walk -- `async` end to end per D-0801, since it composes the `Promise`-returning S1 verbs
 D-0301 gave continuo's `SessionProvider`).
 
-**28 of 34 cases are translated: 26 `ported`, 2 `adapted`, 0 `not-ported`, 0 waivers**, across two of
-the source's three files, one ledger per file (D-0019):
+**28 of 34 cases are translated: 26 `ported`, 2 `adapted`, 0 `not-ported`, 0 waivers**, and the
+remaining 6 are recorded `not-ported` (deferred), across all three of the source's files, one ledger
+per file (D-0019):
 
 | source file | cases | ledger |
 |---|---|---|
 | `tests/gate_item2/test_orchestrator_walk.py` | 23 | `parity/gate_item2.orchestrator-walk.ledger.json` |
 | `tests/gate_item2/test_mediated_real_provider.py` | 5 | `parity/gate_item2.mediated-real-provider.ledger.json` |
+| `tests/gate_item2/test_session_driver_harness.py` | 6 | `parity/gate_item2.session-driver-harness.ledger.json` |
 
-**`tests/gate_item2/test_session_driver_harness.py` (6 cases) is deferred**, not covered by a ledger
-in this change. It drives `tests.fault_injection.controller` / `session_driver` -- the fault-injection
-harness itself, real SIGKILL and all -- which is `fault_injection`'s own `candidate-lane` belt below,
-being ported concurrently in a sibling worktree. See D-0801 for the reasoning. The belt stays
-`candidate-lane` rather than moving to `in-scope`/ported until those 6 node ids land, either against
-`fault_injection`'s finished session-driver adapter or against a follow-up decision if that adapter's
-shape does not fit this file's four cases directly.
+**`test_session_driver_harness.py`'s 6 cases are deferred to a dedicated follow-on task**, ratified by
+human decision 2026-08-29 (via secretary). It drives `tests.fault_injection.controller` / the S1
+adapter `tests.fault_injection.session_driver.SessionAdapter` -- the fault-injection harness itself,
+real SIGKILL and all. `fault_injection` is its own `candidate-lane` belt below, being ported
+concurrently in a sibling worktree; what actually blocks these 6 is narrower than "wait for that belt
+to land" -- `SessionAdapter`'s execution-path methods are a stub that deliberately throws (its own
+header names this as its own declared follow-on, D-0601, on the session belt landing, which has
+happened, PR #61, without the adapter itself being re-bound yet). The follow-on task's scope is
+therefore: re-bind `SessionAdapter` to `src/supervisor.ts` / `src/session/claude_cli_provider.ts`, land
+these 6 node ids, and land `fault_injection`'s own 4 full-profile session-start manifest cases together
+-- one task, since a `SessionAdapter` real enough for one is real enough for both. A faithful draft of
+all 6 cases against the current `controller.ts` / `manifest.ts` APIs is held at
+`tmp/session-driver-harness.draft.test.ts` (gitignored) on `feat/continuo-gate-item2-port`, as a
+handoff asset; see that ledger's per-entry reason for its exact provenance and the rework it expects.
+The belt stays `candidate-lane` rather than moving to `in-scope` until those 6 (plus `fault_injection`'s
+own 4) land.
 
 ### `broker` -- `retarget` -- 54 cases collected, 4 further modules not collected
 
