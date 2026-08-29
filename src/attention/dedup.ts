@@ -36,7 +36,7 @@ import {
 import { dirname, join } from "node:path";
 import { pyJsonDumps } from "../fencing/pyjson.js";
 import { getOwn } from "../fencing/pysemantics.js";
-import { parseIso, pyIsoUtc } from "./pytime.js";
+import { isRepresentableInstant, parseIso, pyIsoUtc } from "./pytime.js";
 
 /**
  * The source value of `source=` that selects the record-once namespace.
@@ -271,7 +271,7 @@ export function shouldNotify(
   // `recordNotified` already refuses it through `pyIsoUtc`; the read path needs the same answer,
   // and it is checked here rather than at the top because the `state.db.events` branch above never
   // looks at the clock.
-  if (Number.isNaN(now.getTime())) {
+  if (!isRepresentableInstant(now)) {
     throw new DedupStateRefused(`attention dedup now must be a valid instant, got ${String(now)}`);
   }
   if (!Object.hasOwn(state.pending, key)) {

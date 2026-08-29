@@ -275,7 +275,16 @@ describe("attention dedup", () => {
     // Rule 9: `new Date(NaN)` renders as the literal text "Invalid Date" and a year past 9999 in
     // the expanded `+275760-...` form. Either one written into the file is a key whose cooldown
     // can never be evaluated again.
-    for (const now of [new Date(Number.NaN), new Date(8.64e15)]) {
+    // `new Date("-000001-01-01T00:00:00Z")` is a perfectly valid `Date` and an instant `datetime`
+    // cannot hold; year 0000 is one `toISOString` renders in the ordinary four-digit form while
+    // `datetime.MINYEAR` is 1. Both were admitted before the two callers were put on one shared
+    // domain predicate.
+    for (const now of [
+      new Date(Number.NaN),
+      new Date(8.64e15),
+      new Date("-000001-01-01T00:00:00Z"),
+      new Date("0000-01-01T00:00:00Z"),
+    ]) {
       expectRefusal(
         () => recordNotified(new DedupState(), "event:1", { source: "state.db.events", now }),
         PyValueError,
@@ -343,16 +352,26 @@ describe("attention dedup", () => {
     // is false for every key at every age -- the notification silently suppressed. `recordNotified`
     // already refuses the same value; the read path has to give the same answer.
     const state = new DedupState({ pending: { "pending:T:k": "2026-05-12T10:00:00Z" } });
-    expectRefusal(
-      () =>
-        shouldNotify(state, "pending:T:k", {
-          source: "pending_decisions",
-          cooldownSec: 300,
-          now: new Date(Number.NaN),
-        }),
-      DedupStateRefused,
-      /now must be a valid instant/,
-    );
+    // The out-of-domain `Date`s are the same list `recordNotified` refuses, and they are here
+    // because the two guards were written a round apart with two different approximations of one
+    // domain: a valid `Date` in year -1 gives a NEGATIVE age against a 2026 timestamp, which reads
+    // as "well inside the cooldown" and suppresses the notification just as silently as `NaN` did.
+    for (const now of [
+      new Date(Number.NaN),
+      new Date("-000001-01-01T00:00:00Z"),
+      new Date(8.64e15),
+    ]) {
+      expectRefusal(
+        () =>
+          shouldNotify(state, "pending:T:k", {
+            source: "pending_decisions",
+            cooldownSec: 300,
+            now,
+          }),
+        DedupStateRefused,
+        /now must be a valid instant/,
+      );
+    }
   });
 
   test("the stored-timestamp grammar is fromisoformat's, measured against CPython (target-only)", () => {

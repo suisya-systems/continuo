@@ -7213,7 +7213,18 @@ the `PyValueError` wrapper the third round put around the config decode had been
 the source keeps `OSError` and `UnicodeDecodeError` apart and lets each propagate as itself, so the
 read moved outside the try. The differential set is 104 inputs: 102 comparable ones agree and the
 two CPython raises `OverflowError` on are recorded as repaired, classified separately by the
-generator so a crash can never be scored as a match. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+generator so a crash can never be scored as a match.
+
+**A fifth round found the same lesson a third time: two callers holding two spellings of one
+domain.** `pyIsoUtc` tested the rendered string, which admits year 0000 where `datetime.MINYEAR` is
+1; `shouldNotify` tested only for `NaN`, which admits `new Date("-000001-01-01T00:00:00Z")` -- a
+valid `Date` whose subtraction from a 2026 timestamp gives a *negative* age, reading as "well inside
+the cooldown" and suppressing the notification exactly as silently as `NaN` did. Both approximations
+were wrong in the same direction, and both were written a round apart, so they now share one
+exported predicate (`isRepresentableInstant`) that a single probe falsifies for both callers at
+once. Three of this belt's nine post-review defects have this one shape -- a rule applied at one of
+two call sites -- which is `D-0024`'s finding restated and is the thing worth carrying out of this
+belt. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written

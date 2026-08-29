@@ -305,15 +305,37 @@ function weeksInIsoYear(year: number): number {
  * a durable dedup file is a key whose cooldown can never be evaluated again.
  */
 export function pyIsoUtc(now: Date): string {
-  const rendered = Number.isNaN(now.getTime()) ? "" : now.toISOString();
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(rendered)) {
+  if (!isRepresentableInstant(now)) {
     throw new PyValueError(
       `attention dedup cannot render ${String(now)} as an ISO-8601 UTC timestamp`,
     );
   }
+  const rendered = now.toISOString();
   const micros = now.getUTCMilliseconds() * 1000;
   const seconds = rendered.slice(0, 19);
   return micros === 0 ? `${seconds}Z` : `${seconds}.${String(micros).padStart(6, "0")}Z`;
+}
+
+/**
+ * Whether `instant` is one `datetime` could hold: not `Invalid Date`, and inside `MINYEAR`..
+ * `MAXYEAR`.
+ *
+ * The predicate is shared rather than inlined because both of its callers need the SAME domain and
+ * they were written a review round apart with two different approximations of it -- `pyIsoUtc`
+ * tested the rendered string (which admits year 0000, and `datetime.MINYEAR` is 1) and
+ * `shouldNotify` tested only for `NaN` (which admits `new Date("-000001-01-01T00:00:00Z")`, a
+ * perfectly valid `Date` whose subtraction from a 2026 timestamp gives a NEGATIVE age and silently
+ * suppresses the notification). Two callers holding two spellings of one domain is the drift shape
+ * `docs/test-translation-conventions.md` rule 11 names, and both spellings were wrong in the same
+ * direction: they admitted an instant Python cannot construct.
+ */
+export function isRepresentableInstant(instant: Date): boolean {
+  const time = instant.getTime();
+  if (Number.isNaN(time)) {
+    return false;
+  }
+  const year = instant.getUTCFullYear();
+  return year >= 1 && year <= 9999;
 }
 
 /** Days in a Gregorian month, so a `2026-02-30` is refused rather than rolled into March. */
