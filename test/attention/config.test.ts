@@ -442,6 +442,16 @@ describe("attention config", () => {
     expect(String((thrown as Error).message)).toMatch(/EISDIR|illegal operation on a directory/);
   });
 
+  test("malformed JSON is refused in the same family as every other refusal (target-only)", () => {
+    // `json.JSONDecodeError` IS a `ValueError` in Python and `load_config` lets it propagate, so a
+    // caller catching this loader's refusals catches a malformed file too. `JSON.parse` raises a
+    // `SyntaxError`, which that caller would miss -- and the decode a few lines above is already
+    // re-raised as `PyValueError`, so leaving this half alone would answer one question two ways
+    // inside one function.
+    const path = configText("broken.json", "{ this is not json");
+    expectRefusal(() => loadConfig(path), PyValueError, /is not valid JSON/);
+  });
+
   test("a notify or template kind naming an Object.prototype member is not inherited (target-only)", () => {
     // Rule 9: the kind is a caller-supplied string used as a map key, and Python's `dict` has no
     // inherited keys. On an object literal `cfg.notify["constructor"]` answers with a function and

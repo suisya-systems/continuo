@@ -7405,7 +7405,16 @@ were wrong in the same direction, and both were written a round apart, so they n
 exported predicate (`isRepresentableInstant`) that a single probe falsifies for both callers at
 once. Three of this belt's nine post-review defects have this one shape -- a rule applied at one of
 two call sites -- which is `D-0024`'s finding restated and is the thing worth carrying out of this
-belt. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+belt.
+
+**A round on the integrated tip closed the other half of the third round's own decision.**
+`json.JSONDecodeError` is a `ValueError` in Python and `load_config` lets it propagate; `JSON.parse`
+raises a `SyntaxError`, which a caller catching this loader's refusals would miss. Other belts in
+this port *disclose* that difference rather than repairing it, and that would have been defensible
+here too -- except that the config decode two lines above had already been re-raised as
+`PyValueError` on exactly this argument, so the file answered one question two ways. That makes it
+a fourth instance of the shape above rather than a new judgement call, and consistency inside one
+function is the cheaper half to fix. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written

@@ -322,7 +322,23 @@ export function loadConfig(path: string | null): AttentionConfig {
       })`,
     );
   }
-  const raw: unknown = pyJsonLoads(text);
+  let raw: unknown;
+  try {
+    raw = pyJsonLoads(text);
+  } catch (error) {
+    // `json.loads` raises `json.JSONDecodeError`, which IS a `ValueError`, and `load_config` lets
+    // it propagate -- its own docstring says malformed JSON must reach the CLI as a clear error
+    // before the watcher ever runs. `JSON.parse` raises a `SyntaxError`, which a caller catching
+    // this loader's refusals would not catch, so it is re-raised in the same family the decode
+    // above and every validation below already use. Leaving the two halves of one question
+    // answered differently inside one function is what made this worth fixing rather than
+    // disclosing.
+    throw new PyValueError(
+      `attention config ${pyRepr(path)} is not valid JSON (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    );
+  }
   if (!isDict(raw)) {
     throw new PyValueError(`attention config ${pyRepr(path)} must be a JSON object`);
   }
