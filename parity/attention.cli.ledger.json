@@ -1,0 +1,290 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "attention",
+      "collected": 194,
+      "inventory": "parity/source-inventory/attention.all.txt",
+      "note": "The attention subsystem is six source files carrying node ids -- test_classifier.py (61), test_readers.py (29), test_config.py (34), test_dedup.py (10), test_notify.py (34) and test_cli.py (26) -- and one that carries none (test_broker_journal_contract.py, a collection-time skip; see parity/attention.broker-journal-contract.ledger.json). D-0034 splits the 194 into three sub-belts sharing the D-09xx range: A1 (classifier + readers, 90), A2 (config + dedup, 44) and A3 (notify + cli, 60). This is A3's cli file: 26 of the sub-belt's 60 and 26 of the subsystem's 194, and the only file in the subsystem whose cases run all five modules together."
+    },
+    "file": {
+      "path": "tests/attention/test_cli.py",
+      "collected": 26,
+      "inventory": "parity/source-inventory/attention.test_cli.txt",
+      "status": "26 passed, re-run at 65f36c5 on the porting host with `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/attention/test_cli.py -q -p no:cacheprovider` (Python 3.12.3, pytest 9.1.1). `source_status` is `passed` for all 26. The file carries NO capability gate and no parametrize: grepping it at 65f36c5 for `skipif`, `xfail`, `pytest.skip` and `parametrize` returns zero lines, so there is nothing here to translate into a `skipIf` and nothing among interlock's 8 skipped or 1 xfailed. `grep -c '^def test_'` is 26, which is the node id count exactly."
+    }
+  },
+  "target": {
+    "test_file": "test/attention/cli.test.ts",
+    "target_only_tests": {
+      "count": 4,
+      "ids": [
+        "test/attention/cli.test.ts::attention cli > production reads the clock through its seam (target-only)",
+        "test/attention/cli.test.ts::attention cli > production sleeps through its seam (target-only)",
+        "test/attention/cli.test.ts::attention cli > a refusal from a command becomes an exit code, not a stack trace (target-only)",
+        "test/attention/cli.test.ts::attention cli > attention is mounted on the unified parser (target-only)"
+      ],
+      "note": "Four cases, none counted as ported coverage. Each was measured red under a named mutation and green again on revert (rule 10). TWO SEAM LIVENESS CASES, required because this module carries two seams and a seam nothing routes through keeps every case that replaces it green for the wrong reason. `production reads the clock through its seam` (C1: calling `new Date()` directly turns it red, `expected +0 to be 1`) -- and note this is NOT already covered by the frozen-clock cases: those would fail today only because the frozen instant is months in the past, which is an accident of the calendar rather than an assertion. `production sleeps through its seam` (C2: moving the sleep above the iteration check turns it red, `expected [10, 10] to deeply equal [10]`) -- it also pins that the loop does NOT sleep after its last iteration, which is the difference between `--max-iterations 2` returning at once and returning ten seconds late for anyone who scripts around it. ONE CASE FOR THE PORT'S OWN PROCESS TOP LEVEL. `a refusal from a command becomes an exit code, not a stack trace` (C3: removing `main`'s `ArgparseExit` catch turns it red). In Python a `SystemExit` escaping `main` is what sets the process's exit status, and the interpreter's own top level does that; Node has no such top level, so without the catch the refusal `loadCfgOrExit` carefully wrote would reach the operator buried under an unhandled error. The source needs no case for this because CPython supplies the behaviour. ONE MOUNT CASE. `attention is mounted on the unified parser` (C4: removing the mount turns it red) pins the D-0030 arrangement the whole file rests on -- every ported case above parses through the shipped `continuo` parser, so if the mount or a flag's `dest` were wrong they would all fail at once and none of them would say why. This one says why."
+    },
+    "approved_non_running": [],
+    "conditionally_collected": [],
+    "notes": [
+      "`approved_non_running` is empty because the file uses no non-running construct. Checked directly against scripts/parity-check.mjs's own NON_RUNNING patterns -- `(test|it|describe).skip`, `(test|it|describe).todo`, `(test|it).fails`, `skipIf(` and `xfail(` -- over test/attention/cli.test.ts with comments and string literals INCLUDED, which is stricter than the sweep: no match. `conditionally_collected` is empty for the same reason: nothing here is absent from a host's collection, and all 26 mapped ids plus the 4 target-only ones were present in `vitest list --json` when this ledger was written (30 collected from this file, 30 passed).",
+      "THE RULE 9 ANSWERS. (1) WHICH CALLER-SUPPLIED STRINGS ARE USED AS A MAP KEY: the payload keys this module writes onto `event.to_dict()`'s result -- `title`, `body`, `desktop_dispatched`, `bell_dispatched`, `delivered` -- are literals of this module's own, not caller-supplied, and the object they are written onto is built by `AttentionEvent.toDict()`. The caller-supplied keys of the pipeline (the attention kind, the dedup key) are read inside `classifier.ts`, `config.ts` and `dedup.ts`, each of which guards them and each of which has its own ledger entry saying so. (2) WHICH `number` PARAMETERS THE SOURCE TYPES `int`: `poll_interval_sec`, through `max(1, int(cfg.poll_interval_sec))`. A2's loader already refuses a non-integer for it, and `Math.trunc` reproduces `int()`'s truncation-toward-zero for the value that does arrive. `max_iterations` is `type=int` on the parser, which is the port's own argparse transcription and converts before `choices`, exactly as `_get_values` does. The two epoch numbers (`now.timestamp()`) are floats on both sides.",
+      "WHAT `pyJsonDumps` BUYS OVER `JSON.stringify` FOR THE `--json` PAYLOAD. The payload carries an operator's template text, and `json.dump(..., ensure_ascii=False)` and `JSON.stringify` disagree about a lone surrogate: `JSON.stringify` emits a `\\udXXX` escape where CPython's encoder raises, and about non-BMP characters they agree only because both emit them raw. The module reuses the port's existing CPython `json.dumps` transcription rather than growing a second local rendering of the same function, which is the rule-11 argument A2 makes for `pytime.ts`. `indent=2` and the trailing newline are the source's.",
+      "ONE DIVERGENCE THAT IS NOT REPRODUCED, and it is a mechanism rather than a behaviour. `cmd_attention_watch` wraps its loop in `except KeyboardInterrupt` and prints one line. There is nothing to catch here: Node delivers SIGINT as a process signal rather than as an exception raised inside the loop, so an equivalent would have to install a handler on `process` -- a different mechanism, with a lifetime that outlives the function that installed it. No source case exercises the branch (there is no way to raise `KeyboardInterrupt` inside `time.sleep` from a test without patching the sleep to raise, which the source does not do), so nothing is lost from the evidence set; it is recorded here rather than left for a reader to notice the missing `try`.",
+      "WHY THE PORT'S `scan` CAN EXIT NON-ZERO WHERE THE SOURCE'S ALWAYS RETURNED 0 ON A BROKEN LEDGER: D-0951. The source has exactly one `SystemExit` in this module, for an unreadable config, and recovers silently from a corrupt dedup file. A2's D-0904 removed the recovery; the CLI's answer to the refusal is A3's decision and is the entry's subject. The exit code is 2, the same the config refusal uses, because both mean an input this command was pointed at cannot be used."
+    ]
+  },
+  "totals": {
+    "source_cases": 26,
+    "ported": 0,
+    "adapted": 26,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_dry_run_emits_events_no_state_writes",
+      "target_id": "test/attention/cli.test.ts::attention cli > a dry-run scan emits events and writes no state",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. Every assertion is kept: the four kinds present in the payload, and that no dedup file exists after a dry run.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_records_dedup_state",
+      "target_id": "test/attention/cli.test.ts::attention cli > a scan records dedup state",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. Both namespace assertions are kept, including the exact pending key `pending:T4:pending_decision`. This is the case that proves the whole pipeline runs: readers to classifier to notify to a durable ledger.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_second_run_dedupes",
+      "target_id": "test/attention/cli.test.ts::attention cli > a second scan dedupes the same rows",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The source swaps `sys.stdout` for a `StringIO` by hand around the second run; here the recording stream is already installed, so the payload is read from the slice written by the second scan. Same assertion: the second run notifies nothing.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_recovers_from_broken_dedup_state",
+      "target_id": "test/attention/cli.test.ts::attention cli > a broken dedup ledger is refused, not recovered",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "ADAPTED, AND THIS IS THE BELT'S REPAIRED DEFECT rather than a mechanical rewrite. THE SOURCE ASSERTS: a `{ broken` dedup file makes `attention scan` return 0, and the file is valid JSON afterwards -- i.e. the corrupt ledger is silently replaced with an empty one. parity/source-inventory.belts.md names that behaviour as ruled out for durable dedup state and D-0034 ratified the repair; A2's D-0904 made `loadState` fail closed, because an empty ledger says nothing has been notified and therefore frees every already-handled event to fire again -- the resume-without-double-execution violation D-0001 exists to prevent. Per D-0023 the case that pinned the inherited behaviour is INVERTED in the change that repairs it, which is what this entry records. THE PORT ASSERTS: the scan exits 2, names the file on stderr, and leaves the file byte-for-byte as it found it. The third assertion is the one the source's version destroys and is not merely the negation of it. What A2's decision did NOT settle is what the CLI does with the refusal; that is A3's call and is recorded in D-0951. Probe C5: swallowing `DedupStateRefused` and returning 0 -- the source's behaviour -- turns this red with `expected the command to exit, and it returned`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_no_state_dir_no_op",
+      "target_id": "test/attention/cli.test.ts::attention cli > a scan of an empty state directory is a no-op",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The port additionally asserts the payload is `[]`, which is not a strengthening: the source passes `--json` and reads nothing back, and an empty payload is the only thing a scan over an empty directory can print. Kept because a case whose only assertions are an exit code and a missing file would stay green if the command printed a page of events.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_watch_exits_on_max_iterations",
+      "target_id": "test/attention/cli.test.ts::attention cli > watch exits on max iterations",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. `monkeypatch.setattr(attention_cli.time, \"sleep\", ...)` becomes `patchSeam(attentionCliSeams, \"sleep\", ...)`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_with_template_config",
+      "target_id": "test/attention/cli.test.ts::attention cli > a template config flows through to the log line",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The Japanese template is spelled with `\\u` escapes and named at the foot of the file, per D-0006's whole-file scan; it is the same string. Without `--json` the log line goes to stdout, which is what the assertion reads.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_json_reflects_rendered_template",
+      "target_id": "test/attention/cli.test.ts::attention cli > the json payload shows the rendered template",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. All three assertions kept.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_severity_override_via_config",
+      "target_id": "test/attention/cli.test.ts::attention cli > a severity override in the config reaches the payload",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_demote_tier_pending_emits_normal_via_real_config",
+      "target_id": "test/attention/cli.test.ts::attention cli > a demote-tier pending row emits normal through the real config",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The case runs the REAL `AttentionConfig` defaults through the CLI, which is its point: it guards the round-4 shape where a pre-filled `cfg.notify` made every default read as an operator override and defeated the TTL demote. A2's `AttentionConfig` keeps the map sparse for that reason and this is the end-to-end check of it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_pending_explicit_severity_override_resists_ttl_demote",
+      "target_id": "test/attention/cli.test.ts::attention cli > an explicit severity override beats the TTL demote",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The companion to the case above: a genuine operator override must still win over the demote, so the sparse map has to be distinguishable in both directions.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_drop_tier_pending_honors_template_overrides",
+      "target_id": "test/attention/cli.test.ts::attention cli > a drop-tier pending row still honours the template overrides",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The suppressed branch runs `renderText` too, which is what keeps a triage payload in the operator's own language instead of the runtime default.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_drop_tier_pending_surfaces_in_json_but_not_notified",
+      "target_id": "test/attention/cli.test.ts::attention cli > a drop-tier pending row surfaces in json but is not notified",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. All four assertions kept, including that NO dedup file is written -- a suppressed row must not lock out a later urgent re-classification.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_invalid_config_exits_cleanly",
+      "target_id": "test/attention/cli.test.ts::attention cli > a garbled config exits cleanly",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. `pytest.raises(SystemExit)` with `exc.value.code == 2` becomes the port's `ArgparseExit`, which is this repository's `SystemExit` stand-in and carries the same `code`. It is caught ONCE and inspected, rather than through `expect(...).toThrow(...)` followed by a second call, so the command runs the number of times the source runs it. One genuine difference in the module under test: `json.JSONDecodeError` is a `ValueError` subclass there and a native `SyntaxError` here, because `pyJsonLoads` parses with `JSON.parse`; `loadCfgOrExit` names it explicitly, and leaving it out is exactly what would turn this case into an unhandled `SyntaxError`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_failed_dispatch_does_not_dedup",
+      "target_id": "test/attention/cli.test.ts::attention cli > a failed dispatch does not dedup",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The two `monkeypatch.setattr` calls on `notify.detect_backend` and `notify._safe_subprocess_run` become `patchSeam` on the matching `notifySeams` entries. This is the end-to-end half of the `reachedUser` contract: a silently-failing desktop with sound off must leave the ledger empty so the next poll retries.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_json_payload_delivered_flag",
+      "target_id": "test/attention/cli.test.ts::attention cli > the json payload carries a delivered flag",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_surfaces_duplicate_sidecar_from_broker_journal",
+      "target_id": "test/attention/cli.test.ts::attention cli > a duplicate sidecar in the broker journal surfaces",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. `_write_duplicate` becomes a belt-local appending writer rather than a call to A1's `writeJournal`, which truncates: three cases here append to a journal they already wrote, and the append is the subject of two of them. A1's helpers file is not edited in passing, because a shared helper changed by one belt changes what another belt's cases assert.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_ignores_duplicate_older_than_window",
+      "target_id": "test/attention/cli.test.ts::attention cli > a duplicate older than the window is ignored",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The freshness window is what makes the alert mean \"this is happening now\".",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_duplicate_sidecar_dedupes_within_cooldown",
+      "target_id": "test/attention/cli.test.ts::attention cli > a duplicate sidecar dedupes within its cooldown",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. Both halves are kept: the cooldown-gated key lands in the `pending` namespace (not the write-once `events` one) and the next poll is silent.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_duplicate_sidecar_new_pair_is_not_swallowed",
+      "target_id": "test/attention/cli.test.ts::attention cli > a new duplicate pair is not swallowed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. Killing one session and getting a new competitor is a new incident, and the dedup key has to carry the instance pair for that to hold.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_without_broker_journal_is_a_no_op",
+      "target_id": "test/attention/cli.test.ts::attention cli > a scan without a broker journal is a no-op",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. Both assertions kept, including the second one -- that the ordinary `.state` events still classify -- which is what stops this from passing on a scan that did nothing at all.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_broker_state_dir_override",
+      "target_id": "test/attention/cli.test.ts::attention cli > the broker state dir can be overridden",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. `Path(override).resolve()` becomes `resolve()`. The two differ on symbolic links, which nothing here reads through: the value is joined with a file name and handed to `existsSync`, which follows links itself.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_surfaces_adopt_expiry_from_broker_journal",
+      "target_id": "test/attention/cli.test.ts::attention cli > an adopt expiry in the broker journal surfaces",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. All five assertions kept, including the `restored: false` sentence in the body -- the decisive half, because it says nobody is claiming the owner at all.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_adopt_expiry_dedupes_within_cooldown",
+      "target_id": "test/attention/cli.test.ts::attention cli > an adopt expiry dedupes within its cooldown",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The exact dedup key `broker:delivery_adopt_expired:secretary:ad0011` is kept, not just a prefix.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_scan_ignores_delivery_signal_older_than_its_window",
+      "target_id": "test/attention/cli.test.ts::attention cli > a delivery signal older than its own window is ignored",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. These lines never age out of the journal on their own, so the freshness window is the only thing stopping a fresh watcher from re-announcing every historical adopt failure.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_cli.py::test_watch_surfaces_duplicate_sidecar",
+      "target_id": "test/attention/cli.test.ts::attention cli > the watch loop reads the broker journal too",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the two autouse fixtures become `installFixtures()`, called at the top of the case: `_suppress_subprocess` is `patchSeam(notifySeams, \"safeSubprocessRun\", ...)` and `_freeze_now` is `patchSeam(attentionCliSeams, \"now\", ...)`. Vitest has no autouse, and a `beforeEach` would put the setup at a distance from the `onTestFinished` that undoes it (rule 1). `monkeypatch.setattr` on a module attribute has no ESM equivalent, so both go through a seam record (rule 5), each with a target-only liveness case. `capsys` becomes recording streams installed on `attentionCliSeams.stdout/stderr` and `notifySeams.stdout/stderr`. The source reaches `sys.stdout` and `sys.stderr` by name at CALL time and pytest replaces them wholesale; the seams are where this port makes the same two streams replaceable, so the case reads back exactly what the command wrote. `build_top_parser().parse_args(argv)` becomes `buildParser().parseArgs(argv, streams)` and `args.func(args)` is unchanged, so the case still exercises the MOUNTED command rather than a hand-built namespace. `tmp_path` becomes `caseRoot()` (rule 6), and `.state` is created inside it as the source creates it. The watch loop, not only the one-shot scan, reads the journal; the assertion is on the ledger the loop left behind.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

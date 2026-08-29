@@ -175,6 +175,24 @@ const LEDGERS = [
   // itself and points back here.
   "parity/attention.classifier.ledger.json",
   "parity/attention.readers.ledger.json",
+  // lane K, sub-belt A3 (notify and pipeline). Same lane letter as A1 above and
+  // as A2's `attention.dedup` / `attention.config`, because it is the same belt:
+  // D-0034 split the attention subsystem into three sub-belts sharing one
+  // D-range rather than into three lanes. A3 mints from `D-0951`, which is a
+  // gap above A2's `D-0904`.. deliberately -- the window allocated the sub-belts
+  // disjoint stretches of D-09xx so three concurrent lanes could not collide on
+  // an id.
+  //
+  // `parity/attention.notify.ledger.json` also declares the three
+  // `test/attention/pyformat-oracle.test.ts` ids as target-only. That is a file
+  // this list does not name and does not need to: a ledger's `test_file` is
+  // where the CHECKER looks for unclaimed tests, and the oracle file has no
+  // source cases to claim. It is declared from the notify ledger because
+  // `src/attention/pyformat.ts` is that file's subject, and it follows the
+  // precedent `parity/fencing.battery-coverage.ledger.json` set when it declared
+  // `test/fencing/fnmatch-shlex-oracle.test.ts`'s ids the same way.
+  "parity/attention.notify.ledger.json",
+  "parity/attention.cli.ledger.json",
 ];
 
 /**

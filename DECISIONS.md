@@ -125,6 +125,8 @@ spaces distinct.
 | D-0902 | A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's | accepted |
 | D-0903 | The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes | superseded by D-0906 |
 | D-0906 | D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed | accepted |
+| D-0951 | A refused dedup ledger stops the attention CLI at exit 2 and leaves the file untouched | accepted |
+| D-0952 | The operator's template goes through a transcribed CPython, checked by a differential oracle rather than by review | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 
 ---
@@ -7344,3 +7346,139 @@ because something can, so the two readings cannot both be right at the same time
 `tests/attention/test_cli.py`. Decision id allocated by the window in the `D-09xx` range that
 `D-0034` gave the attention belt (`D-0904`/`D-0905` are A2's). Ratified at the human gate before
 this belt made the change.
+
+---
+
+## D-0951 -- A refused dedup ledger stops the attention CLI at exit 2 and leaves the file untouched
+
+**Context.** A2's `D-0904` made `attention/dedup.py`'s reader fail closed: a state file that is
+present and unusable is a `DedupStateRefused`, not an empty `DedupState`, because an empty ledger
+says nothing has ever been notified and therefore frees every already-handled event to fire again --
+the resume-without-double-execution violation `D-0001` exists to prevent. `D-0034` ratified that
+repair and `D-0023` supplies the procedure for it: the source case that pinned the inherited
+behaviour is inverted in the change that repairs it.
+
+What `D-0904` deliberately did not settle is what the **caller** does with the refusal, and A3 owns
+the only caller there is. `tests/attention/test_cli.py::test_scan_recovers_from_broken_dedup_state`
+is the case that pins the source's answer -- `attention scan` returns 0 and the corrupt file is
+silently replaced with an empty one -- so a decision had to be made here rather than inherited.
+
+**Decision.** `attention scan` and `attention watch` report the refusal on stderr and exit **2**,
+and **write nothing**. In particular the refused file is left byte for byte as it was found.
+
+Three parts, each with its own reason:
+
+- **Exit 2, not 1 and not 0.** Two is what `_load_cfg_or_exit` already exits with for a config it
+  cannot read, and the two failures are the same kind of failure: an input this command was pointed
+  at cannot be used. A distinct code would be a distinction the operator has to look up, and there
+  is nothing behind it.
+- **The refusal is caught, not left to escape.** In Python a `SystemExit` escaping `main` is what
+  sets the process's exit status; the interpreter's own top level does that. Node has no such top
+  level, so a `DedupStateRefused` allowed to propagate would reach the operator as an unhandled
+  error with a stack trace, and the message naming the file would be buried above it. `src/cli.ts`'s
+  `main` therefore turns an escaping `ArgparseExit` -- this port's `SystemExit` stand-in -- into its
+  code, which is CPython's behaviour rather than an invention. A target-only case measures it.
+- **Nothing is written.** This is the half a silent recovery destroys, and it is not merely the
+  negation of the source's behaviour. An operator can still look at the file that was refused; and
+  no later run can mistake a rewritten empty ledger for a ledger that was always empty, which is
+  precisely the confusion that makes the inherited defect dangerous rather than merely untidy.
+
+**`watch` stops too, rather than polling on.** A loop that re-read the same unusable file every ten
+seconds would print the same refusal forever and notify nothing, which is a worse operator surface
+than stopping and is not more available: the watcher cannot do its job without a ledger it can
+trust.
+
+**Rejected alternative: refuse the ledger but keep scanning with an empty in-memory state, writing
+nothing.** It looks strictly safer -- no double execution is recorded, no file is damaged -- and it
+is not: every already-notified event would be re-notified on every poll, which is the alert storm
+the dedup ledger exists to prevent, and the operator would be told about it only on stderr, once,
+under a wall of notifications.
+
+**Falsifier.** If an operator turns out to need `scan` to keep running past a refused ledger -- say
+a deployment where the ledger lives on a filesystem that is briefly unreadable and the notifications
+matter more than the duplicates -- then the flat refusal is wrong and the answer is a flag that says
+so explicitly, not a default that decides it for them. The observation would be a real deployment
+asking for it; nothing in either suite does.
+
+**Source.** Task `continuo-attention-a3`, 2026-08-29, porting `tests/attention/test_cli.py` (26
+cases) from interlock `65f36c5`. Decision id from `D-0951`, the start of the stretch of `D-09xx`
+the window allocated to sub-belt A3 so that three concurrent sub-belts could not collide on an id.
+
+---
+
+## D-0952 -- The operator's template goes through a transcribed CPython, checked by a differential oracle rather than by review
+
+**Context.** `notify.render_text` is the one place in the attention subsystem that formats a string
+**the operator wrote**. It reads `attention.json`'s `templates`, asks which placeholders the
+template names, checks them against the design's section 6 allowlist, and renders. Three CPython
+functions are load-bearing in that sentence: `string.Formatter().parse` decides which names a
+template references, `str.format_map` renders it, and `str.__format__` applies each format spec.
+
+The port could have substituted a regular expression over `\{(\w+)\}`. What that costs is not
+hypothetical, and it falls on the operator in both directions: a parser that misses
+`{summary!r:>10}`'s name hands the allowlist the wrong set and lets a template reach a field the
+design forbids, and one that reads `{{pr}}` as a reference to `pr` renders `42` where CPython
+renders the literal text `{pr}`. On the rendering side, a transcription that refuses a template
+CPython renders replaces the operator's own text with the English default -- silently, since the
+whole contract of this path is that a bad template must not crash the watcher -- and one that
+renders a template CPython refuses is the crash that contract exists to prevent.
+
+**Decision 1 -- the three functions are transcribed, in `src/attention/pyformat.ts`.** Not
+approximated, and not narrowed to what this belt's own cases happen to write. `formatValue`
+implements `str.__format__` and no other type's, because `_format_with_event` builds its mapping out
+of six strings and nothing else; a number reaching it is a caller error rather than a case to guess
+at, and it is refused rather than run through a near-miss of the numeric mini-language.
+
+`classifier.ts`'s private `formatMap` is deliberately **not** replaced by this one. It formats a
+closed set of templates the port itself ships, and a private substitution is the right size for a
+closed set; consolidating the two is an edit to a landed belt's file, which `D-0504` established
+belongs in its own PR. It is named here so the second copy is a recorded choice rather than
+something a later reader has to decide was an oversight.
+
+**Decision 2 -- the transcription is checked against CPython, not against review.** A differential
+oracle in the shape `D-0200`'s `fnmatch`/`shlex` vector established: a committed corpus
+(`parity/oracle/pyformat-corpus.json`), a Python half (`scripts/oracle/dump_pyformat.py`) run by
+hand and its output committed (`parity/oracle/pyformat-vector.json`), and a comparison
+(`test/attention/pyformat-oracle.test.ts`) that rebuilds the same corpus and asserts agreement on
+every field -- placeholder set, unknown set, rendering, exception class, and exception message text.
+
+**This is a decision because the measurement changed the answer, five times.** The transcription was
+written from CPython's own source -- `Objects/stringlib/unicode_format.h` and
+`Python/formatter_unicode.c` -- rather than guessed at, and its first draft still disagreed with
+CPython on five inputs. Review had found none of them:
+
+- `{}` and `{0}` raise `ValueError("Format string contains positional fields")`, not `IndexError`.
+  `format_map` passes **no** positional argument tuple, and `get_field_object` tests for that before
+  it tests any index.
+- `{pr:010}` **renders**, as `4200000000`. A leading `0` sets the fill character and takes the `=`
+  alignment branch only when the type's own `default_align` is `>`, which is the numeric types'
+  default and not `str`'s. The draft, reading the grammar, made it a refusal.
+- `{pr:0}` renders `42`, for the same reason and with the same wrong first answer.
+- `{pr:{}}` follows from the first.
+- an unprintable presentation type is **escaped** in the refusal message -- `Unknown format code
+  '\xa' for object of type 'str'` -- where a `%c` transcription puts a literal newline in the middle
+  of an operator's warning line.
+
+After the repairs, all 88 templates agree on every compared field. Four of the five would have
+shipped as a silent behaviour difference in an operator-facing path.
+
+**A finding about the source, recorded because it is easy to lose.** The first of those five means
+the source's own `except (ValueError, IndexError)` around `_format_with_event` has an
+**unreachable** half: that function only ever calls `format_map`, and `format_map` raises
+`ValueError` for every positional field, so no template can produce the `IndexError` the catch
+names. The port catches the class that can arrive and says why, rather than declaring a stand-in
+class nothing can raise. Nothing about the port's behaviour differs from the source's here; the
+observation is about interlock.
+
+**Rejected alternative: compare only the exception class, not its message.** It is the cheaper
+vector and it would have passed the fifth divergence, because the class was right and only the text
+was wrong -- and that text is what an operator reads on stderr when their template is refused.
+
+**Falsifier.** If the corpus turns out to be the thing under review rather than the transcription --
+if a divergence is found by some other means in a shape the corpus does not cover -- then the corpus
+is too narrow and the answer is to widen it in the change that found the gap. The vector's own
+not-vacuous cases guard the degenerate version of that: a corpus that only rendered, or only
+refused, would let half the transcription be wrong with the oracle green.
+
+**Source.** Task `continuo-attention-a3`, 2026-08-29, porting `tests/attention/test_notify.py` (34
+cases) from interlock `65f36c5`.

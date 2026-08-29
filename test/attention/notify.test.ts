@@ -661,11 +661,14 @@ describe("attention notify", () => {
     expect(err).toContain("format failed");
   });
 
-  test("an auto-numbered field falls back through the IndexError half (target-only)", () => {
+  test("an auto-numbered field falls back through the positional refusal (target-only)", () => {
     const cfg = new AttentionConfig({
       // `_placeholders` SKIPS the empty field name (`if not field_name`), so `{}` passes the
-      // allowlist and raises `IndexError` in `format_map`, which has no positional arguments.
-      // This is the other half of the source's two-class catch, and the source never reaches it.
+      // allowlist and then refuses in `format_map`, which is handed no positional arguments at
+      // all. MEASURED through the oracle: CPython raises `ValueError("Format string contains
+      // positional fields")` here rather than the `IndexError` the source's own
+      // `except (ValueError, IndexError)` names, which makes that second class unreachable
+      // through `render_text`. The source reaches neither.
       templates: { ci_failed: new Template({ title: "X", body: "empty {}" }) },
     });
     const { value, err } = capturedStderr(() => renderText(makeEvent(), cfg));
