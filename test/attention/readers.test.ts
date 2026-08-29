@@ -606,6 +606,42 @@ describe("attention readers", () => {
     expect(reached, "the tail walk did not go through readersSeams.chunkReachesCutoff").toBe(true);
   });
 
+  test("target-only -- a chunk larger than the remaining budget is clamped to it", () => {
+    // D-0023 repair, and a divergence from the source. Its walk sizes each read from `chunk_bytes`
+    // alone and only re-checks the cap at the top of the next iteration, so an oversized chunk is
+    // read whole first -- and if that read reaches the top of the file, the walk ends WITHOUT
+    // `capped`, telling the operator the window was covered when the cap was blown through to
+    // cover it. Both halves are asserted: no read exceeds the budget, and the cap is still
+    // reported. Without the clamp the single read is the whole file and the warning disappears.
+    const root = caseRoot("readers");
+    const records: unknown[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      records.push({ event: "claimed", owner: "sec", note: "no ts at all" });
+    }
+    writeJournal(join(root, "broker"), records);
+
+    const seen: number[] = [];
+    const real = readers.readersSeams.chunkReachesCutoff;
+    patchSeam(readers.readersSeams, "chunkReachesCutoff", (chunk, cutoff, options) => {
+      seen.push(chunk.length);
+      return real(chunk, cutoff, options);
+    });
+
+    const { err } = capturedStderr(() =>
+      readers.readBrokerDuplicates(join(root, "broker"), {
+        nowEpoch: 1000,
+        windowSec: 300,
+        chunkBytes: 1_000_000, // far larger than the whole journal, let alone the budget
+        maxScanBytes: 256,
+      }),
+    );
+
+    expect(Math.max(...seen), "a single read went past the scan budget").toBeLessThanOrEqual(256);
+    expect(err, "the walk blew through the cap and then reported full coverage").toContain(
+      "freshness window",
+    );
+  });
+
   test("target-only -- a ts JSON.parse renders as Infinity is skipped", () => {
     // The source's `NaN` / `Infinity` journal lines are literals `json.loads` accepts and
     // `JSON.parse` rejects, so in this runtime those two lines are dropped one step earlier, as

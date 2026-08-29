@@ -1200,6 +1200,23 @@ describe("attention classifier", () => {
     );
 
     expect(event?.pr).toBeNull();
+
+    // The other half of the same repair, and the half only this runtime has: Python's `int` is
+    // arbitrary-precision, so a 400-digit `pr` string is an exact value there. Here `Number(text)`
+    // reaches `Infinity`, which would render as `PR #Infinity` in an operator's notification.
+    const huge = classifier.classifyEvent(
+      row({
+        kind: "pr_merged",
+        payload: { pr: "9".repeat(400), task_id: "t" },
+        factState: "TERMINAL",
+      }),
+    );
+
+    expect(
+      huge?.pr,
+      "a digit string past 2^53 became a number this runtime cannot carry",
+    ).toBeNull();
+    expect(huge?.body).toContain("unknown");
   });
 
   test("target-only -- an unknown kind falls back to the generic template", () => {

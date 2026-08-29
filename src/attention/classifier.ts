@@ -822,15 +822,34 @@ function coerceInt(value: unknown): number | null {
     return null;
   }
   if (typeof value === "number") {
-    return Number.isFinite(value) ? Math.trunc(value) : null;
+    return exactInteger(Math.trunc(value));
   }
   if (typeof value === "string") {
     // `int("  7  ")` accepts surrounding whitespace and `int("4.2")` does not; a decimal point is
     // a ValueError there and must not become a silent truncation here.
     const text = pyStrip(value);
-    return /^[+-]?\d+$/.test(text) ? Number(text) : null;
+    return /^[+-]?\d+$/.test(text) ? exactInteger(Number(text)) : null;
   }
   return null;
+}
+
+/**
+ * The second half of the `int()` repair: an integer this runtime can actually carry.
+ *
+ * Python's `int` is arbitrary-precision, so `int("1" * 400)` is an exact value and `int(1e400)` is
+ * the OverflowError the source fails to catch. Neither has a `number` counterpart: a digit string
+ * past 2^53 reaches `Infinity` or a silently rounded value, and `Infinity` renders as `PR
+ * #Infinity` in an operator's notification -- a numeral that is not a number, produced from input
+ * the source would have handled exactly.
+ *
+ * So the answer for a value this runtime cannot represent is the one the two caught exceptions
+ * already give for every other unusable input: `null`, and the field is simply absent from the
+ * event. That is a deliberate divergence, not a transcription -- narrower than the source for
+ * `pr` values above 2^53, which are not PR numbers -- and it is pinned by a target-only case
+ * rather than left for a reader to discover from the guard.
+ */
+function exactInteger(value: number): number | null {
+  return Number.isSafeInteger(value) ? value : null;
 }
 
 /**

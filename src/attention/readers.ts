@@ -359,7 +359,16 @@ function tailLinesBackTo(
         capped = true;
         break;
       }
-      const start = Math.max(0, pos - bounds.chunkBytes);
+      // Clamped to what is left of the scan budget, which the source does not do: it computes the
+      // step from `chunk_bytes` alone and only re-checks the cap at the top of the NEXT iteration,
+      // so a chunk larger than the remaining budget is read in full first. Two things go wrong
+      // there, and D-0023 repairs an inherited defect at the belt that touches the code rather
+      // than disclosing it: the walk reads (and allocates) past the bound it advertises, and -- the
+      // worse half -- if that oversized chunk happens to reach an old-enough line or the top of the
+      // file, the walk ends WITHOUT `capped`, so the operator is told the window was covered when
+      // the read went past the cap to cover it. A target-only case pins both halves.
+      const remaining = bounds.maxScanBytes - (size - pos);
+      const start = Math.max(0, pos - Math.min(bounds.chunkBytes, remaining));
       const chunk = Buffer.alloc(pos - start);
       readSync(fd, chunk, 0, chunk.length, start);
       parts.push(chunk);

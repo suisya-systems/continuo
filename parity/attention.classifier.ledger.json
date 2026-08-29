@@ -142,9 +142,23 @@
           "probe": "drop the strict 24-hour UTC-offset bound, so `+24:00` parses as a real offset",
           "against": "target-only -- an out-of-range date is malformed rather than rolled forward",
           "measured": "red"
+        },
+        {
+          "probe": "return the coerced integer without the safe-integer guard, so a 400-digit `pr` string becomes `Infinity`",
+          "against": "target-only -- a non-finite pr does not take the classifier down",
+          "measured": "red"
         }
       ]
-    }
+    },
+    "deliberate_divergences": [
+      {
+        "behaviour": "`coerceInt` returns `null` for any value that is not a safe integer, so a `pr` above 2^53 -- reached from a float, or from a digit string Python would have parsed exactly -- is absent from the event rather than present as a rounded or infinite number.",
+        "source": "`classifier._coerce_int` catches only `TypeError` and `ValueError`, so `int(float('inf'))` raises `OverflowError` past it, and Python's arbitrary-precision `int` parses a 400-digit string exactly.",
+        "why": "Two halves of one hole, both reachable here and only one of them reachable there. The `OverflowError` escape is an inherited defect that takes the watcher down (D-0023 repairs it at this belt); the precision half is this runtime's own -- `Number('9'.repeat(400))` is `Infinity`, which renders as `PR #Infinity` in an operator's notification, a numeral that is not a number. `null` is the answer the two caught exceptions already give for every other unusable input, and the field is simply absent. Narrower than the source above 2^53, which is not a PR number.",
+        "pinned_by": "test/attention/classifier.test.ts::attention classifier > target-only -- a non-finite pr does not take the classifier down",
+        "found_by": "the OverflowError half by the rule-9 sweep during translation; the precision half by codex self-review, round 2"
+      }
+    ]
   },
   "totals": {
     "source_cases": 61,

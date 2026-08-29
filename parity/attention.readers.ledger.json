@@ -57,14 +57,57 @@
       }
     ],
     "target_only_tests": {
-      "count": 3,
+      "count": 4,
       "ids": [
         "test/attention/readers.test.ts::attention readers > target-only -- production routes the walk through the seam",
+        "test/attention/readers.test.ts::attention readers > target-only -- a chunk larger than the remaining budget is clamped to it",
         "test/attention/readers.test.ts::attention readers > target-only -- a ts JSON.parse renders as Infinity is skipped",
         "test/attention/readers.test.ts::attention readers > target-only -- a journal line split by a Python line boundary is unparseable"
       ],
-      "why": "Each defends machinery the PORT wrote and the source therefore carries no warrant for. The seam is required by the ESM constraint and would rot into a decoration without a liveness case (measured red by calling `chunkReachesCutoff` directly). The other two close the two places where `JSON.parse` and `String#split` are narrower than `json.loads` and `str.splitlines()`: without them the finiteness guard would be unreachable from any ported case, and the line-boundary list would be uncheckable (measured red by returning `ts` unchecked, and by splitting on `\\n` alone)."
-    }
+      "why": "Each defends machinery the PORT wrote and the source therefore carries no warrant for. The seam is required by the ESM constraint and would rot into a decoration without a liveness case (measured red by calling `chunkReachesCutoff` directly). The other two close the two places where `JSON.parse` and `String#split` are narrower than `json.loads` and `str.splitlines()`: without them the finiteness guard would be unreachable from any ported case, and the line-boundary list would be uncheckable (measured red by returning `ts` unchecked, and by splitting on `\\n` alone). The fourth is a D-0023 repair rather than a defence of the port's own machinery, and is described in `deliberate_divergences` below.",
+      "mutation_probes": [
+        {
+          "probe": "call `chunkReachesCutoff` directly instead of through `readersSeams`",
+          "against": "target-only -- production routes the walk through the seam",
+          "measured": "red"
+        },
+        {
+          "probe": "return the journal `ts` without the finiteness check",
+          "against": "target-only -- a ts JSON.parse renders as Infinity is skipped",
+          "measured": "red"
+        },
+        {
+          "probe": "split journal lines on `\\n` alone instead of Python's eleven boundaries",
+          "against": "target-only -- a journal line split by a Python line boundary is unparseable",
+          "measured": "red"
+        },
+        {
+          "probe": "size each read from `chunkBytes` alone, as the source's own walk does",
+          "against": "target-only -- a chunk larger than the remaining budget is clamped to it",
+          "measured": "red"
+        },
+        {
+          "probe": "never let a chunk end the backward walk",
+          "against": "read broker duplicates: the walk stops at the first line past the window",
+          "measured": "red"
+        },
+        {
+          "probe": "publish the whole journal record instead of the three-key projection",
+          "against": "read broker duplicates: the projection is exactly three keys",
+          "measured": "red"
+        }
+      ]
+    },
+    "deliberate_divergences": [
+      {
+        "behaviour": "`tailLinesBackTo` clamps each backward read to what is left of `maxScanBytes`, where the source sizes it from `chunk_bytes` alone and only re-checks the cap at the top of the next iteration.",
+        "source": "`readers._tail_lines_back_to` at 65f36c5 reads `pos - max(0, pos - chunk_bytes)` bytes unconditionally.",
+        "why": "Two defects, one of them the dangerous kind. The walk reads and allocates past the bound it advertises; and if that oversized read happens to reach an old-enough line or the top of the file, the loop exits with `capped` still false -- so the operator is told the freshness window was fully covered when the cap was blown through to cover it. A degraded read that reports full coverage is the one outcome this whole cap exists to prevent. D-0023 repairs an inherited defect at the belt that touches the code, and this is that belt.",
+        "pinned_by": "test/attention/readers.test.ts::attention readers > target-only -- a chunk larger than the remaining budget is clamped to it",
+        "found_by": "codex self-review, round 2",
+        "no_ported_case_changes": "Every source case passes a `chunk_bytes` at or below its `max_scan_bytes`, so the clamp never binds in any of the 29 and none of their assertions move."
+      }
+    ]
   },
   "totals": {
     "source_cases": 29,
