@@ -123,6 +123,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       ),
       `${entry.id}.start`,
     );
+    // Recorded before polling, not only after: a session that started but
+    // whose subsequent readState() throws must still be stopped by cleanup()
+    // below, or the started child outlives the run its own start failed to
+    // qualify for.
+    readout = started;
     readout = await waitForReport(provider, started, entry);
     const disqualification = entry.disqualified(readout);
     if (disqualification !== null) {
