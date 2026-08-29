@@ -1,0 +1,388 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "attention",
+      "collected": 194,
+      "inventory": "parity/source-inventory/attention.all.txt",
+      "note": "The attention subsystem is six source files carrying node ids -- test_classifier.py (61), test_readers.py (29), test_config.py (34), test_dedup.py (10), test_notify.py (34) and test_cli.py (26) -- and one that carries none (test_broker_journal_contract.py, a collection-time skip; see parity/attention.broker-journal-contract.ledger.json). D-0034 splits the 194 into three sub-belts sharing the D-09xx range: A1 (classifier + readers, 90), A2 (config + dedup, 44) and A3 (notify + cli, 60). This is A3's notify file: 34 of the sub-belt's 60 and 34 of the subsystem's 194."
+    },
+    "file": {
+      "path": "tests/attention/test_notify.py",
+      "collected": 34,
+      "inventory": "parity/source-inventory/attention.test_notify.txt",
+      "status": "34 passed, re-run at 65f36c5 on the porting host with `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/attention/test_notify.py -q -p no:cacheprovider` (Python 3.12.3, pytest 9.1.1). `source_status` is `passed` for all 34. The file carries NO capability gate: grepping it at 65f36c5 for `skipif`, `xfail` and `pytest.skip` returns zero lines, so there is nothing here to translate into a `skipIf` and nothing among interlock's 8 skipped or 1 xfailed. It DOES carry two `@pytest.mark.parametrize` decorators, each over the same two backends, which is why `grep -c '^def test_'` is 32 and the node id count is 34."
+    }
+  },
+  "target": {
+    "test_file": "test/attention/notify.test.ts",
+    "target_only_tests": {
+      "count": 20,
+      "ids": [
+        "test/attention/notify.test.ts::attention notify > production reaches the subprocess through its seam (target-only)",
+        "test/attention/notify.test.ts::attention notify > production reaches backend detection through its seam (target-only)",
+        "test/attention/notify.test.ts::attention notify > a runner failure that is not an OS error escapes the dispatcher (target-only)",
+        "test/attention/notify.test.ts::attention notify > an unparseable template falls back with a warning (target-only)",
+        "test/attention/notify.test.ts::attention notify > a bad format spec falls back through the format branch (target-only)",
+        "test/attention/notify.test.ts::attention notify > an auto-numbered field falls back through the positional refusal (target-only)",
+        "test/attention/notify.test.ts::attention notify > an escaped brace is not a placeholder (target-only)",
+        "test/attention/notify.test.ts::attention notify > a conversion and a format spec are honoured (target-only)",
+        "test/attention/notify.test.ts::attention notify > truncation counts code points, not UTF-16 units (target-only)",
+        "test/attention/notify.test.ts::attention notify > a notification records what it sent (target-only)",
+        "test/attention/notify.test.ts::attention notify > a child killed by a signal is not a clean exit (target-only)",
+        "test/attention/notify.test.ts::attention notify > the real subprocess call goes through its own seam (target-only)",
+        "test/attention/notify.test.ts::attention notify > a bell that could not be written did not ring (target-only, D-0023)",
+        "test/attention/notify.test.ts::attention notify > an overflowing format width is refused, not a RangeError (target-only)",
+        "test/attention/notify.test.ts::attention notify > a Write-Host backend that never ran still bells (target-only, D-0023)",
+        "test/attention/notify.test.ts::attention notify > a failed Write-Host dispatch falls back to the bell (target-only, D-0023)",
+        "test/attention/notify.test.ts::attention notify > a bell on an already-finished stream did not ring (target-only, D-0023)",
+        "test/attention/pyformat-oracle.test.ts::the pyformat vector is not vacuous > the corpus rebuilds to the size the vector was generated at",
+        "test/attention/pyformat-oracle.test.ts::the pyformat vector is not vacuous > the corpus exercises every outcome the module can produce",
+        "test/attention/pyformat-oracle.test.ts::CPython's format-string machinery agrees with the transcription at every position > every template in the corpus"
+      ],
+      "note": "Thirteen cases, none counted as ported coverage, in three groups. Every one was measured red under a named mutation and green again on revert (docs/test-translation-conventions.md rule 10), and each measurement is quoted with its probe id. GROUP 1 -- SEAM LIVENESS (two cases, rule 5). `production reaches the subprocess through its seam` (P1: calling `safeSubprocessRun` directly instead of through the record turns it red, `expected false to be true` -- with the seam bypassed the real `notify-send` is spawned, is absent, and the dispatch demotes) and `production reaches backend detection through its seam` (P2: calling `detectBackend` directly turns it red, `expected 'stdout' to be 'linux'`). Both seams exist because tests/attention/test_cli.py patches exactly these two names with monkeypatch.setattr; a seam nothing routes through is a decoration that keeps every case that replaces it green for the wrong reason. GROUP 2 -- THE CATCH THAT KEEPS FOUR SOURCE CASES FALSIFIABLE (one case). `a runner failure that is not an OS error escapes the dispatcher` (P3: replacing the `instanceof SubprocessRunError` re-throw with a bare catch turns it red, `expected [Function] to throw an error`). Four of the source's own cases pass `runner=lambda cmd: pytest.fail(\"runner should not run\")`, which works because `Failed` is neither an `OSError` nor a `SubprocessError`. A port that caught everything would turn all four into cases that cannot fail, and nothing would say so. GROUP 3 -- CPYTHON'S FORMAT MACHINERY (ten cases: seven here plus the three oracle ids). `notify.render_text` runs a template the OPERATOR wrote through `string.Formatter().parse`, `str.format_map` and `str.__format__`, and the source's suite asserts about five templates. `an unparseable template falls back with a warning` (P4: dropping the `__invalid__` marker from the parse-error branch turns it red, the warning then names the format failure instead) covers the branch where the template does not parse at all. `a bad format spec falls back through the format branch` (P5: accepting an unknown presentation type turns it red, `expected 'X' to be 'CI failed'`) is the source's `except (ValueError, IndexError)` around `format_map`, which NO source case reaches. `an auto-numbered field falls back through the positional refusal` (P6: rendering `{}` as empty text turns it red, same message) is the other shape that reaches that catch. `an escaped brace is not a placeholder` (P7: treating `{{` as markup turns it red, `expected 'CI failed' to be 'T'`) is what separates a transcription from a regular expression over `\\{(\\w+)\\}`, and the difference is visible in the OUTPUT, not only in the allowlist. `a conversion and a format spec are honoured` (P10: making `!r` an identity turns it red, `expected 'ship it [  failed]' to be \"'ship it' [  failed]\"`). `truncation counts code points, not UTF-16 units` (P8: `String#slice` turns it red, and the measured value is the lone surrogate the hazard predicts). `a notification records what it sent` (P9: removing `Object.freeze` turns it red) is the `frozen=True` dataclass, whose enforcement `readonly` does not carry past emit. THE THREE ORACLE IDS are the differential vector (scripts/oracle/dump_pyformat.py, parity/oracle/pyformat-corpus.json, parity/oracle/pyformat-vector.json), declared here because the module they measure is this file's subject. They are not a mutation probe: they compare against CPython 3.12.3 itself over 88 templates, on placeholder set, unknown set, rendering, exception class and exception message. See this ledger's `divergences_found` note for what they caught. GROUP 4 -- THE CODEX ROUND-1 REPAIRS (four cases, added after the review gate found three P2 issues in the paths above). `a child killed by a signal is not a clean exit` (P11: making the `result.signal` branch unreachable turns it red, `expected true to be false` on `desktopDispatched`) -- `spawnSync` reports a signalled child as `status: null` plus a `signal` name and does NOT necessarily set `error`, so `status ?? 0` called a killed backend a clean exit and the CLI would have recorded the event as delivered. THIS CASE IS ALSO RULE 10's OWN WORKED EXAMPLE IN MINIATURE: its first draft patched the OUTER seam (`safeSubprocessRun`) and asserted on a `returncode` it had supplied itself, so it never reached the mapping it was about and MEASURED GREEN under P11. It was rewritten against a second, inner seam (`notifySeams.spawn`) and only then turned red. `the real subprocess call goes through its own seam` (P14: calling `spawnSync` directly turns it red) is that seam's liveness, without which the case above would assert about a function production no longer calls. `a bell that could not be written did not ring` (P12: restoring the source's unconditional `bell_dispatched = True` turns it red, `expected true to be false`) is a DELIBERATE DIVERGENCE under D-0023 -- see the note below. `an overflowing format width is refused, not a RangeError` (P13: removing the `readInteger` guard turns it red with the crash itself, `RangeError: Invalid string length`) -- CPython refuses a width of 33 nines at the parse and `render_text` falls back; without the guard `String#repeat` throws a class neither `except` catches and an operator's mistyped template takes the watcher down. GROUP 5 -- THE CODEX ROUND-2 REPAIR (two cases). `a Write-Host backend that never ran still bells` (P15) and `a failed Write-Host dispatch falls back to the bell` (P16): restoring the source's unconditional suppression turns both red, `expected false to be true`. See the divergence note below. GROUP 6 -- THE CODEX ROUND-3 NARROWING (one case). `a bell on an already-finished stream did not ring` (P18: removing the finished-stream check turns it red, `expected true to be false`). See the note below for what it covers and what it does not."
+    },
+    "approved_non_running": [],
+    "conditionally_collected": [],
+    "notes": [
+      "`approved_non_running` is empty because neither file uses a non-running construct. Checked directly against scripts/parity-check.mjs's own NON_RUNNING patterns -- `(test|it|describe).skip`, `(test|it|describe).todo`, `(test|it).fails`, `skipIf(` and `xfail(` -- over test/attention/notify.test.ts and test/attention/pyformat-oracle.test.ts with comments and string literals INCLUDED, which is stricter than the sweep: no match. `conditionally_collected` is empty for the same reason: nothing here is absent from a host's collection, and all 34 mapped ids plus the 13 target-only ones were present in `vitest list --json` when this ledger was written.",
+      "DIVERGENCES THE ORACLE FOUND, recorded because the finding is the argument for having built it. `src/attention/pyformat.ts` was written FROM CPython's own source (Objects/stringlib/unicode_format.h and Python/formatter_unicode.c), not guessed at, and its first draft disagreed with CPython on five inputs. Review had found none of them. (1) `{}` and `{0}` raise `ValueError(\"Format string contains positional fields\")` under `format_map`, not `IndexError`: `format_map` passes NO positional argument tuple, and `get_field_object` tests that before it tests the index. (2) `{pr:010}` RENDERS, as `4200000000`: a leading `0` sets the fill character and only sets `=` alignment when the type's own `default_align` is `>`, which `str`'s is not. (3) `{pr:0}` renders `42` for the same reason; the draft refused both. (4) `{pr:{}}` follows from (1). (5) an unprintable presentation type is ESCAPED in the refusal message -- `Unknown format code '\\xa' for object of type 'str'` -- where a `%c` transcription puts a literal newline in the middle of an operator's warning line. After the repairs, all 88 templates agree on every field including the exception message text.",
+      "A CONSEQUENCE OF (1) WORTH NAMING ON ITS OWN: the source's `except (ValueError, IndexError)` around `_format_with_event` has an UNREACHABLE half. `_format_with_event` only ever calls `format_map`, and `format_map` raises `ValueError` for every positional field, so no template can produce the `IndexError` that catch names. The port catches the reachable class and says why, rather than declaring a stand-in class nothing can raise. This is a property of the SOURCE, discovered by measuring it; nothing about the port's behaviour differs.",
+      "THE RULE 9 ANSWERS, which docs/test-translation-conventions.md requires in the porting report. (1) WHICH CALLER-SUPPLIED STRINGS ARE USED AS A MAP KEY: two. The event kind, in `cfg.templates.get(event.kind)`, and the template's own field name, in `format_map`'s lookup. Both are read with `getOwn`. For the templates map that is uniformity rather than the defence -- A2's `AttentionConfig` already builds it with `Object.create(null)`, so an `Object.prototype` member cannot be found through it either way, and MEASURED: replacing `getOwn` with an index lookup turns NO case red, so no case here pretends to distinguish them. For the field name it IS the defence: `formatMap` is handed an ordinary values object and a template of `{constructor}` must miss. (2) WHICH `number` PARAMETERS THE SOURCE TYPES `int`: `max_title_chars` and `max_body_chars`, both validated by A2's config loader (`isinstance(value, int)` against the DOCUMENT), and the format spec's width and precision, which this module parses out of an operator's text and which cannot be `NaN` or fractional because the grammar admits only digits. `_truncate` guards `limit <= 0` exactly as the source does, so a zero or negative limit returns the text unchanged rather than emptying it.",
+      "WHAT `shutil.which` COSTS HERE, disclosed rather than left to grep. `_backend_command` resolves `powershell.exe` with `shutil.which(...) or \"powershell\"` on the `windows` backend, and this module carries the repository's THIRD private transcription of `shutil.which`: `src/fencing/renderer.ts` and `src/settings/sandbox_doctor.ts` each have one, and neither is exported. Exporting one is an edit to a landed belt's file, which D-0504 established belongs in its own PR rather than in whichever belt is the first to need it. Consolidating the three is a declared follow-on. No case in either suite asserts the resolved path: the source's two Windows cases assert the embedded beep, not `argv[0]`.",
+      "ONE INHERITED LIMITATION, CARRIED RATHER THAN REPAIRED. `detect_backend` always answers `\"stdout\"`, because interlock discarded the OS probe with `attention.platform` (its PORTING_LEDGER D-0014) and its Q-0017 -- what replaces the discarded desktop notification path -- is open. Every backend below `stdout` is therefore reachable only by a caller that passes `backend` explicitly, which in both suites means a test. The port reproduces that rather than inventing a probe, and the fix belongs upstream, in the change that answers Q-0017.",
+      "WHAT `_safe_subprocess_run` DOES DIFFERENTLY, and why it is not a weakening. `subprocess.run(timeout=5, check=False, capture_output=True)` raises on a failed spawn and on a timeout; Node's `spawnSync` RETURNS an error in both cases and throws in neither. The port raises `SubprocessRunError` from that returned error, which is what puts both runtimes on the source's `except (OSError, subprocess.SubprocessError)` path. `shell: false` is passed explicitly rather than relied on as the default, because this is the one place in the module where a shell could be turned on.",
+      "ONE DELIBERATE DIVERGENCE, UNDER D-0023: `bell()` reports whether the BEL was written, and `notify` records `bellDispatched` from that answer. The source writes `bell(); bell_dispatched = True` and its `bell()` swallows the write error, so a bell that could not be written is still recorded as an audio channel that reached the user. With the desktop dispatch also failed, `reached_user` is then TRUE for a notification that reached nobody, and `cli._scan_once` records it in the dedup ledger -- the event is suppressed for good, on the one path where the operator was told nothing at all. It is the same defect class the source repaired for a failing desktop subprocess (its round-2 codex Major, the reason `reached_user` exists) and did not follow through to the bell. D-0023 puts the repair in the belt that touches the code rather than deferring it, since interlock is frozen. NO SOURCE CASE IS INVERTED, because none pins the inherited behaviour: in both suites the bell's stream always accepts the write, so the source's own cases cannot tell the two readings apart. A target-only case pins the repair, and the divergence is reachable from here, which is what D-0023 asks of it. Found by the codex review gate on the finished belt.",
+      "TWO REPAIRS THAT ARE NOT DIVERGENCES, because they make this port agree with the source where it had not. (1) A desktop child killed by a SIGNAL: `CompletedProcess.returncode` is `-signum` there, which is truthy and non-zero, so the source demotes the dispatch; the port read `status ?? 0` and called it a clean exit. Now `safeSubprocessRun` maps a `signal` to `-signalNumber(signal)`. (2) A format width or precision whose digits overflow `PY_SSIZE_T_MAX`: CPython's `get_integer` refuses it with `ValueError(\"Too many decimal digits in format string\")` and `render_text` falls back; `Number.parseInt` produced `1e33` and `String#repeat` then threw a `RangeError`, which is neither class the source catches. Both are in the oracle's corpus now, so the agreement is measured rather than asserted. Both found by the codex review gate.",
+      "WHAT THE WIDTH GUARD DOES NOT CLOSE, disclosed with its measured numbers. Between V8's maximum string length (about 2**29 characters) and `PY_SSIZE_T_MAX` the two runtimes still differ: CPython attempts the allocation -- `format(\"42\", \"1\" * 10)` really does build a 1.1 GB string, and `format(\"42\", \"99999999999\")` raises `MemoryError`, which the source does not catch either -- while this runtime raises `RangeError` from `repeat`. So a width in that range is a crash on both sides, at different thresholds and under different exception names, rather than a render on one and a crash on the other. Closing it would mean refusing a width CPython accepts, which is a divergence in the other direction and a larger one.",
+      "ONE FINDING FORWARDED RATHER THAN FIXED, because the file is not this belt's. The codex gate also reported that `ALLOWED_PLACEHOLDERS` in `src/attention/config.ts` is an `Object.freeze`d `Set`, which freezes the object's own properties and not the set's internal entries -- so `ALLOWED_PLACEHOLDERS.delete(\"pr\")` succeeds and permanently narrows the validation `renderText` performs on every notification. That is A2's file (D-0902 and D-0905), the repository already has the right shape for it in `src/session/provider.ts`'s frozen-set class, and the same hazard is documented there. A3 reported it to the window for A2 rather than editing a concurrent lane's file.",
+      "A SECOND DELIBERATE DIVERGENCE, UNDER D-0023: on `windows` and `wsl` the bell is suppressed only when the dispatch that carries the embedded beep actually SUCCEEDED. The source writes `should_bell = play_sound and chosen not in (\"windows\", \"wsl\")` -- an unconditional suppression -- and then adds a `desktop_dispatched` test for `wsl-notify-send` alone. So on those two backends, with `desktop=false` or with the PowerShell subprocess failing, an urgent event with sound enabled makes NO sound at all: no beep, because the command carrying it never ran, and no bell, because the suppression does not ask whether it ran. The source's own comment is what makes this an oversight rather than a decision -- it justifies the suppression by the beep being \"already inside the PowerShell command\" -- and the source already draws exactly this distinction one line down for `wsl-notify-send`. The three backends that carry their own audio are now treated alike. NO SOURCE CASE IS INVERTED: its two Windows cases pass a runner that succeeds, and its `sound=\"off\"` cases never reach the bell. Found by the codex review gate, round 2.",
+      "ONE ROUND-2 FINDING DECLINED, with its reason, because a declined finding that leaves no trace is indistinguishable from one nobody read. The gate reported that `_truncate`'s `limit == 1` branch returns the first character rather than `s[:0] + \"...\"`, and called it a divergence from the expression in the docstring. It is not a divergence from anything: it is the source's own branch, character for character. At a limit of one the general expression would produce a BARE ellipsis -- within the limit, and carrying nothing about the event -- and the source prefers the one character the operator configured room for. The docstring now says so, so the next reader of the two lines together does not have to re-derive it.",
+      "WHAT `bell`'s ANSWER CANNOT COVER, disclosed rather than implied by its type. The round-3 gate reported that Node reports an `EPIPE` on a pipe ASYNCHRONOUSLY, through the stream's `error` event, so a `write` that returns without throwing does not prove the BEL was delivered. That is correct and it is a property of the runtime rather than of this function: the source writes the BEL and then calls `stream.flush()` inside the same `try`, so CPython reports a broken pipe synchronously, at the flush, and Node has no flush to report at. The half that IS detectable synchronously is now checked -- a stream Node has already finished (`destroyed` / `writableEnded`) drops the chunk and reports nothing, and that is a false `true` this function can and does refuse -- and a target-only case pins it. What is left is a pipe whose reader closes between that check and the write. Covering it means making `notify` asynchronous, which changes what its caller can do with it, and the caller is a polling loop the source keeps synchronous on purpose; that is a change to the belt's shape rather than to this function, and it belongs in the change that makes it.",
+      "A SIXTH DIVERGENCE, FOUND ON THE INTEGRATION TIP, AND THIS ONE WAS THIS BELT'S OWN REGRESSION RATHER THAN A MISREADING OF CPYTHON. The repair for `{pr:010}` removed two guards in one edit when only one of them was wrong. The alignment guard was wrong and had to go; the `fill === \"\"` guard beside it was RIGHT, because an explicit fill character wins over the `0` -- `format(\"ab\", \"*>010\")` is `\"********ab\"`, not `\"00000000ab\"`. So the fix for one silent mis-render introduced another, in an operator's padded template, and the corpus did not notice because it carried `{pr:*^10}` and `{pr:010}` but no input that combined an explicit fill with a leading zero. Eight such combinations are in the corpus now, and the guard's removal is measured red against it (P20). THE CODEX REVIEW GATE FOUND THE AREA AND NOT THE FAULT: its round-4 comment claimed `{summary:>010}` should pad with SPACES because the explicit alignment suppresses zero-fill, which CPython contradicts -- `format(\"ab\", \">010\")` is `\"00000000ab\"`. Measuring the claim rather than acting on it is what turned up the real defect one case over. Both halves are worth recording: a review comment that is wrong on its own terms can still be the reason a bug is found, and it is only worth that if the response is a measurement."
+    ]
+  },
+  "totals": {
+    "source_cases": 34,
+    "ported": 5,
+    "adapted": 29,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_uses_runtime_default_when_no_template",
+      "target_id": "test/attention/notify.test.ts::attention notify > render uses the runtime default when there is no template",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `cfg.templates.get(event.kind)` misses, so the classifier's own title and body come back unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_applies_user_template",
+      "target_id": "test/attention/notify.test.ts::attention notify > render applies a user template",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `{pr}` and `{status}` are bare identifiers inside the section 6 allowlist, so the template renders; `Template(title=..., body=...)` becomes `new Template({title, body})`, which is the same two fields.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_unknown_placeholder_falls_back",
+      "target_id": "test/attention/notify.test.ts::attention notify > render falls back on an unknown placeholder",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes `capturedStderr` (`./helpers/fixtures.js`), a spy on `process.stderr.write` -- the same shape A1's readers cases use. The subject really is the rendered stderr text: the source warns with `print(file=sys.stderr)` and asserts on substrings of it, so no `LogSink` seam was invented for a path the source reaches directly (rule 7). Both halves of the source's assertion are kept -- the offending name in the warning and the whole-event fallback for title AND body.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_attribute_lookup_rejected",
+      "target_id": "test/attention/notify.test.ts::attention notify > render rejects an attribute lookup",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes `capturedStderr` (`./helpers/fixtures.js`), a spy on `process.stderr.write` -- the same shape A1's readers cases use. The subject really is the rendered stderr text: the source warns with `print(file=sys.stderr)` and asserts on substrings of it, so no `LogSink` seam was invented for a path the source reaches directly (rule 7). The property is the strict one: a `.` in the field name makes the whole template `__invalid__`, so a template cannot reach into an attribute of the event.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_index_lookup_rejected",
+      "target_id": "test/attention/notify.test.ts::attention notify > render rejects an index lookup",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes `capturedStderr` (`./helpers/fixtures.js`), a spy on `process.stderr.write` -- the same shape A1's readers cases use. The subject really is the rendered stderr text: the source warns with `print(file=sys.stderr)` and asserts on substrings of it, so no `LogSink` seam was invented for a path the source reaches directly (rule 7). The source's signature takes `capsys` and never reads it; the wrapper here serves the same purpose, which is keeping the warning off the runner's own stderr. The two assertions it does make are unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_truncates_long_body",
+      "target_id": "test/attention/notify.test.ts::attention notify > render truncates a long body",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, with `len(title)` spelled `[...title].length`. That IS `len` on a `str`, which counts code points; `String#length` counts UTF-16 units and would agree here only because the fixture is ASCII. A target-only case carries the astral input the source has no case for.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_supports_japanese_template",
+      "target_id": "test/attention/notify.test.ts::attention notify > render supports a Japanese template",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The Japanese literals are spelled with `\\u` escapes and named at the top of the file, because `docs/cli-output-policy.md` (D-0006) scans every byte of a file under `test/`. The escaped literal is the same string; the case asserts the same rendering.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_render_summary_placeholder",
+      "target_id": "test/attention/notify.test.ts::attention notify > render substitutes the summary placeholder",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, including the `pending_decision` event with `pr`, `status` and `worker` all `None`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_dry_run_skips_subprocess_and_dedup_state",
+      "target_id": "test/attention/notify.test.ts::attention notify > a dry run skips the subprocess and the dedup state",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. All four assertions are kept, including that the log line is still written in a dry run.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_dispatch_invokes_backend_runner",
+      "target_id": "test/attention/notify.test.ts::attention notify > a dispatch invokes the backend runner",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_stdout_backend_no_subprocess_but_bells_on_urgent",
+      "target_id": "test/attention/notify.test.ts::attention notify > the stdout backend runs no subprocess but bells on urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The `runner=lambda cmd: pytest.fail(...)` guard becomes a runner that throws a plain `Error`. It stays a guard rather than becoming decoration because `dispatchDesktop` catches only `SubprocessRunError` -- the port's stand-in for the source's `(OSError, subprocess.SubprocessError)` -- exactly as `Failed` escapes the source's `except`. A target-only case measures that. The `notify` call is wrapped in `capturedStderr` because the bell really rings: the source's BEL goes into pytest's captured stderr and this keeps it out of the runner's terminal, which is the same containment rather than a weakening.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_bell_rings_on_macos_desktop_success",
+      "target_id": "test/attention/notify.test.ts::attention notify > the bell rings on a macOS desktop success",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The bell is contained by `capturedStderr` for the reason the stdout case above gives.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_bell_rings_on_linux_desktop_success",
+      "target_id": "test/attention/notify.test.ts::attention notify > the bell rings on a Linux desktop success",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. Same containment as the macOS case.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_no_double_bell_on_windows_success",
+      "target_id": "test/attention/notify.test.ts::attention notify > there is no double bell on a Windows success",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. No containment wrapper, because the assertion IS that no bell rang.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_normal_severity_no_bell_with_urgent_only",
+      "target_id": "test/attention/notify.test.ts::attention notify > a normal-severity event does not bell under urgent-only",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The `runner=lambda cmd: pytest.fail(...)` guard becomes a runner that throws a plain `Error`. It stays a guard rather than becoming decoration because `dispatchDesktop` catches only `SubprocessRunError` -- the port's stand-in for the source's `(OSError, subprocess.SubprocessError)` -- exactly as `Failed` escapes the source's `except`. A target-only case measures that.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_sound_off_silent_even_on_urgent",
+      "target_id": "test/attention/notify.test.ts::attention notify > sound off stays silent even on urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The `runner=lambda cmd: pytest.fail(...)` guard becomes a runner that throws a plain `Error`. It stays a guard rather than becoming decoration because `dispatchDesktop` catches only `SubprocessRunError` -- the port's stand-in for the source's `(OSError, subprocess.SubprocessError)` -- exactly as `Failed` escapes the source's `except`. A target-only case measures that.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_runner_exception_falls_back_to_bell",
+      "target_id": "test/attention/notify.test.ts::attention notify > a runner that raises falls back to the bell",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted twice. `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. And `OSError(\"nope\")` becomes `new SubprocessRunError(\"nope\")`: the port needs a NARROW class for the source's `except (OSError, subprocess.SubprocessError)`, because Node reports a failed spawn by returning an error rather than raising one, and because a `catch` that swallowed everything would absorb the four `pytest.fail` guards elsewhere in this file. The property is unchanged: a runner that fails the way an OS failure fails demotes the dispatch and the bell becomes the audio channel.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_runner_nonzero_returncode_falls_back_to_bell",
+      "target_id": "test/attention/notify.test.ts::attention notify > a runner returning a non-zero code falls back to the bell",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. `capsys` becomes `capturedStderr` (`./helpers/fixtures.js`), a spy on `process.stderr.write` -- the same shape A1's readers cases use. The subject really is the rendered stderr text: the source warns with `print(file=sys.stderr)` and asserts on substrings of it, so no `LogSink` seam was invented for a path the source reaches directly (rule 7). `class FakeProc: returncode = 1` becomes the object literal `{ returncode: 1 }`, which is what `getattr(result, \"returncode\", 0)` reads either way.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_reached_user_true_for_stdout_only_mode",
+      "target_id": "test/attention/notify.test.ts::attention notify > reachedUser is true for stdout-only mode",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. `reached_user` is a `@property` there and a getter here, so all four assertions read the same.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_reached_user_false_when_desktop_failed_and_silent",
+      "target_id": "test/attention/notify.test.ts::attention notify > reachedUser is false when the desktop failed and nothing sounded",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. This is the case the dedup contract rests on: a silently-failing desktop must NOT be recorded, so the next poll retries.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_reached_user_true_when_bell_rang_after_desktop_failed",
+      "target_id": "test/attention/notify.test.ts::attention notify > reachedUser is true when the bell rang after the desktop failed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. Bell contained by `capturedStderr`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_reached_user_true_when_desktop_disabled_only",
+      "target_id": "test/attention/notify.test.ts::attention notify > reachedUser is true when only the desktop is disabled",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The `runner=lambda cmd: pytest.fail(...)` guard becomes a runner that throws a plain `Error`. It stays a guard rather than becoming decoration because `dispatchDesktop` catches only `SubprocessRunError` -- the port's stand-in for the source's `(OSError, subprocess.SubprocessError)` -- exactly as `Failed` escapes the source's `except`. A target-only case measures that.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_powershell_subprocess_skipped_when_sound_off[windows]",
+      "target_id": "test/attention/notify.test.ts::attention notify > a Write-Host backend with sound off skips the subprocess[windows]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The `@pytest.mark.parametrize` expansion is reproduced with `parametrize()` from the testkit, which takes pytest's own id explicitly so the target id stays a stable function of the source id (rule 2). This is the `windows` expansion.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_powershell_subprocess_skipped_when_sound_off[wsl]",
+      "target_id": "test/attention/notify.test.ts::attention notify > a Write-Host backend with sound off skips the subprocess[wsl]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The `@pytest.mark.parametrize` expansion is reproduced with `parametrize()` from the testkit, which takes pytest's own id explicitly so the target id stays a stable function of the source id (rule 2). This is the `wsl` expansion.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_powershell_beep_present_when_sound_urgent[windows]",
+      "target_id": "test/attention/notify.test.ts::attention notify > a Write-Host backend carries the beep when sound is urgent[windows]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. `parametrize()` expansion for `windows`, as above.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_powershell_beep_present_when_sound_urgent[wsl]",
+      "target_id": "test/attention/notify.test.ts::attention notify > a Write-Host backend carries the beep when sound is urgent[wsl]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. `parametrize()` expansion for `wsl`, as above.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_desktop_disabled_still_bells_on_urgent",
+      "target_id": "test/attention/notify.test.ts::attention notify > a disabled desktop still bells on urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The `runner=lambda cmd: pytest.fail(...)` guard becomes a runner that throws a plain `Error`. It stays a guard rather than becoming decoration because `dispatchDesktop` catches only `SubprocessRunError` -- the port's stand-in for the source's `(OSError, subprocess.SubprocessError)` -- exactly as `Failed` escapes the source's `except`. A target-only case measures that. Bell contained by `capturedStderr`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_control_chars_stripped_from_command",
+      "target_id": "test/attention/notify.test.ts::attention notify > control characters are stripped from the command",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. The control characters are written as `\\u0007` and `\\n` escapes rather than as raw bytes, per D-0006's whole-file scan; they are the same two characters.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_wsl_notify_send_toast_only_when_sound_off",
+      "target_id": "test/attention/notify.test.ts::attention notify > wsl-notify-send sends only the toast when sound is off",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. Every assertion is kept, including that the body is the FINAL positional argument and the title is the `--category` value.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_wsl_notify_send_toast_and_beep_when_sound_on",
+      "target_id": "test/attention/notify.test.ts::attention notify > wsl-notify-send sends the toast and a beep when sound is on",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_wsl_notify_send_no_double_bell_on_success",
+      "target_id": "test/attention/notify.test.ts::attention notify > a successful wsl-notify-send does not also ring the terminal bell",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_wsl_notify_send_toast_failure_skips_beep",
+      "target_id": "test/attention/notify.test.ts::attention notify > a failed wsl-notify-send toast skips the beep",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. `capsys` becomes `capturedStderr` (`./helpers/fixtures.js`), a spy on `process.stderr.write` -- the same shape A1's readers cases use. The subject really is the rendered stderr text: the source warns with `print(file=sys.stderr)` and asserts on substrings of it, so no `LogSink` seam was invented for a path the source reaches directly (rule 7). The call-count assertion (`len(calls) == 1`) is the one that makes this different from its neighbour, and it is kept.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_wsl_notify_send_beep_failure_does_not_demote_toast",
+      "target_id": "test/attention/notify.test.ts::attention notify > a failed wsl-notify-send beep does not demote the toast",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. `capsys` becomes `capturedStderr` (`./helpers/fixtures.js`), a spy on `process.stderr.write` -- the same shape A1's readers cases use. The subject really is the rendered stderr text: the source warns with `print(file=sys.stderr)` and asserts on substrings of it, so no `LogSink` seam was invented for a path the source reaches directly (rule 7). The source's stateful `TwoResults` callable becomes a closure over a counter, which is the same two answers in the same order.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_notify.py::test_wsl_notify_send_strips_control_chars",
+      "target_id": "test/attention/notify.test.ts::attention notify > wsl-notify-send strips control characters",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `log_stream=StringIO()` becomes `logStream: recordingStream()`, a `{write}` sink: the source's contract for that parameter is \"something with `.write()`\", and nothing here reads a file. The keyword arguments become one options object under this port's call convention, which changes no value. Control characters as escapes, per D-0006.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
