@@ -8332,9 +8332,12 @@ not edited. This entry is the errata, and it has three parts.
 
 1. **The withdrawal condition is restated without naming another repository.** Read `D-0035`'s
    `curator` falsifier as: *if continuo, or any layer built on it, grows a surface that writes into
-   a live skill directory, the subject exists here and the decision is superseded.* That is a
-   condition a later reader can evaluate against this repository alone. The clause that pointed at
-   `suisya-systems/cadenza#9` is withdrawn, per part 2.
+   a live skill directory, the subject exists here and the decision is superseded.* The continuo
+   half of that condition is checkable in this repository; the layer half is checkable in whatever
+   layer is built on continuo, which is a surface this project is party to rather than an issue in
+   a repository it only reads. Neither half sends a reader to a foreign issue tracker for a status,
+   which is what the withdrawn clause did. That clause -- the one pointing at
+   `suisya-systems/cadenza#9` -- is withdrawn, per part 2.
 2. **`cadenza#9` is not what `D-0035` says it is, and was not when the entry was written.**
    `D-0035` cites it as an "agentic-layer direction" and "a live candidate, not a theoretical one".
    cadenza#9 is a **G2 delegation-contract freeze marker**. It carries no agent-layer, skill, or
@@ -8365,8 +8368,8 @@ not edited. This entry is the errata, and it has three parts.
 supersedes `D-0035` with it. Part 2 is falsified by the record: if cadenza#9 is shown to have
 carried agent-layer or skill-promotion content at the time `D-0035` was ratified, the first erratum
 is wrong and the original clause was merely stale rather than unsupported. Part 3 is falsified if a
-skill-promotion writer or gate module appears in `src/`, which is the same event as part 1 seen from
-the premise side.
+skill-promotion writer or gate module appears in `src/`, which is part 1's condition in its
+continuo-local form -- the narrower claim is the one that fails first, and it fails here.
 
 **Rejected alternative: leave `D-0035` alone at zero cost.** The dead pointer stays in the file a
 reader is sent to for decisions, and it has already produced one confusion; and the two-conditions
