@@ -785,6 +785,22 @@ describe("attention notify", () => {
     expect(result.reachedUser).toBe(false);
   });
 
+  test("a bell on an already-finished stream did not ring (target-only, D-0023)", () => {
+    // The half of the async-EPIPE hazard that IS detectable synchronously: a stream Node has
+    // already finished drops the chunk and reports nothing at all, so `write` returning without
+    // throwing says nothing about whether anyone heard it. What is left after this -- a pipe whose
+    // reader closes between the check and the write -- has no synchronous answer, and `bell`'s own
+    // note says so rather than leaving the `boolean` to imply one.
+    patchSeam(notifySeams, "stderr", () => ({ writableEnded: true, write: () => undefined }));
+    const result = notify(makeEvent(), new AttentionConfig(), {
+      backend: "linux",
+      logStream: recordingStream(),
+      runner: () => failingProc,
+    });
+    expect(result.bellDispatched).toBe(false);
+    expect(result.reachedUser).toBe(false);
+  });
+
   test("an overflowing format width is refused, not a RangeError (target-only)", () => {
     const cfg = new AttentionConfig({
       // MEASURED on CPython 3.12.3: `format("42", "9" * 33)` raises

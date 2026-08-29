@@ -125,9 +125,29 @@ export function detectBackend(): Backend {
  * carries it as a divergence rather than as a silent improvement. No source case pins the
  * inherited behaviour -- in both suites the bell's stream always accepts the write -- so there is
  * no case to invert; a target-only one pins the repair.
+ *
+ * **What the answer cannot cover, disclosed rather than implied by its type.** It is
+ * best-effort, and the residue is a property of the runtime rather than of this function. The
+ * source writes the BEL and then calls `stream.flush()` inside the same `try`, so CPython reports
+ * a broken pipe synchronously, at the flush. Node has no flush: `write` returns a backpressure
+ * boolean, and an `EPIPE` on a pipe arrives later, through the stream's `error` event. A stream
+ * that is ALREADY finished is detectable and is checked below; a pipe whose reader closes between
+ * that check and the write is not, and this returns `true` for it. Narrowing it further means
+ * making `notify` asynchronous, which changes what a caller can do with it -- and the caller here
+ * is a polling loop the source keeps synchronous on purpose. Raised by the codex review gate,
+ * round 3, and recorded in `parity/attention.notify.ledger.json` rather than papered over.
  */
 export function bell(stream: TextStream | null = null): boolean {
   const target = stream ?? notifySeams.stderr();
+  // A stream that is already finished will not report the failure from `write` at all -- Node
+  // resolves an `EPIPE` on a pipe through the stream's `error` event, asynchronously, and a
+  // destroyed stream simply drops the chunk. Both are visible as state BEFORE the write, so they
+  // are asked about first; what is left after this is only the pipe that breaks between this test
+  // and the write, which no synchronous answer can cover (see the note above).
+  const state = target as { destroyed?: unknown; writableEnded?: unknown };
+  if (state.destroyed === true || state.writableEnded === true) {
+    return false;
+  }
   try {
     target.write("\u0007");
     return true;
