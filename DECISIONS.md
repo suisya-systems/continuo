@@ -7124,6 +7124,17 @@ for the file and for each namespace inside it:
   dropped entry is one already-notified key forgotten, which is exactly the effect the repair
   exists to prevent.
 
+**An undecodable byte is on the refusing side too, and the first draft of this decision got it
+wrong.** The draft read the file with Node's `utf8` mode and recorded that an undecodable file
+reaches a refusal either way, at the JSON parse -- Python raises `UnicodeDecodeError` there, which
+is a `ValueError` and escapes its own `except OSError`, so the source CRASHES rather than
+recovering. That reasoning holds only when the bad byte breaks the syntax. A bad byte **inside a
+JSON string** leaves the document valid: Node substitutes U+FFFD, the parse succeeds, and the state
+loads carrying a dedup key that is not the key that was written -- an already-notified event free to
+fire again, arriving through the reader this repair exists to harden. The file is read as bytes and
+decoded with a fatal `TextDecoder`. Found by the codex review gate on the finished belt, which is
+where the claim's own falsifier finally got exercised.
+
 **A blank file is on the refusing side, and that is the one call here that is not forced.** The
 source returns empty state for it without even a warning, so it could be read as a third flavour of
 "nothing was written". It is not: `saveState` writes through a fully-written temporary file and a
@@ -7150,7 +7161,21 @@ the platform's:
   digits when it is not, where `Date#toISOString` always prints three.
 
 Every one of those differences turns a garbled or old stored timestamp into a recent one, or changes
-the bytes of a durable file. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+the bytes of a durable file.
+
+**The grammar is measured, not recalled, and the first transcription was too narrow.** A2 inherited
+A1's regex -- extended calendar dates, a `T` or space separator -- and the codex review gate
+observed that `fromisoformat` on CPython 3.12 takes considerably more than that: basic format
+(`20260512`, `115900`), ISO week dates (`2026-W20-2`, `2026W202`, `2026-W20`), an hour-only or
+hour-and-minute time, **any** single character as the date/time separator, a two-digit-hour offset,
+a sub-second offset, and a fractional second **truncated** rather than rounded at six digits. Every
+form left out is a stored timestamp the port would read as garbled while the source read it as
+real -- an extra notification where the source applies the cooldown, which is the safe direction and
+still not parity. The grammar was re-derived by running 68 inputs through `datetime.fromisoformat`
+on CPython 3.12.3 (the interpreter interlock's suite runs on at `65f36c5`) and against `parseIso`;
+all 68 now agree, and 26 of them are pinned in a target-only case. The measurement also caught a
+defect the reviewer had not named: a sub-second offset whose fraction was being stripped put the
+instant a whole **second** away, not a microsecond. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written
@@ -7168,7 +7193,10 @@ an alarm silently. The dedup key is caller-supplied and Python's `dict` has no i
 both namespaces are built with `Object.create(null)` and read with `Object.hasOwn` -- otherwise a
 task named `constructor` reads as already notified forever. `cooldown_sec` is `int` in the source,
 so `NaN` and the infinities are excluded there; here a `NaN` cooldown makes every comparison false
-and suppresses every pending notification for the life of the process, so it is refused. The
+and suppresses every pending notification for the life of the process, so it is refused. The **clock**
+argument carries the same exposure and was missed in the first pass, found by the codex review gate:
+`new Date(NaN).getTime()` is `NaN`, so `shouldNotify` answered false for every key at every age while
+`recordNotified` already refused the same value through `pyIsoUtc`. Both paths refuse it now. The
 `parity/attention.dedup.ledger.json` entry for each records the mutation that was measured red.
 
 **One inherited limitation is carried rather than repaired**, and it is A1's disclosure rather than
@@ -7230,13 +7258,24 @@ transcription already exists in this repository (`src/fencing/pyjson.ts`,
 `src/fencing/pysemantics.ts`) and is already shared by `src/settings/` and `src/session/`, so the
 cost is an import rather than a new module.
 
-**One divergence in the same area is disclosed rather than guarded**, because guarding it would be
-the divergence. Python's `int` is arbitrary-precision; a `cooldown_sec` above 2**53 loads exactly
-there and is rounded to the nearest double here. Refusing it would make this port *narrower* than
-its source for an input the source handles. Nothing observable follows: all ten of these knobs are
-thresholds compared against an age, and both readings of such a value are the same unreachable
-threshold. It is recorded in `parity/attention.config.ledger.json` so a later consumer that does
-arithmetic on one of them -- rather than a comparison -- knows which claim it can make.
+**One divergence in the same area is guarded, and the first draft of this entry argued the
+opposite.** That draft said a knob above 2**53 should be *disclosed* rather than refused: Python's
+`int` is arbitrary-precision and loads it exactly, this runtime rounds it, refusing would make the
+port narrower than its source, and nothing observable followed because all ten knobs are thresholds
+compared against an age. **The loader's own backward-compat auto-scale falsifies the last clause**,
+which the codex review gate found: the auto-scale computes `floor + 1` and then `max + 1`, and past
+2**53 each of those expressions *is* its own input, so `{"pending_decision_min":
+9007199254740992}` produced a ladder with `max == min` and was refused by the constructor with a
+message about `max <= min` -- a refusal naming the wrong knob, for a value interlock accepts. The
+choice was therefore never between refusing and accepting; it was between refusing where the value
+is read and refusing three steps later with a misleading message.
+
+`loadConfig` refuses a value above `MAX_SAFE_INTEGER - 2`, two below the limit because **two**
+successive increments have to stay exact, and the target-only case pins both halves: the refusal,
+and that the largest admitted value still auto-scales to a strictly increasing ladder. This is
+narrower than interlock for an input interlock handles, it is recorded as such here and in
+`parity/attention.config.ledger.json`, and the smallest refused value is some 285 million years in
+minutes.
 
 **Decision 2 -- the dataclass's own defaults become one exported record, read by both the
 constructor and the loader.** `load_config` reads four defaults back out of

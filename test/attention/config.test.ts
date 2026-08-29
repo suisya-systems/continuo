@@ -381,6 +381,26 @@ describe("attention config", () => {
     expect(loadConfig(configText("int2.json", '{"cooldown_sec": 60}')).cooldownSec).toBe(60);
   });
 
+  test("an integer past this runtime's exact range is refused where it is read (target-only)", () => {
+    // A deliberate divergence, narrower than the source (D-0905). Python's `int` is
+    // arbitrary-precision and loads 9007199254740992 exactly; here it is a `number` whose
+    // successor rounds back to itself, and the loader's backward-compat auto-scale computes
+    // `floor + 1`. Without this guard the document below is refused anyway -- by the ladder
+    // validator, with a message about `max <= min` that names the wrong knob for a value interlock
+    // accepts. The refusal fires where the value is read and says what actually happened.
+    const path = configText("big.json", '{"pending_decision_min": 9007199254740992}');
+    expectRefusal(
+      () => loadConfig(path),
+      PyValueError,
+      /must be an integer this runtime can carry/,
+    );
+    // The largest value the bound admits still auto-scales to a strictly increasing ladder, which
+    // is what the bound is two below MAX_SAFE_INTEGER for.
+    const edge = loadConfig(configText("edge.json", '{"pending_decision_min": 9007199254740989}'));
+    expect(edge.pendingDecisionMax).toBeGreaterThan(edge.pendingDecisionMin);
+    expect(edge.pendingDecisionDrop).toBeGreaterThan(edge.pendingDecisionMax);
+  });
+
   test("a notify or template kind naming an Object.prototype member is not inherited (target-only)", () => {
     // Rule 9: the kind is a caller-supplied string used as a map key, and Python's `dict` has no
     // inherited keys. On an object literal `cfg.notify["constructor"]` answers with a function and

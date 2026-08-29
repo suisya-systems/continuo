@@ -241,6 +241,25 @@ export class AttentionConfig {
 }
 
 /**
+ * The largest integer a config knob may carry, and it is deliberately not `MAX_SAFE_INTEGER`.
+ *
+ * Python's `int` is arbitrary-precision; this runtime's `number` is exact only to 2**53. Silence
+ * is unaffordable here because of the loader's own backward-compat auto-scale, which computes
+ * `floor + 1` and then `max + 1`: past 2**53 each of those expressions IS its own input, so a
+ * legacy document setting `pending_decision_min` to 9007199254740992 would produce a ladder with
+ * `max == min` and be refused by the constructor with a message about `max <= min` -- a refusal
+ * naming the wrong knob, for a value interlock loads without complaint. Two successive increments
+ * have to stay exact, so the bound is two below `MAX_SAFE_INTEGER` rather than at it, and the
+ * refusal fires where the value is READ, which is where a reader can act on it.
+ *
+ * `D-0905` records this as a divergence rather than a repair: the port is narrower than its source
+ * for an input the source handles, and nothing in interlock's own suite reaches it. Every one of
+ * these knobs is a threshold in minutes or seconds, so the smallest refused value is some 285
+ * million years.
+ */
+const MAX_CONFIG_INTEGER = Number.MAX_SAFE_INTEGER - 2;
+
+/**
  * The JSON keys carrying a non-negative integer, in the order the source validates them.
  *
  * The order is the order the refusals fire in, so it is part of what a ported case observes when a
@@ -300,6 +319,14 @@ export function loadConfig(path: string | null): AttentionConfig {
     }
     if ((value as number) < 0) {
       throw new PyValueError(`config.${jsonKey} must be non-negative`);
+    }
+    // A DELIBERATE DIVERGENCE, narrower than the source, recorded in D-0905 and in the ledger.
+    // See MAX_CONFIG_INTEGER for what the bound is and why it is not simply 2**53 - 1.
+    if (!Number.isSafeInteger(value) || (value as number) > MAX_CONFIG_INTEGER) {
+      throw new PyValueError(
+        `config.${jsonKey} must be an integer this runtime can carry exactly ` +
+          `(at most ${MAX_CONFIG_INTEGER}), got ${String(value)}`,
+      );
     }
     init[field] = value;
   }

@@ -15,7 +15,6 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-
 import {
   DedupState,
   DedupStateRefused,
@@ -24,6 +23,7 @@ import {
   saveState,
   shouldNotify,
 } from "../../src/attention/dedup.js";
+import { parseIso } from "../../src/attention/pytime.js";
 import { PyValueError } from "../../src/fencing/pysemantics.js";
 import { caseRoot } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
@@ -308,6 +308,84 @@ describe("attention dedup", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  test("a byte that is not UTF-8 is refused even inside a valid JSON string (target-only)", () => {
+    // `readFileSync(path, "utf8")` substitutes U+FFFD for an undecodable byte and carries on. When
+    // the byte sits INSIDE a JSON string the document stays syntactically valid, so the parse
+    // succeeds and the state loads with a dedup key that is not the key that was written -- an
+    // already-notified event free to fire again, which is the one outcome this module exists to
+    // prevent. The file is read as bytes and decoded fatally instead.
+    const path = join(caseRoot("dedup"), "attention_notified.json");
+    writeFileSync(
+      path,
+      Buffer.concat([
+        Buffer.from('{"events": {"event:', "utf8"),
+        Buffer.from([0xff]),
+        Buffer.from('1": "2026-05-12T10:00:00Z"}}', "utf8"),
+      ]),
+    );
+    expectRefusal(() => loadState(path), DedupStateRefused, /cannot read attention dedup state/);
+  });
+
+  test("an invalid now is refused rather than suppressing the notification (target-only)", () => {
+    // Rule 9 on the clock argument. `new Date(NaN).getTime()` is `NaN`, so the cooldown comparison
+    // is false for every key at every age -- the notification silently suppressed. `recordNotified`
+    // already refuses the same value; the read path has to give the same answer.
+    const state = new DedupState({ pending: { "pending:T:k": "2026-05-12T10:00:00Z" } });
+    expectRefusal(
+      () =>
+        shouldNotify(state, "pending:T:k", {
+          source: "pending_decisions",
+          cooldownSec: 300,
+          now: new Date(Number.NaN),
+        }),
+      DedupStateRefused,
+      /now must be a valid instant/,
+    );
+  });
+
+  test("the stored-timestamp grammar is fromisoformat's, measured against CPython (target-only)", () => {
+    // `datetime.fromisoformat` accepts far more than the shape a careful person writes from
+    // memory, and every form left out is a stored value this port would treat as garbled -- an
+    // extra notification where the source applies the cooldown. The table is MEASURED, not
+    // recalled: produced by `python3 -c 'datetime.fromisoformat(...)'` on CPython 3.12.3, the
+    // interpreter interlock's own suite runs on at 65f36c5, over 68 inputs; these are the rows
+    // that distinguish this grammar from the one a translation reaches for first, plus the
+    // refusals that must stay refusals.
+    const table: readonly (readonly [string, string | null])[] = [
+      ["2026-05-12T11:59:00Z", "2026-05-12T11:59:00.000Z"],
+      ["2026-05-12", "2026-05-12T00:00:00.000Z"],
+      ["20260512", "2026-05-12T00:00:00.000Z"],
+      ["20260512T115900", "2026-05-12T11:59:00.000Z"],
+      ["2026-05-12T115900", "2026-05-12T11:59:00.000Z"],
+      ["2026-05-12T1159", "2026-05-12T11:59:00.000Z"],
+      ["2026-05-12T11", "2026-05-12T11:00:00.000Z"],
+      ["2026-05-12x11:59:00", "2026-05-12T11:59:00.000Z"],
+      ["2026-W20-2", "2026-05-12T00:00:00.000Z"],
+      ["2026W202", "2026-05-12T00:00:00.000Z"],
+      ["2026-W20", "2026-05-11T00:00:00.000Z"],
+      ["2026-W53-1", "2026-12-28T00:00:00.000Z"],
+      ["2026-05-12T11:59:00+09", "2026-05-12T02:59:00.000Z"],
+      ["2026-05-12T11:59:00+090030", "2026-05-12T02:58:30.000Z"],
+      ["2026-05-12T11:59:00,123", "2026-05-12T11:59:00.123Z"],
+      ["2026-05-12T11:59:00.9999999", "2026-05-12T11:59:01.000Z"],
+      // Refused by CPython, and each would become a real timestamp under a looser reading.
+      ["20260512115900", null],
+      ["2027-W53-1", null],
+      ["2026-W20-8", null],
+      ["2026-05-12T11:59:00z", null],
+      ["2026-05-12T11:59:00+24:00", null],
+      ["2026-05-12T24:00:00", null],
+      ["2026-132", null],
+      ["2026-0512", null],
+      [" 2026-05-12", null],
+      ["05/12/2026 11:59:00", null],
+    ];
+    for (const [text, expected] of table) {
+      const parsed = parseIso(text);
+      expect(parsed === null ? null : parsed.toISOString(), text).toBe(expected);
+    }
   });
 
   test("a failed write leaves no temporary file behind (target-only)", () => {

@@ -118,12 +118,17 @@ export function loadState(path: string): DedupState {
 
   let raw: string;
   try {
-    // Python's `read_text(encoding="utf-8")` raises `UnicodeDecodeError` on undecodable bytes,
-    // which is a `ValueError` and escapes the source's own `except OSError` -- it takes the
-    // watcher down rather than recovering. Node substitutes U+FFFD instead of raising, so the
-    // undecodable file arrives here as text and is refused a few lines below by the JSON parse.
-    // The outcome is the refusal this module wants either way; the crash is not reproduced.
-    raw = readFileSync(path, "utf8");
+    // Read BYTES and decode with a fatal decoder, rather than `readFileSync(path, "utf8")`.
+    // Python's `read_text(encoding="utf-8")` raises `UnicodeDecodeError` on an undecodable byte;
+    // Node's utf8 read substitutes U+FFFD and carries on, and the damage that does is not
+    // hypothetical. An undecodable byte INSIDE a JSON string leaves the document syntactically
+    // valid, so the parse below succeeds and the state loads with a dedup key that is not the key
+    // that was written -- an already-notified event free to fire again, which is precisely what
+    // this module refuses everywhere else. The `fatal` decoder puts that file on the refusing side
+    // where it belongs. (The source's own answer is worse than either: `UnicodeDecodeError` is a
+    // `ValueError`, so it escapes its `except OSError` and takes the watcher down. D-0904's
+    // fail-closed repair is what this is; the crash is not reproduced.)
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(path));
   } catch (error) {
     throw new DedupStateRefused(
       `cannot read attention dedup state ${path}: ${describeError(error)}; ` +
@@ -259,6 +264,15 @@ export function shouldNotify(
     throw new DedupStateRefused(
       `attention dedup cooldownSec must be a non-negative integer, got ${String(cooldownSec)}`,
     );
+  }
+  // The same rule-9 exposure one argument along, and in the same silent direction: `new Date(NaN)`
+  // is a value this runtime admits and `datetime` excludes, and `NaN.getTime()` makes the cooldown
+  // comparison below false for every key -- the notification suppressed with nothing red anywhere.
+  // `recordNotified` already refuses it through `pyIsoUtc`; the read path needs the same answer,
+  // and it is checked here rather than at the top because the `state.db.events` branch above never
+  // looks at the clock.
+  if (Number.isNaN(now.getTime())) {
+    throw new DedupStateRefused(`attention dedup now must be a valid instant, got ${String(now)}`);
   }
   if (!Object.hasOwn(state.pending, key)) {
     return true;
