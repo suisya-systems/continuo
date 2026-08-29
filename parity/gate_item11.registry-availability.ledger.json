@@ -1,0 +1,75 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item11",
+      "collected": 64,
+      "inventory": "parity/source-inventory/gate_item11.all.txt",
+      "note": "This is part 1 of the gate_item11 belt (D-1001): the structural leak checks and the registry's own predicates (51 of 64 cases). The remaining 13 -- tests/gate_item11/test_suite_runs_unchanged.py, the double-suite-run measurement -- are out of this task's scope and are recorded not-ported here with a follow-on pointer; see D-1001 and parity/source-inventory.belts.md."
+    },
+    "file": {
+      "path": "tests/gate_item11/test_registry_availability.py",
+      "collected": 4,
+      "inventory": "parity/source-inventory/gate_item11.test_registry_availability.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Re-run 2026-08-29 against the read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item11/test_no_provider_detail_leaks.py tests/gate_item11/test_registry_availability.py -p no:cacheprovider`: 39 passed (35 + 4, of which these 4 are this file's)."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item11/registry-availability.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 4,
+    "ported": 4,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item11/test_registry_availability.py::test_every_entry_carries_both_predicates",
+      "target_id": "test/gate_item11/registry-availability.test.ts::every entry carries both predicates",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_registry_availability.py::test_s3_is_available_and_qualified_everywhere",
+      "target_id": "test/gate_item11/registry-availability.test.ts::S3 is available and qualified everywhere",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_registry_availability.py::test_s2_disqualifies_a_child_that_died_without_ever_speaking",
+      "target_id": "test/gate_item11/registry-availability.test.ts::S2 disqualifies a child that died without ever speaking",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_registry_availability.py::test_s2_accepts_any_state_the_child_itself_reported",
+      "target_id": "test/gate_item11/registry-availability.test.ts::S2 accepts any state the child itself reported",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
