@@ -515,8 +515,10 @@ reasons are in the ledger.
 The ledger also carries an `inherited_limitations` list, for rough edges the port **reproduces**
 rather than fixes. A parity port that quietly improves on its source is no longer a parity port, and
 interlock#74's acceptance criteria require known limitations to stay disclosed. Each entry says what
-the behaviour is, that it matches the source, and where a fix would belong -- which is upstream, or
-in a change that moves both sides together.
+the behaviour is, that it matches the source, and where a fix belongs. **That last part is
+continuo's**: interlock is frozen (`D-0023`, `D-0036`), so an inherited defect is repaired here, at
+the first belt that touches it, and `inherited_limitations` records what is reproduced *pending that
+repair* -- not what is queued for someone upstream to fix.
 
 An `adapted` case must still be *at least as strong* as its source in the property it pins. If it is
 weaker, it is a waiver, and that is a report to the reviewer -- see rule 0.

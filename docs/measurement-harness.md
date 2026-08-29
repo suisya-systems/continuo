@@ -217,8 +217,9 @@ If coverage is 100% all four figures coincide and the harness says so.
 
 **The harness does not decide pass or fail.** It prints the cohort size alongside every rate, and it
 prints AC-9's targets (>=95% prompts, >=90% output tokens) as targets. Whether a given cohort size is
-large enough to judge on is canary exit criteria, which is interlock `Q-0005` and open; inventing a
-threshold here would be answering `Q-0005` by inertia.
+large enough to judge on is canary exit criteria, which interlock filed as `Q-0005` and never
+answered; inventing a threshold here would be answering `Q-0005` by inertia rather than by
+decision.
 
 ---
 
@@ -394,7 +395,7 @@ report is section 3.3's episode reconciliation rendered per period, plus:
   claim (condition 5).
 
 What the report does **not** contain is a go/no-go verdict. Interlock `Q-0005` (canary duration,
-sample size, numeric exit criteria) is open, `ACCEPTANCE.md` section 3 says in terms that AC-9's
+sample size, numeric exit criteria) is unanswered, `ACCEPTANCE.md` section 3 says in terms that AC-9's
 targets "are not the same thing as canary go/no-go thresholds, and this document does not convert one
 into the other", and a harness that emitted a verdict would be converting them. It emits the
 measurements the verdict will be made from.
@@ -458,11 +459,17 @@ identity of content.
 
 ## 7. Known holes, stated rather than filled
 
-- **Interlock `Q-0005` stays open.** No exit criterion, sample-size minimum, or go/no-go threshold
+The three `Q-` items below are questions **interlock recorded and never answered**. interlock is
+frozen (`D-0036`), so none of them has an answer in transit: each is unanswered, and each is
+continuo's to settle at its own human gate if a belt ever needs it settled. They are listed as holes
+because the harness deliberately declines to answer them by inertia -- not because something else is
+expected to.
+
+- **Interlock `Q-0005` is unanswered.** No exit criterion, sample-size minimum, or go/no-go threshold
   appears anywhere above.
-- **Interlock `Q-0009` stays open.** The report exposes the set of detector versions and flags a
+- **Interlock `Q-0009` is unanswered.** The report exposes the set of detector versions and flags a
   non-homogeneous period; it does not decide what cross-version compatibility means.
-- **Interlock `Q-0011` stays open.** Secretary window latency under load is gate item 8's measurement,
+- **Interlock `Q-0011` is unanswered.** Secretary window latency under load is gate item 8's measurement,
   not this harness's, and no threshold is invented here.
 - **The escalation correlation key is positional** (section 3.3) and is the weakest join in the
   reconciliation. It is documented as such and its failures surface as unmatched episodes rather

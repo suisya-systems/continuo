@@ -6,11 +6,20 @@
 > DISCHARGED AT THE CANARY ITSELF, WITH LIVE V1 AS THE COUNTERPARTY. Q-0005 REMAINS OPEN: NO
 > NUMERIC GO/NO-GO CRITERION IS STATED OR USED HERE.**
 
+**"Open" here means unanswered, not pending.** The marking sentence above is carried verbatim in
+`src/canary/routing_ledger.sql` and `src/canary/index.ts` as well, and is pinned by
+`test/canary/structural.test.ts`, so it keeps interlock's spelling. Read it as `D-0036` requires:
+`Q-0005` is a question interlock recorded and never answered, interlock is frozen, and no criterion
+is in transit from it. If continuo needs canary exit criteria, continuo settles them at its own
+human gate.
+
 The implementation in `src/canary/` is throwaway by default (D-0026); the durable outputs are this
 contract and the tests in `test/canary/`. The discharge point for item 10 is the same audit run
 **at the canary itself, with live v1 as the counterparty**, under canary duration, sample size and
-go/no-go criteria settled by `Q-0005` — which **remains open**: nothing below states one, and no
-number a rehearsal test uses is a criterion.
+go/no-go criteria `Q-0005` asks for and interlock never supplied -- so `Q-0005` **remains open**,
+in the sense the note above fixes: unanswered, with interlock frozen (`D-0036`), and continuo's to
+settle at its own human gate whenever the canary is actually designed. Nothing below states a
+criterion, and no number a rehearsal test uses is one.
 
 **Refs.** interlock `ACCEPTANCE.md` §1 item 10; interlock `DECISIONS.md` D-0013 (canary shape: one
 worker, run-boundary rollback), D-0022 (scoped exception: rehearse now, discharge at the canary),
@@ -160,7 +169,9 @@ audit showing no dual write, a rehearsed rollback whose entire footprint is one 
 What it cannot show is exactly what D-0022 says it cannot: the counterparty is synthetic, so
 nothing here exercises v1's real write paths, load, or failure modes, and the numeric questions —
 canary duration, sample size, go/no-go thresholds, and what a real rollback does with runs then
-in flight on Interlock (drain? finish? abort?) — are `Q-0005` and **remain open**. The rehearsal
+in flight on Interlock (drain? finish? abort?) — are `Q-0005`, which interlock left
+**unanswered** and, being frozen, will not answer; they are settled at continuo's own gate or not at
+all (`D-0036`). The rehearsal
 shows only that the rollback itself does not touch such runs; it decides nothing about what
 should happen to them, and deliberately provides no API or enum in which such a policy could be
 expressed. The item is discharged **at the canary itself**, with live v1 as the counterparty

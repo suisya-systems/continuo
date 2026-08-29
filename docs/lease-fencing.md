@@ -152,9 +152,12 @@ package rather than one shadowing the other.
 - **The spike schema keeps one lease row per resource and no history table.** `authority_timeline()`
   therefore reconstructs the timeline from the row states the caller observed, while the durable,
   query-answerable evidence is `write_history()` over `action`. Which table records lease history is
-  `Q-0001` and stays open: production schema section 4.2's writer table lists `lease` only as
-  "in-place (CAS)", `migrations/0001_initial.sql` has no lease-history table, and section 12's known
-  holes does not name this question either -- adding a history table here would answer it by inertia.
+  the part of `Q-0001` that stays unanswered: production schema section 4.2's writer table lists
+  `lease` only as "in-place (CAS)", `migrations/0001_initial.sql` has no lease-history table, and
+  section 12's known holes does not name this question either -- adding a history table here would
+  answer it by inertia. It is unanswered *here*, not pending upstream: interlock is frozen
+  (`D-0036`), so choosing a table is continuo's decision to take at its own gate whenever a belt
+  needs it.
 - **`write_history()` reads `action`, and only `action`.** A protected write to another table — S7's
   `outbox` is the case in point — stamps `writer_epoch` on its own row, and its history is read there
   by the same shape of query. Nothing synthesises an action row per protected write, deliberately:
