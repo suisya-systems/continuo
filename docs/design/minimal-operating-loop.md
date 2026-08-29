@@ -101,22 +101,30 @@ The rest of this document is about the other half.
 |---|---|---|
 | L0 | Substrate | A production control-plane database exists at head. |
 | L1 | Admission | An operator names a task and a project; a `run` row is created; a delegation record is persisted. |
-| L2 | Workspace | A git worktree is cut from a named base **branch**; the worker's fenced configuration is rendered into it. |
+| L2 | Workspace | A **topic branch** is created from the named base branch and a git worktree is cut from the topic branch; the worker's fenced configuration is rendered into it. |
 | L3 | Spawn | A lease is acquired, a session is bound, a `claude -p` child starts in that workspace with the brief as its prompt. |
 | L4 | Report | The worker's outcome reaches the control plane as an event on the spine. |
 | L5 | Gate out | A gate is opened on that event and relayed to somewhere a person reads. |
 | L6 | Gate in | The person's decision comes back with a verbatim body, the relay is acked, and the gate advances to `answered`. |
-| L7 | Publish | The branch is pushed, a PR is opened against the same base branch the worktree was cut from, the PR is merged. |
+| L7 | Publish | The topic branch is pushed and a PR is opened from it against the recorded base branch; the PR is merged. |
 | L8 | Close | The merge is observed, the run reaches `completed`. |
 
-**One constraint the table states deliberately: the base is a *branch*, not a ref.** A worktree can be
-cut from a tag or a commit SHA and a naive design would allow it, because L2 only needs something
-resolvable. But L7 requires the base to name a branch -- a PR cannot target a tag or a bare SHA -- so
-a lap that accepted an arbitrary ref at L2 would reach L7 with no valid target and no way to satisfy
-the "same base" invariant that keeps unrelated commits out of the PR. **Require a base branch at
-admission, persist it in the delegation record (6.3), and record the resolved commit separately if
-the lap wants provenance.** Cadenza's G1 already validates a base branch as a distinct value type,
-which is one reason it is the natural supplier once it is callable (4.8).
+**L2 carries two branch constraints, and both are easy to write down wrongly.**
+
+**The base is a *branch*, not a ref.** A worktree can be cut from a tag or a commit SHA, and a naive
+design would allow it because L2 only needs something resolvable. But L7 requires the base to name a
+branch -- a PR cannot target a tag or a bare SHA -- so a lap that accepted an arbitrary ref at L2
+would reach L7 with no valid target and no way to satisfy the "same base" invariant that keeps
+unrelated commits out of the PR. **Require a base branch at admission**, and record the resolved
+commit separately if the lap wants provenance. Cadenza's G1 already validates a base branch as a
+distinct value type, which is one reason it is the natural supplier once it is callable (4.8).
+
+**The worktree is cut from a *topic branch*, not from the base branch.** Cutting it from the base
+directly fails in both directions: `git worktree add` refuses a branch that is already checked out
+somewhere, and where it does not refuse, the worker's commits land on the PR's own base, leaving no
+distinct head to push at L7. So admission names or derives a topic branch, creates it from the base,
+and **persists both in the delegation record (6.3)** -- the pair is what makes L7's PR well-formed,
+and either one alone does not.
 
 **What makes this minimal.** One project, one worker at a time, one gate, git worktrees as the only
 isolation strategy, an operator present throughout, and no CI observation. It is the smallest thing
@@ -134,6 +142,46 @@ if the worker genuinely cannot publish (section 4.5).
    it is currently unreachable.
 2. **The worker cannot publish.** The fence is what turns a report into a request for approval rather
    than a notification of a fait accompli.
+
+### 2.1 A concrete acceptance test: the operator console becomes drawable
+
+"The lap works" is hard to check. There is a sharper criterion available, and it comes from a design
+that already exists: **cadenza#22**, *Operating surface for the human gate: what ports a console
+requires*, migrated from interlock#29 on 2026-08-29 for the reason `D-0036` gives -- it had been
+parked as a candidate answer to an interlock question that will never be answered.
+
+That issue settles a direction (start chat-primary with inline decision cards, grow into a
+three-pane decision inbox, both over one data model; OIDC rather than hand-rolled authentication;
+the home LAN as the operating end state rather than a stepping stone), and it names exactly three
+things a console renders: **gates awaiting a human, run and belt state with `awaiting_user` events,
+and the conversation.** It also names its own blocker, and it is this document's subject:
+
+> today the process that runs opens the spike schema while gates, events and PR rows live only in the
+> production schema, so **the human gate is not reachable at all**. A console cannot render gates that
+> nothing can read. Whatever that work concludes about which schema the stack runs on is a
+> precondition here.
+
+So the relationship is worth stating plainly: **the console was designed before the substrate it
+draws from could be read.** That makes it a good acceptance test for this lap and a bad addition to
+its scope.
+
+- **In scope for the lap:** the data a console would render is in a place something can read it --
+  one database, gates reachable, runs with real statuses, the delegation record persisted.
+- **Explicitly out of scope:** the console itself. No UI, no HTTP server, no identity provider.
+  cadenza#22 is not scheduled by this document and this document does not schedule it.
+
+**The ownership split the console forces** matches what section 6.3 concluded independently, with one
+open item. cadenza#22 assigns the delegation record to continuo -- citing continuo's own `task` known
+hole -- and run, event and outbox state to continuo, which agrees. It assigns **gate management** to
+cadenza on the strength of cadenza's charter, and that is the overlap section 8 names: the gate is
+*implemented and trigger-enforced* in continuo today
+(`migrations/0001_initial.sql:1264-1301`, `src/control_plane/gates.ts`), while cadenza's README claims
+gate semantics as one of its three goals and owns no gate code. This document does not settle that;
+it records that a console makes the ambiguity operational rather than theoretical, so it should be
+settled before a surface is built over it. The fourth row -- **where the operator conversation
+lives** -- cadenza#22 marks undecided, and nothing in either repository claims it. That is a genuine
+open question and not one the minimal lap has to answer: lap 1's conversation is the operator's own
+terminal.
 
 ---
 
@@ -153,7 +201,7 @@ terminal multiplexer.
 | `incident` writing | `grep "INTO incident" src/` returns nothing, and `incident` is in `PROTECTED_TABLES` (`src/control_plane/lease.ts:1267-1274`). Every "On a hit -> raise an incident" cell in the reconcile table (`docs/production-schema.md:546-553`) has no landing place. Deferring the sweep and deferring the incident writer are the same deferral; do not count them twice. |
 | Durable secretary intake | Zero cost, **provided** the design says outright that the admission command *is* the intake. The cost of not saying it is a second answer to "where does a task come from" appearing beside the run table. |
 | Retargeting `continuo attention` at the successor spine | See 3.2 -- this is currently pointed backwards, and the note belongs in the plan. |
-| Lease renewal | Excludable, and section 4.9 says why the obvious alternative -- a longer TTL -- is not an answer. What must be written down instead is that **the lease does not span the human wait.** |
+| ~~Lease renewal~~ | **Not excludable.** Two attempts to scope it away failed; section 4.9 records why and makes renewal a lap-1 requirement for the endpoint's lease. Listed here because a reader looking for it in the exclusion table should find the answer, not its absence. |
 
 ### 3.2 Not needed, rather than not yet ported
 
@@ -453,21 +501,40 @@ endpoint is a long-running process, and it does not manage its own lease at all:
 across an unbounded human wait stops being able to write, whether or not anyone took the lease over.
 **This must be decided for lap 1; it is not covered by the per-verb rule above.**
 
-| | What it means | Assessment |
-|---|---|---|
-| **A** | **Run the endpoint only while a worker turn is live** -- start it at L3, stop it at L4. It never spans the gate, so no renewal is needed and the fixed startup epoch is correct for its whole life. | **Recommended.** It matches the turn shape the lap already has (5.5): a `claude -p` child is one turn, the endpoint exists to serve that turn's `poll`/`ack`, and after L4 there is no worker to serve. It also keeps the "no lease crosses the gate" rule true of the whole lap rather than of one component. |
-| **B** | Give the endpoint an owner process that holds the lease and renews it on a timer. | The general answer, and the one a later unattended lap will need. It is a new long-running component in a lap whose whole point is to be minimal, and it puts renewal on the critical path before anything has shown what TTL is right. |
-| **C** | Restart the endpoint per poll cycle with a freshly acquired epoch. | Works, and re-acquisition raising the epoch makes it safe, but it turns a stdio server into a supervised respawn loop for no gain over A. |
+**Scoping the endpoint's life does not remove the problem, and it is worth saying why the obvious
+scoping fails.** The tempting answer is to run the endpoint only while a worker turn is live -- start
+at L3, stop at L4 -- so it never spans the gate. That is a smaller window, not a bounded one. **A
+worker turn has no upper bound either**: `claude -p` runs until it is done, and section 3.2 already
+records that a hung child is the one liveness case the turn shape does not answer for free. An
+endpoint whose lease expires mid-turn refuses every subsequent `poll` with `StaleWriterRefused`,
+which is the same failure moved earlier and made harder to see.
 
-**So renewal is deferred, but only because option A removes the case that needs it** -- not because
-the case does not exist. If the lap is built any other way, renewal moves from deferred to required
-and belongs in step 4 of section 7.
+**So renewal is required for lap 1, and the design should stop trying to avoid it.** Concretely:
+whatever process launches the endpoint holds its lease and renews it on a timer for as long as the
+endpoint runs. The mechanism is already the right shape for this, which is why this is a small
+requirement rather than a new subsystem:
 
-*An earlier draft of this document said the lap should "set the TTL explicitly beyond the lap's
-duration". That was wrong twice over -- no such value exists for an unbounded wait, and the claim
-that the 30-second default expires mid-lap misread the orchestrator's per-verb lease as a per-lap
-one. The correction in turn missed the endpoint, which is genuinely a per-process holder; the table
-above is that second correction.*
+- **A renewal keeps the epoch.** "A renewal by the holder keeps its epoch, as it must: re-acquiring is
+  what invalidates a token, and a renewal that bumped the epoch would invalidate the holder's own
+  writes in flight" (`src/control_plane/lease.ts:486-489`). So the endpoint's `INTERLOCK_MESSAGEBUS_
+  EPOCH`, fixed at startup, **stays valid across every renewal** -- the holder can keep the lease
+  alive indefinitely without the endpoint knowing or needing to be restarted.
+- **The failure mode if the holder dies is the right one.** The lease expires, the endpoint's writes
+  are refused durably as `StaleWriterRefused` rather than landing under a token nobody holds, and a
+  returning holder must re-acquire, which raises the epoch (`:411`) and invalidates the old endpoint
+  rather than silently readmitting it.
+
+**What the design records, then:** the orchestrator's lease is per-verb and never crosses the gate;
+the endpoint's lease is per-process and **must be held and renewed by its launcher for the endpoint's
+whole life**, with the TTL chosen against the renewal interval rather than against the lap's
+duration. That makes renewal a lap-1 requirement and puts it in step 4 of section 7.
+
+*This paragraph is the third answer to this question and the first correct one; the route matters
+because two plausible answers failed. The first draft said "set the TTL beyond the lap's duration",
+which is not a property when the wait is unbounded, and which also misread the orchestrator's
+per-verb lease as a per-lap one. The second said "scope the endpoint to the worker turn", which
+mistook a smaller window for a bounded one. Both were attempts to make renewal unnecessary; it is
+not.*
 
 ### 4.10 Nobody publishes: L7 has no actor, and the second relay has no acker
 
@@ -847,7 +914,7 @@ DDL to be written by "the first Issue that needs them". G2 remains cadenza's lat
 authority and permission modelling -- not the lap's field list.
 
 **Recommendation:** continuo owns a small, explicitly non-normative record --
-`{ runId, holder, workspace, role, baseBranch, prompt, cliArgs? }` -- produced by the admission command and
+`{ runId, holder, workspace, role, baseBranch, topicBranch, prompt, cliArgs? }` -- produced by the admission command and
 persisted through the existing `appendEvent` as an event row with `subject_kind = 'run'`, so the work
 statement is durable rather than living only in the child's transcript. The entry must state that it
 is lap-scoped, that `holder` is a lease claimant and **not** an authority, and that it is superseded by
@@ -865,14 +932,16 @@ Each step names what it unblocks. Steps 1-3 are strictly ordered; 4-8 have some 
 0. **Rebase onto `origin/main` (`e54c6be`); read cadenza at `origin/main`.** Done for this document.
    *Unblocks: writing anything that does not contradict `D-0036` or misdescribe cadenza.*
 1. **Decide the schema: production, one database (6.1).** *Unblocks: every later step having one
-   address. This is the gate that 5.1, 5.4, 5.5, 6.2 and 6.3 all wait on.*
+   address. This is the gate that 5.1, 5.4, 5.5, 6.2 and 6.3 all wait on -- and, outside this
+   document, the one cadenza#22 names as the precondition for starting the operator console (2.1).*
 2. **Mount `continuo db create|migrate|verify` (6.1).** *Unblocks: an operator bringing a control plane
    into existence at head, which the re-pointed endpoint's startup check requires.*
 3. **Write the run-lifecycle writer and name the lap's event types (6.2).** *Unblocks: the session
    foreign key, the gate foreign key, and the close.*
-4. **Record the lease's scope: acquired per verb, never held across the gate (4.9).** *Unblocks: a
-   correct answer to "what TTL" -- which is that the question does not arise -- and gives the
-   endpoint's lease environment variables determinate values.*
+4. **Settle the lease's two scopes and build the endpoint's renewal (4.9).** The orchestrator's lease
+   is per-verb and never crosses the gate; the endpoint's is per-process and its launcher must hold
+   and renew it for the endpoint's whole life. *Unblocks: a `poll` that still works after the TTL,
+   and determinate values for the endpoint's lease environment variables.*
 5. **Align the outbox with 0003's `cancelled`, then re-point the endpoint (5.1).** *Unblocks: the
    human gate. It is unreachable until this lands.*
 6. **Decide the delegation record (6.3), and pair it with cadenza's condition replacement (5.4).**
@@ -889,8 +958,8 @@ Each step names what it unblocks. Steps 1-3 are strictly ordered; 4-8 have some 
    *Unblocks: `openGate`, which cannot fire without a prior event.*
 10. **Gate verbs, both relays, and an ack path (4.2, 4.4, 4.10).** *Unblocks: an approval that closes
     as `answered_and_forwarded` rather than `withdrawn`.*
-11. **The operator publishes: push, PR against the recorded base branch, merge; then close the run
-    (4.10).** *Ends the lap.*
+11. **The operator publishes: push the topic branch, open a PR against the recorded base branch,
+    merge; then close the run (4.10).** *Ends the lap.*
 
 **Off this chain, decidable in any order:** `migrate` (5.2, ratify `not-porting`), `curator` (5.3,
 errata only), S1 (5.5, record that lap 1 evaluates rather than promotes). None of them blocks anything.
@@ -908,9 +977,12 @@ disposition; the `migrate` belt status; the curator errata; and S1's post-lap pr
 
 - **Retiring G2's freeze condition** -- `README.md:48-50` and `D-0014`'s falsifier. Both are cadenza
   text and neither can resolve as written.
-- **The charter's overlapping claims.** cadenza's README claims the delegation contract *and* "gate
-  management -- which checks a run must pass before it is considered done", while the gate is built,
-  typed and trigger-enforced in continuo. Whichever way it settles, the sentence being edited is
+- **The charter's overlapping claims, now operational rather than theoretical.** cadenza's README
+  claims the delegation contract *and* "gate management -- which checks a run must pass before it is
+  considered done", while the gate is built, typed and trigger-enforced in continuo and cadenza owns
+  no gate code. cadenza#22 restates the claim as the ground for the console belonging to cadenza,
+  which turns the ambiguity into a build decision (2.1). Note the same issue assigns the delegation
+  record to *continuo*, agreeing with 6.3. Whichever way it settles, the sentence being edited is
   cadenza's.
 - **`README.md:3`**, "Cadenza is the business operations layer that sits on top of **interlock**" --
   the successor stack's registry names the frozen repository as its control plane, in its own front
