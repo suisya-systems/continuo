@@ -886,7 +886,12 @@ function minutesSince(isoTs: unknown, now: Date): number {
  * millisecond of an integer-minute threshold can therefore be classified on the other side of it
  * from the source. The fix is to return an epoch in microseconds instead of a `Date` and let
  * `minutesSince` do the arithmetic there; the ledger entry says why it was not taken in this
- * belt and where it belongs.
+ * belt and where it belongs. A second, related one is disclosed beside it: the offset group here
+ * accepts `+HH:MM` and `+HH:MM:SS` but not a fractional offset such as `+01:02:03.5`, which
+ * `fromisoformat` takes on Python 3.11 and later. Such a value reads as malformed, which sends it
+ * down the urgent path -- the safe direction, and the one `minutesSince` documents -- and the two
+ * entries have to be fixed together, since an offset fraction finer than a millisecond cannot
+ * survive a `Date` either way.
  */
 function parseIso(text: string): Date | null {
   const match =
