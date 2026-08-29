@@ -8192,6 +8192,18 @@ record. It supplies **no decisions and no answers**. Concretely:
   rewritten. `D-0035`'s "undecided upstream", `D-0901`'s "had to be answered upstream first", and
   similar phrasings in earlier entries stay as written and are read through this entry: they record
   what was believed when they were taken, and the authority they describe is now here.
+- `parity/attention.broker-journal-contract.ledger.json`'s `where_the_status_lives` said the broker
+  is "`retarget` upstream first" and that continuo decides after interlock does. It is the status
+  pointer a reader reaches the uncollected `test_broker_journal_contract.py` through, so it
+  recreated the same wait from a second entrance; it now says what the belts document says.
+- **The `where_a_fix_belongs: "upstream"` fields already in the parity ledgers are not rewritten in
+  this sweep**, and `docs/test-translation-conventions.md` says how to read them instead. Each is
+  one of two different things -- a repair `D-0023` sends to the next belt that touches the
+  behaviour, or a fix that is structurally impossible here (it needs a v1 store, an interlock
+  module, or a decision this port has no standing to take) -- and telling them apart is a judgement
+  per entry against that entry's `note`. A blanket rewrite would assert repairs continuo cannot
+  make. The per-entry pass is proposed as its own change, at the human gate, and is named here so it
+  is not mistaken for something this decision already did.
 - Nothing about the port's *evidence* rules changes. The five uncollected broker modules still have
   no node ids and nothing may be invented for them (`D-0031`); that is a constraint on evidence, and
   this entry does not license filling it in from judgement.
