@@ -1,0 +1,222 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item11",
+      "collected": 64,
+      "inventory": "parity/source-inventory/gate_item11.all.txt",
+      "note": "This is part 2 of the gate_item11 belt (D-1002), completing it at 64/64. Part 1 (task continuo-gate-item11-p1, D-1001) ported the 51 cases of test_no_provider_detail_leaks.py, test_registry_availability.py and test_substitution_scenarios.py."
+    },
+    "file": {
+      "path": "tests/gate_item11/test_suite_runs_unchanged.py",
+      "collected": 13,
+      "inventory": "parity/source-inventory/gate_item11.test_suite_runs_unchanged.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Re-run 2026-08-29 against the read-only clone of interlock at 65f36c5, with the real `claude` CLI on PATH: `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item11/test_suite_runs_unchanged.py -p no:cacheprovider -v`: 13 collected, 13 passed -- both [S2] and [S3] rows ran for real (S2 spawned a live `claude -p` child for its own bind-and-drive round trip, then the whole of tests/control_plane ran again under it)."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item11/suite-runs-unchanged.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/gate_item11/suite-runs-unchanged.test.ts",
+        "constructs": {
+          "skipIf": 13
+        },
+        "reason": "Two independent gates, both written as literal per-case `skipIf(...)(...)` calls so the exact collected title is present verbatim in this file's source text for `scripts/parity-check.mjs`'s own `declaresTitle` sweep. Six `[S2]` cases: the source's `entry` fixture calls `pytest.skip(reason)` when `registry.PROVIDERS[id].unavailable()` is not None -- one skip per case, at RUN time, so pytest still COLLECTS a node id for it; ported the same way `substitution-scenarios.test.ts` is, one `skipIf` call per case rather than a shared entry-parameterised wrapper. Seven more (six `[S3]` cases plus the unbound case): D-1003's Windows platform gate (`skipIf(WINDOWS, WINDOWS_SKIP_REASON)`), which has no source-side analogue -- interlock has no Windows CI cell for this file to skip on -- and is a target-side addition recorded and justified in D-1003, not a translation of anything in the source. Thirteen calls total, one per case in this file."
+      }
+    ],
+    "conditionally_collected": [
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the suite passes with a provider bound [S2]",
+        "reason": "`vitest list` omits a case gated by `skipIf` entirely where pytest still collects a skipped node id; the condition is `registry.PROVIDERS.S2.unavailable() !== null`, i.e. the `claude` CLI is not on PATH. Same premise as parity/gate_item11.substitution-scenarios.ledger.json's six declarations and parity/gate_item2.mediated-real-provider.ledger.json's two capability gates."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run collects exactly the same tests [S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::every test reaches the same verdict either way [S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::both runs read the same suite artifact [S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run really had a provider live [S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound provider drove the control plane before the suite ran [S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the suite passes with a provider bound [S3]",
+        "reason": "D-1003: on a Windows host, `skipIf(WINDOWS, WINDOWS_SKIP_REASON)` gates every case in this file, including the `[S3]` and unbound cases that run unconditionally everywhere else -- `vitest list` omits the case entirely there, the same fallback the six `[S2]` declarations above document, gated on `process.platform === \"win32\"` instead of `claude` availability. Measured: this file's nested subprocess double-run of the whole of test/control_plane oversubscribed a Windows CI runner's CPU under contention with the outer suite's own parallel files (PR #73, run 33242488019), collaterally blowing an unrelated fault-injection file's own suite budget. See D-1003 for the measurement and its falsifier."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run collects exactly the same tests [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::every test reaches the same verdict either way [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::both runs read the same suite artifact [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run really had a provider live [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound provider drove the control plane before the suite ran [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the unbound run had no provider",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 13,
+    "ported": 0,
+    "adapted": 13,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_suite_passes_with_a_provider_bound[S2]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the suite passes with a provider bound [S2]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same assertions -- zero failures, exit code 0, nothing skipped -- over `support/run.ts`'s RunResult rather than pytest's own outcome dict. Adapted: `failed()` and the skipped-id sweep read `outcomes[id].test`/`.file` (vitest's JSON reporter status, D-1002) in place of the source's per-phase (setup/call/teardown) dict, since vitest's reporter has no phase breakdown of its own -- see support/run.ts's own module doc for what the two-level {test, file} status pair does and does not preserve."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_bound_run_collects_exactly_the_same_tests[S2]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run collects exactly the same tests [S2]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same set-equality assertion (collected ids match, unbound run is non-empty), over `Object.keys(...).sort()` rather than Python `set()`. Adapted: async (`Promise.all` over the two cached subprocess runs) since every SessionProvider verb is Promise-returning (D-0301)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_every_test_reaches_the_same_verdict_either_way[S2]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::every test reaches the same verdict either way [S2]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same per-test outcome-equality assertion, over `expect(...).toEqual(...)` on the `{test, file}` outcome maps `support/run.ts` builds from vitest's JSON reporter, in place of pytest's own per-phase dict (see D-1002)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_both_runs_read_the_same_suite_artifact[S2]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::both runs read the same suite artifact [S2]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same digest-equality assertion (SHA-256 per collected file, non-empty), over `node:crypto`'s `createHash('sha256')` in place of Python's `hashlib.sha256`, keyed the same way (basename of each collected file)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_bound_run_really_had_a_provider_live[S2]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run really had a provider live [S2]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same three stdout substring assertions (the binding header, the provider's own scaffold string, \"live session\"), over the run's captured stdout as `support/provider-plugin.ts`'s `globalSetup` prints it -- a vitest `globalSetup` module standing in for the source's `pytest_report_header` hook (D-1002)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_bound_provider_drove_the_control_plane_before_the_suite_ran[S2]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound provider drove the control plane before the suite ran [S2]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same two stdout substring assertions (the drive-the-control-plane line, the one-effect-delivered-and-acked line), over `./substitution.ts`'s `driveOnce()` -- a translation of the fixture's own `drive_once()` (D-1002), printed by `support/provider-plugin.ts`'s `globalSetup` the same way the header assertion above is."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_suite_passes_with_a_provider_bound[S3]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the suite passes with a provider bound [S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same assertions -- zero failures, exit code 0, nothing skipped -- over `support/run.ts`'s RunResult rather than pytest's own outcome dict. Adapted: `failed()` and the skipped-id sweep read `outcomes[id].test`/`.file` (vitest's JSON reporter status, D-1002) in place of the source's per-phase (setup/call/teardown) dict, since vitest's reporter has no phase breakdown of its own -- see support/run.ts's own module doc for what the two-level {test, file} status pair does and does not preserve."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_bound_run_collects_exactly_the_same_tests[S3]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run collects exactly the same tests [S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same set-equality assertion (collected ids match, unbound run is non-empty), over `Object.keys(...).sort()` rather than Python `set()`. Adapted: async (`Promise.all` over the two cached subprocess runs) since every SessionProvider verb is Promise-returning (D-0301)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_every_test_reaches_the_same_verdict_either_way[S3]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::every test reaches the same verdict either way [S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same per-test outcome-equality assertion, over `expect(...).toEqual(...)` on the `{test, file}` outcome maps `support/run.ts` builds from vitest's JSON reporter, in place of pytest's own per-phase dict (see D-1002)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_both_runs_read_the_same_suite_artifact[S3]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::both runs read the same suite artifact [S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same digest-equality assertion (SHA-256 per collected file, non-empty), over `node:crypto`'s `createHash('sha256')` in place of Python's `hashlib.sha256`, keyed the same way (basename of each collected file)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_bound_run_really_had_a_provider_live[S3]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run really had a provider live [S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same three stdout substring assertions (the binding header, the provider's own scaffold string, \"live session\"), over the run's captured stdout as `support/provider-plugin.ts`'s `globalSetup` prints it -- a vitest `globalSetup` module standing in for the source's `pytest_report_header` hook (D-1002)."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_bound_provider_drove_the_control_plane_before_the_suite_ran[S3]",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound provider drove the control plane before the suite ran [S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same two stdout substring assertions (the drive-the-control-plane line, the one-effect-delivered-and-acked line), over `./substitution.ts`'s `driveOnce()` -- a translation of the fixture's own `drive_once()` (D-1002), printed by `support/provider-plugin.ts`'s `globalSetup` the same way the header assertion above is."
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_suite_runs_unchanged.py::test_the_unbound_run_had_no_provider",
+      "target_id": "test/gate_item11/suite-runs-unchanged.test.ts::the unbound run had no provider",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same negative stdout assertion, over the unbound run's captured stdout. Adapted: `support/provider-plugin.ts`'s `globalSetup` is always present in `suite-runs-unchanged.config.ts` and is a no-op when `CONTINUO_ITEM11_PROVIDER` is unset (vitest has no per-invocation plugin flag to omit it the way the source omits `-p tests.gate_item11.provider_plugin` for the unbound run) -- see D-1002 and support/provider-plugin.ts's own module doc."
+    }
+  ]
+}

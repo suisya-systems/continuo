@@ -131,6 +131,8 @@ spaces distinct.
 | D-0951 | A refused dedup ledger stops the attention CLI at exit 2 and leaves the file untouched | accepted |
 | D-0952 | The operator's template goes through a transcribed CPython, checked by a differential oracle rather than by review | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
+| D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
+| D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
 
 ---
 
@@ -7357,6 +7359,111 @@ file"), the next free id after D-0118.
 
 ---
 
+## D-1002 -- The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional
+
+**Context.** D-1001's Decision 3 deferred `tests/gate_item11/test_suite_runs_unchanged.py`'s 13
+cases -- the operational half of item 11's claim, run the control-plane suite twice (once with a
+live session bound before collection, once without) and diff the outcomes, the collected ids and a
+digest of every collected file -- pending a spike into whether continuo's own suite runner supports
+the same shape. This task is that spike plus the port.
+
+**Decision 1 -- the spike confirms the shape and finds it needs no pytest-plugin analogue: vitest's
+own `--reporter=json` already carries what `outcome_recorder.py` had to be written to collect.**
+Measured directly (`node_modules/.bin/vitest run <file> --reporter=json --outputFile=<path>`,
+vitest 4.1.11): the JSON reporter's `testResults[]` gives, per file, a `status` (`"passed"` /
+`"failed"`) and a `name` (the file's own path, usable for both a digest and an outcome key), and per
+test inside it an `assertionResults[].status`. Two further measurements this decision rests on:
+
+- **Hook failures are distinguishable from test failures without a custom reporter.** A `beforeAll`
+  throw sets every contained test's `status` to `"skipped"` and the *file's* `status` to `"failed"`;
+  an `afterAll` throw leaves every contained test `"passed"` and only the file `"failed"`. That is
+  enough to tell "a test started passing only because its fixture stopped running" (source's own
+  worry, `test_every_test_reaches_the_same_verdict_either_way`'s docstring) from "the suite's own
+  results are unchanged but teardown broke" -- not the same setup/call/teardown vocabulary pytest's
+  plugin recorded, but a strictly comparable pair (`{test, file}` per id) for the same purpose. See
+  `test/gate_item11/support/run.ts`'s own module doc.
+- **A `globalSetup` module that throws aborts the run, but the JSON reporter still writes a report**
+  (`{success: false, testResults: []}`), unlike pytest where a failed `pytest_configure` leaves no
+  report file at all. `support/run.ts` checks `testResults.length > 0` (via the `outcomes` map
+  built from it) rather than the source's `report.exists()`, which is the direct translation of the
+  same fail-closed intent (D-0010): a provider that could not qualify must not produce a
+  measurement that looks like anything ran.
+
+Consequence: `outcome_recorder.py` has no port. `test/gate_item11/support/run.ts` reads vitest's
+JSON reporter output directly and builds the outcome/artifact maps `suite-runs-unchanged.test.ts`
+compares, which is a re-derivation against continuo's own test runner rather than a line-for-line
+port of a pytest plugin whose whole reason to exist was that pytest did not expose this by default.
+
+**Decision 2 -- the "provider fixture" is a `globalSetup` module read by a dedicated vitest config
+(`support/suite-runs-unchanged.config.ts`), not a flag on the main config.** Vitest has no
+per-invocation plugin flag analogous to pytest's `-p`, so the source's `argv += ["-p",
+"tests.gate_item11.provider_plugin"]` (present only for the bound run) has no direct target. The
+config file's `globalSetup` entry is always present; what varies between the two runs is whether
+`support/provider-plugin.ts`'s `globalSetup` finds `CONTINUO_ITEM11_PROVIDER` in the subprocess
+environment `support/run.ts` builds -- absent, it returns immediately and is inert, the same
+"harmless when unset" contract the source's own `outcome_recorder.py` documents for `REPORT_ENV`.
+Measured (nested-vitest spike): a `vitest run` subprocess spawned from inside a running vitest
+worker works cleanly with no environment-variable interference once `VITEST`/`VITEST_POOL_ID`/
+`VITEST_WORKER_ID` are not force-inherited by accident, and `test/control_plane`'s 605 cases run in
+~7s either way -- three such runs (unbound, `[S3]` bound, `[S2]` bound) comfortably inside a single
+outer test's budget, which is why `CASE_TIMEOUT_MS` is generous (900s) rather than tuned to the
+measured figure: the same asymmetry `vitest.config.ts`'s own `testTimeout` comment gives for a slow
+CI cell. The config is spawned via `node <repo>/node_modules/vitest/vitest.mjs run --config <path>`
+(`process.execPath` plus the package's own `bin` target) rather than `node_modules/.bin/vitest`, so
+the subprocess launch does not depend on a POSIX shebang shim continuo's own Windows cell lacks.
+
+The double-run's own config deliberately does not reuse `vitest.config.ts`: that file's
+`resolveSeed()` throws under CI without `CONTINUO_TEST_SEED` (D-0005), which has nothing to do with
+item 11, and this measurement compares *outcomes and artifact digests*, not order-sensitivity --
+the main config's own job, D-0005's double-green rule already covers it. `support/suite-runs-
+unchanged.config.ts` runs in collection order, no shuffle.
+
+**Decision 3 -- `driveOnce` (the source's `drive_once`) is added to `test/gate_item11/
+substitution.ts` rather than to a new file.** Part 1 (D-1001) did not need it, since nothing in the
+51 cases it ported drove a full lease-to-outbox round trip to *qualify* a provider before a
+measurement -- that is `provider_plugin.py`'s job alone in the source, and its TypeScript home is
+the module already documented as "the one file in this fixture package that turns a provider's own
+words into a `session` row", which `driveOnce` also does, just as a precondition rather than as an
+assertion. Async because every `SessionProvider` verb it calls is `Promise`-returning (D-0301); the
+sqlite operations inside it stay synchronous, as `bindSession` already was.
+
+**Decision 4 (continuo#70) -- `test_substitution_scenarios.py`'s (and its port's) never calling
+`registry.disqualified()` is the source's own design, not a gap this belt should close.** Verified
+directly against interlock at `65f36c5`: `grep -n disqualified tests/gate_item11/
+test_substitution_scenarios.py` returns nothing -- the source's own `entry` fixture skips on
+`unavailable()` only, never calls `disqualified()`. The only source call site is
+`provider_plugin.py`'s `bind()`, now ported as `support/provider-plugin.ts`'s `globalSetup` in this
+task. The reason is the shape of what each file measures: `test_substitution_scenarios.py` exercises
+the control-plane binding path itself, case by case, so a session whose readout would disqualify it
+is exactly a case worth having (the binding logic still has to translate whatever state a provider
+reports, disqualifying or not -- `sessionRow`'s `OBSERVATION_WORD` mapping has no third case for
+"disqualified"). `test_suite_runs_unchanged.py` instead spends an entire double-suite-run measuring
+against one bound session, and `disqualified()` is the fail-closed gate (D-0010) that stops it from
+spending that cost on a backend already known to be broken, *before* either subprocess starts.
+Nothing here changes; `test/gate_item11/substitution-scenarios.test.ts` is unmodified by this task.
+
+**Totals.** `parity/gate_item11.suite-runs-unchanged.ledger.json` records 13 (0 `ported`, 13
+`adapted`, 0 `not-ported`, 0 waivers) -- all `adapted`, since every case reads `support/run.ts`'s
+`{test, file}` outcome pair or the `globalSetup`-printed stdout rather than pytest's own per-phase
+dict, per Decision 1. The six `[S2]` cases are `conditionally_collected`, the same premise
+`parity/gate_item11.substitution-scenarios.ledger.json`'s six declarations and
+`parity/gate_item2.mediated-real-provider.ledger.json`'s two capability gates already document.
+`parity/source-inventory.belts.md` moves `gate_item11` from `retarget` to `in-scope` (ratified
+2026-08-30, D-0034; completed 2026-08-29), the belt's own precedent from D-1001's text. The belt is
+now 64/64.
+
+**Falsifier.** If a future continuo test runner migration removes `--reporter=json` or `globalSetup`
+support, or changes either's semantics around hook-failure status or an aborted run's report
+contents, `support/run.ts` and `support/provider-plugin.ts` need re-verification against the new
+runner before this measurement can be trusted again -- this decision rests on vitest 4.1.11's
+measured behaviour, not on a documented contract either module promises to keep.
+
+**Source.** Task `continuo-gate-item11-p2`, 2026-08-29, porting
+`tests/gate_item11/test_suite_runs_unchanged.py` from interlock `65f36c5`, completing the belt D-0034
+started and D-1001 began, per the spike-first approach that task's brief required.
+
+---
+
 ## D-0904 -- Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home
 
 **Context.** `PORTING_LEDGER.md`'s row for `attention/dedup.py` carries the two dedup namespaces --
@@ -7752,6 +7859,95 @@ because something can, so the two readings cannot both be right at the same time
 `tests/attention/test_cli.py`. Decision id allocated by the window in the `D-09xx` range that
 `D-0034` gave the attention belt (`D-0904`/`D-0905` are A2's). Ratified at the human gate before
 this belt made the change.
+
+---
+
+## D-1003 -- `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting
+
+**Context.** PR #73 (D-1002) failed `double-green (windows-latest, node 24)` in CI (run
+`33242488019`, job `99074077395`) after merging `main` forward twice (through `attention` A1's PR
+#71 and the `measurement` suite-template migration PR #72, the latter specifically to rule out that
+this was `measurement`'s own already-known Windows slowness). The failure's own signature ruled out
+a simple "make the Windows cell faster" fix.
+
+**Diagnosis.** Three things read from the job's own annotations, not inferred:
+
+1. **Not a job-level timeout.** The job completed in 15m44s, inside every configured limit; nothing
+   here is GitHub Actions' own workflow timeout firing.
+2. **A file with nothing to do with this belt blew its own budget.** `test/fault_injection/policy.ts`
+   raised `ContractViolation: the fast profile spent 447s in this fault-injection file, over its
+   240s suite budget (design 9)`, alongside a `BarrierTimeout` inside the same file's controller.
+   Nothing in `test/fault_injection/` was touched by this task's diff. D-0602 already tuned that
+   budget for this port's runners; this run blew through it by nearly 2x with unrelated code.
+3. **This belt's own double-run failed too, the same way a subprocess timeout looks.**
+   `support/run.ts`'s `the unbound run wrote no report; vitest exited 1` fired with **empty**
+   `stdout` and `stderr`. A vitest crash ordinarily writes something to one of the two; a `spawnSync`
+   `timeout` (`support/run.ts`'s `RUN_TIMEOUT_MS`, 300s) instead kills the child with `SIGTERM`,
+   leaves `status` `null`, and `run()`'s `completed.status ?? 1` reports that as plain exit code 1
+   with whatever was captured before the kill -- empty, if the kill lands early. The `[S3]` failures
+   in the same job show partial `stdout` (the `globalSetup` header lines) before the same failure,
+   consistent with a slow run reaching its own internal deadline rather than crashing outright.
+
+Both symptoms point the same direction: `suite-runs-unchanged.test.ts` spawns up to two full
+subprocess re-runs of the entire `test/control_plane` suite (14 files, 605 cases, `synchronous =
+FULL` fsync on every commit) *while the outer suite's own parallel worker pool is still running*,
+including `fault_injection`'s own real-child-process, timing-sensitive tests. On a two-vCPU Windows
+runner that is already the slowest cell in the matrix (D-0029's own finding), that is enough
+concurrent CPU/IO demand to starve an unrelated file past its tuned budget and to push this belt's
+own nested runs past their own internal timeout. `ubuntu-latest` (both Node versions) passed in
+~2.5 minutes each in the same run -- the contention is a Windows-runner-resource fact, not a defect
+in the measurement's logic.
+
+**Decision.** `suite-runs-unchanged.test.ts` gates every case (not only `[S2]`'s existing
+`claude`-CLI-availability gate) on `process.platform === "win32"`, the same `skipIf` shape as
+`[S2]`'s: a platform capability gate, recorded as `conditionally_collected` in
+`parity/gate_item11.suite-runs-unchanged.ledger.json` (seven more entries, `[S3]` and unbound,
+alongside the six `[S2]` entries D-1002 already recorded) rather than a silent narrowing. Applied
+**alongside**, not instead of, `support/suite-runs-unchanged.config.ts`'s nested `fileParallelism:
+false`: serialising the nested run's own 14 files is free and can only lengthen that run's own wall
+time, never widen what it measures, but nothing about it was measured sufficient alone against a
+runner already saturated by the outer suite's own pool, and CI is the only place that contention is
+reproducible at all -- so both land together rather than staging a second, unverifiable round.
+
+**Why this is not a coverage gap the belt is silently accepting.** Item 11's property -- no provider
+detail leaks into the control plane; the control-plane suite runs unmodified against either provider
+-- is a fact about this repository's source and runtime behaviour, not about the operating system
+running it: nothing in `src/session/`, `src/control_plane/`, or this belt's own fixtures branches on
+`process.platform`. Two things already cover Windows without this file's help:
+`no-provider-detail-leaks.test.ts`'s static AST scan runs on every OS unmodified (it reads import
+graphs, not processes), and `test/control_plane`'s own 605 cases run -- and must pass -- on Windows
+every time as part of the ordinary suite, which is already evidence the suite itself is
+Windows-compatible. What the skip gives up is narrower than either: literal re-confirmation, via
+*this specific subprocess double-run*, that swapping providers costs nothing *on Windows
+specifically*, as opposed to on Linux where the same code already ran the same way.
+
+**Relationship to D-0029.** D-0029 rejected raising a timeout cap and rejected "re-run CI and hope"
+in favour of reducing the *real* per-case cost (the spike-schema template), on the position that "the
+cap is not the fix". This decision does not raise any cap, and does not touch `fault_injection`'s
+budget or any other belt's -- both stay exactly as D-0602 tuned them. The reason this decision is a
+platform skip rather than a D-0029-style cost reduction is that D-0029 had a general cost-reduction
+move available (a cheaper fixture achieving the identical assertions) and this measurement does not:
+its entire premise (D-1002) is running the *real*, unmodified `test/control_plane` suite as a real
+subprocess twice, which is not a cost a testkit trick can remove without ceasing to measure what item
+11 asks for. `fileParallelism: false` is the cost reduction available here, and it is applied; what
+remains is a cost this measurement cannot shed further without narrowing its own scope (rejected --
+see D-1002's own totals) and that a two-vCPU Windows runner cannot currently absorb alongside the
+rest of the suite.
+
+**Falsifier.** If a future change removes the resource pressure this decision responds to --
+`fault_injection`'s own suite budget or watchdogs are re-tuned for a larger CI runner (out of this
+belt's hands, D-0602), a Windows runner with more cores becomes the CI default, or
+`test/control_plane` itself gets substantially cheaper to run twice (the `measurement` belt's own
+143x suite-template speedup, landed the same day as this decision in PR #72, is exactly the kind of
+change that could someday make this moot for a different subsystem) -- this skip should be revisited
+and the Windows gate lifted if a re-measurement shows the contention is gone. It should not be lifted
+on the strength of one green re-run alone; D-0029 already recorded why that is not evidence on this
+cell.
+
+**Source.** Task `continuo-gate-item11-p2`, 2026-08-29, responding to PR #73's CI failure (run
+`33242488019`) after D-1002 landed; the option (skip on Windows, keep full scope on Ubuntu) was
+presented with two alternatives and their trade-offs, and selected at the human gate via the
+secretary.
 
 ---
 

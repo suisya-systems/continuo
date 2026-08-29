@@ -142,14 +142,15 @@ const LEDGERS = [
   "parity/fault-injection.import-graph.ledger.json",
   "parity/fault-injection.manifest.ledger.json",
   "parity/fault-injection.protocol.ledger.json",
-  // lane J -- gate_item11 (item 11's structural leak checks and registry,
-  // D-1001, D-range D-10xx). Part 1 of the belt: 51 of 64 source cases across
-  // the two structural files and the substitution-scenarios file below. The
-  // remaining 13 (test_suite_runs_unchanged.py, the double-suite-run
-  // measurement) are a declared follow-on -- see D-1001.
+  // lane J -- gate_item11 (item 11's structural leak checks, registry and
+  // double-suite-run measurement, D-1001/D-1002, D-range D-10xx). Part 1: 51
+  // of 64 source cases across the two structural files and the
+  // substitution-scenarios file. Part 2 (D-1002) lands the remaining 13
+  // (test_suite_runs_unchanged.py), completing the belt at 64/64.
   "parity/gate_item11.no-provider-detail-leaks.ledger.json",
   "parity/gate_item11.registry-availability.ledger.json",
   "parity/gate_item11.substitution-scenarios.ledger.json",
+  "parity/gate_item11.suite-runs-unchanged.ledger.json",
   // lane K -- attention. The subsystem ports in three sub-belts sharing one
   // D-range (D-0034): A1 (facts, 90 cases, `D-0901`..`D-0903`), A2 (dedup and
   // config, 44, `D-0904`..`D-0905`) and A3 (notify and pipeline, 60). One

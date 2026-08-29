@@ -1,6 +1,11 @@
+import { join } from "node:path";
+
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
+import { KeyedDropbox } from "../../src/control_plane/destination.js";
+import { NOTIFY_RECIPIENT, spikeRegistry } from "../../src/control_plane/handlers.js";
 import {
+  acquire,
   effectKind,
   fencedInsert,
   type Lease,
@@ -8,11 +13,14 @@ import {
   param,
   protectedWrite,
 } from "../../src/control_plane/lease.js";
+import { Outbox } from "../../src/control_plane/outbox.js";
+import { createControlPlane, reconstruct } from "../../src/control_plane/schema.js";
 import {
   Failure,
   Observation,
   Ok,
   type ProviderResult,
+  type SessionProvider,
   type SessionReadout,
 } from "../../src/session/provider.js";
 
@@ -130,4 +138,109 @@ export function releaseSession(
   connection
     .prepare("UPDATE session SET released_at_ms = ? WHERE session_id = ?")
     .run(options.releasedAtMs, sessionId);
+}
+
+// --------------------------------------------------------------------------
+// One full round trip, used to qualify a provider before the suite runs
+// (D-1002; source `drive_once`, used only by `support/provider-plugin.ts`).
+// --------------------------------------------------------------------------
+
+/** The fixed instant the round trip is dated at -- never the wall clock (see source). */
+export const DRIVE_T0 = 1_700_000_000_000;
+export const DRIVE_TTL_MS = 30_000;
+export const DRIVE_RUN_ID = "item11-drive-run";
+export const DRIVE_RESOURCE = "item11-drive-resource";
+export const DRIVE_HOLDER = "item11-drive-writer";
+
+/**
+ * Run the control plane end to end with `readout`'s session as its subject.
+ *
+ * What makes `support/provider-plugin.ts`'s binding a measurement rather than
+ * a coincidence: the provider's readout has to become a binding the schema
+ * accepts, under a fencing token, with an outbox delivery on top -- so a
+ * provider that cannot drive the control plane fails before the suite runs.
+ *
+ * Deliberately not a test: it throws rather than asserting, so a failure here
+ * aborts the run (D-0010) instead of appearing as one red case among the
+ * suite's own.
+ *
+ * @returns a one-line summary for the run header.
+ */
+export async function driveOnce(
+  provider: SessionProvider,
+  readout: SessionReadout,
+  options: { readonly providerId: string; readonly root: string },
+): Promise<string> {
+  const { providerId, root } = options;
+  const connection = createControlPlane(join(root, "drive-control-plane.sqlite3"));
+  try {
+    connection
+      .prepare(
+        "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms) VALUES (?, 'running', ?, ?)",
+      )
+      .run(DRIVE_RUN_ID, DRIVE_T0, DRIVE_T0);
+    const lease = acquire(connection, {
+      resource: DRIVE_RESOURCE,
+      holder: DRIVE_HOLDER,
+      nowMs: DRIVE_T0,
+      ttlMs: DRIVE_TTL_MS,
+    });
+    bindSession(connection, lease, readout, {
+      runId: DRIVE_RUN_ID,
+      provider: providerId,
+      nowMs: DRIVE_T0,
+    });
+
+    // The provider's list verb has to agree that the session it just bound
+    // exists. A binding written from a readout the provider no longer knows
+    // about would be a row about nothing.
+    const listed = new Set(
+      unwrap(await provider.listSessions(), "list_sessions").map((row) => row.sessionId),
+    );
+    if (!listed.has(readout.sessionId)) {
+      throw new Error(
+        `${providerId} bound session ${readout.sessionId} is not in its own roster ` +
+          `${JSON.stringify([...listed].sort())}`,
+      );
+    }
+
+    const dropbox = new KeyedDropbox(join(root, "drive-destination"), "item11-drive-dropbox");
+    const outbox = new Outbox(connection, {
+      resource: DRIVE_RESOURCE,
+      holder: DRIVE_HOLDER,
+      registry: spikeRegistry(dropbox),
+    });
+    outbox.enqueue({
+      messageId: "item11-drive-msg",
+      recipient: NOTIFY_RECIPIENT,
+      payload: `{"session":"${readout.sessionId}"}`,
+      dedupKey: `item11-drive:${readout.sessionId}`,
+      nowMs: DRIVE_T0,
+      epoch: lease.epoch,
+      runId: DRIVE_RUN_ID,
+    });
+    const attempt = outbox.attempt("item11-drive-msg", { nowMs: DRIVE_T0 + 1, epoch: lease.epoch });
+    if (!outbox.recordAck("item11-drive-msg", { nowMs: DRIVE_T0 + 2 }).recorded) {
+      throw new Error("the delivery was never acked");
+    }
+    if (dropbox.effectCount(attempt.idempotencyKey) !== 1) {
+      throw new Error(
+        `the destination applied ${dropbox.effectCount(attempt.idempotencyKey)} effects, not one`,
+      );
+    }
+
+    const state = reconstruct(connection, DRIVE_T0 + 3);
+    const bound = state.activeSessions.map((row) => row["session_id"]);
+    if (bound.length !== 1 || bound[0] !== readout.sessionId) {
+      throw new Error(`active sessions are ${JSON.stringify(bound)}, not [${readout.sessionId}]`);
+    }
+    const row = state.activeSessions[0] as Record<string, unknown>;
+    return (
+      `bound ${String(row["session_id"])} to ${String(row["run_id"])} as ${String(row["observation"])}` +
+      `/${String(row["provider_state"] ?? row["observation_reason"])} under epoch ` +
+      `${lease.epoch}, one effect delivered and acked`
+    );
+  } finally {
+    connection.close();
+  }
 }
