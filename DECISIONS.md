@@ -109,6 +109,7 @@ spaces distinct.
 | D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
 | D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
 | D-0601 | The fault-injection belt takes `D-06xx`, its own `test/fault_injection/` directory, and two adapter classes | accepted |
+| D-0602 | The fault-injection watchdogs are scaled for this port's runners, and the manifest's numbers are left alone | accepted |
 | D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
 
 ---
@@ -6413,5 +6414,72 @@ seam surviving, `test/fault_injection/import-graph.test.ts` goes red naming the 
 reached the implementation. If a second full adapter is added without passing the battery,
 `test/fault_injection/conformance.test.ts` collects it and fails. If the adapter registry is
 emptied, its own structural case fails rather than the matrix silently collecting nothing.
+
+---
+
+## D-0602 — The fault-injection watchdogs are scaled for this port's runners, and the manifest's numbers are left alone
+
+**Context.** `manifest.json` carries interlock's CI budgets: a `fast` profile with a 15s per-case
+watchdog and a 10s per-barrier one. Those numbers are calibrated on interlock's runners. On PR #62
+they met continuo's, and two cases failed on the `windows-latest` / node 22 cell:
+
+    CaseTimeout: disp__attempt__after_effect_before_record__sigkill outran its 15s budget
+    CaseTimeout: disp__lease-acquire__lease-acquired__clock-fwd outran its 15s budget
+
+**The stack is the whole diagnosis.** Both failed at the *identical* site --
+`Controller.checkDeadline` -> `Controller.spawn` -> `executeCase` at the FIRST spawn, the one
+immediately after `bootstrap()`. Neither case had started a role process. Creating the schema alone
+had consumed the entire budget. The same suite was green on windows/node 24 and on all four ubuntu
+cells, and both cases pass everywhere else, so nothing distinguishes them except which machine they
+happened to run on.
+
+That is a phenomenon this repository has already measured and already written down. From
+`vitest.config.ts`, for one test on one commit in one workflow:
+
+    linux-latest              28ms
+    windows-latest (healthy) 321ms
+    windows-latest (slow)  13,556ms
+
+a 42x spread between two Windows runners with no code between them, on work that is exactly what a
+case does -- the control plane runs `synchronous = FULL` (interlock D-0012), so every commit fsyncs,
+and a case creates, migrates and re-reads a database several times.
+
+**Two hypotheses were measured and discarded before this one.** The port spawns a child per role and
+type-strips `src/control_plane` on each spawn, so per-spawn cost was the obvious suspect: measured at
+**210ms median** (n=5, linux/node 22), and `NODE_COMPILE_CACHE` moved it not at all (208ms vs 210ms).
+Spawn count was the second: the two failures were assumed to be the multi-spawn cases until the stack
+showed both dying before *any* spawn. Neither survived contact with the evidence, and both are
+recorded here because a reader's first instinct will be the same as mine was.
+
+**Decision.** The budgets are scaled **where they are used**, by this port, and the manifest keeps
+interlock's numbers:
+
+- `PORT_BUDGET_SCALE = 3` applied to the per-case, combination and per-barrier budgets;
+- held under `RUNNER_BUDGET_CEILING_S = 50`, because Vitest's own `testTimeout` is 60s and the two
+  failures are not equivalent. The harness's `CaseTimeout` names the case, carries the `S9-REPRO`
+  line and runs the teardown ladder; the runner's says a test took too long and leaves the role
+  processes to a teardown that never ran. Keeping the harness strictly faster preserves the
+  attributable failure design section 8.2 asks for.
+
+**What is NOT changed, and why.** `manifest.json`'s profile numbers stay exactly as interlock wrote
+them. A ported case -- `the profiles carry the budgets the watchdogs enforce` -- asserts them
+literally, and editing them would make this port's evidence disagree with its source over a fact
+about interlock's CI rather than about continuo's. The source's own docstring says these are
+"harness engineering parameters, not acceptance thresholds", revisable by an ordinary diff; this
+entry takes that at its word while leaving the recorded values alone.
+
+**One place this is stricter than the source, stated plainly.** The `full` profile's combination
+budget is 60s, which already equals the runner's timeout, so a 60s harness budget could never fire
+first. The ceiling holds it at 50s. That is a tighter number than interlock's on that one cell, and
+it buys a better failure rather than a weaker one.
+
+**Why not simply raise the runner's timeout.** `testTimeout` lives in `vitest.config.ts`, which every
+lane shares; a belt does not get to widen the whole suite's tolerance to fix its own cell.
+
+**Falsifier.** If a case's runtime grows past the scaled budget for a reason that is not runner
+weather -- a matrix that has genuinely got slower -- the watchdog still fires and still names the
+case, which is what design section 9 asks of it. If the scale is ever suspected of hiding growth,
+the measurement to redo is the one above: run the belt on a healthy runner and compare against the
+unscaled number.
 
 ---

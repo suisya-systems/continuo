@@ -18,6 +18,7 @@ import type { FaultCase } from "./contract.js";
 import { assertInvariants, CaseFailure, Controller, executeCase, reproLine } from "./controller.js";
 import {
   adapterFor,
+  barrierTimeoutS,
   caseTimeoutS,
   installSuiteBudget,
   laneSkipReason,
@@ -82,7 +83,7 @@ describe("the manifest cases", () => {
         adapter: adapterFor(entry),
         case: entry,
         suiteSeed: suiteSeed(),
-        barrierTimeoutS: Number(PROFILE["barrier_timeout_s"]),
+        barrierTimeoutS: barrierTimeoutS(PROFILE),
         caseTimeoutS: caseTimeoutS(entry, PROFILE),
         profile: String(PROFILE["name"]),
       });

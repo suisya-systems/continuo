@@ -258,14 +258,70 @@ export function installSuiteBudget(activeProfile: Record<string, unknown>): void
 }
 
 /**
- * The per-case watchdog a case's shape earns (design 9).
+ * How much longer this port's watchdogs run than the numbers the manifest
+ * carries (D-0602).
+ *
+ * interlock's budgets are calibrated on interlock's runners. Continuo's Windows
+ * cells are documented -- in this repository's own `vitest.config.ts`, from a
+ * measured CI run -- as pathologically slow for exactly the work a case does:
+ * the same test took 28ms on linux, 321ms on a healthy windows runner and
+ * **13,556ms on a slow one**, same commit, same workflow, no code between them.
+ * The control plane runs `synchronous = FULL` (interlock D-0012), so every
+ * commit fsyncs.
+ *
+ * That is not a hypothetical here. On PR #62's windows/node22 cell, two cases
+ * failed `CaseTimeout` at the IDENTICAL site -- the first `spawn`, immediately
+ * after `bootstrap()` -- meaning creating the schema alone consumed the whole
+ * 15s budget before either case had started a single role process. Both cases
+ * are ordinary ones that pass everywhere else, and the same suite was green on
+ * windows/node24; they simply ran while that machine was in the slow state.
+ *
+ * The manifest's numbers are NOT changed: they are interlock's, a ported case
+ * asserts them literally, and moving them would make this port's evidence
+ * disagree with its source. The scale is applied where the budget is USED, and
+ * only by this port.
+ */
+export const PORT_BUDGET_SCALE = 3;
+
+/**
+ * The ceiling a scaled budget is held under, so the harness always fails first.
+ *
+ * Vitest's `testTimeout` is 60s (`vitest.config.ts`). If a case's own budget
+ * could reach that, the runner would kill the test before the harness noticed --
+ * and the two failures are not equivalent: the harness's `CaseTimeout` names the
+ * case, carries the `S9-REPRO` line and runs teardown, while the runner's says a
+ * test took too long and leaves the role processes to the teardown ladder that
+ * never ran. Keeping the harness strictly faster preserves the attributable
+ * failure design section 8.2 asks for.
+ */
+export const RUNNER_BUDGET_CEILING_S = 50;
+
+/** Scale a manifest budget for this port, then hold it under the runner's. */
+function scaled(budgetS: number): number {
+  return Math.min(budgetS * PORT_BUDGET_SCALE, RUNNER_BUDGET_CEILING_S);
+}
+
+/**
+ * The per-case watchdog a case's shape earns (design 9), scaled for this port.
  *
  * A combination case -- more than one target, or a staggered kill -- gets the
  * longer budget, because it spawns and synchronises more processes.
+ *
+ * One case is scaled DOWN rather than up, and it is worth naming: the `full`
+ * profile's combination budget is 60s, which is already the runner's own
+ * timeout, so a harness budget of 60s could never fire first. It is held at
+ * {@link RUNNER_BUDGET_CEILING_S} so the attributable failure is still the
+ * harness's. That is stricter than interlock's number on that one cell, and it
+ * buys a better failure rather than a weaker one.
  */
 export function caseTimeoutS(faultCase: FaultCase, activeProfile: Record<string, unknown>): number {
   const combination =
     (faultCase["targets"] as string[]).length > 1 || faultCase["fault"] === "staggered-sigkill";
   const key = combination ? "combination_case_timeout_s" : "per_case_timeout_s";
-  return Number(activeProfile[key]);
+  return scaled(Number(activeProfile[key]));
+}
+
+/** The per-barrier watchdog (design 8.2), scaled for this port on the same grounds. */
+export function barrierTimeoutS(activeProfile: Record<string, unknown>): number {
+  return scaled(Number(activeProfile["barrier_timeout_s"]));
 }
