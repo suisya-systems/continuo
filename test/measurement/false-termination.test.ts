@@ -34,8 +34,6 @@
  * goes through the harness's read-only handle.
  */
 
-import { join } from "node:path";
-
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
 import { describe, expect, test } from "vitest";
@@ -66,7 +64,7 @@ import {
 } from "../../src/measurement/false-termination.js";
 import { isAscii } from "../../src/measurement/format.js";
 import { openForMeasurement } from "../../src/measurement/reader.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -90,10 +88,12 @@ const PRODUCTIVE = ["session_activity"] as const;
  * the source fixture is function-scoped and a shared one would be a coupling
  * the port's isolation contract exists to keep out.
  */
-function productionDb(): string {
-  const path = join(caseRoot("false-termination"), "production.sqlite3");
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
   createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+});
+
+function productionDb(): string {
+  return productionTemplate.copyInto(caseRoot("false-termination"));
 }
 
 /**
