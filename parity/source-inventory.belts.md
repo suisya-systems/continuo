@@ -102,17 +102,16 @@ source does not have is what the parity check exists to catch -- and the child-l
 the second was retired structurally instead, by making every teardown await its child's exit rather
 than merely signal it.
 
-### `attention` -- `in-scope` for A1 (**ported: 90 of 90 cases**) and A3 (**ported: 60 of 60 cases**), `retarget` for A2 -- 194 cases
+### `attention` -- `in-scope` -- **ported: 194 of 194 cases**
 
 Belt start ratified at the human gate on 2026-08-30 (D-0034), split into three sub-belts sharing
 one D-range, `D-09xx`: A1 (facts, 90 cases), A2 (dedup and config, 44 cases) and A3 (notify and
 pipeline, 60 cases). The status keeps its `retarget` spelling here -- starting the belt is not the
 same axis as completing it (the same distinction D-0032's belts used); each sub-belt's rows move to
-`in-scope` at its own completion. **A1 completed 2026-08-29** (`D-0901`..`D-0903` and `D-0906`)
-and **A3 completed 2026-08-29** (`D-0951`..`D-0952`), so their 90 and 60 rows carry that spelling
-and A2's 44 stay `retarget`. `test_broker_journal_contract.py`
-is **not** part of these 194 cases -- it has no node ids and sits in the `broker` section below as
-a collection-time skip.
+`in-scope` at its own completion, and **all three completed 2026-08-29**: A1 (`D-0901`..`D-0903`
+and `D-0906`), A2 (`D-0904`..`D-0905`) and A3 (`D-0951`..`D-0952`). All 194 rows therefore carry
+that spelling, and the belt is finished. `test_broker_journal_contract.py` is **not** part of these
+194 cases -- it has no node ids and sits in the `broker` section below as a collection-time skip.
 
 **A1 -- facts, 90 of 90 ported.** `tests/attention/test_readers.py` (29) and
 `tests/attention/test_classifier.py` (61), ported to `src/attention/` (`fact_state.ts`,
@@ -184,6 +183,31 @@ absent -- in `scripts/parity-check.mjs`'s `LEDGERS` list, in a comment beside th
 rather than as an entry, because the checker's first act on a ledger is to read the inventory file
 it points at and this file has none to point at.
 
+**A2 -- dedup and config, 44 of 44 ported.** `tests/attention/test_dedup.py` (10) and
+`tests/attention/test_config.py` (34), against `src/attention/dedup.ts`, `src/attention/pytime.ts`
+and the A2 half of `src/attention/config.ts` that `D-0902` reserved:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/attention/test_config.py` | 34 | `parity/attention.config.ledger.json` |
+| `tests/attention/test_dedup.py` | 10 | `parity/attention.dedup.ledger.json` |
+
+**The `test_dedup.py` retarget this document called for is done, and it is the belt's one
+deliberate divergence from interlock.** The two corruption cases named below assert the OPPOSITE of
+their source: `D-0034` ratified the fail-closed repair inside A2 and `D-0023` requires the case that
+pinned an inherited behaviour to be inverted in the change that repairs it, so both are recorded
+`adapted` with the divergence stated. `D-0904` draws the new boundary -- an ABSENT namespace is
+empty, a PRESENT but unusable one is a refusal -- and the source has four silent recovery paths
+where interlock's own suite pins only two, so the other two are closed by target-only cases rather
+than left unprotected. Rebuilding the corrupted state from durable records instead of refusing it
+is the larger repair `D-0034` named as declined-for-now; nothing in A2 forecloses it and no belt is
+yet chosen for it. The config file needed no such retarget: all 34 cases are straight translations,
+and the ledger defends that reading rather than leaving it to look like an oversight.
+
+The two decisions A2 minted are `D-0904` (the fail-closed boundary, and one home for the belt's
+`datetime` transcriptions) and `D-0905` (`isinstance(value, int)` is a question about the config
+document, not about the value; the dataclass's own defaults become one exported record).
+
 Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
 (mechanism)` or `rewrite`; **none** is a straight carry. `test_classifier.py` (61) carries the
 strongest invariant -- that every fact-vocabulary row has a pinned expectation -- and this document
@@ -200,11 +224,12 @@ with every other and that the DDL still constrains `incident.fact_state` only fo
 is an agreement between statements of a vocabulary rather than a pinned expectation per row. `test_dedup.py` is called out explicitly: its two
 corruption cases pin "malformed state loads as an empty `DedupState`", and the ledger rules that
 behaviour out for durable dedup state, so those two must be re-authored to assert fail-closed
-rather than ported. **A2 still owns those two**; A3 owns the CLI case that runs the same
-repair end to end, and has re-authored it (`D-0951`).
+rather than ported. **A2 re-authored those two under `D-0904`**, and A3 re-authored the CLI case
+that runs the same repair end to end (`D-0951`), so the behaviour the ledger ruled out is not
+reproduced anywhere in the subsystem.
 
-That last point is why A2's rows are `retarget` and not `candidate-lane`: a straight translation
-there
+That is why the belt was `retarget` rather than `candidate-lane` while it was open: a straight
+translation
 would carry a behaviour the source repository has already decided is wrong, and continuo's D-0023
 says an inherited defect is repaired at the first belt that touches it, not reproduced.
 
@@ -588,8 +613,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` A1 and A3 (**ported** 2026-08-29) | 1,865 |
-| `retarget` | `attention` A2, `gate_item11`, `broker` | 162 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` (all three sub-belts, **ported** 2026-08-29) | 1,909 |
+| `retarget` | `gate_item11`, `broker` | 118 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
 | | **18** | **2,194** |

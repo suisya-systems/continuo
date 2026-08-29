@@ -280,10 +280,20 @@ export function scanOnce(
 /**
  * `load_config`, with a clean error instead of a traceback.
  *
- * The source catches `(ValueError, OSError, json.JSONDecodeError)`. `JSONDecodeError` is a
- * `ValueError` subclass there and is a native `SyntaxError` here, because `pyJsonLoads` parses
- * with `JSON.parse` -- so it is named explicitly. Leaving it out is what would turn the source's
- * "garbled config exits 2" case into an unhandled `SyntaxError`.
+ * The source catches `(ValueError, OSError, json.JSONDecodeError)`, and `JSONDecodeError` is a
+ * `ValueError` subclass there, so that triple is two classes here: `PyValueError` and the Node
+ * errno `Error` that stands in for `OSError`.
+ *
+ * **It was three until A2 landed, and the third is deliberately gone rather than kept as
+ * insurance.** `pyJsonLoads` parses with `JSON.parse`, which raises a native `SyntaxError`, so
+ * this function named that class explicitly while `loadConfig` let it through. A2's own review
+ * closed that at the source -- `loadConfig` now re-raises a malformed document as a
+ * `PyValueError`, in the same family as every other refusal it makes -- which leaves the branch
+ * here unreachable. An unreachable branch is a branch nobody has checked, and no case can be
+ * written that exercises it, so it is removed rather than left looking like a defence. The
+ * entry for `test_scan_invalid_config_exits_cleanly` in `parity/attention.cli.ledger.json`
+ * records the change, because the previous text described an implementation that no longer
+ * exists.
  */
 export function loadCfgOrExit(configArg: string | null): AttentionConfig {
   if (configArg === null || configArg === "") {
@@ -302,12 +312,16 @@ export function loadCfgOrExit(configArg: string | null): AttentionConfig {
   }
 }
 
-/** `(ValueError, OSError, json.JSONDecodeError)`, in this runtime's classes. */
+/** `(ValueError, OSError, json.JSONDecodeError)`, in this runtime's two classes. */
 function isConfigRefusal(error: unknown): boolean {
-  if (error instanceof PyValueError || error instanceof SyntaxError) {
+  if (error instanceof PyValueError) {
     return true;
   }
   // Node reports an `OSError` as an `Error` carrying an errno `code`; there is no class to test.
+  // This one is NOT redundant with the above: `loadConfig` deliberately performs its `readFileSync`
+  // outside its own try, so a path that exists and cannot be read -- a directory, a permission
+  // denial, a file that vanished after the existence check -- still arrives here as an errno
+  // `Error`, exactly as it is an `OSError` in the source.
   return error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string";
 }
 

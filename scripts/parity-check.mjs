@@ -150,9 +150,13 @@ const LEDGERS = [
   "parity/gate_item11.no-provider-detail-leaks.ledger.json",
   "parity/gate_item11.registry-availability.ledger.json",
   "parity/gate_item11.substitution-scenarios.ledger.json",
-  // lane K -- attention, sub-belt A1 (facts). The subsystem ports in three
-  // sub-belts sharing one D-range (D-0034); A1 is `D-0901`..`D-0903`. One
-  // ledger per source test file, as everywhere else.
+  // lane K -- attention. The subsystem ports in three sub-belts sharing one
+  // D-range (D-0034): A1 (facts, 90 cases, `D-0901`..`D-0903`), A2 (dedup and
+  // config, 44, `D-0904`..`D-0905`) and A3 (notify and pipeline, 60). One
+  // ledger per source test file, as everywhere else, and the sub-belts share
+  // one lane block rather than taking a letter each -- they are one subsystem
+  // and one D-range, and three blocks would invite the letter collision the
+  // comment below describes.
   //
   // The letter is `K` and was drafted as `J`: gate_item11 above was reaching
   // for the same one concurrently and landed on `main` first (PR #69), so this
@@ -175,13 +179,13 @@ const LEDGERS = [
   // itself and points back here.
   "parity/attention.classifier.ledger.json",
   "parity/attention.readers.ledger.json",
-  // lane K, sub-belt A3 (notify and pipeline). Same lane letter as A1 above and
-  // as A2's `attention.dedup` / `attention.config`, because it is the same belt:
-  // D-0034 split the attention subsystem into three sub-belts sharing one
-  // D-range rather than into three lanes. A3 mints from `D-0951`, which is a
-  // gap above A2's `D-0904`.. deliberately -- the window allocated the sub-belts
-  // disjoint stretches of D-09xx so three concurrent lanes could not collide on
-  // an id.
+  "parity/attention.dedup.ledger.json",
+  "parity/attention.config.ledger.json",
+  // Sub-belt A3 (notify and pipeline), in the same block for the reason the
+  // header above gives. A3 mints from `D-0951` rather than from `D-0906`, and
+  // the gap is deliberate: the window allocated the three sub-belts disjoint
+  // stretches of D-09xx so that three concurrent lanes could not collide on an
+  // id.
   //
   // `parity/attention.notify.ledger.json` also declares the three
   // `test/attention/pyformat-oracle.test.ts` ids as target-only. That is a file

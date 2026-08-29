@@ -256,7 +256,7 @@ export function renderText(event: AttentionEvent, cfg: AttentionConfig): [string
   let body = event.body;
   if (template !== undefined) {
     const used = new Set([...placeholders(template.title), ...placeholders(template.body)]);
-    const unknown = [...used].filter((name) => !ALLOWED_PLACEHOLDERS.has(name));
+    const unknown = [...used].filter((name) => !ALLOWED_PLACEHOLDERS.includes(name));
     if (unknown.length > 0) {
       warn(
         `warning: attention template[${pyRepr(event.kind)}] uses unknown ` +

@@ -26,6 +26,7 @@
 
 import { getOwn, pyOr, pyStr, pyStrip, pyTruthy } from "../fencing/pysemantics.js";
 import { DEFAULT_NOTIFY, type Severity } from "./config.js";
+import { parseIso, renderIsoUtc } from "./pytime.js";
 import { DELIVERY_ADOPT_EXPIRED_EVENT, DELIVERY_SUPERSEDED_EVENT } from "./readers.js";
 
 /**
@@ -767,14 +768,12 @@ export function isoFromEpoch(ts: unknown): string | null {
   if (Number.isNaN(whole.getTime())) {
     return null;
   }
-  const rendered = whole.toISOString();
-  // A year outside 0000-9999 renders in the expanded `+275760-...` form, which is not an ISO
-  // string the rest of the port would accept; the source reaches the same outcome by raising.
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(rendered)) {
-    return null;
-  }
-  const seconds = rendered.slice(0, 19);
-  return micros === 0 ? `${seconds}Z` : `${seconds}.${String(micros).padStart(6, "0")}Z`;
+  // The rendering rule -- no fractional part at zero microseconds, six digits otherwise -- is
+  // `datetime.isoformat`'s and is shared with `pyIsoUtc` rather than spelled twice
+  // (`docs/test-translation-conventions.md` rule 11, and `D-0904`). A year outside 1..9999 is
+  // outside `datetime`'s own domain and renders in the expanded `+275760-...` form here, so
+  // `renderIsoUtc` answers `null` where the source reaches the same outcome by raising.
+  return renderIsoUtc(whole, micros);
 }
 
 /**
@@ -839,96 +838,6 @@ function minutesSince(isoTs: unknown, now: Date): number {
     return Number.POSITIVE_INFINITY;
   }
   return (now.getTime() - parsed.getTime()) / 1000 / 60;
-}
-
-/**
- * `datetime.fromisoformat`, accepting a trailing `Z`, with a naive value read as UTC.
- *
- * Written as an explicit grammar rather than handed to `new Date(...)`. `Date.parse` accepts
- * shapes `fromisoformat` rejects (`"2026/05/12"`, `"May 12 2026"`, a bare `"12"`) and reads a
- * naive `"2026-05-12T10:00:00"` as **local** time where Python's `astimezone` on a naive value
- * would first attach UTC here. Both differences change which side of a TTL threshold a row lands
- * on, and the second one changes it by the runner's timezone offset -- a green suite in one
- * region and a red one in another.
- *
- * **One disclosed divergence, recorded in `parity/attention.classifier.ledger.json` rather than
- * repaired here.** A `Date` resolves to one millisecond and `datetime` to one microsecond, so the
- * parsed microsecond field is rounded into the millisecond. A timestamp within a fraction of a
- * millisecond of an integer-minute threshold can therefore be classified on the other side of it
- * from the source. The fix is to return an epoch in microseconds instead of a `Date` and let
- * `minutesSince` do the arithmetic there; the ledger entry says why it was not taken in this
- * belt and where it belongs. A second, related one is disclosed beside it: the offset group here
- * accepts `+HH:MM` and `+HH:MM:SS` but not a fractional offset such as `+01:02:03.5`, which
- * `fromisoformat` takes on Python 3.11 and later. Such a value reads as malformed, which sends it
- * down the urgent path -- the safe direction, and the one `minutesSince` documents -- and the two
- * entries have to be fixed together, since an offset fraction finer than a millisecond cannot
- * survive a `Date` either way.
- */
-function parseIso(text: string): Date | null {
-  const match =
-    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,6}))?)?(Z|[+-]\d{2}:?\d{2}(?::\d{2})?)?)?$/.exec(
-      text,
-    );
-  if (match === null) {
-    return null;
-  }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4] ?? "0");
-  const minute = Number(match[5] ?? "0");
-  const second = Number(match[6] ?? "0");
-  const micros = Number((match[7] ?? "").padEnd(6, "0"));
-  const zone = match[8];
-  // Checked before the arithmetic, because `Date.UTC` rolls a month 13 or a day 32 FORWARD where
-  // `fromisoformat` raises -- so a typo would become a real timestamp a month away rather than the
-  // malformed-timestamp path the classifier's urgent posture depends on. The year bound is
-  // `datetime.MINYEAR`, which is 1: `0000-01-01` is a ValueError there and an ordinary date here,
-  // and an ordinary date two millennia old is exactly the shape the drop tier swallows.
-  if (
-    year < 1 ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > daysInMonth(year, month) ||
-    hour > 23 ||
-    minute > 59 ||
-    second > 59
-  ) {
-    return null;
-  }
-  let ms = Date.UTC(year, month - 1, day, hour, minute, second, Math.round(micros / 1000));
-  if (year < 100) {
-    // `Date.UTC` maps years 0-99 into 1900-1999; `fromisoformat` does not.
-    ms = new Date(ms).setUTCFullYear(year);
-  }
-  if (zone !== undefined && zone !== "Z") {
-    const digits = zone.slice(1).replace(/:/g, "");
-    const sign = zone.startsWith("-") ? -1 : 1;
-    const offsetSeconds =
-      Number(digits.slice(0, 2)) * 3600 +
-      Number(digits.slice(2, 4)) * 60 +
-      Number(digits.slice(4, 6) || "0");
-    // Python builds a `timezone` from the offset, and that constructor refuses anything not
-    // strictly inside +/- 24 hours. `+24:00` is a two-digit offset the grammar above happily
-    // matches, so without this the value would become a real timestamp a day away instead of the
-    // malformed one the urgent posture depends on.
-    if (offsetSeconds >= 24 * 3600) {
-      return null;
-    }
-    ms -= sign * offsetSeconds * 1000;
-  }
-  const parsed = new Date(ms);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-/** Days in a Gregorian month, so a `2026-02-30` is refused rather than rolled into March. */
-function daysInMonth(year: number, month: number): number {
-  const lengths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (month === 2 && year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) {
-    return 29;
-  }
-  return lengths[month - 1] as number;
 }
 
 /**
