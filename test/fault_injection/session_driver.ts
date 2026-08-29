@@ -430,6 +430,21 @@ class SessionObserver implements DestinationObserver {
         const list = intervals.get(uuid) ?? [];
         list.push([started, Number.POSITIVE_INFINITY]);
         intervals.set(uuid, list);
+        continue;
+      }
+      // Not live now -- but it may have exited between the ledger snapshot
+      // above and this `/proc` check: the restarted generation's stop-file
+      // release and the fake CLI's own normal exit race this scan, and a
+      // process that exited in that window is a closed interval, not an
+      // unexplained death. Re-read the ledger fresh rather than judge a
+      // still-open entry on a snapshot that may already be stale.
+      const exited = this.#ledger().find(
+        (entry) => entry.event === "exit" && `${entry.uuid} ${entry.pid}` === key,
+      );
+      if (exited !== undefined) {
+        const list = intervals.get(uuid) ?? [];
+        list.push([started, Number(exited.t)]);
+        intervals.set(uuid, list);
       } else {
         indeterminate.add(uuid);
       }

@@ -6951,6 +6951,14 @@ as it already is for the session belt's own fake-CLI fixture. A dedicated harnes
 still be solving a problem this fixture does not have; the observation is recorded here rather than
 left implicit, per the fault belt's own request to have this question actually evaluated.
 
+A second codex review round, on the merged tip, caught a related race in
+`SessionObserver.liveProcessReport()`: the stop-file release above makes the fake CLI's own normal
+exit and the observer's ledger-snapshot-then-`/proc`-check race each other, so a process that exited
+in that narrow window read as an unexplained death (`null`, "indeterminate") rather than the closed,
+ordinary interval it was. Fixed by re-reading the ledger for that specific `(uuid, pid)` immediately
+before declaring indeterminate, rather than judging a still-open ledger entry against the snapshot
+taken before the `/proc` check ran.
+
 **Decision 3 -- per-case budgets route through D-0602's scaling, not literal numbers.** The source's
 `barrier_timeout_s=20.0, case_timeout_s=60.0` become `barrierTimeoutS(PROFILE)` /
 `caseTimeoutS(faultCase, PROFILE)` (`test/fault_injection/policy.ts`), exactly as
