@@ -329,16 +329,27 @@ export function notify(
   // Bell semantics per the design's section 5:
   //   - macOS / Linux: the notification is visual-only; the bell is the audio channel.
   //   - Windows / WSL: `[console]::beep` is already inside the PowerShell command, so a bell
-  //     here would double up.
+  //     here would double up -- *when that command ran*.
   //   - wsl-notify-send: the dispatcher fires a companion `powershell.exe` beep alongside a
   //     successful toast, so the bell is suppressed there to avoid double audio. If the toast
   //     subprocess itself failed the bell becomes the audio fallback, matching macOS / Linux.
   //   - desktop disabled / dispatch failed / stdout-only: the bell is the only audio surface
   //     left.
-  let shouldBell = playSound && chosen !== "windows" && chosen !== "wsl";
-  if (chosen === "wsl-notify-send" && desktopDispatched) {
-    shouldBell = false;
-  }
+  //
+  // **DELIBERATE DIVERGENCE, under `D-0023`.** The source writes
+  // `should_bell = play_sound and chosen not in ("windows", "wsl")`, an UNCONDITIONAL suppression,
+  // and then adds the `desktop_dispatched` test for `wsl-notify-send` alone. So on Windows or WSL
+  // with `desktop=false`, or with the PowerShell subprocess failing, an urgent event with sound
+  // enabled makes NO sound at all -- no beep, because the command that carries it never ran, and
+  // no bell, because the suppression does not ask whether it ran. The source's own comment is what
+  // makes this an oversight rather than a decision: it justifies the suppression by the beep being
+  // "already inside the PowerShell command", which is a reason that only holds when the command
+  // succeeded, and the source ALREADY draws exactly this distinction one line down for
+  // `wsl-notify-send`. The three backends that carry their own audio are therefore treated
+  // alike here. No source case is inverted: its two Windows cases pass a runner that succeeds, and
+  // its `sound="off"` cases never reach the bell at all.
+  const carriesOwnAudio = chosen === "windows" || chosen === "wsl" || chosen === "wsl-notify-send";
+  const shouldBell = playSound && !(carriesOwnAudio && desktopDispatched);
   if (shouldBell) {
     // `bell(); bell_dispatched = True` in the source. See `bell`'s own note: the write's answer is
     // read here rather than assumed, per `D-0023`.
@@ -537,6 +548,13 @@ function shouldPlaySound(soundMode: string, severity: string): boolean {
  * `s[: limit - 1] + "\u2026"`, counting **code points**. The ellipsis is written as an
  * escape rather than as the character, so this file stays ASCII (`docs/cli-output-policy.md`);
  * it is the character the source appends.
+ *
+ * **`limit == 1` returns the first character and no ellipsis, and that is the source's own
+ * branch rather than a divergence from the expression above.** It is worth stating because the
+ * general expression makes it look like a bug: at a limit of one, `s[:0] + "\u2026"` would be a
+ * bare ellipsis -- one character, within the limit, and carrying no information about the event at
+ * all. The source prefers the one character the operator configured room for. Raised by the codex
+ * review gate reading the docstring against the branch, and kept as the source has it.
  *
  * `len(s)` and slicing are code-point operations in Python and UTF-16-unit operations here, so a
  * title of astral characters would be cut short -- and, worse, a cut landing between a surrogate

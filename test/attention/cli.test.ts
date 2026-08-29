@@ -686,6 +686,44 @@ describe("attention cli", () => {
   // `parity/attention.cli.ledger.json` with the mutation that measured it red.
   // -------------------------------------------------------------------------
 
+  test("a suppressed row is not re-rendered on every poll (target-only, D-0023)", () => {
+    // DELIBERATE DIVERGENCE. The source renders a suppressed row's template unconditionally, so
+    // that the `--json` payload carries the operator's text rather than the runtime default. Where
+    // no payload is emitted the render's only surviving effect is `renderText`'s warning -- and a
+    // suppressed row is deliberately never dedup'd, so a drop-tier row with a misspelled template
+    // reprints the identical warning on every poll of `watch`, forever, about an event that by
+    // construction can never be delivered.
+    const { err } = installFixtures();
+    patchSeam(attentionCliSeams, "sleep", () => undefined);
+    const dir = stateDir("attn-cli");
+    makeStateDb(join(dir, "state.db"), []);
+    writePendingDecisions(join(dir, "pending_decisions.json"), [
+      { task_id: "T-old", received_at: staleIso(12000), raw_message: "old", status: "pending" },
+    ]);
+    const cfgPath = join(dir, "..", "attention.json");
+    writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        templates: { pending_decision: { title: "T", body: "{branch}" } },
+      }),
+      "utf8",
+    );
+
+    run(
+      parse([
+        "attention",
+        "watch",
+        "--state-dir",
+        dir,
+        "--config",
+        cfgPath,
+        "--max-iterations",
+        "3",
+      ]),
+    );
+    expect(err.text()).not.toContain("falling back");
+  });
+
   test("production reads the clock through its seam (target-only)", () => {
     const { out } = installFixtures();
     let asked = 0;

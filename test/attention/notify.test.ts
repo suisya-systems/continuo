@@ -800,6 +800,38 @@ describe("attention notify", () => {
     expect(err).toContain("Too many decimal digits");
   });
 
+  test("a Write-Host backend that never ran still bells (target-only, D-0023)", () => {
+    // DELIBERATE DIVERGENCE. The source suppresses the bell for `windows` and `wsl`
+    // unconditionally, on the stated grounds that `[console]::beep` is "already inside the
+    // PowerShell command" -- a reason that only holds when that command RAN. With `desktop=false`
+    // an urgent event with sound enabled therefore makes no sound at all on those two backends.
+    const cfg = new AttentionConfig({ desktop: false });
+    const { value: result } = capturedStderr(() =>
+      notify(makeEvent(), cfg, {
+        backend: "windows",
+        logStream: recordingStream(),
+        runner: forbiddenRunner("desktop disabled, no runner"),
+      }),
+    );
+    expect(result.desktopDispatched).toBe(false);
+    expect(result.bellDispatched).toBe(true);
+  });
+
+  test("a failed Write-Host dispatch falls back to the bell (target-only, D-0023)", () => {
+    // The other half of the same hole, and the one the source already closes for
+    // `wsl-notify-send`: a subprocess that failed carried no beep either.
+    const { value: result, err } = capturedStderr(() =>
+      notify(makeEvent(), new AttentionConfig(), {
+        backend: "wsl",
+        logStream: recordingStream(),
+        runner: () => failingProc,
+      }),
+    );
+    expect(result.desktopDispatched).toBe(false);
+    expect(result.bellDispatched).toBe(true);
+    expect(err).toContain("exited with code 1");
+  });
+
   test("a notification records what it sent (target-only)", () => {
     // `FormattedNotification` is frozen the way the source's `frozen=True` dataclass is, and
     // `readonly` alone is erased at emit.

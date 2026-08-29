@@ -190,6 +190,21 @@ export function scanOnce(
     // while every other row carried the operator's template. `delivered` stays false so a machine
     // consumer can tell "classified but suppressed" from "delivered".
     if (event.suppressed) {
+      // **DELIBERATE DIVERGENCE, under `D-0023`: gated on `emitJson`.** The source renders and
+      // builds this payload unconditionally. Where no payload is emitted -- an ordinary `scan`,
+      // and every iteration of `watch` -- the built object is discarded, so the only surviving
+      // effect of the render is `renderText`'s warning. A suppressed row is deliberately NOT
+      // dedup'd (the assertion two cases down: it must not lock out a later urgent
+      // re-classification), so a drop-tier row whose template is misspelled reprints the identical
+      // warning on every poll, for as long as the watcher runs, about an event that by
+      // construction can never be delivered. That is the alert-fatigue shape the freshness windows
+      // and the cooldown elsewhere in this pipeline exist to prevent, arriving through the one
+      // path that has neither. Under `--json` the render still happens and still applies the
+      // operator's template and truncation, which is the property the source's comment is about
+      // and which its own case pins.
+      if (!emitJson) {
+        continue;
+      }
       const [renderedTitle, renderedBody] = renderText(event, cfg);
       const payload = event.toDict();
       payload["title"] = renderedTitle;
@@ -219,6 +234,16 @@ export function scanOnce(
     // (post-template, post-truncation). `delivered` mirrors `FormattedNotification.reachedUser` so
     // a machine consumer can tell "classified" from "actually delivered" without re-implementing
     // the dispatch contract.
+    //
+    // **It mirrors `reachedUser` IN A DRY RUN TOO, which is the source's behaviour and is kept.**
+    // Under `--dry-run` with the default `stdout` backend the flag reads `true`, because nothing
+    // was intended and nothing failed. The codex review gate proposed gating it on `!dryRun`; that
+    // was declined, because the field's contract is that it mirrors `reachedUser` -- the source
+    // says so in the comment this one is translated from -- and a `delivered` that meant
+    // "reachedUser, except under a flag" would be a second definition a machine consumer has to
+    // learn from somewhere other than the field it names. `--dry-run` is documented as classifying
+    // and logging without dispatching, so a consumer that passed the flag already knows nothing
+    // was sent. Recorded in `parity/attention.cli.ledger.json` rather than changed.
     const payload = event.toDict();
     payload["title"] = formatted.title;
     payload["body"] = formatted.body;
