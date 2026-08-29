@@ -79,7 +79,7 @@ import {
   SUBJECT_PR_MERGE,
   V1Reference,
 } from "../../src/measurement/shadow.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -102,11 +102,20 @@ const VERDICT_WORDS = /\b(pass|passes|passed|passing|fail|fails|failed|failing|g
 // helpers -- the world, built through a writable second connection
 // --------------------------------------------------------------------------
 
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Building it once per file and handing each case its own copy removes the
+ * migrations this file used to run once per case (D-0119, carrying out D-0118's
+ * approach on the remaining measurement files).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
 /** The source's `db` fixture, as a per-test call (rule 8). */
 function productionDb(): string {
-  const path = join(caseRoot("canary"), "production.sqlite3");
-  createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+  return productionTemplate.copyInto(caseRoot("canary"));
 }
 
 /** An ordinary writable handle -- deliberately not the harness's. */

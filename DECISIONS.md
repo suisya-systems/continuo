@@ -86,6 +86,7 @@ spaces distinct.
 | D-0116 | The statement trace names its issuer from the V8 call site, and folds the two languages' spellings | accepted |
 | D-0117 | The catalogue's no-copy property is read off the syntax, because JavaScript has no string identity | accepted |
 | D-0118 | The last two measurement files convert whole, and the copy is verified by the testkit rather than by an opener | accepted |
+| D-0119 | The remaining six measurement files convert whole, closing out the belt's per-case control-plane creation | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -7267,6 +7268,89 @@ or does not reproduce the source's comparison faithfully, the belt's approach to
 **Source.** Task `continuo-gate-item11-p1`, 2026-08-29, porting
 `tests/gate_item11/test_no_provider_detail_leaks.py`, `test_registry_availability.py` and
 `test_substitution_scenarios.py` from interlock `65f36c5`, under the belt start D-0034 ratified.
+---
+
+## D-0119 -- The remaining six measurement files convert whole, closing out the belt's per-case control-plane creation
+
+**Context.** D-0118 converted `provenance.test.ts` and `latency.test.ts`, the two heaviest files, and
+left `cohort.test.ts` and `render.test.ts` already on the template from earlier PRs -- four of the
+belt's ten files. Six still built a production control plane per case: `ac9.test.ts` (40 call
+sites), `canary.test.ts` (28), `windows.test.ts` (24), `reader.test.ts` (23),
+`false-termination.test.ts` (20) and `shadow.test.ts` (17), 152 in total. This task's brief estimated
+all ten files as unconverted; the survey above (call sites counted from each file's own
+`productionDb(` occurrences, cross-checked against the pre-task tree at `8ff9124`) found four already
+done, and the window narrowed the task to the remaining six before any conversion work started.
+
+**Decision.** All six files convert, and every one of their 152 fixture call sites converts -- there
+are no exclusions, judged the same way D-0118 judged its two:
+
+- **Nothing here has creation as its subject.** Each file contains exactly one
+  `createProductionControlPlane` call, in its own fixture (`ac9.test.ts` additionally parameterises
+  the copy's filename, which `suiteTemplate.copyInto`'s `as` argument already carries, the same shape
+  `provenance.test.ts` kept in D-0118).
+- **Nothing here asserts what an opener would verify against a constant.** None of the six files
+  compare a stamp or fingerprint to a hardcoded value; where a digest is taken (`reader.test.ts`,
+  `canary.test.ts`) it is compared against a digest of the same file taken earlier in the same case,
+  which a template copy satisfies identically to a per-case build.
+- **`patchSeam` never precedes the fixture in a way that matters.** `canary.test.ts` and
+  `reader.test.ts` each call `patchSeam` on `readerSeams` (`openReadOnly`, `proveReadOnly`) --
+  never on `schemaSeams` or `migratorSeams`, the two seams a converted template's lazy build could
+  run through. This is now moot regardless of call order: `suiteTemplate` registers its build in the
+  file's own `beforeAll`, which runs before every case's body, so no per-case seam patch can reach the
+  build in the first place.
+- **Nothing here needs a database that does not exist yet.** None of the six files contains an
+  `existsSync`, an `unlinkSync`, or an assertion about a file's absence.
+
+**Measurement.** Per-fixture cost on this Linux box, N=30: **85.93ms** to create a production control
+plane against **0.60ms** to copy one -- consistent with D-0118's 42.5ms/0.68ms figure on the same
+methodology (the difference in the create figure is machine variance between tasks, not a regression;
+the copy figure is stable). Running the six files together, `tests`-phase wall clock (vitest's own
+reported segment, three runs each side, this box, both states rebuilt from `dist/` before each run):
+before **40.08s / 50.58s / 51.51s**, after **16.67s / 27.11s / 31.64s** -- roughly halved despite this
+box's shared-runner noise (the paired `Duration` figures move the same direction: 13.79-19.28s before
+against 11.16-17.83s after). As in D-0118 and D-0029, the Linux figures understate the point: what
+each converted call site removes is one `fsync`, and Windows CI cells pay for those specifically.
+
+Verified the way D-0118 was: `npm run typecheck`, the full suite (`npm test`, 78 files / 2423 passed +
+2 expected-fail + 1 skipped, unchanged from before this branch), `npm run parity` (2425 target tests
+collected, matching the pre-existing ledger) and `npm run inventory` (2194 node ids across 77 files,
+matching the suite baseline at `65f36c5`) all pass against the converted tree. No case's assertions,
+node ids, or ledger totals changed; only the six files' `productionDb` fixtures did.
+
+**Alternatives.**
+
+- **Convert only the files the brief named as highest call-site count first, deferring the rest
+  (rejected).** Nothing in D-0118's exclusion analysis distinguishes any of the six files from the
+  four already converted; deferring any of them would leave that file's per-case `fsync` cost on
+  Windows CI for no reason tied to risk or size.
+- **Raise the per-test timeout for `ac9.test.ts`'s bounded-figure case instead (rejected, D-0029's
+  position kept).** The brief for this task explicitly forbids raising the cap; this decision reports
+  whether the conversion resolves that file's known Windows flake as an observation, not as the fix.
+
+**Consequences.**
+
+- Case counts are unchanged file by file. No ledger changed; only how each file's `productionDb`
+  fixture is built.
+- This closes the measurement belt's own per-case control-plane creation: after this task, no file
+  under `test/measurement/` builds a production control plane inside a case body rather than in a
+  file-scoped `suiteTemplate`.
+- The known Windows-only 60s timeout on `ac9.test.ts`'s bounded-figure case (noted in this task's
+  brief) could not be reproduced or disproved from this Linux box; the fixture-cost mechanism it was
+  attributed to is now removed from that file, and whether the flake is actually gone is left for the
+  next Windows CI run to show rather than claimed here.
+
+**Falsifier.** A case in any of the six files that comes to need a database which does not exist yet,
+that asserts a stamp against a constant rather than against the file it was handed, or that patches a
+`schemaSeams` or `migratorSeams` entry before taking its fixture -- the two records the template's
+lazy build runs through. Any of the three puts that case back on `createProductionControlPlane`, the
+way D-0118's are.
+
+**Status.** accepted
+
+**Source.** Task `continuo-measurement-suite-template`, 2026-08-29, closing out the measurement belt's
+suiteTemplate migration D-0118 started. Measured on Node 22.17.0, better-sqlite3 13.0.3, vitest
+4.1.11. Decision id allocated in the measurement belt's own `D-01xx` band (see "How to use this
+file"), the next free id after D-0118.
 
 ---
 
