@@ -69,6 +69,22 @@
     {
       "behaviour": "The frozen manifest.json is interlock's own file, copied byte-for-byte, and the port's generator is asserted to reproduce it. So every property of the matrix itself -- which 59 cases exist, which are `fast`, the pruning rule -- is interlock's, including any it got wrong.",
       "why": "That is the intended relationship: rule 0 of docs/test-translation-conventions.md forbids a stricter translation than the source's, and the matrix IS the specification being ported. A change to the matrix is a change to interlock's evidence and belongs upstream, not in a translation."
+    },
+    {
+      "behaviour": "`validateCase` skips the armed-roles check entirely when a case has a claimant: the condition is `armedRoles != targets && claimant === null`. A case targeting `disp` could therefore arm nothing, or arm an unrelated role, pass collection, and time out in `waitAtAnchor` instead of being refused as an unreachable barrier.",
+      "why": "INHERITED AND UNCHANGED. interlock's manifest.py line 1110 is `if set(case[\"arms\"]) != set(targets) and case[\"claimant\"] is None:` -- the same skip, for the same reason (a claimant's own arms live under `claimant.arms`, so the equality would fail for a legitimate takeover case). The gap is real: the skip is wider than the exemption it was written for. Closing it would make this port refuse manifests interlock accepts, which rule 0 forbids. Raised as [P2] by the review gate."
+    },
+    {
+      "behaviour": "`kill_order` and `restart_order` are checked only for NON-TARGET roles, so an omission or a duplicate passes. A two-target kill case with `kill_order: [\"sup\"]` validates, leaves the dispatcher alive, and silently stops applying the kill set it declares; an incomplete `restart_order` silently skips a target's recovery.",
+      "why": "INHERITED AND UNCHANGED. interlock's lines 1112-1117 are the same two `any(role not in targets ...)` tests. Requiring an exact permutation of the targets would be a stricter translation. Raised as [P2] by the review gate."
+    },
+    {
+      "behaviour": "A case whose `profiles` array is EMPTY passes validation vacuously. Such a case is returned by no profile selection and so never runs, yet it still counts toward the whole-manifest fault / checkpoint / lane coverage sets -- so a required coverage cell can be satisfied on paper by a case that executes nowhere.",
+      "why": "INHERITED AND UNCHANGED. interlock's lines 1268-1270 are the same loop, which asserts nothing over an empty list. Raised as [P2] by the review gate."
+    },
+    {
+      "behaviour": "MITIGATION THAT APPLIES TO ALL THREE OF THE ABOVE, so they are latent rather than live: the manifest this belt ships is interlock's own frozen literal, and it passes both validators identically. None of these gaps can be reached without EDITING the matrix -- and `the generator reproduces the frozen matrix exactly` makes any edit a reviewed diff against the generator rather than a silent change.",
+      "why": "Stated so the disclosure is not read as 'the shipped matrix may be malformed'. It is not. What is disclosed is that the validator would not catch a future malformed edit in these three shapes -- which is worth knowing precisely because the validator's whole purpose is to refuse at collection rather than time out in CI."
     }
   ],
   "entries": [
