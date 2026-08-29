@@ -971,10 +971,16 @@ function shortSummary(value: unknown, limit = 120): string | null {
   if (text === "") {
     return null;
   }
-  if (text.length > limit) {
+  // Code POINTS, not UTF-16 code units. Python's `len()` and slicing count code points, so a
+  // message carrying an astral character -- an emoji in a raw operator message is the ordinary
+  // case, not the exotic one -- would be cut early here and, worse, could be cut THROUGH a
+  // surrogate pair, putting a lone surrogate into text an operator reads. Spreading the string
+  // iterates it by code point, which is the unit the source counts in.
+  const points = [...text];
+  if (points.length > limit) {
     // `"\u2026"` rather than the character, so this file stays ASCII; it is the character the
     // source appends, and the summary is operator-facing text rather than CLI output.
-    return `${pyRstrip(text.slice(0, limit - 1))}\u2026`;
+    return `${pyRstrip(points.slice(0, limit - 1).join(""))}\u2026`;
   }
   return text;
 }

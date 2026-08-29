@@ -54,6 +54,12 @@
         "to": "a class with `readonly` fields plus `Object.freeze(this)`",
         "why": "`readonly` is erased at emit, so a plain JavaScript caller could downgrade a severity in place -- the same gap the session belt found for `Enum` and `frozenset` and closed the same way. A target-only case pins it; measured, removing the freeze turns it red.",
         "affects": "every case, and one target-only case"
+      },
+      {
+        "from": "`len(text)` and `text[:limit - 1]`, which count and slice CODE POINTS",
+        "to": "`[...text]` spread to code points before the length test and the slice",
+        "why": "JavaScript's `String#length` and `slice` count UTF-16 code units. A `raw_message` carrying an astral character -- an emoji in an operator's own message is the ordinary case -- would be cut early, and a cut landing inside a surrogate pair would put a lone surrogate into text an operator reads. The source's summary is untested in both repositories, which is exactly why the target-only case exists. Found by codex self-review, round 3.",
+        "affects": "the 120-character summary, and one target-only case"
       }
     ],
     "target_only_tests": {
@@ -146,6 +152,11 @@
         {
           "probe": "return the coerced integer without the safe-integer guard, so a 400-digit `pr` string becomes `Infinity`",
           "against": "target-only -- a non-finite pr does not take the classifier down",
+          "measured": "red"
+        },
+        {
+          "probe": "count the summary in UTF-16 code units instead of code points, so 119 emoji read as 238 characters",
+          "against": "target-only -- a long summary is cut with Python's ellipsis and no trailing space",
           "measured": "red"
         }
       ]

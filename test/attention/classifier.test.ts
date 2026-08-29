@@ -1114,6 +1114,29 @@ describe("attention classifier", () => {
     );
 
     expect(event?.summary).toBe(`${"a".repeat(118)}\u2026`);
+
+    // The same cut, counted in code points rather than UTF-16 code units. `"\u{1f600}"` is two
+    // units and one character, so a message of 119 emoji is UNDER the limit for Python and over it
+    // for a `String#length` transcription -- which would additionally cut through a surrogate pair
+    // and put a lone surrogate into text an operator reads.
+    const emoji = "\u{1f600}".repeat(119);
+    const astral = classifier.classifyPending(
+      {
+        task_id: "astral",
+        received_at: minutesAgo(60),
+        raw_message: emoji,
+        status: "pending",
+        factState: "KNOWN_WAIT",
+      },
+      NOW,
+      THRESHOLDS,
+    );
+
+    expect(astral?.summary, "the cut counted UTF-16 units instead of code points").toBe(emoji);
+    expect(
+      [...(astral?.summary ?? "")].every((point) => point === "\u{1f600}"),
+      "the cut left an unpaired surrogate in operator-facing text",
+    ).toBe(true);
   });
 
   test("target-only -- an ISO created_at keeps Python's fractional-second spelling", () => {
