@@ -877,6 +877,56 @@ async function runWalk(options: {
     } catch {
       // Best effort: a workdir already gone is nothing to release into.
     }
+    // Writing the marker does not itself prove the detached child has SEEN
+    // it -- the fake CLI polls every 20ms, and the driver process (this one)
+    // is what the controller waits on before letting the case's temp
+    // directory be removed. Without this wait, a fast-running case could
+    // report done, have its workdir deleted by the test's own cleanup, and
+    // leave the still-polling detached child orphaned until the safety cap.
+    // Best effort and bounded: a process this does not manage to observe
+    // exit is still bounded by `HOLD_SAFETY_CAP_MS` inside the fake CLI
+    // itself.
+    await waitForNoLiveChild(workdir, 2_000);
+  }
+}
+
+/**
+ * Block (async) until no process whose command line names this workdir's
+ * fake CLI is visible in `/proc`, or until `timeoutMs` elapses.
+ *
+ * Scoped by the workdir's own marker path, not by session id: at most one
+ * live child exists at a time across these single-role cases, and the path
+ * itself already disambiguates one case's temp directory from another's.
+ * A no-op wherever `/proc` does not exist (non-Linux); the session-start
+ * cases are Linux-lane only, so nothing relies on this wait there.
+ */
+async function waitForNoLiveChild(workdir: string, timeoutMs: number): Promise<void> {
+  if (!existsSync("/proc")) {
+    return;
+  }
+  const marker = fakeCliPath(workdir);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let found = false;
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) {
+        continue;
+      }
+      let cmdline: string;
+      try {
+        cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8");
+      } catch {
+        continue;
+      }
+      if (cmdline.includes(marker)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
 }
 

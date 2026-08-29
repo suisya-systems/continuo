@@ -6959,6 +6959,14 @@ ordinary interval it was. Fixed by re-reading the ledger for that specific `(uui
 before declaring indeterminate, rather than judging a still-open ledger entry against the snapshot
 taken before the `/proc` check ran.
 
+A third round caught the remaining half of the same shape: writing the stop-file marker does not
+prove the detached child has *seen* it yet (the fake CLI polls every 20ms), and nothing was waiting
+for that observation before `runWalk` returned and the test's own `caseRoot()` cleanup could remove
+the workdir the marker lives in -- a fast case could leave the still-polling child orphaned, invisible
+to the marker it is waiting for, until `HOLD_SAFETY_CAP_MS` expired. `runWalk`'s `finally` now also
+awaits `waitForNoLiveChild` (a bounded, `/proc`-scoped poll on the workdir's own fake-CLI marker path)
+before returning, so the walk does not report done while a process this case spawned is still running.
+
 **Decision 3 -- per-case budgets route through D-0602's scaling, not literal numbers.** The source's
 `barrier_timeout_s=20.0, case_timeout_s=60.0` become `barrierTimeoutS(PROFILE)` /
 `caseTimeoutS(faultCase, PROFILE)` (`test/fault_injection/policy.ts`), exactly as
