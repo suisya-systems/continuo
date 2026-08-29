@@ -6552,6 +6552,22 @@ likely than not, and the extraction should be done first. The observation that w
 *already* wrong is any disagreement between the three existing `importedModules` bodies about which
 node kinds are edges; they were compared at this belt's writing and agree.
 
+**Carried out** (2026-08-29, task `continuo-testkit-ast`). Done ahead of the falsifier rather than
+in response to it firing: the `gate_item11` belt was about to add a fourth AST-scanning structural
+test, which would have made a fourth hand-written copy of `importedModules` and let the falsifier's
+condition come due, so the extraction was made before that fourth copy was written rather than
+after. `test/testkit/ast.ts` now exports `importedModules` alone --
+the one helper the three files already agreed on -- and `test/canary/structural.test.ts`,
+`test/secretary/structural.test.ts` and `test/messagebus/import-graph.test.ts` were rewritten to
+import it rather than carry their own copy. `calledNames`, `referencedIdentifiers`, `exportedNames`
+and `namesASessionBackend` stay local to the belts that use them, as this entry anticipated. The
+extraction's own contract test is target-only, in `test/testkit/testkit.contract.test.ts`
+("importedModules sees every route a static import list would miss"), alongside the testkit's other
+target-only contracts. The three original scans' behaviour is unchanged: a mutation probe that
+temporarily added a forbidden import to `src/canary/index.ts`, `src/secretary/index.ts` and
+`src/messagebus/bus.ts` in turn confirmed all three structural tests still turn red for the same
+reason they did before the extraction, then the probe was reverted.
+
 **Source.** Task `continuo-messagebus-port`, 2026-08-29. The freeze rule is
 `docs/test-translation-conventions.md` and D-0033's own closing paragraph.
 

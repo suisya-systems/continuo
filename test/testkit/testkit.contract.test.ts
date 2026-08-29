@@ -1,9 +1,11 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import process from "node:process";
+import * as ts from "typescript";
 
 import { afterAll, describe, expect, test } from "vitest";
 
+import { importedModules } from "./ast.js";
 import { caseRoot, databasePath, sidecars, suiteRoot, suiteTemplate, writeStep } from "./cases.js";
 import { chdirForTest } from "./cwd.js";
 import { expectRefusal, expectSqliteError } from "./errors.js";
@@ -467,5 +469,80 @@ describe("a suite-scoped directory must be taken at the top level of the file", 
 
   test("and at the top level it yields a directory that exists", () => {
     expect(existsSync(collected)).toBe(true);
+  });
+});
+
+// D-0504: `importedModules` was a near-identical private copy in
+// `test/canary/structural.test.ts`, `test/secretary/structural.test.ts` and
+// `test/messagebus/import-graph.test.ts`, extracted here once a fourth structural scan
+// (`test/gate_item11/*`) was about to become a fourth hand-written copy. The probe below is
+// **target-only**: it defends the scanning machinery itself, not a property any one belt's
+// source asserts, and each belt keeps its own question (an allowlist, a call-name ban, a
+// session-backend name) local to itself -- only the walk that finds an import edge is shared.
+//
+// Built at the file's top level, like `collected` above: the fixture is read-only and shared by
+// every case below, so it is built once with `suiteRoot` rather than reconstructed per test.
+const astProbeDir = suiteRoot("tk-ast");
+const astProbe = join(astProbeDir, "probe.ts");
+writeFileSync(
+  astProbe,
+  // Parsed, never loaded and never type-checked, which is what lets it name paths that do not
+  // exist and climb out of a directory nothing else is in.
+  'import type { Anything } from "../session/index.js";\n' +
+    'export { MessageBus } from "../control_plane/outbox.js";\n' +
+    'import "node:process";\n' +
+    'import eq = require("../secretary/index.js");\n' +
+    "export function late(): void {\n" +
+    '  require("../measurement/index.js");\n' +
+    "}\n" +
+    "export async function later(): Promise<void> {\n" +
+    '  await import("../canary/index.js");\n' +
+    "}\n",
+  "utf-8",
+);
+const astSeen = importedModules(
+  ts.createSourceFile("probe.ts", readFileSync(astProbe, "utf-8"), ts.ScriptTarget.Latest, true),
+  astProbe,
+);
+
+describe("importedModules sees every route a static import list would miss", () => {
+  const probeDir = astProbeDir;
+  const seen = astSeen;
+
+  test("a type-only import is erased at emit and must still be seen", () => {
+    expect(seen.has(resolve(probeDir, "../session/index.js"))).toBe(true);
+  });
+
+  test("an `export ... from` is a dependency edge and must be seen", () => {
+    expect(seen.has(resolve(probeDir, "../control_plane/outbox.js"))).toBe(true);
+  });
+
+  test("a require() inside a function body must be reached by the walk", () => {
+    expect(seen.has(resolve(probeDir, "../measurement/index.js"))).toBe(true);
+  });
+
+  test("a dynamic import() inside a function body must be reached by the walk", () => {
+    expect(seen.has(resolve(probeDir, "../canary/index.js"))).toBe(true);
+  });
+
+  test("import x = require(...) is an ImportEqualsDeclaration and must be seen", () => {
+    expect(seen.has(resolve(probeDir, "../secretary/index.js"))).toBe(true);
+  });
+
+  test("a bare specifier is returned unresolved, not treated as relative", () => {
+    expect(seen.has("node:process")).toBe(true);
+  });
+
+  test("nothing else was invented -- the set is exactly the six edges above", () => {
+    expect([...seen].sort()).toEqual(
+      [
+        resolve(probeDir, "../session/index.js"),
+        resolve(probeDir, "../control_plane/outbox.js"),
+        "node:process",
+        resolve(probeDir, "../secretary/index.js"),
+        resolve(probeDir, "../measurement/index.js"),
+        resolve(probeDir, "../canary/index.js"),
+      ].sort(),
+    );
   });
 });

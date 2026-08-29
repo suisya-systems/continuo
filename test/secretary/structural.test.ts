@@ -48,11 +48,12 @@
  */
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, test } from "vitest";
 
+import { importedModules } from "../testkit/ast.js";
 import { caseRoot } from "../testkit/cases.js";
 
 /**
@@ -220,61 +221,6 @@ function secretaryModules(): readonly (readonly [string, ts.SourceFile])[] {
       const text = readFileSync(join(PACKAGE_DIR, entry), "utf-8");
       return [entry, ts.createSourceFile(entry, text, ts.ScriptTarget.Latest, true)] as const;
     });
-}
-
-/**
- * Every module `source` imports, with relative specifiers resolved to a path.
- *
- * The port of the source's `_imported_roots`, and the same function
- * `test/canary/structural.test.ts` carries -- the whole tree is walked rather
- * than the top-level statements, so an import inside a function body is
- * reached; `import type` is TypeScript's `TYPE_CHECKING` block, erased at emit
- * and therefore invisible to any scan of the built JavaScript, which is exactly
- * why it has to be seen here; and dynamic `import()` and `require()` are how a
- * module reaches another at a point a static import list does not mention.
- *
- * A relative specifier is resolved against the importing file's directory, so
- * `../session/index.js` surfaces as a path outside the package rather than as a
- * bare tail a containment test would let through. That is the port of the
- * source's level-1 / level>=2 relative-import rule: the source exempts a
- * level-1 import (the package importing its own modules) and treats level>=2 as
- * an escape; resolving to an absolute path and testing containment in
- * `PACKAGE_DIR` asks the same question without a dotted namespace to lean on.
- */
-function importedModules(source: ts.SourceFile, filePath: string): ReadonlySet<string> {
-  const names = new Set<string>();
-  const here = dirname(filePath);
-
-  const add = (specifier: ts.Expression | undefined): void => {
-    if (specifier === undefined || !ts.isStringLiteralLike(specifier)) {
-      return;
-    }
-    const text = specifier.text;
-    names.add(text.startsWith(".") ? resolve(here, text) : text);
-  };
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      // `export ... from "x"` is an import as far as the dependency goes, and
-      // it is how a barrel reaches every module it re-exports.
-      add(node.moduleSpecifier);
-    } else if (ts.isImportEqualsDeclaration(node)) {
-      const reference = node.moduleReference;
-      if (ts.isExternalModuleReference(reference)) {
-        add(reference.expression);
-      }
-    } else if (ts.isCallExpression(node)) {
-      const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
-      const isRequire = ts.isIdentifier(node.expression) && node.expression.text === "require";
-      if (isDynamicImport || isRequire) {
-        add(node.arguments[0]);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(source);
-  return names;
 }
 
 /**
