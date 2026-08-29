@@ -631,8 +631,7 @@ ever needs the number, it is decided here (`D-0036`), not collected from upstrea
 `PORTING_LEDGER.md` classes it `rewrite`, against "whatever migration/comparison bridge the run
 boundary cutover needs" -- a bridge that does not exist yet in either repository. Two of its cases
 call `pytest.importorskip("jsonschema")` inside the test body rather than at module level, so unlike
-the broker five they *are* collected and *are* in the inventory; they will skip on a host without
-`jsonschema` and continuo will need a decision about the equivalent dependency.
+the broker five they *are* collected and *are* in the inventory.
 
 Ratified at the human gate on 2026-08-30 (D-0043): `D-0035` left this belt `decision-pending` on one
 explicit revisiting trigger -- "the run-boundary cutover bridge actually being designed" -- and that
