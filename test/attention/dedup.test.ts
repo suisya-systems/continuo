@@ -406,6 +406,19 @@ describe("attention dedup", () => {
       ["2026-05-12T1159.5", "2026-05-12T11:59:00.500Z"],
       ["2026-05-12T11:59:00+09.5", "2026-05-12T02:58:59.500Z"],
       ["2026-05-12T11:5900", null],
+      // The source's own first line is `if s.endswith("Z"): s = s[:-1] + "+00:00"`, and it is not
+      // redundant with `fromisoformat`'s native `Z`: on a DATE-ONLY value the rewrite is what makes
+      // `2026-05-12Z` midnight, where a parser knowing `Z` only as a time-zone suffix consumes it
+      // as the separator and refuses the empty time. The two rows below it are the second CPython
+      // answer that rewrite exposes, and it looks wrong until measured -- `2026-05-12+09:00` is
+      // NAIVE 09:00, because `+` reads as the separator and `09:00` as the time, not as an offset
+      // on midnight. Added after a PR review.
+      ["2026-05-12Z", "2026-05-12T00:00:00.000Z"],
+      ["20260512Z", "2026-05-12T00:00:00.000Z"],
+      ["2026-W20Z", "2026-05-11T00:00:00.000Z"],
+      ["2026-05-12T11Z", "2026-05-12T11:00:00.000Z"],
+      ["2026-05-12+09:00", "2026-05-12T09:00:00.000Z"],
+      ["2026-05-12-09:00", "2026-05-12T09:00:00.000Z"],
       // An offset can carry a boundary timestamp out of `datetime`'s own domain. CPython's own
       // `_parse_iso` CRASHES on these two -- `astimezone` raises `OverflowError`, which its
       // `except ValueError` does not catch -- so the port repairs rather than carries (D-0023),
@@ -425,6 +438,8 @@ describe("attention dedup", () => {
       ["2026-05-12T11:59:00+00:00:02.25", "2026-05-12T11:58:57.750Z"],
       ["2026-05-12\u{1F600}11:59:00", "2026-05-12T11:59:00.000Z"],
       // Refused by CPython, and each would become a real timestamp under a looser reading.
+      ["Z", null],
+      ["2026-05-12 Z", null],
       ["9999-W52-7", null],
       ["2021-W53-5", null],
 

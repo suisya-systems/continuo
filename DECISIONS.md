@@ -7432,7 +7432,20 @@ the prototype-call ones all throw. The weaker structure is the stronger guarante
 -- restored to a frozen `Set`, every array route throws for the wrong reason (`push` is not a
 function there) while `.delete` goes through. It now asserts `Array.isArray` first. That is rule 10
 arriving inside the fix for a rule-9 defect, and it is worth recording because the belt's own habit
-of probing every guard is the only thing that caught it. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+of probing every guard is the only thing that caught it.
+
+**The same review found the grammar's last gap, and it was a gap in what the oracle was pointed
+at.** `parseIso` ports `_parse_iso`, whose first line is `if s.endswith("Z"): s = s[:-1] +
+"+00:00"` -- not redundant with `fromisoformat`'s native `Z`, because on a **date-only** value the
+rewrite is what makes `2026-05-12Z` midnight, where a parser knowing `Z` only as a time-zone suffix
+consumes it as the separator and refuses the empty time. Four such forms were `null` here and are
+midnight UTC to the source. The differential oracle had been comparing against bare
+`fromisoformat` rather than against the wrapper, which is why five rounds of measurement did not
+find it: **an oracle is only as good as the function it is pointed at**, and that is the sharper
+form of this belt's own lesson about measuring rather than reasoning. It now models `_parse_iso`,
+114 comparable inputs agree, and the `Z` arm was removed from the offset grammar because nothing
+reaching it can still carry one -- dead code there could mask a bug in the rewrite, and the probe
+confirms two *ported* cases now depend on it. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written

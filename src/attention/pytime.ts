@@ -53,11 +53,25 @@ import { PyValueError } from "../fencing/pysemantics.js";
  * - **separator**: any single character, not only `T` and space -- `"2026-05-12x11:59:00"` parses.
  * - **time**: `HH`, `HH:MM`, `HHMM`, `HH:MM:SS`, `HHMMSS`, each optionally followed by `.` or `,`
  *   and one or more digits, TRUNCATED (not rounded) to six.
- * - **offset**: `Z` (uppercase only -- a lowercase `z` raises), or a sign followed by `HH`,
- *   `HH:MM`, `HHMM`, `HH:MM:SS`, `HHMMSS`, optionally with a fractional second, and strictly
- *   inside +/- 24 hours.
+ * - **offset**: a sign followed by `HH`, `HH:MM`, `HHMM`, `HH:MM:SS` or `HHMMSS`, optionally with
+ *   a fractional second, and strictly inside +/- 24 hours. A trailing `Z` never reaches the
+ *   grammar -- the source rewrites it to `+00:00` first, and so does this (see the body). A
+ *   lowercase `z` is not rewritten and does not parse, in both.
  */
-export function parseIso(text: string): Date | null {
+export function parseIso(input: string): Date | null {
+  // interlock `_parse_iso`'s own first line: `if s.endswith("Z"): s = s[:-1] + "+00:00"`. It is
+  // NOT redundant with `fromisoformat`'s native `Z` support, and the difference shows on a
+  // DATE-ONLY value: `2026-05-12Z` becomes `2026-05-12+00:00`, which CPython reads as midnight,
+  // while a parser that only knows `Z` as a time-zone suffix consumes the `Z` as the date/time
+  // separator and then refuses the empty time. Measured: `2026-05-12Z`, `20260512Z`, `2026-W20Z`
+  // and `2026-W20-2Z` are all midnight UTC to the source and were all `null` here before.
+  //
+  // What the rewrite turns them INTO is a second CPython answer worth stating, because it looks
+  // wrong: `fromisoformat("2026-05-12+09:00")` is NAIVE `2026-05-12 09:00:00`, not an aware
+  // midnight at +09:00 -- the `+` is read as the separator and `09:00` as the time. So the
+  // separator-then-time path below is already the right reading for the rewritten string, and
+  // `+00:00` lands on midnight because the time it spells is `00:00`.
+  const text = input.endsWith("Z") ? `${input.slice(0, -1)}+00:00` : input;
   const date = matchDate(text);
   if (date === null) {
     return null;
@@ -192,7 +206,7 @@ function matchTime(text: string): TimePart | null {
   // earlier draft allowed it only after `SS` and refused both -- a valid source timestamp read as
   // garbled, which is an extra notification. The same is true of the offset.
   const match =
-    /^(\d{2})(?::(\d{2})(?::(\d{2}))?|(\d{2})(\d{2})?)?(?:[.,](\d+))?(Z|[+-]\d{2}(?::\d{2}(?::\d{2})?|\d{2}(?:\d{2})?)?(?:[.,]\d+)?)?$/.exec(
+    /^(\d{2})(?::(\d{2})(?::(\d{2}))?|(\d{2})(\d{2})?)?(?:[.,](\d+))?([+-]\d{2}(?::\d{2}(?::\d{2})?|\d{2}(?:\d{2})?)?(?:[.,]\d+)?)?$/.exec(
       text,
     );
   if (match === null) {
@@ -202,7 +216,9 @@ function matchTime(text: string): TimePart | null {
   // `.9999999` is 999999 microseconds and not a carried second.
   const fraction = match[6] ?? "";
   const zone = match[7];
-  const offsetSeconds = zone === undefined || zone === "Z" ? 0 : offsetOf(zone);
+  // No `Z` arm: `parseIso` rewrote a trailing `Z` to `+00:00` before anything got here, exactly as
+  // the source does, so nothing reaching this function can still carry one.
+  const offsetSeconds = zone === undefined ? 0 : offsetOf(zone);
   return {
     hour: Number(match[1]),
     minute: Number(match[2] ?? match[4] ?? "0"),
