@@ -128,7 +128,7 @@ export function loadState(path: string): DedupState {
     // where it belongs. (The source's own answer is worse than either: `UnicodeDecodeError` is a
     // `ValueError`, so it escapes its `except OSError` and takes the watcher down. D-0904's
     // fail-closed repair is what this is; the crash is not reproduced.)
-    raw = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(path));
+    raw = utf8Strict(readFileSync(path));
   } catch (error) {
     throw new DedupStateRefused(
       `cannot read attention dedup state ${path}: ${describeError(error)}; ` +
@@ -303,6 +303,22 @@ export function recordNotified(
   } else {
     state.pending[key] = timestamp;
   }
+}
+
+/**
+ * Python's `bytes.decode("utf-8")`, which is what `Path.read_text(encoding="utf-8")` does.
+ *
+ * Two departures from `readFileSync(path, "utf8")`, and each one was a defect the review gate
+ * found. `fatal` because Node's utf8 mode substitutes U+FFFD for an undecodable byte and carries
+ * on: a bad byte INSIDE a JSON string leaves the document valid, so the parse succeeds and the
+ * state loads with a dedup key that is not the key that was written. `ignoreBOM` because
+ * `TextDecoder` STRIPS a leading U+FEFF by default where Python's `utf-8` codec keeps it (that is
+ * `utf-8-sig`'s job, not `utf-8`'s) -- and `json.loads` then refuses the document with "Unexpected
+ * UTF-8 BOM", measured. Stripping it would quietly load a file the source refuses, on the accepting
+ * side of a repair whose whole point is to refuse.
+ */
+function utf8Strict(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 
 /** A map with no inherited keys, which is what Python's `dict` is. */

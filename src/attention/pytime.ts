@@ -174,8 +174,12 @@ interface TimePart {
 }
 
 function matchTime(text: string): TimePart | null {
+  // The fraction attaches to the END of whatever precision was written, not only to a seconds
+  // field: CPython reads `11.5` as 11:00:00.500000 and `11:59.5` as 11:59:00.500000, measured. An
+  // earlier draft allowed it only after `SS` and refused both -- a valid source timestamp read as
+  // garbled, which is an extra notification. The same is true of the offset.
   const match =
-    /^(\d{2})(?::(\d{2})(?::(\d{2})(?:[.,](\d+))?)?|(\d{2})(?:(\d{2})(?:[.,](\d+))?)?)?(Z|[+-]\d{2}(?::\d{2}(?::\d{2}(?:[.,]\d+)?)?|\d{2}(?:\d{2}(?:[.,]\d+)?)?)?)?$/.exec(
+    /^(\d{2})(?::(\d{2})(?::(\d{2}))?|(\d{2})(\d{2})?)?(?:[.,](\d+))?(Z|[+-]\d{2}(?::\d{2}(?::\d{2})?|\d{2}(?:\d{2})?)?(?:[.,]\d+)?)?$/.exec(
       text,
     );
   if (match === null) {
@@ -183,14 +187,15 @@ function matchTime(text: string): TimePart | null {
   }
   // CPython TRUNCATES a fractional second past six digits rather than rounding, measured:
   // `.9999999` is 999999 microseconds and not a carried second.
-  const fraction = match[4] ?? match[7] ?? "";
-  const zone = match[8];
+  const fraction = match[6] ?? "";
+  const zone = match[7];
+  const offsetSeconds = zone === undefined || zone === "Z" ? 0 : offsetOf(zone);
   return {
     hour: Number(match[1]),
-    minute: Number(match[2] ?? match[5] ?? "0"),
-    second: Number(match[3] ?? match[6] ?? "0"),
+    minute: Number(match[2] ?? match[4] ?? "0"),
+    second: Number(match[3] ?? match[5] ?? "0"),
     micros: fraction === "" ? 0 : Number(fraction.slice(0, 6).padEnd(6, "0")),
-    offsetSeconds: zone === undefined || zone === "Z" ? 0 : offsetOf(zone),
+    offsetSeconds,
   };
 }
 

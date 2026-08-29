@@ -7186,7 +7186,20 @@ rule 11's own shape: a repair applied at one entry point and not at its sibling.
 hour, minute and second are all zero discards its fraction in CPython, so `+00:00:00.5` is plain UTC
 while `+00:00:02.25` is 2.25 seconds. And the date/time separator is one character to Python, which
 indexes a `str` by code point, and two UTF-16 units here when it is astral. All 90 inputs now agree,
-and each of the four carries its own probe. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+and each of the four carries its own probe.
+
+**A third round found two more, and one of them was introduced by the first round's own fix.** The
+fractional second attaches to the end of whatever precision was written -- `11.5` is 11:00:00.500000
+and `11:59.5` is 11:59:00.500000, and an abbreviated offset takes one too -- where the grammar
+allowed it only after a seconds field; the set is now 100 inputs and all 100 agree. And the fatal
+`TextDecoder` that closed the U+FFFD hole **strips a leading BOM by default**, where the
+`readFileSync(path, "utf8")` it replaced did not and Python's `utf-8` codec does not either
+(stripping is `utf-8-sig`'s job). CPython's `json.loads` refuses a BOM outright, so the repair had
+quietly moved a file the source rejects onto the accepting side of a repair whose whole point is to
+refuse. That is rule 11's own warning arriving inside the belt that cites it, and the decode now
+reads `{ fatal: true, ignoreBOM: true }` -- in **both** loaders, which is the other half of the same
+round: `loadConfig` had been left on the loose decode for two rounds after `loadState` was hardened,
+so an undecodable byte inside a template body would have loaded altered. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written

@@ -298,7 +298,26 @@ export function loadConfig(path: string | null): AttentionConfig {
   // same `number` here, and `Number.isInteger` says yes to both -- so a `cooldown_sec: 1e2` that
   // the source refuses would be silently accepted. `pyJsonLoads` records the DOCUMENT's spelling
   // and `pyTypeNameOf` reports `int` or `float` from it, which is the question the source asks.
-  const raw: unknown = pyJsonLoads(readFileSync(path, "utf8"));
+  // Read BYTES and decode strictly, for the two reasons `src/attention/dedup.ts` records: Node's
+  // utf8 mode substitutes U+FFFD for an undecodable byte (so a bad byte inside a JSON string
+  // silently mutates a template or a notify key that the document is then loaded with), and
+  // `TextDecoder` strips a leading BOM by default where Python's `utf-8` codec keeps it and
+  // `json.loads` refuses it.
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(path));
+  } catch (error) {
+    // `read_text(encoding="utf-8")` raises `UnicodeDecodeError`, which IS a `ValueError`, and
+    // `load_config` lets it propagate -- so a caller catching `ValueError` around this loader
+    // catches it. `TextDecoder` raises a `TypeError` instead, which that caller would not catch,
+    // so it is re-raised in the family the rest of this loader refuses in.
+    throw new PyValueError(
+      `attention config ${pyRepr(path)} is not valid UTF-8 (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    );
+  }
+  const raw: unknown = pyJsonLoads(text);
   if (!isDict(raw)) {
     throw new PyValueError(`attention config ${pyRepr(path)} must be a JSON object`);
   }

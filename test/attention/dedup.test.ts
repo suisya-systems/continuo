@@ -168,6 +168,16 @@ describe("attention dedup", () => {
     expectRefusal(() => loadState(path), DedupStateRefused, /cannot read attention dedup state/);
   });
 
+  test("a leading byte-order mark is refused rather than stripped (target-only, D-0904)", () => {
+    // `TextDecoder` removes a leading U+FEFF by default; Python's `utf-8` codec keeps it (stripping
+    // is `utf-8-sig`'s job) and `json.loads` then refuses the document with "Unexpected UTF-8 BOM",
+    // measured. Stripping it here would quietly LOAD a file the source refuses -- on the accepting
+    // side of a repair whose whole point is to refuse -- so the decoder is told to keep it.
+    const path = join(caseRoot("dedup"), "attention_notified.json");
+    writeFileSync(path, `\ufeff${JSON.stringify({ events: {}, pending: {} })}`, "utf8");
+    expectRefusal(() => loadState(path), DedupStateRefused, /is not valid JSON/);
+  });
+
   test("a namespace that is present but not an object is refused (target-only, D-0904)", () => {
     for (const document of [{ events: 42 }, { pending: ["a"] }, { events: null }]) {
       const path = join(caseRoot("dedup"), "wrong-namespace.json");
@@ -370,6 +380,13 @@ describe("attention dedup", () => {
       ["2026-05-12T11:59:00+090030", "2026-05-12T02:58:30.000Z"],
       ["2026-05-12T11:59:00,123", "2026-05-12T11:59:00.123Z"],
       ["2026-05-12T11:59:00.9999999", "2026-05-12T11:59:01.000Z"],
+      // The fraction attaches to the END of whatever precision was written, not only to a
+      // seconds field. Added after the review gate's third round.
+      ["2026-05-12T11.5", "2026-05-12T11:00:00.500Z"],
+      ["2026-05-12T11:59.5", "2026-05-12T11:59:00.500Z"],
+      ["2026-05-12T1159.5", "2026-05-12T11:59:00.500Z"],
+      ["2026-05-12T11:59:00+09.5", "2026-05-12T02:58:59.500Z"],
+      ["2026-05-12T11:5900", null],
       // The boundary rows, all added after the codex review gate's second round.
       ["9999-W52-5", "9999-12-31T00:00:00.000Z"],
       ["0001-W01-1", "0001-01-01T00:00:00.000Z"],

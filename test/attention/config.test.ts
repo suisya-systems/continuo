@@ -401,6 +401,28 @@ describe("attention config", () => {
     expect(edge.pendingDecisionDrop).toBeGreaterThan(edge.pendingDecisionMax);
   });
 
+  test("a config file that is not valid UTF-8 is refused, not silently mutated (target-only)", () => {
+    // The same pair of decoder defaults `src/attention/dedup.ts` records, on the other loader.
+    // Node's utf8 mode substitutes U+FFFD for an undecodable byte, and when the byte sits INSIDE a
+    // JSON string the document stays valid -- so a template body or a notify kind would load
+    // altered, with nothing to say so. And `TextDecoder` strips a leading BOM by default where
+    // Python's `utf-8` codec keeps it and `json.loads` refuses the document.
+    const bad = join(caseRoot("attn-config"), "bad-bytes.json");
+    writeFileSync(
+      bad,
+      Buffer.concat([
+        Buffer.from('{"templates": {"ci_failed": {"title": "a', "utf8"),
+        Buffer.from([0xff]),
+        Buffer.from('b", "body": "x"}}}', "utf8"),
+      ]),
+    );
+    expectRefusal(() => loadConfig(bad), PyValueError, /is not valid UTF-8/);
+
+    const bom = join(caseRoot("attn-config"), "bom.json");
+    writeFileSync(bom, `\ufeff${JSON.stringify({ cooldown_sec: 60 })}`, "utf8");
+    expect(() => loadConfig(bom)).toThrow();
+  });
+
   test("a notify or template kind naming an Object.prototype member is not inherited (target-only)", () => {
     // Rule 9: the kind is a caller-supplied string used as a map key, and Python's `dict` has no
     // inherited keys. On an object literal `cfg.notify["constructor"]` answers with a function and
