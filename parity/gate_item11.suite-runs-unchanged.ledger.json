@@ -33,9 +33,9 @@
       {
         "file": "test/gate_item11/suite-runs-unchanged.test.ts",
         "constructs": {
-          "skipIf": 6
+          "skipIf": 13
         },
-        "reason": "The source's `entry` fixture calls `pytest.skip(reason)` when `registry.PROVIDERS[id].unavailable()` is not None -- one skip per case, at RUN time, so pytest still COLLECTS a node id for it. Ported the same way `substitution-scenarios.test.ts` is: each of the six `[S2]` cases is registered with its own literal `skipIf(S2_UNAVAILABLE !== null, ...)(...)` call rather than a shared, entry-parameterised wrapper, so the exact collected title is present verbatim in this file's source text for `scripts/parity-check.mjs`'s own `declaresTitle` sweep (needed on a host without `claude` on PATH, where `vitest list` omits the case entirely and the check falls back to reading the source). Six calls, one per `[S2]` case in this file, matching `substitution-scenarios.test.ts`'s own six."
+        "reason": "Two independent gates, both written as literal per-case `skipIf(...)(...)` calls so the exact collected title is present verbatim in this file's source text for `scripts/parity-check.mjs`'s own `declaresTitle` sweep. Six `[S2]` cases: the source's `entry` fixture calls `pytest.skip(reason)` when `registry.PROVIDERS[id].unavailable()` is not None -- one skip per case, at RUN time, so pytest still COLLECTS a node id for it; ported the same way `substitution-scenarios.test.ts` is, one `skipIf` call per case rather than a shared entry-parameterised wrapper. Seven more (six `[S3]` cases plus the unbound case): D-1003's Windows platform gate (`skipIf(WINDOWS, WINDOWS_SKIP_REASON)`), which has no source-side analogue -- interlock has no Windows CI cell for this file to skip on -- and is a target-side addition recorded and justified in D-1003, not a translation of anything in the source. Thirteen calls total, one per case in this file."
       }
     ],
     "conditionally_collected": [
@@ -61,6 +61,34 @@
       },
       {
         "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound provider drove the control plane before the suite ran [S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the suite passes with a provider bound [S3]",
+        "reason": "D-1003: on a Windows host, `skipIf(WINDOWS, WINDOWS_SKIP_REASON)` gates every case in this file, including the `[S3]` and unbound cases that run unconditionally everywhere else -- `vitest list` omits the case entirely there, the same fallback the six `[S2]` declarations above document, gated on `process.platform === \"win32\"` instead of `claude` availability. Measured: this file's nested subprocess double-run of the whole of test/control_plane oversubscribed a Windows CI runner's CPU under contention with the outer suite's own parallel files (PR #73, run 33242488019), collaterally blowing an unrelated fault-injection file's own suite budget. See D-1003 for the measurement and its falsifier."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run collects exactly the same tests [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::every test reaches the same verdict either way [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::both runs read the same suite artifact [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound run really had a provider live [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the bound provider drove the control plane before the suite ran [S3]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/suite-runs-unchanged.test.ts::the unbound run had no provider",
         "reason": "See the sibling declaration above; same gate, same reason."
       }
     ]

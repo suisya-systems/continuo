@@ -128,6 +128,7 @@ spaces distinct.
 | D-0906 | D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 | D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
+| D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
 
 ---
 
@@ -7534,3 +7535,92 @@ because something can, so the two readings cannot both be right at the same time
 `tests/attention/test_cli.py`. Decision id allocated by the window in the `D-09xx` range that
 `D-0034` gave the attention belt (`D-0904`/`D-0905` are A2's). Ratified at the human gate before
 this belt made the change.
+
+---
+
+## D-1003 -- `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting
+
+**Context.** PR #73 (D-1002) failed `double-green (windows-latest, node 24)` in CI (run
+`33242488019`, job `99074077395`) after merging `main` forward twice (through `attention` A1's PR
+#71 and the `measurement` suite-template migration PR #72, the latter specifically to rule out that
+this was `measurement`'s own already-known Windows slowness). The failure's own signature ruled out
+a simple "make the Windows cell faster" fix.
+
+**Diagnosis.** Three things read from the job's own annotations, not inferred:
+
+1. **Not a job-level timeout.** The job completed in 15m44s, inside every configured limit; nothing
+   here is GitHub Actions' own workflow timeout firing.
+2. **A file with nothing to do with this belt blew its own budget.** `test/fault_injection/policy.ts`
+   raised `ContractViolation: the fast profile spent 447s in this fault-injection file, over its
+   240s suite budget (design 9)`, alongside a `BarrierTimeout` inside the same file's controller.
+   Nothing in `test/fault_injection/` was touched by this task's diff. D-0602 already tuned that
+   budget for this port's runners; this run blew through it by nearly 2x with unrelated code.
+3. **This belt's own double-run failed too, the same way a subprocess timeout looks.**
+   `support/run.ts`'s `the unbound run wrote no report; vitest exited 1` fired with **empty**
+   `stdout` and `stderr`. A vitest crash ordinarily writes something to one of the two; a `spawnSync`
+   `timeout` (`support/run.ts`'s `RUN_TIMEOUT_MS`, 300s) instead kills the child with `SIGTERM`,
+   leaves `status` `null`, and `run()`'s `completed.status ?? 1` reports that as plain exit code 1
+   with whatever was captured before the kill -- empty, if the kill lands early. The `[S3]` failures
+   in the same job show partial `stdout` (the `globalSetup` header lines) before the same failure,
+   consistent with a slow run reaching its own internal deadline rather than crashing outright.
+
+Both symptoms point the same direction: `suite-runs-unchanged.test.ts` spawns up to two full
+subprocess re-runs of the entire `test/control_plane` suite (14 files, 605 cases, `synchronous =
+FULL` fsync on every commit) *while the outer suite's own parallel worker pool is still running*,
+including `fault_injection`'s own real-child-process, timing-sensitive tests. On a two-vCPU Windows
+runner that is already the slowest cell in the matrix (D-0029's own finding), that is enough
+concurrent CPU/IO demand to starve an unrelated file past its tuned budget and to push this belt's
+own nested runs past their own internal timeout. `ubuntu-latest` (both Node versions) passed in
+~2.5 minutes each in the same run -- the contention is a Windows-runner-resource fact, not a defect
+in the measurement's logic.
+
+**Decision.** `suite-runs-unchanged.test.ts` gates every case (not only `[S2]`'s existing
+`claude`-CLI-availability gate) on `process.platform === "win32"`, the same `skipIf` shape as
+`[S2]`'s: a platform capability gate, recorded as `conditionally_collected` in
+`parity/gate_item11.suite-runs-unchanged.ledger.json` (seven more entries, `[S3]` and unbound,
+alongside the six `[S2]` entries D-1002 already recorded) rather than a silent narrowing. Applied
+**alongside**, not instead of, `support/suite-runs-unchanged.config.ts`'s nested `fileParallelism:
+false`: serialising the nested run's own 14 files is free and can only lengthen that run's own wall
+time, never widen what it measures, but nothing about it was measured sufficient alone against a
+runner already saturated by the outer suite's own pool, and CI is the only place that contention is
+reproducible at all -- so both land together rather than staging a second, unverifiable round.
+
+**Why this is not a coverage gap the belt is silently accepting.** Item 11's property -- no provider
+detail leaks into the control plane; the control-plane suite runs unmodified against either provider
+-- is a fact about this repository's source and runtime behaviour, not about the operating system
+running it: nothing in `src/session/`, `src/control_plane/`, or this belt's own fixtures branches on
+`process.platform`. Two things already cover Windows without this file's help:
+`no-provider-detail-leaks.test.ts`'s static AST scan runs on every OS unmodified (it reads import
+graphs, not processes), and `test/control_plane`'s own 605 cases run -- and must pass -- on Windows
+every time as part of the ordinary suite, which is already evidence the suite itself is
+Windows-compatible. What the skip gives up is narrower than either: literal re-confirmation, via
+*this specific subprocess double-run*, that swapping providers costs nothing *on Windows
+specifically*, as opposed to on Linux where the same code already ran the same way.
+
+**Relationship to D-0029.** D-0029 rejected raising a timeout cap and rejected "re-run CI and hope"
+in favour of reducing the *real* per-case cost (the spike-schema template), on the position that "the
+cap is not the fix". This decision does not raise any cap, and does not touch `fault_injection`'s
+budget or any other belt's -- both stay exactly as D-0602 tuned them. The reason this decision is a
+platform skip rather than a D-0029-style cost reduction is that D-0029 had a general cost-reduction
+move available (a cheaper fixture achieving the identical assertions) and this measurement does not:
+its entire premise (D-1002) is running the *real*, unmodified `test/control_plane` suite as a real
+subprocess twice, which is not a cost a testkit trick can remove without ceasing to measure what item
+11 asks for. `fileParallelism: false` is the cost reduction available here, and it is applied; what
+remains is a cost this measurement cannot shed further without narrowing its own scope (rejected --
+see D-1002's own totals) and that a two-vCPU Windows runner cannot currently absorb alongside the
+rest of the suite.
+
+**Falsifier.** If a future change removes the resource pressure this decision responds to --
+`fault_injection`'s own suite budget or watchdogs are re-tuned for a larger CI runner (out of this
+belt's hands, D-0602), a Windows runner with more cores becomes the CI default, or
+`test/control_plane` itself gets substantially cheaper to run twice (the `measurement` belt's own
+143x suite-template speedup, landed the same day as this decision in PR #72, is exactly the kind of
+change that could someday make this moot for a different subsystem) -- this skip should be revisited
+and the Windows gate lifted if a re-measurement shows the contention is gone. It should not be lifted
+on the strength of one green re-run alone; D-0029 already recorded why that is not evidence on this
+cell.
+
+**Source.** Task `continuo-gate-item11-p2`, 2026-08-29, responding to PR #73's CI failure (run
+`33242488019`) after D-1002 landed; the option (skip on Windows, keep full scope on Ubuntu) was
+presented with two alternatives and their trade-offs, and selected at the human gate via the
+secretary.
