@@ -6548,3 +6548,86 @@ node kinds are edges; they were compared at this belt's writing and agree.
 `docs/test-translation-conventions.md` and D-0033's own closing paragraph.
 
 ---
+
+## D-0801 -- The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred
+
+**Context.** `tests/gate_item2/` (interlock `65f36c5`) is 34 cases across three files, downstream of
+the session belt (`D-0301`/`D-0302`, ported PR #61): every case runs a crash-and-retry shape
+*through* the control plane and asserts a durable row, never an exit code. Porting it needs two new
+modules with no continuo counterpart yet -- `claude_org_runtime.control_plane.session_binding`
+(the staged session<->run binding, `prepared` -> `spawned` -> `identity_confirmed`) and
+`claude_org_runtime.supervisor.SessionOrchestrator` (the lease-before-spawn walk that composes the
+binding, the lease and the S1 provider verbs) -- ported here to `src/control_plane/session_binding.ts`
+and `src/supervisor.ts`.
+
+**Decision 1: the `D-08xx` band is reserved for this belt**, per D-0019's per-source-file ledger
+convention and D-0032's D-range allocation.
+
+**Decision 2: `SessionOrchestrator.start()` and `.recover()` are `async`, and every private helper
+downstream of a provider verb call is `async` with them.** The source drives five ordinary blocking
+calls; D-0301 already made continuo's `SessionProvider` verbs (`start`, `listSessions`, `readState`,
+`stop`, `resume`) `Promise`-returning, because Node has no synchronous way to wait for a child to
+exit. `SessionOrchestrator` calls all four of the non-list verbs, so the async-ness D-0301 introduced
+at the leaf necessarily reaches this join layer -- there is no way to write a `SessionOrchestrator`
+over continuo's `SessionProvider` that stays synchronous. This is a calling-convention change with no
+effect on what any case asserts: every value compared, every row read and every exception raised is
+the source's. `pytest.raises(SomeError, match=...)` becomes `expectAsyncRefusal`, this belt's local
+async twin of `test/testkit/errors.ts`'s `expectRefusal` (kept local to `test/gate_item2/helpers.ts`
+rather than added to the shared testkit while `fault_injection` and `messagebus` are mid-flight
+against shared files).
+
+One further consequence, specific to `#refuseAndTerminate` (the port of `_refuse_and_terminate`): the
+source holds SQLite's write lock across its `provider.stop(session_id)` call inside one
+`BEGIN IMMEDIATE` transaction, using the lock itself to serialise the loser's stop-or-stand-down
+decision against a winner's concurrent `confirm_identity`. `better-sqlite3` is synchronous and has no
+async API to hold a transaction open across an `await`, so the port's transaction still opens before
+the read-only check-and-decide and is rolled back (never committed -- the block only ever reads)
+around the same `await this.#provider.stop(sessionId)`, in the same order the source's `try/finally`
+does. Node's single-threaded event loop means nothing else can touch this same connection object
+during that `await` unless another already-running task does, and nothing in this belt's tests does;
+this is stated as the residual rather than assumed away, in the same spirit as gate item 2's own
+statement that the admission-to-spawn window "cannot be closed from here" (`ACCEPTANCE.md` section 2).
+
+**Decision 3: `test_session_driver_harness.py` (6 of the 34 node ids) is deferred to a dedicated
+follow-on task, not ported in this change.** That file drives
+`tests.fault_injection.controller.Controller` / `execute_case` / `assert_invariants` against a
+`SESSION_ADAPTER` from `tests/fault_injection/session_driver.py` -- the fault-injection harness
+itself, real SIGKILL and all. `fault_injection` is its own `candidate-lane` belt
+(`parity/source-inventory.belts.md`) and is being ported concurrently in a sibling worktree (PR #62);
+porting the harness here as a "ついで" would duplicate that lane's work and risk disagreeing with it.
+`parity/gate_item2.orchestrator-walk.ledger.json` (23 cases) and
+`parity/gate_item2.mediated-real-provider.ledger.json` (5 cases) land in this change -- both are
+downstream only of the already-ported session belt and are fully in-memory or real-subprocess-but-
+no-fault-injection. `test/gate_item2/mediated-real-provider.test.ts` reuses `test/session/helpers/`
+(`fakeCli`, `spawnLog`, `stopSessionsAtTeardown`, `spawned`) built for the session belt's own
+`claude-cli-provider.test.ts`, rather than re-deriving the fake CLI fixture.
+
+Investigating the blocker turned up a narrower fact than "wait for `fault_injection` to land":
+`SessionAdapter`'s execution-path methods (`bootstrap`, `spawn`, `roleArguments`, `observer`,
+`invariantQueries`, `queryParameters`, `effectKeys`, `holderOf`) are a deliberate stub that throws
+`ContractViolation` on every call -- `fault_injection`'s own header on that file already names this as
+its own declared follow-on (D-0601) on the session belt landing, and the session belt has landed
+(PR #61) without the adapter itself yet being re-bound to it. So `fault_injection` landing on `main`
+does not, by itself, unblock these 6 node ids. Ratified by human decision 2026-08-29 (via secretary,
+option "(a')"): this belt ships as 28/34 in its own PR, and re-binding `SessionAdapter` to
+`src/supervisor.ts` / `src/session/claude_cli_provider.ts` -- landing these 6 node ids together with
+`fault_injection`'s own 4 full-profile session-start manifest cases, since one real `SessionAdapter`
+serves both -- is dispatched as a separate follow-on task. `parity/gate_item2.session-driver-harness.
+ledger.json` records the 6 as `not-ported` with the reason above; a faithful draft of all 6 against the
+current `controller.ts` / `manifest.ts` APIs (`feat/continuo-fault-injection-port` at HEAD `16a9c2c`
+when drafted) is held at `tmp/session-driver-harness.draft.test.ts` (gitignored, this task's own
+branch) as a handoff asset for the follow-on worker, expected to need rework once the adapter is real.
+
+**Falsifier.** If a future belt needs `SessionOrchestrator` to expose a synchronous entry point (a
+CLI driving it directly, say), the async-everywhere decision above is the wrong default there and
+that caller needs its own adapter -- this decision is about the join layer over an async provider
+contract, not a claim that every caller wants a promise. If `fault_injection`'s session-driver adapter
+lands with a shape `test_session_driver_harness.py`'s cases cannot be ported against directly (its own
+`SESSION_ADAPTER` assumes a three-role delivery loop the full battery needs but this file's four cases
+do not), the remaining 6 node ids need a follow-up ledger and belt update rather than silent inclusion
+in either lane's totals.
+
+**Source.** Task `continuo-gate-item2-port`, 2026-08-29, porting `tests/gate_item2/` from interlock
+`65f36c5`. Decision id from the `D-08xx` range this entry allocates.
+
+---

@@ -1,0 +1,91 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item2",
+      "collected": 34,
+      "inventory": "parity/source-inventory/gate_item2.all.txt",
+      "note": "See parity/gate_item2.orchestrator-walk.ledger.json for the subsystem-level note."
+    },
+    "file": {
+      "path": "tests/gate_item2/test_mediated_real_provider.py",
+      "collected": 5,
+      "inventory": "parity/source-inventory/gate_item2.test_mediated_real_provider.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 5 pass there (re-run 2026-08-29 against the read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item2/ -p no:cacheprovider`: 34 passed, of which 5 are this file's, including both @pytest.mark.skipif-gated cases -- the porting host is POSIX and has /proc, the same premise test/session/claude-cli-provider.test.ts's own two capability gates document."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item2/mediated-real-provider.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/gate_item2/mediated-real-provider.test.ts",
+        "constructs": {
+          "skipIf": 2
+        },
+        "reason": "The source's two capability gates -- @pytest.mark.skipif(not HAS_PROC, ...) on the adoption case and @pytest.mark.skipif(not IS_POSIX, ...) on the resume case -- are the same two conditions test/session/claude-cli-provider.test.ts's ledger (parity/session.claude-cli-provider.ledger.json) already approves for that file, reused here verbatim rather than re-derived: `IS_POSIX = process.platform !== \"win32\"` and `HAS_PROC = statSync(\"/proc\", { throwIfNoEntry: false })?.isDirectory() === true`, both probed at module load exactly as pytest evaluates a skipif condition at collection time, never inferred from the platform name (rule 4 of docs/test-translation-conventions.md -- HAS_PROC is the narrower condition, since macOS is POSIX without /proc). The two reasons are carried at their call sites verbatim from the source's decorator arguments."
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 5,
+    "ported": 5,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item2/test_mediated_real_provider.py::test_the_walk_commits_the_exact_identity_the_provider_is_told_to_claim",
+      "target_id": "test/gate_item2/mediated-real-provider.test.ts::the walk commits the exact identity the provider is told to claim",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_mediated_real_provider.py::test_a_reported_identity_that_disagrees_is_never_confirmed",
+      "target_id": "test/gate_item2/mediated-real-provider.test.ts::a reported identity that disagrees is never confirmed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_mediated_real_provider.py::test_supervisor_only_kill_the_surviving_child_is_adopted_not_respawned",
+      "target_id": "test/gate_item2/mediated-real-provider.test.ts::supervisor-only kill: the surviving child is adopted not respawned",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_mediated_real_provider.py::test_supervisor_and_child_kill_recovery_resumes_the_bound_identity",
+      "target_id": "test/gate_item2/mediated-real-provider.test.ts::supervisor and child kill: recovery resumes the bound identity",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_mediated_real_provider.py::test_the_provider_refusal_is_not_the_mechanism",
+      "target_id": "test/gate_item2/mediated-real-provider.test.ts::the provider refusal is not the mechanism",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

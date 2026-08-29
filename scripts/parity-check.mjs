@@ -114,6 +114,18 @@ const LEDGERS = [
   "parity/messagebus.endpoint.ledger.json",
   "parity/messagebus.import-graph.ledger.json",
   "parity/messagebus.stale-readout.ledger.json",
+  // lane H -- gate_item2 (issue #18's crash-and-retry proof). Downstream of
+  // the session belt above; the D-range is `D-08xx` (D-0801). Lettered `H`
+  // rather than `G`: `messagebus` and this lane were both appended as the
+  // next free letter concurrently and `messagebus` landed on `main` first
+  // (PR #63), so this lane takes the letter that was actually free at merge
+  // time rather than the one it was drafted under. All three source files
+  // are ledgered: the third, test_session_driver_harness.py, is entirely
+  // `not-ported` (deferred to a follow-on task -- see D-0801 and that
+  // ledger's per-entry reason).
+  "parity/gate_item2.orchestrator-walk.ledger.json",
+  "parity/gate_item2.mediated-real-provider.ledger.json",
+  "parity/gate_item2.session-driver-harness.ledger.json",
 ];
 
 /**
