@@ -36,12 +36,20 @@ import { boundRun, failed, type RunResult, unboundRun } from "./support/run.js";
  * control plane it is being run against.
  *
  * Parameterised over `registry.PROVIDERS`, the same as
- * `substitution-scenarios.test.ts`: `[S3]` always runs, `[S2]` is skipped
- * wherever the real `claude` CLI is not on `PATH`.
+ * `substitution-scenarios.test.ts`: each case is written out once per
+ * provider with a literal title (`[S2]` runs behind `skipIf`, `[S3]` always
+ * runs) rather than built from an interpolated template. `vitest list`
+ * *and* `scripts/parity-check.mjs`'s own `declaresTitle` sweep both need the
+ * exact collected title to appear verbatim in this file's source text --
+ * `scripts/parity-check.mjs`'s conditionally_collected fallback (used on a
+ * host without `claude` on `PATH`, where `[S2]` is never collected at all)
+ * greps for the literal quoted string, and a template-interpolated title
+ * would not contain it.
  */
 
 const S2 = PROVIDERS.S2 as ProviderEntry;
 const S3 = PROVIDERS.S3 as ProviderEntry;
+const S2_UNAVAILABLE = S2.unavailable();
 
 /** Generous headroom over the measured ~7s per subprocess run of `test/control_plane`. */
 const CASE_TIMEOUT_MS = 900_000;
@@ -50,88 +58,147 @@ function outcomeIds(run: RunResult): string[] {
   return Object.keys(run.outcomes).sort();
 }
 
-function registerCases(entry: ProviderEntry): void {
-  const unavailable = entry.unavailable();
-  const t = skipIf(unavailable !== null, unavailable ?? "");
+async function theSuitePassesWithAProviderBound(entry: ProviderEntry): Promise<void> {
+  const bound = await boundRun(entry.id);
+  expect(failed(bound)).toEqual({});
+  expect(bound.returncode, bound.stdout).toBe(0);
+  const skipped = Object.entries(bound.outcomes)
+    .filter(([, outcome]) => outcome.test === "skipped")
+    .map(([id]) => id)
+    .sort();
+  expect(
+    skipped,
+    `${JSON.stringify(skipped)} was skipped under the bound provider; a test that cannot run ` +
+      "against a provider is a leak to fix, not one to skip",
+  ).toEqual([]);
+}
 
-  t(
-    `the suite passes with a provider bound [${entry.id}]`,
-    async () => {
-      const bound = await boundRun(entry.id);
-      expect(failed(bound)).toEqual({});
-      expect(bound.returncode, bound.stdout).toBe(0);
-      const skipped = Object.entries(bound.outcomes)
-        .filter(([, outcome]) => outcome.test === "skipped")
-        .map(([id]) => id)
-        .sort();
-      expect(
-        skipped,
-        `${JSON.stringify(skipped)} was skipped under the bound provider; a test that cannot ` +
-          "run against a provider is a leak to fix, not one to skip",
-      ).toEqual([]);
-    },
-    CASE_TIMEOUT_MS,
-  );
+skipIf(S2_UNAVAILABLE !== null, S2_UNAVAILABLE ?? "")(
+  "the suite passes with a provider bound [S2]",
+  async () => {
+    await theSuitePassesWithAProviderBound(S2);
+  },
+  CASE_TIMEOUT_MS,
+);
+test(
+  "the suite passes with a provider bound [S3]",
+  async () => {
+    await theSuitePassesWithAProviderBound(S3);
+  },
+  CASE_TIMEOUT_MS,
+);
 
-  t(
-    `the bound run collects exactly the same tests [${entry.id}]`,
-    async () => {
-      const [unbound, bound] = await Promise.all([unboundRun(), boundRun(entry.id)]);
-      expect(outcomeIds(bound)).toEqual(outcomeIds(unbound));
-      expect(
-        Object.keys(unbound.outcomes).length,
-        "the unbound run collected nothing",
-      ).toBeGreaterThan(0);
-    },
-    CASE_TIMEOUT_MS,
-  );
-
-  t(
-    `every test reaches the same verdict either way [${entry.id}]`,
-    async () => {
-      const [unbound, bound] = await Promise.all([unboundRun(), boundRun(entry.id)]);
-      expect(bound.outcomes).toEqual(unbound.outcomes);
-    },
-    CASE_TIMEOUT_MS,
-  );
-
-  t(
-    `both runs read the same suite artifact [${entry.id}]`,
-    async () => {
-      const [unbound, bound] = await Promise.all([unboundRun(), boundRun(entry.id)]);
-      expect(bound.artifact).toEqual(unbound.artifact);
-      expect(
-        Object.keys(bound.artifact).length,
-        "no suite file was recorded, so nothing was compared",
-      ).toBeGreaterThan(0);
-    },
-    CASE_TIMEOUT_MS,
-  );
-
-  t(
-    `the bound run really had a provider live [${entry.id}]`,
-    async () => {
-      const bound = await boundRun(entry.id);
-      expect(bound.stdout).toContain("gate item 11: control-plane suite bound to");
-      expect(bound.stdout).toContain(entry.scaffold);
-      expect(bound.stdout).toContain("live session");
-    },
-    CASE_TIMEOUT_MS,
-  );
-
-  t(
-    `the bound provider drove the control plane before the suite ran [${entry.id}]`,
-    async () => {
-      const bound = await boundRun(entry.id);
-      expect(bound.stdout).toContain("gate item 11: the provider drove the control plane");
-      expect(bound.stdout).toContain("one effect delivered and acked");
-    },
-    CASE_TIMEOUT_MS,
+async function theBoundRunCollectsExactlyTheSameTests(entry: ProviderEntry): Promise<void> {
+  const [unbound, bound] = await Promise.all([unboundRun(), boundRun(entry.id)]);
+  expect(outcomeIds(bound)).toEqual(outcomeIds(unbound));
+  expect(Object.keys(unbound.outcomes).length, "the unbound run collected nothing").toBeGreaterThan(
+    0,
   );
 }
 
-registerCases(S2);
-registerCases(S3);
+skipIf(S2_UNAVAILABLE !== null, S2_UNAVAILABLE ?? "")(
+  "the bound run collects exactly the same tests [S2]",
+  async () => {
+    await theBoundRunCollectsExactlyTheSameTests(S2);
+  },
+  CASE_TIMEOUT_MS,
+);
+test(
+  "the bound run collects exactly the same tests [S3]",
+  async () => {
+    await theBoundRunCollectsExactlyTheSameTests(S3);
+  },
+  CASE_TIMEOUT_MS,
+);
+
+async function everyTestReachesTheSameVerdictEitherWay(entry: ProviderEntry): Promise<void> {
+  const [unbound, bound] = await Promise.all([unboundRun(), boundRun(entry.id)]);
+  expect(bound.outcomes).toEqual(unbound.outcomes);
+}
+
+skipIf(S2_UNAVAILABLE !== null, S2_UNAVAILABLE ?? "")(
+  "every test reaches the same verdict either way [S2]",
+  async () => {
+    await everyTestReachesTheSameVerdictEitherWay(S2);
+  },
+  CASE_TIMEOUT_MS,
+);
+test(
+  "every test reaches the same verdict either way [S3]",
+  async () => {
+    await everyTestReachesTheSameVerdictEitherWay(S3);
+  },
+  CASE_TIMEOUT_MS,
+);
+
+async function bothRunsReadTheSameSuiteArtifact(entry: ProviderEntry): Promise<void> {
+  const [unbound, bound] = await Promise.all([unboundRun(), boundRun(entry.id)]);
+  expect(bound.artifact).toEqual(unbound.artifact);
+  expect(
+    Object.keys(bound.artifact).length,
+    "no suite file was recorded, so nothing was compared",
+  ).toBeGreaterThan(0);
+}
+
+skipIf(S2_UNAVAILABLE !== null, S2_UNAVAILABLE ?? "")(
+  "both runs read the same suite artifact [S2]",
+  async () => {
+    await bothRunsReadTheSameSuiteArtifact(S2);
+  },
+  CASE_TIMEOUT_MS,
+);
+test(
+  "both runs read the same suite artifact [S3]",
+  async () => {
+    await bothRunsReadTheSameSuiteArtifact(S3);
+  },
+  CASE_TIMEOUT_MS,
+);
+
+async function theBoundRunReallyHadAProviderLive(entry: ProviderEntry): Promise<void> {
+  const bound = await boundRun(entry.id);
+  expect(bound.stdout).toContain("gate item 11: control-plane suite bound to");
+  expect(bound.stdout).toContain(entry.scaffold);
+  expect(bound.stdout).toContain("live session");
+}
+
+skipIf(S2_UNAVAILABLE !== null, S2_UNAVAILABLE ?? "")(
+  "the bound run really had a provider live [S2]",
+  async () => {
+    await theBoundRunReallyHadAProviderLive(S2);
+  },
+  CASE_TIMEOUT_MS,
+);
+test(
+  "the bound run really had a provider live [S3]",
+  async () => {
+    await theBoundRunReallyHadAProviderLive(S3);
+  },
+  CASE_TIMEOUT_MS,
+);
+
+async function theBoundProviderDroveTheControlPlaneBeforeTheSuiteRan(
+  entry: ProviderEntry,
+): Promise<void> {
+  const bound = await boundRun(entry.id);
+  expect(bound.stdout).toContain("gate item 11: the provider drove the control plane");
+  expect(bound.stdout).toContain("one effect delivered and acked");
+}
+
+skipIf(S2_UNAVAILABLE !== null, S2_UNAVAILABLE ?? "")(
+  "the bound provider drove the control plane before the suite ran [S2]",
+  async () => {
+    await theBoundProviderDroveTheControlPlaneBeforeTheSuiteRan(S2);
+  },
+  CASE_TIMEOUT_MS,
+);
+test(
+  "the bound provider drove the control plane before the suite ran [S3]",
+  async () => {
+    await theBoundProviderDroveTheControlPlaneBeforeTheSuiteRan(S3);
+  },
+  CASE_TIMEOUT_MS,
+);
 
 test(
   "the unbound run had no provider",

@@ -33,9 +33,9 @@
       {
         "file": "test/gate_item11/suite-runs-unchanged.test.ts",
         "constructs": {
-          "skipIf": 1
+          "skipIf": 6
         },
-        "reason": "One call site (`registerCases`'s `const t = skipIf(entry.unavailable() !== null, ...)`), reused for both providers via two calls to `registerCases` -- unlike substitution-scenarios.test.ts, which writes the same skipIf(...) call out six times (one per case body), this file's six per-provider cases share a single wrapper `t` built once per `registerCases` invocation. The construct count the parity check sees is textual occurrences in the file (one), not runtime invocations (twelve: six cases times two `registerCases` calls) -- the same distinction D-1002 records for why this file's own six `[S2]` ids are still each individually `conditionally_collected` below, despite sharing one skipIf call site in the source text."
+        "reason": "The source's `entry` fixture calls `pytest.skip(reason)` when `registry.PROVIDERS[id].unavailable()` is not None -- one skip per case, at RUN time, so pytest still COLLECTS a node id for it. Ported the same way `substitution-scenarios.test.ts` is: each of the six `[S2]` cases is registered with its own literal `skipIf(S2_UNAVAILABLE !== null, ...)(...)` call rather than a shared, entry-parameterised wrapper, so the exact collected title is present verbatim in this file's source text for `scripts/parity-check.mjs`'s own `declaresTitle` sweep (needed on a host without `claude` on PATH, where `vitest list` omits the case entirely and the check falls back to reading the source). Six calls, one per `[S2]` case in this file, matching `substitution-scenarios.test.ts`'s own six."
       }
     ],
     "conditionally_collected": [
