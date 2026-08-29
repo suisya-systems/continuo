@@ -1,0 +1,378 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item11",
+      "collected": 64,
+      "inventory": "parity/source-inventory/gate_item11.all.txt",
+      "note": "Belt start ratified at the 2026-08-30 human gate (D-0034), D-range D-10xx (D-1001). This is part 1: the structural leak checks and the registry's own predicates (51 of 64 cases, across this file, test_registry_availability.py and test_substitution_scenarios.py). The remaining 13 -- test_suite_runs_unchanged.py, the double-suite-run measurement -- are out of this task's scope; see D-1001 and parity/source-inventory.belts.md for the follow-on declaration."
+    },
+    "file": {
+      "path": "tests/gate_item11/test_no_provider_detail_leaks.py",
+      "collected": 35,
+      "inventory": "parity/source-inventory/gate_item11.test_no_provider_detail_leaks.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Re-run 2026-08-29 against the read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item11/test_no_provider_detail_leaks.py tests/gate_item11/test_registry_availability.py -p no:cacheprovider`: 39 passed (35 + 4, of which these 35 are this file's)."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item11/no-provider-detail-leaks.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "Python `ast.parse` + `ast.walk` over `sorted(root.rglob('*.py'))`, with `_imported_modules` resolving a relative import against the file's own package name and recording both a `from` import's base module and every one of its aliases as a candidate module",
+        "to": "`test/testkit/ast.ts`'s `importedModules` (D-0504), shared with `test/messagebus/import-graph.test.ts`, `test/canary/structural.test.ts` and `test/secretary/structural.test.ts`, over a recursive directory walk of `.ts` files with an explicit declared allowlist for non-TypeScript artifacts (`docs/test-translation-conventions.md` section 10)",
+        "why": "TypeScript has no package-dotted namespace; `importedModules` resolves a relative specifier to an absolute path instead, which asks the source's question (does this leave the package, and what does it reach?) without one. `namesASessionBackend` is the source's `_names_a_session_backend`, name for name, applied to the resolved path's segments; `knowsASessionBackend` is `_knows_a_session_backend`, applied to path containment under `src/session/` rather than a dotted-string prefix, with the same S1-contract exclusion.",
+        "affects": "all 35 cases"
+      },
+      {
+        "from": "`@pytest.mark.parametrize(..., ids=lambda path: path.name)` over a directory listing",
+        "to": "`test/testkit/parametrize.ts`'s `parametrize`, over the same directory listing, byte-stable ids by construction",
+        "affects": "the 31 parametrized cases (17 + 14)"
+      }
+    ],
+    "target_only_tests": {
+      "count": 6,
+      "ids": [
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[connection.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[python_json.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[python_repr.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[refusals.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[spike.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[differential-oracle.test.ts]"
+      ],
+      "why": "The directory walks in this file are LISTINGS, not hand-written lists (the source's own `rglob('*.py')`), so a `.ts` file with no `.py` analogue still gets a case: `src/control_plane/connection.ts`, `python_json.ts`, `python_repr.ts`, `refusals.ts` and `spike.ts` are helpers this port split into their own modules where the source keeps the equivalent logic inline elsewhere, and `test/control_plane/differential-oracle.test.ts` is a target-only structural check this port added with no source counterpart. Each is still exercised by the same property (no session-backend import), which is the point of walking rather than listing."
+    },
+    "approved_non_running": []
+  },
+  "totals": {
+    "source_cases": 35,
+    "ported": 0,
+    "adapted": 32,
+    "not_ported": 3,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[__init__.py0]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "No target case: the parametrization is a directory listing, not a hand-written list, and TypeScript has no `__init__.py`-equivalent package marker under `src/control_plane/` for the walk to find (D-0002: one package entry point, no per-directory barrel required for a directory to be a module namespace). No coverage is lost -- the property is checked over every `.ts` file `src/control_plane/` actually contains, so a future barrel there gets its own case (and its own ledger entry, or the parity check reports it unmapped).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[ai_invocation.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[ai_invocation.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. The case id is the file that exists in each language's spelling: `ai_invocation.py` / `ai_invocation.ts`. See this ledger's `systematic_mappings` for the scan and parametrize adaptations shared by all 17 module-file cases.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[ci_ingest.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[ci_ingest.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[destination.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[destination.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[events.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[events.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[gates.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[gates.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[handlers.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[handlers.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[lease.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[lease.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[__init__.py1]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "No target case: `src/control_plane/migrations/` holds only `.sql` step files (declared non-module artifacts, `docs/test-translation-conventions.md` section 10) and has no `__init__.py`-equivalent marker for the walk to find. No coverage is lost -- the property is checked over every `.ts` file the package actually contains.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[migrator.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[migrator.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[outbox.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[outbox.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[policy.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[policy.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[repo_link.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[repo_link.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[schema.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[schema.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[session_binding.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[session_binding.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[txn.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[txn.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_module_reaches_a_session_backend[watcher.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[watcher.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`. `src/control_plane/` also carries `connection.ts`, `python_json.ts`, `python_repr.ts`, `refusals.ts` and `spike.ts`, which have no `.py` analogue at this revision (helpers the source keeps inline elsewhere); each gets its own case from the same directory walk and is declared target-only below rather than claimed by any source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[__init__.py]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "No target case: `test/control_plane/` has no `__init__.py`-equivalent marker for the walk to find. No coverage is lost -- the property is checked over every `.ts` file the suite directory actually contains.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_ai_invocation.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[ai-invocation.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. The case id is the file that exists in each language's spelling: `test_ai_invocation.py` / `ai-invocation.test.ts`. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_ci_ingest.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[ci-ingest.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_events.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[events.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_gates.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[gates.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_lease.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[lease.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_migrator.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[migrator.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_outbox.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[outbox.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_policy.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[policy.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_policy_seed.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[policy-seed.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_production_schema.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[production-schema.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_repo_link.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[repo-link.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_spike_schema.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[spike-schema.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_control_plane_test_reaches_a_session_backend[test_watcher.py]",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[watcher.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree. `test/control_plane/` also carries `differential-oracle.test.ts`, which has no `.py` analogue at this revision; it gets its own case from the same directory walk and is declared target-only below rather than claimed by any source id. See this ledger's `systematic_mappings`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_no_shipped_module_knows_both_a_provider_and_the_control_plane",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::no shipped module knows both a provider and the control plane",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, walking the whole of `src/` instead of a dotted-prefix scan, with one deliberate exception the source has no counterpart for: `src/index.ts` is allowlisted (D-1001). continuo ships one package entry point (D-0002, `exports` restricted to `.`), so the single barrel re-exports both `./control_plane/*.js` and `./session/index.js` (which itself re-exports both providers) -- a shape the source's per-directory `__init__.py` package layout never produces, since nothing there re-exports both vocabularies from one module. The falsifier is recorded in D-1001: a subpath-exports split (`./control_plane`, `./session`) that let a provider swap avoid touching `src/index.ts`'s session half would remove the need for this exception.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_the_translation_is_confined_to_this_fixture_package",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::the translation is confined to this fixture package",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, walking the whole of `test/` instead of `tests/`. The allowlist of two files beyond the fixture package is the source's own, re-spelled for this repository's paths: `tests/fault_injection/session_driver.py` -> `test/fault_injection/session_driver.ts`, `tests/gate_item2/test_mediated_real_provider.py` -> `test/gate_item2/mediated-real-provider.test.ts`. Measured: both are the only two files under `test/` (outside `test/gate_item11/`) whose import statements reach both `src/session/` (beyond the S1 contract) and `src/control_plane/`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_every_shipped_provider_is_registered",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::every shipped provider is registered",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion. Adapted: discovery is `pkgutil.iter_modules` + `inspect.getmembers` in the source; ESM cannot import a specifier computed at runtime, so `registry.ts`'s `shippedProviders()` uses `import.meta.glob` over `src/session/*.ts` instead (D-0114's precedent, `test/measurement/module-scan.ts`), checking `candidate.prototype instanceof SessionProvider` in place of `issubclass` / `inspect.isabstract`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_no_provider_detail_leaks.py::test_the_registry_entries_describe_real_implementations",
+      "target_id": "test/gate_item11/no-provider-detail-leaks.test.ts::the registry entries describe real implementations",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion. Adapted: `issubclass(entry.implementation, SessionProvider)` becomes `entry.implementation.prototype instanceof SessionProvider`, and `entry.id == key` / `entry.scaffold` / `entry.issue.startswith('#')` are the same field checks against `registry.ts`'s `ProviderEntry` and `PROVIDERS`.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

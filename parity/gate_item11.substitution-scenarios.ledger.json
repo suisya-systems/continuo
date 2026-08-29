@@ -1,0 +1,185 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item11",
+      "collected": 64,
+      "inventory": "parity/source-inventory/gate_item11.all.txt",
+      "note": "This is part 1 of the gate_item11 belt (D-1001). See parity/gate_item11.registry-availability.ledger.json for the subsystem-level note."
+    },
+    "file": {
+      "path": "tests/gate_item11/test_substitution_scenarios.py",
+      "collected": 12,
+      "inventory": "parity/source-inventory/gate_item11.test_substitution_scenarios.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Re-run 2026-08-29 against the read-only clone of interlock at 65f36c5 with `claude` removed from PATH (the same premise this ledger's own conditionally_collected declarations below document): `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item11/test_substitution_scenarios.py -p no:cacheprovider -v`: 12 collected, 6 passed ([S3]), 6 skipped ([S2] -- the `entry` fixture's own `pytest.skip(reason)`, since `shutil.which(\"claude\")` is `None` on the porting host used for this measurement)."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item11/substitution-scenarios.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/gate_item11/substitution-scenarios.test.ts",
+        "constructs": {
+          "skipIf": 6
+        },
+        "reason": "The source's `entry` fixture calls `pytest.skip(reason)` when `registry.PROVIDERS[id].unavailable()` is not None -- one skip per case, at RUN time, so pytest still COLLECTS a node id for it. `forEachProvider`'s `skipIf(entry.unavailable() !== null, reason)` is the same condition, evaluated once per case at file load (module scope, since the six [S2] cases are declared with `test.skip`/`test` chosen at that point rather than inside the test body) -- six calls, one per [S2] case in this file. Each is genuinely reachable and independently meaningful (a different assertion body follows), so each counts on its own rather than being one approval for the file."
+      }
+    ],
+    "conditionally_collected": [
+      {
+        "id": "test/gate_item11/substitution-scenarios.test.ts::a provider readout becomes the binding item 2 reads[S2]",
+        "reason": "`vitest list` omits a case gated by `skipIf` entirely where pytest still collects a skipped node id; the condition is `registry.PROVIDERS.S2.unavailable() !== null`, i.e. the `claude` CLI is not on PATH. Absent on a host without a real, PATH-resolvable `claude` binary; present and running on one that has it -- the same premise as test/session/claude-cli-provider.test.ts's own capability gates and as `parity/gate_item2.mediated-real-provider.ledger.json`'s."
+      },
+      {
+        "id": "test/gate_item11/substitution-scenarios.test.ts::a session that cannot be observed binds as itself and not as nothing[S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/substitution-scenarios.test.ts::the second live session is refused by us and not by the provider[S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/substitution-scenarios.test.ts::a released binding frees the run for the next session[S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/substitution-scenarios.test.ts::a stale holder cannot bind a session it started[S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      },
+      {
+        "id": "test/gate_item11/substitution-scenarios.test.ts::an effect about a provider session stays exactly once across a resend[S2]",
+        "reason": "See the sibling declaration above; same gate, same reason."
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 12,
+    "ported": 0,
+    "adapted": 12,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_provider_readout_becomes_the_binding_item_2_reads[S2]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a provider readout becomes the binding item 2 reads[S2]",
+      "disposition": "adapted",
+      "source_status": "skipped",
+      "target_status": "skipped",
+      "reason": "Same assertion, over `./substitution.ts`'s bindSession() -- a translation of the fixture's own bind_session(), not of src/control_plane/session_binding.ts's staged walk (this fixture is deliberately independent evidence, as the source's is). Adapted: async, since every SessionProvider verb is Promise-returning (D-0301), and the [S2]/[S3] parametrize axis is `forEachProvider` (registry.ts, sorted key order) rather than a pytest fixture indirection.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_provider_readout_becomes_the_binding_item_2_reads[S3]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a provider readout becomes the binding item 2 reads[S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion; see the [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_session_that_cannot_be_observed_binds_as_itself_and_not_as_nothing[S2]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a session that cannot be observed binds as itself and not as nothing[S2]",
+      "disposition": "adapted",
+      "source_status": "skipped",
+      "target_status": "skipped",
+      "reason": "Same assertion -- R4, end to end: could-not-observe reaches the database with its reason. See the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_session_that_cannot_be_observed_binds_as_itself_and_not_as_nothing[S3]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a session that cannot be observed binds as itself and not as nothing[S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion; see the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_the_second_live_session_is_refused_by_us_and_not_by_the_provider[S2]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::the second live session is refused by us and not by the provider[S2]",
+      "disposition": "adapted",
+      "source_status": "skipped",
+      "target_status": "skipped",
+      "reason": "Same assertion -- the exclusion is ours (D-0024): the second bindSession() throws (the schema's partial unique index refuses the row), asserted with `expect(...).toThrow()` in place of `pytest.raises(sqlite3.IntegrityError)` (better-sqlite3 raises a plain `SqliteError` for the constraint violation, not a typed subclass this port exports). See the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_the_second_live_session_is_refused_by_us_and_not_by_the_provider[S3]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::the second live session is refused by us and not by the provider[S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion; see the entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_released_binding_frees_the_run_for_the_next_session[S2]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a released binding frees the run for the next session[S2]",
+      "disposition": "adapted",
+      "source_status": "skipped",
+      "target_status": "skipped",
+      "reason": "Same assertion. See the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_released_binding_frees_the_run_for_the_next_session[S3]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a released binding frees the run for the next session[S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion; see the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_stale_holder_cannot_bind_a_session_it_started[S2]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a stale holder cannot bind a session it started[S2]",
+      "disposition": "adapted",
+      "source_status": "skipped",
+      "target_status": "skipped",
+      "reason": "Same assertion -- losing the lease is not softened by the provider having answered. See the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_a_stale_holder_cannot_bind_a_session_it_started[S3]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::a stale holder cannot bind a session it started[S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion; see the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_an_effect_about_a_provider_session_stays_exactly_once_across_a_resend[S2]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::an effect about a provider session stays exactly once across a resend[S2]",
+      "disposition": "adapted",
+      "source_status": "skipped",
+      "target_status": "skipped",
+      "reason": "Same assertion -- the outbox half of the scope, with the provider's session as the subject. See the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item11/test_substitution_scenarios.py::test_an_effect_about_a_provider_session_stays_exactly_once_across_a_resend[S3]",
+      "target_id": "test/gate_item11/substitution-scenarios.test.ts::an effect about a provider session stays exactly once across a resend[S3]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion; see the first [S2] entry above for the shared adaptation reason.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
