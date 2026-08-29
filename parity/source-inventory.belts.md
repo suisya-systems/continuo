@@ -625,7 +625,7 @@ frozen, will never answer; this is item 8's *rehearsal* and not its discharge, a
 timeouts bound how long a failing run hangs rather than how fast a passing one must be. If continuo
 ever needs the number, it is decided here (`D-0036`), not collected from upstream.
 
-### `migrate` -- `decision-pending` -- 11 cases
+### `migrate` -- `not-porting` (ratified 2026-08-30, D-0043) -- 11 cases
 
 `tests/test_migrate.py`, fixture-driven checks of v1 to v2 key normalisation.
 `PORTING_LEDGER.md` classes it `rewrite`, against "whatever migration/comparison bridge the run
@@ -634,11 +634,19 @@ call `pytest.importorskip("jsonschema")` inside the test body rather than at mod
 the broker five they *are* collected and *are* in the inventory; they will skip on a host without
 `jsonschema` and continuo will need a decision about the equivalent dependency.
 
-**Reviewed at the human gate on 2026-08-29 and deliberately left pending (D-0035).** This is not an
-unexamined entry: deciding to port would not produce anything to port it against, since the bridge
-`PORTING_LEDGER.md` calls for does not exist in either repository yet. The trigger for revisiting is
-the run-boundary cutover bridge actually being designed; the `jsonschema`-equivalent dependency
-question above comes with it and does not need answering before then.
+Ratified at the human gate on 2026-08-30 (D-0043): `D-0035` left this belt `decision-pending` on one
+explicit revisiting trigger -- "the run-boundary cutover bridge actually being designed" -- and that
+trigger has since fired. `docs/design/minimal-operating-loop.md` section 5.2 is that design, and it
+reviewed the belt against both sides of the port: the belt's subject is ja v1 *file* artefacts, both
+inputs are gone or reshaped on the live ja side, and the successor's cutover is specified as no state
+conversion, only routing at the run boundary. The `jsonschema`-equivalent dependency question
+`D-0035` deferred is small and already answered by the frozen tree: it gates 2 of the 11 cases, and
+both already skip in interlock's own frozen tree.
+
+**What would falsify this:** if a cutover is ever specified that must convert in-flight state rather
+than route at the run boundary, or if a v1 shadow episode adapter is built that reads ja's file
+artefacts rather than ja's `events` table, the subject exists here and this decision is superseded --
+not edited.
 
 ### `package_smoke` -- `not-porting` (ratified 2026-08-28) -- 1 case
 
@@ -663,12 +671,11 @@ continuo does not ship would assert nothing.
 |---|---|---|
 | `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` (all three sub-belts, **ported** 2026-08-29), `gate_item11` (ratified and **ported** 2026-08-29) | 1,973 |
 | `retarget` | `broker` | 54 |
-| `decision-pending` | `migrate` | 11 |
-| `not-porting` (ratified 2026-08-28; `curator` ratified 2026-08-29) | `gate_record`, `scrub`, `package_smoke`, `curator` | 156 |
+| `not-porting` (ratified 2026-08-28; `curator` ratified 2026-08-29; `migrate` ratified 2026-08-30, D-0043) | `gate_record`, `scrub`, `package_smoke`, `curator`, `migrate` | 167 |
 | | **18** | **2,194** |
 
-With the 156 `not-porting` cases ratified out, continuo's effective porting target is
-**2,194 − 156 = 2,038** node ids -- the pool of cases not declined, not a commitment to port all of
+With the 167 `not-porting` cases ratified out, continuo's effective porting target is
+**2,194 − 167 = 2,027** node ids -- the pool of cases not declined, not a commitment to port all of
 it: within that pool, every status not marked ratified remains a proposal. The inventory itself
 stays at 2,194: the evidence set is unconditional and does not shrink with the decision.
 
