@@ -39,7 +39,10 @@ The pilot implemented two: **control-plane database state** (2a) and **statement
 (2b). The measurement belt added a third, **fixed-point number rendering** (2c). The fencing lane
 added a fourth, **CPython library semantics** (2d), which is the widest of them: the fence is
 *defined* by standard-library behaviour that JavaScript has no equivalent for, so that behaviour had
-to be transcribed, and every transcription needs the same check.
+to be transcribed, and every transcription needs the same check. The settings lane widened that
+into a fifth, **`os.path` in both namespaces** (2e), and the attention belt added a sixth,
+**CPython's format-string machinery** (2f), for the same reason one layer up: the string being
+formatted is one the OPERATOR wrote.
 
 ### 2a. Control-plane database state
 
@@ -261,6 +264,42 @@ reproduced is listed at the function. It is pinned by the settings suite instead
 directory and, where the layout has to be a symlinked one, injects `realpathFn` exactly as
 interlock's own tests do.
 
+### 2f. CPython's format-string machinery
+
+`notify.render_text` is the one place in the attention subsystem that formats a string **the
+operator wrote**. It reads `attention.json`'s `templates`, asks which placeholders each template
+names, checks those against the design's section 6 allowlist, and renders. Three CPython functions
+are load-bearing in that sentence -- `string.Formatter().parse`, `str.format_map` and
+`str.__format__` -- and `src/attention/pyformat.ts` transcribes all three (`D-0952`).
+
+What a near-miss costs falls on the operator in both directions, and neither direction is loud:
+
+- a parser that misses the name in `{summary!r:>10}` hands the allowlist the wrong set, so a
+  template reaches a field the design forbids; one that reads `{{pr}}` as a reference to `pr`
+  renders `42` where CPython renders the literal text `{pr}`.
+- a renderer that refuses what CPython accepts replaces the operator's own template with the
+  bundled English default -- **silently**, because the whole contract of this path is that a
+  misspelled template must not crash the watcher. One that accepts what CPython refuses is that
+  crash.
+
+- `scripts/oracle/dump_pyformat.py` asks CPython, for every template in
+  `parity/oracle/pyformat-corpus.json`: which placeholders `_placeholders` finds, which of them are
+  outside the allowlist, what `format_map` renders, and -- when it raises -- the exception's class
+  **and its message text**. It writes `parity/oracle/pyformat-vector.json`.
+- `test/attention/pyformat-oracle.test.ts` rebuilds the same corpus in the same order and asserts
+  agreement on every field at every position.
+
+The corpus is committed and hand-authored, grouped by what each group asks: literals and brace
+escapes, the six allowed names, names outside the allowlist including the attribute and index
+reaches, positional and auto-numbered fields, the three conversions, the format specs a `str`
+accepts, the ones it refuses, nested specs, and templates that do not parse at all. Every group
+carries at least one input that renders and one that raises, so a half-implemented answer cannot
+pass by refusing everything or by rendering everything -- and the vector's own not-vacuous cases
+assert that, rather than leaving it to the corpus author's care.
+
+**The message text is compared, and that is not thoroughness for its own sake.** It caught the
+fifth of the five divergences below, where the exception class was already right.
+
 ## 3. What is normalised, and why each part is there
 
 The dump is not "whatever the database happens to return". Every element of the shape is a decision
@@ -415,6 +454,44 @@ ULP either side of every tie. The lesson is the one worth carrying to the next f
 necessary and it is not sufficient.** It answers only for the inputs somebody thought to put in the
 corpus, so "the oracle is green" is a claim about coverage as much as about correctness, and the
 corpus deserves the same adversarial attention as the code.
+
+### 6d. Format strings: five divergences in a transcription written from CPython's source
+
+`src/attention/pyformat.ts` was not guessed at. It was written from `Objects/stringlib/
+unicode_format.h` and `Python/formatter_unicode.c`, with the C read alongside the TypeScript. Its
+first draft still disagreed with CPython on five of the corpus's inputs, and **review had found none
+of them**:
+
+1. `{}` and `{0}` raise `ValueError("Format string contains positional fields")`, not `IndexError`.
+   `format_map` passes **no** positional argument tuple at all, and `get_field_object` tests for
+   that before it tests any index. The draft reasoned "an empty tuple, so the index is out of range"
+   and reached a class CPython never raises here.
+2. `{pr:010}` **renders**, as `4200000000`. A leading `0` sets the fill character and takes the `=`
+   alignment branch only when the type's own `default_align` is `>`, which is the numeric types'
+   default and not `str`'s. Reading the published grammar, which documents `0` as implying `=`,
+   makes this a refusal.
+3. `{pr:0}` renders `42`, for the same reason and with the same wrong first answer.
+4. `{pr:{}}` follows from (1).
+5. an unprintable presentation type is **escaped** in the refusal message -- `Unknown format code
+   '\xa' for object of type 'str'`. A `%c` transcription puts a literal newline in the middle of an
+   operator's warning line. Only the message comparison could catch this: the class was right.
+
+A sixth arrived on the integration tip, and it is the most instructive of them because it was
+**the port's own regression and the oracle did not catch it either**. The repair for (2) removed
+two guards in one edit when only one was wrong: an explicit fill character wins over the `0`, so
+`format("ab", "*>010")` is `"********ab"` and the port rendered `"00000000ab"`. The corpus carried
+`{pr:*^10}` and `{pr:010}` and nothing that combined them. **An oracle is only as good as the
+combinations its corpus asks about, and a repair is a new combination** -- so widening the corpus
+belongs in the same change as the repair, not in the next one that happens to think of it.
+
+Five of the six would have shipped as a silent behaviour difference in an operator-facing path.
+After the repairs, all 101 templates agree on every compared field.
+
+**A finding about the SOURCE fell out of (1).** interlock's own `except (ValueError, IndexError)`
+around `_format_with_event` has an unreachable half: that function only ever calls `format_map`, and
+`format_map` raises `ValueError` for every positional field, so no template can produce the
+`IndexError` the catch names. Nothing about the port's behaviour differs; the observation is about
+interlock, and it is the kind of thing a differential vector notices and a reading does not.
 
 ## 7. Faces designed but not implemented here
 

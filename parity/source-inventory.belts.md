@@ -102,15 +102,15 @@ source does not have is what the parity check exists to catch -- and the child-l
 the second was retired structurally instead, by making every teardown await its child's exit rather
 than merely signal it.
 
-### `attention` -- `in-scope` for A1 and A2 (**ported: 134 of 194 cases**), `retarget` for A3 -- 194 cases
+### `attention` -- `in-scope` -- **ported: 194 of 194 cases**
 
 Belt start ratified at the human gate on 2026-08-30 (D-0034), split into three sub-belts sharing
 one D-range, `D-09xx`: A1 (facts, 90 cases), A2 (dedup and config, 44 cases) and A3 (notify and
 pipeline, 60 cases). The status keeps its `retarget` spelling here -- starting the belt is not the
 same axis as completing it (the same distinction D-0032's belts used); each sub-belt's rows move to
-`in-scope` at its own completion. **A1 completed 2026-08-29** (`D-0901`..`D-0903` and `D-0906`
-used) and **A2 completed 2026-08-29** (`D-0904`..`D-0905`), so their 90 and 44 rows carry that
-spelling and A3's 60 stay `retarget`. `test_broker_journal_contract.py` is **not** part of these
+`in-scope` at its own completion, and **all three completed 2026-08-29**: A1 (`D-0901`..`D-0903`
+and `D-0906`), A2 (`D-0904`..`D-0905`) and A3 (`D-0951`..`D-0952`). All 194 rows therefore carry
+that spelling, and the belt is finished. `test_broker_journal_contract.py` is **not** part of these
 194 cases -- it has no node ids and sits in the `broker` section below as a collection-time skip.
 
 **A1 -- facts, 90 of 90 ported.** `tests/attention/test_readers.py` (29) and
@@ -134,6 +134,45 @@ after its falsifier fired: the classifier carries no fact state, because nothing
 `D-0903` is left in `DECISIONS.md` exactly as written and marked superseded -- an entry that named
 what would falsify it and was then falsified by that named observation is more useful intact than
 edited.
+
+**A3 -- notify and pipeline, 60 of 60 ported.** `tests/attention/test_notify.py` (34) and
+`tests/attention/test_cli.py` (26), ported to `src/attention/` (`notify.ts`, `cli.ts`, and
+`pyformat.ts`) with `test/attention/notify.test.ts` and `test/attention/cli.test.ts` beside them.
+`attention scan|watch` is mounted on the unified `continuo` CLI, which is the arrangement `D-0030`
+established working as intended: the subtree's own module declares its flags and `src/cli.ts` only
+mounts them.
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/attention/test_notify.py` | 34 | `parity/attention.notify.ledger.json` |
+| `tests/attention/test_cli.py` | 26 | `parity/attention.cli.ledger.json` |
+
+**All 60 are translated: 5 `ported`, 55 `adapted`, 0 `not-ported`, 0 waivers.** The `adapted` count
+is high and the reason is mechanical rather than substantive -- almost every case in both files
+passes `log_stream=StringIO()`, reads `capsys`, or patches a module attribute with
+`monkeypatch.setattr`, and each of those three is a rewrite this port has an established shape for.
+Seventeen further target-only cases sit beside them.
+
+**One case is genuinely re-authored, and it is the belt's repaired defect.**
+`test_scan_recovers_from_broken_dedup_state` pins that a corrupt dedup ledger loads as empty state
+and is silently rewritten -- the behaviour this document names below as ruled out, and which A2's
+`D-0904` removed. Per `D-0023` the case is inverted in the change that repairs it: the port asserts
+that the scan exits 2, names the file, and leaves it byte for byte as it found it. What `D-0904`
+did not settle is what the CLI does with the refusal, and `D-0951` is that decision.
+
+**A3 built the belt's differential oracle, and it changed five answers.** `notify.render_text`
+formats a template the **operator** wrote, so `string.Formatter().parse`, `str.format_map` and
+`str.__format__` are transcribed in `src/attention/pyformat.ts` rather than approximated by a
+regular expression -- a parser that reads `{{pr}}` as a reference to `pr` renders `42` where CPython
+renders the literal `{pr}`, and a renderer that refuses what CPython accepts replaces the operator's
+own text with the English default, silently. `D-0952` records the transcription and the vector that
+checks it (`scripts/oracle/dump_pyformat.py`, `parity/oracle/pyformat-corpus.json`,
+`parity/oracle/pyformat-vector.json`, `test/attention/pyformat-oracle.test.ts`, in the shape
+`D-0200`'s `fnmatch`/`shlex` vector established). The transcription was written from CPython's own
+source and its first draft still disagreed with CPython on five of the corpus's inputs, none of
+which review had found; `D-0952` lists them. One is a finding about interlock rather than about the
+port: the source's `except (ValueError, IndexError)` around `_format_with_event` has an
+**unreachable** half, because `format_map` raises `ValueError` for every positional field.
 
 **`test_broker_journal_contract.py`'s zero-entry ledger.** `D-0034` ratified that this file gets a
 standalone, metadata-only ledger recording **zero entries**, outside the parity checker's normal
@@ -185,9 +224,12 @@ with every other and that the DDL still constrains `incident.fact_state` only fo
 is an agreement between statements of a vocabulary rather than a pinned expectation per row. `test_dedup.py` is called out explicitly: its two
 corruption cases pin "malformed state loads as an empty `DedupState`", and the ledger rules that
 behaviour out for durable dedup state, so those two must be re-authored to assert fail-closed
-rather than ported.
+rather than ported. **A2 re-authored those two under `D-0904`**, and A3 re-authored the CLI case
+that runs the same repair end to end (`D-0951`), so the behaviour the ledger ruled out is not
+reproduced anywhere in the subsystem.
 
-That last point is why this is `retarget` and not `candidate-lane`: a straight translation here
+That is why the belt was `retarget` rather than `candidate-lane` while it was open: a straight
+translation
 would carry a behaviour the source repository has already decided is wrong, and continuo's D-0023
 says an inherited defect is repaired at the first belt that touches it, not reproduced.
 
@@ -579,8 +621,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` A1 and A2 (**ported** 2026-08-29), `gate_item11` (ratified and **ported** 2026-08-29) | 1,913 |
-| `retarget` | `attention` A3, `broker` | 114 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` (all three sub-belts, **ported** 2026-08-29), `gate_item11` (ratified and **ported** 2026-08-29) | 1,973 |
+| `retarget` | `broker` | 54 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
 | | **18** | **2,194** |
