@@ -230,6 +230,8 @@ export class RoleProcess {
    * why swallowing is the source's stance and not a shortcut.
    */
   controlWriteError: Error | null = null;
+  /** Set if the child could not be launched at all. See the `error` listener below. */
+  spawnError: Error | null = null;
 
   /** Events read but not yet consumed, and the waiters queued for them. */
   private readonly pending: (EventRecord | null)[] = [];
@@ -301,6 +303,22 @@ export class RoleProcess {
         this.controlWriteError = error;
       });
     }
+    // A child that cannot be LAUNCHED at all -- a missing interpreter, a bad
+    // adapter command -- reports it on the child's own `error` event, not by
+    // throwing from `spawn()`, which returns a ChildProcess either way. With no
+    // listener Node treats that as uncaught and can take down the Vitest worker,
+    // which is the same shape as the control-pipe error above and the same
+    // wrong outcome: the harness exists to turn a process failure into an
+    // ATTRIBUTABLE case failure. It matters most for the battery, which is
+    // where a newly added adapter's command is exercised for the first time.
+    //
+    // Converted into the protocol's own failure channel so it surfaces through
+    // the wait the caller is already sitting on, with teardown still running.
+    this.child.on("error", (error: Error) => {
+      this.spawnError = error;
+      this.push({ event: EVENT_ERROR, type: "SpawnFailed", detail: error.message });
+      this.push(null);
+    });
     this.child.on("exit", (code, signal) => {
       this.exited = true;
       // Python's `Popen.returncode`: the exit code, or the negated signal
@@ -626,10 +644,19 @@ export class Controller {
     this.processes.set(slot, roleProcess);
     this.spawned.push(roleProcess);
 
-    const hello = await roleProcess.waitForEvent(
-      [EVENT_HELLO],
-      this.remaining(this.barrierTimeoutS),
-    );
+    let hello: EventRecord;
+    try {
+      hello = await roleProcess.waitForEvent([EVENT_HELLO], this.remaining(this.barrierTimeoutS));
+    } catch (error) {
+      if (roleProcess.spawnError !== null) {
+        throw new ContractViolation(
+          `${role}: the adapter's driver command could not be launched ` +
+            `(${roleProcess.spawnError.message}); the command was ` +
+            `${JSON.stringify([executable, ...commandArguments])}`,
+        );
+      }
+      throw error;
+    }
     new Handshake({
       protocolVersion: Number(hello["protocol_version"]),
       contractVersion: Number(hello["contract_version"]),
