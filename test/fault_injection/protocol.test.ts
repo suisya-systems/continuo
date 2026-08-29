@@ -10,9 +10,11 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
@@ -29,7 +31,13 @@ import {
   PROTOCOL_VERSION,
 } from "./contract.js";
 import { BarrierTimeout, Controller, epochRegressions } from "./controller.js";
-import { installSuiteBudget, manifest, profile } from "./policy.js";
+import {
+  installSuiteBudget,
+  manifest,
+  profile,
+  RUNNER_BUDGET_CEILING_S,
+  scaledBudgetS,
+} from "./policy.js";
 import { SPIKE_ADAPTER } from "./spike_driver.js";
 
 const BUDGET_PROFILE = profile(manifest());
@@ -54,8 +62,12 @@ function makeController(
     adapter: SPIKE_ADAPTER,
     case: faultCase,
     suiteSeed: 1,
-    barrierTimeoutS: options.barrierTimeoutS ?? 15.0,
-    caseTimeoutS: options.caseTimeoutS ?? 60.0,
+    // The source's own constants, scaled for this port's runners (D-0602). The
+    // 60s in particular is exactly Vitest's `testTimeout`, so unscaled it would
+    // lose the race the harness must win -- the same defect the gate found in
+    // `conformance.ts`, in a second file.
+    barrierTimeoutS: options.barrierTimeoutS ?? scaledBudgetS(15.0),
+    caseTimeoutS: options.caseTimeoutS ?? RUNNER_BUDGET_CEILING_S,
   });
 }
 
@@ -205,6 +217,46 @@ describe("the arming vocabulary", () => {
 // the barrier
 // ---------------------------------------------------------------------------
 
+describe("the harness's own budgets", () => {
+  test("target-only -- no controller is given a budget the runner would win", () => {
+    // TARGET-ONLY, and structural rather than behavioural, because CI found the
+    // same defect TWICE in two different files and I fixed it once each time
+    // instead of closing the class. This is the guard that makes a third
+    // instance a red test here rather than a red cell on a Windows runner
+    // twenty minutes later.
+    //
+    // The rule is D-0602's: the harness's own watchdog must fire before the
+    // runner's, because the two failures are not equivalent. A `CaseTimeout`
+    // names the case, carries the `S9-REPRO` line and runs the teardown ladder;
+    // Vitest's says a test took too long and cuts off the `finally` that would
+    // have reaped the role processes.
+    //
+    // So no `caseTimeoutS:` anywhere in the belt may be a literal at or above
+    // the ceiling. A scaled expression is fine -- `scaledBudgetS` already caps
+    // itself -- and this only refuses a hard-coded number that would lose the
+    // race.
+    const root = dirname(fileURLToPath(import.meta.url));
+    const offenders: string[] = [];
+    for (const file of readdirSync(root)
+      .filter((name) => name.endsWith(".ts"))
+      .sort()) {
+      const source = readFileSync(join(root, file), "utf8");
+      for (const [index, line] of source.split("\n").entries()) {
+        const match = /caseTimeoutS:\s*([0-9]+(?:\.[0-9]+)?)/.exec(line);
+        if (match !== null && Number(match[1]) >= RUNNER_BUDGET_CEILING_S) {
+          offenders.push(`${file}:${index + 1} -> ${match[1]}s`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      `a controller is given a hard-coded case budget at or above the runner ceiling ` +
+        `(${RUNNER_BUDGET_CEILING_S}s): ${JSON.stringify(offenders)}. Vitest's testTimeout would ` +
+        "fire first and the failure would name a slow test instead of a wedged case (D-0602)",
+    ).toEqual([]);
+  });
+});
+
 describe("the barrier", () => {
   test("an unarmed checkpoint costs no round trip", async () => {
     // A case perturbs the timing of nothing it is not about (design 3.1).
@@ -307,8 +359,15 @@ describe("the barrier", () => {
       arms: { [contract.ROLE_DISPATCHER]: [wire] },
     });
     const controller = makeController(caseRoot("fi-protocol-timeout"), faultCase, {
+      // The barrier budget is the SUBJECT of this case and stays small: it is a
+      // wait for an event that never arrives, so no machine is too slow for it.
       barrierTimeoutS: 2.0,
-      caseTimeoutS: 10.0,
+      // The case budget is only a bound against a wedge, and at 10s it was
+      // preempting the very timeout under test -- on a slow Windows runner
+      // `bootstrap()` alone spent it, and CI reported `CaseTimeout` where the
+      // case asserts `BarrierTimeout`. Held at the runner ceiling so the
+      // subject fires first on any machine.
+      caseTimeoutS: RUNNER_BUDGET_CEILING_S,
     });
     try {
       controller.bootstrap();

@@ -296,10 +296,21 @@ export const PORT_BUDGET_SCALE = 3;
  */
 export const RUNNER_BUDGET_CEILING_S = 50;
 
-/** Scale a manifest budget for this port, then hold it under the runner's. */
-function scaled(budgetS: number): number {
+/**
+ * Scale a budget for this port, then hold it under the runner's (D-0602).
+ *
+ * Exported because the budgets that need it are not only the manifest's. The
+ * battery and the protocol cases construct controllers with the SOURCE's own ad
+ * hoc constants, and those meet continuo's runners exactly as the profile's do
+ * -- CI proved it twice, in two different files, before this was applied
+ * consistently.
+ */
+export function scaledBudgetS(budgetS: number): number {
   return Math.min(budgetS * PORT_BUDGET_SCALE, RUNNER_BUDGET_CEILING_S);
 }
+
+/** @deprecated internal alias kept for readability at the call sites below. */
+const scaled = scaledBudgetS;
 
 /**
  * The per-case watchdog a case's shape earns (design 9), scaled for this port.

@@ -47,7 +47,7 @@ import {
   type InvariantRow,
 } from "./contract.js";
 import { Controller, type EventRecord } from "./controller.js";
-import { RUNNER_BUDGET_CEILING_S } from "./policy.js";
+import { RUNNER_BUDGET_CEILING_S, scaledBudgetS } from "./policy.js";
 
 export const CONFORMANCE_CLOCK_BASE_MS = 1_700_000_000_000;
 export const CONFORMANCE_TTL_MS = 30_000;
@@ -112,7 +112,7 @@ function makeController(
     adapter,
     case: faultCase,
     suiteSeed: CONFORMANCE_SEED,
-    barrierTimeoutS: 15.0,
+    barrierTimeoutS: scaledBudgetS(15.0),
     // The source's constant here is 60s, which is exactly Vitest's own
     // `testTimeout`. Held under {@link RUNNER_BUDGET_CEILING_S} for the reason
     // D-0602 gives for the manifest-case path, and it applies with more force
