@@ -916,6 +916,56 @@
       "rendered": null,
       "error": "ValueError",
       "message": "Unknown format code '!' for object of type 'str'"
+    },
+    {
+      "template": "{pr:999999999999999999999999999999999}",
+      "placeholders": [
+        "pr"
+      ],
+      "unknown": [],
+      "rendered": null,
+      "error": "ValueError",
+      "message": "Too many decimal digits in format string"
+    },
+    {
+      "template": "{pr:99999999999999999999}",
+      "placeholders": [
+        "pr"
+      ],
+      "unknown": [],
+      "rendered": null,
+      "error": "ValueError",
+      "message": "Too many decimal digits in format string"
+    },
+    {
+      "template": "{pr:.99999999999999999999}",
+      "placeholders": [
+        "pr"
+      ],
+      "unknown": [],
+      "rendered": null,
+      "error": "ValueError",
+      "message": "Too many decimal digits in format string"
+    },
+    {
+      "template": "{pr:9223372036854775808}",
+      "placeholders": [
+        "pr"
+      ],
+      "unknown": [],
+      "rendered": null,
+      "error": "ValueError",
+      "message": "Too many decimal digits in format string"
+    },
+    {
+      "template": "{summary:.0}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "",
+      "error": null,
+      "message": null
     }
   ]
 }

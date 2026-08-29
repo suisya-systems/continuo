@@ -429,7 +429,7 @@ function parseRenderSpec(spec: string): RenderSpec {
     index += 1;
   }
   if (index > widthStart) {
-    out.width = Number.parseInt(points.slice(widthStart, index).join(""), 10);
+    out.width = readInteger(points.slice(widthStart, index).join(""));
   }
   if (points[index] === "," || points[index] === "_") {
     out.thousands = points[index] as string;
@@ -448,7 +448,7 @@ function parseRenderSpec(spec: string): RenderSpec {
     if (index === precisionStart) {
       throw new PyValueError("Format specifier missing precision");
     }
-    out.precision = Number.parseInt(points.slice(precisionStart, index).join(""), 10);
+    out.precision = readInteger(points.slice(precisionStart, index).join(""));
   }
   const remaining = points.length - index;
   if (remaining > 1) {
@@ -475,4 +475,34 @@ function presentationTypeName(type: string): string {
     return type;
   }
   return `\\x${code.toString(16)}`;
+}
+
+/**
+ * CPython's `get_integer`, including the overflow it refuses.
+ *
+ * `Number.parseInt` alone silently produces `1e33` for a width of thirty-three nines, and
+ * `String.prototype.repeat` then throws a `RangeError` -- which is neither of the two classes
+ * `notify.render_text` catches, so an operator's mistyped template takes the watcher down instead
+ * of falling back to the default. CPython refuses the same input at the parse, with
+ * `ValueError("Too many decimal digits in format string")` when the accumulator would pass
+ * `PY_SSIZE_T_MAX`, and `render_text` falls back. MEASURED: `format("42", "9" * 33)` raises that
+ * `ValueError` on CPython 3.12.3, and both are in the oracle's corpus.
+ *
+ * The comparison is done in `BigInt` rather than by counting digits, because the boundary is a
+ * value and not a length: nineteen digits may be either side of it.
+ *
+ * **What this does NOT close, disclosed rather than left to be found.** Between V8's maximum
+ * string length (about 2**29 characters) and `PY_SSIZE_T_MAX`, the two runtimes still differ:
+ * CPython attempts the allocation -- `format("42", "1" * 10)` really does build a 1.1 GB string,
+ * and `format("42", "99999999999")` raises `MemoryError`, which the source does not catch either
+ * -- while this runtime raises `RangeError` from `repeat`. So a width in that range is a crash on
+ * both sides, at different thresholds and with different exception names, rather than a render on
+ * one and a crash on the other. Closing it would mean refusing a width CPython accepts, which is
+ * a divergence in the other direction and a larger one.
+ */
+function readInteger(digits: string): number {
+  if (BigInt(digits) > 9223372036854775807n) {
+    throw new PyValueError("Too many decimal digits in format string");
+  }
+  return Number.parseInt(digits, 10);
 }

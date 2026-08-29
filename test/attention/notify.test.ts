@@ -712,6 +712,94 @@ describe("attention notify", () => {
     expect([...title].length).toBe(4);
   });
 
+  test("a child killed by a signal is not a clean exit (target-only)", () => {
+    // `spawnSync` reports a signalled child as `status: null` plus a `signal` name, and does NOT
+    // necessarily set `error`. Reading `status ?? 0` would call that a clean exit, so the desktop
+    // dispatch would report success for a backend that was killed mid-notification and the CLI
+    // would record the event as delivered -- the shape `reachedUser` exists to prevent, on the one
+    // path no other case covers because every one of them replaces the runner.
+    //
+    // The INNER seam is what this patches. The first draft patched `safeSubprocessRun` and
+    // asserted on a `returncode` it had supplied itself; it measured GREEN under the mutation it
+    // was written to catch, which is rule 10 doing its job.
+    patchSeam(notifySeams, "spawn", (() => ({
+      status: null,
+      signal: "SIGKILL",
+      pid: 1234,
+      output: [],
+      stdout: "",
+      stderr: "",
+    })) as unknown as typeof notifySeams.spawn);
+    const { value: result, err } = capturedStderr(() =>
+      notify(makeEvent(), new AttentionConfig(), {
+        backend: "linux",
+        logStream: recordingStream(),
+      }),
+    );
+    expect(result.desktopDispatched).toBe(false);
+    // Urgent event, sound=urgent-only: the bell is the audio fallback, so the user is still
+    // reached -- but by the bell, not by a desktop notification that never arrived.
+    expect(result.bellDispatched).toBe(true);
+    // `-9` is `-signal.SIGKILL`, which is what `CompletedProcess.returncode` carries there.
+    expect(err).toContain("exited with code -9");
+  });
+
+  test("the real subprocess call goes through its own seam (target-only)", () => {
+    // Liveness for the inner seam, without which the case above would be asserting about a
+    // function production no longer calls.
+    const calls: string[][] = [];
+    patchSeam(notifySeams, "spawn", ((command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      return { status: 0, signal: null, pid: 1, output: [], stdout: "", stderr: "" };
+    }) as unknown as typeof notifySeams.spawn);
+    const result = notifySeams.safeSubprocessRun(["notify-send", "title", "body"]);
+    expect(result.returncode).toBe(0);
+    expect(calls).toEqual([["notify-send", "title", "body"]]);
+  });
+
+  test("a bell that could not be written did not ring (target-only, D-0023)", () => {
+    // DELIBERATE DIVERGENCE. The source writes `bell(); bell_dispatched = True`, so a closed
+    // stderr still counts as an audio channel that reached the user -- and with the desktop
+    // dispatch also failed, `reached_user` is then true for a notification that reached nobody
+    // and the CLI dedups it for good. `D-0023` puts the repair in the belt that touches the code.
+    // Only the BEL write fails. The warning `dispatchDesktop` prints goes to the same stream, and
+    // a stream that refused everything would model a stderr the SOURCE cannot survive either --
+    // its `print(file=sys.stderr)` raises just as loudly -- which is a different (and inherited)
+    // fragility from the one this case is about.
+    patchSeam(notifySeams, "stderr", () => ({
+      write(text: string): void {
+        if (text === "\u0007") {
+          throw new Error("EPIPE: broken pipe");
+        }
+      },
+    }));
+    const cfg = new AttentionConfig();
+    const result = notify(makeEvent(), cfg, {
+      backend: "linux",
+      logStream: recordingStream(),
+      runner: () => failingProc,
+    });
+    expect(result.desktopDispatched).toBe(false);
+    expect(result.bellDispatched).toBe(false);
+    // The whole point: nothing reached the user, so the CLI must not record it.
+    expect(result.reachedUser).toBe(false);
+  });
+
+  test("an overflowing format width is refused, not a RangeError (target-only)", () => {
+    const cfg = new AttentionConfig({
+      // MEASURED on CPython 3.12.3: `format("42", "9" * 33)` raises
+      // `ValueError("Too many decimal digits in format string")`, so `render_text` warns and falls
+      // back. `Number.parseInt` alone produces `1e33` and `String#repeat` then throws a
+      // `RangeError`, which is neither class the source catches -- an operator's mistyped template
+      // would take the watcher down.
+      templates: { ci_failed: new Template({ title: "T", body: `{pr:${"9".repeat(33)}}` }) },
+    });
+    const { value, err } = capturedStderr(() => renderText(makeEvent(), cfg));
+    expect(value[0]).toBe("CI failed");
+    expect(value[1]).toBe("PR #42 finished with failed.");
+    expect(err).toContain("Too many decimal digits");
+  });
+
   test("a notification records what it sent (target-only)", () => {
     // `FormattedNotification` is frozen the way the source's `frozen=True` dataclass is, and
     // `readonly` alone is erased at emit.

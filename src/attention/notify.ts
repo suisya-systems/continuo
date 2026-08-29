@@ -33,6 +33,7 @@
 
 import { spawnSync } from "node:child_process";
 import { accessSync, constants as fsConstants, statSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { isAbsolute, delimiter as pathDelimiter, sep as pathSep } from "node:path";
 import process from "node:process";
 
@@ -107,18 +108,32 @@ export function detectBackend(): Backend {
 }
 
 /**
- * Emit a BEL (`\a`) -- stderr by default, to keep stdout clean.
+ * Emit a BEL (`\a`) -- stderr by default, to keep stdout clean. Returns whether it was written.
  *
  * A closed pipe or a non-tty must not crash the watcher, which is what the source's
  * `except (OSError, ValueError)` says. Node reports a closed stream by throwing from `write`, so
  * the guard is the same shape.
+ *
+ * **The return value is a DELIBERATE DIVERGENCE, under `D-0023`.** The source's `bell()` returns
+ * `None` and its caller writes `bell(); bell_dispatched = True` unconditionally -- so a bell that
+ * could not be written is still recorded as an audio channel that reached the user. With the
+ * desktop dispatch also failed, `reached_user` is then true for a notification that reached
+ * nobody, and the CLI records it in the dedup ledger: the event is suppressed for good, on the one
+ * path where the operator was told nothing. That is the same defect class the source repaired for
+ * a failing desktop subprocess and did not follow through to the bell. interlock is frozen, so
+ * `D-0023` puts the repair here, in the belt that is already editing this code, and the ledger
+ * carries it as a divergence rather than as a silent improvement. No source case pins the
+ * inherited behaviour -- in both suites the bell's stream always accepts the write -- so there is
+ * no case to invert; a target-only one pins the repair.
  */
-export function bell(stream: TextStream | null = null): void {
+export function bell(stream: TextStream | null = null): boolean {
   const target = stream ?? notifySeams.stderr();
   try {
     target.write("\u0007");
+    return true;
   } catch {
     // Closed pipes / non-tty streams must not crash the watcher.
+    return false;
   }
 }
 
@@ -189,6 +204,18 @@ export const notifySeams = {
   detectBackend,
   stdout: (): TextStream => process.stdout,
   stderr: (): TextStream => process.stderr,
+  /**
+   * `subprocess.run`'s own call into the operating system.
+   *
+   * A second, inner seam beside {@link safeSubprocessRun}, and it earns its place rather than
+   * duplicating it: `safeSubprocessRun` is what every CALLER replaces, and this is what lets a
+   * case reach the translation INSIDE it -- Node's `{status, signal, error}` triple becoming a
+   * `CompletedProcess`. The signalled-child branch has no other way in. It was found the hard
+   * way: the first case written for that branch patched the outer seam, so it asserted on a
+   * `returncode` the case had supplied itself and stayed green under the mutation it was written
+   * to catch.
+   */
+  spawn: spawnSync,
 };
 
 /** `print(..., file=sys.stderr)`, through the seam so a test can read it back. */
@@ -313,8 +340,9 @@ export function notify(
     shouldBell = false;
   }
   if (shouldBell) {
-    bell();
-    bellDispatched = true;
+    // `bell(); bell_dispatched = True` in the source. See `bell`'s own note: the write's answer is
+    // read here rather than assumed, per `D-0023`.
+    bellDispatched = bell();
   }
 
   return new FormattedNotification({
@@ -423,7 +451,7 @@ function returncodeOf(result: unknown): number {
 /** `subprocess.run(cmd, timeout=..., check=False, capture_output=True)`. */
 function safeSubprocessRun(cmd: string[]): CompletedProcess {
   const [command, ...args] = cmd;
-  const result = spawnSync(command as string, args, {
+  const result = notifySeams.spawn(command as string, args, {
     timeout: SUBPROCESS_TIMEOUT_SEC * 1000,
     // `capture_output=True`: the child's streams are collected, not inherited, so a backend that
     // prints does not interleave with the watcher's own log line.
@@ -438,7 +466,25 @@ function safeSubprocessRun(cmd: string[]): CompletedProcess {
     // `except (OSError, subprocess.SubprocessError)` path.
     throw new SubprocessRunError(result.error.message);
   }
+  if (result.signal !== null && result.signal !== undefined) {
+    // A child killed by a signal: `status` is `null` and `signal` names what killed it.
+    // `CompletedProcess.returncode` is `-signum` there, which is truthy and non-zero, so the
+    // source demotes the dispatch and the caller retries on the next poll. Reading `status ?? 0`
+    // would report a clean exit for a backend that was killed mid-notification and would then
+    // record the event as delivered -- the exact shape the `reachedUser` contract exists to
+    // prevent, arriving through the one path that does not go through a test runner.
+    return { returncode: -signalNumber(result.signal) };
+  }
   return { returncode: result.status ?? 0 };
+}
+
+/** `signal.Signals[name]`, so a killed child's `returncode` reads as CPython spells it. */
+function signalNumber(signal: NodeJS.Signals): number {
+  const known = (osConstants.signals as Record<string, number | undefined>)[signal];
+  // An unrecognised name still has to be a FAILURE rather than a clean exit, so the fallback is a
+  // non-zero number rather than `0`. `1` is `SIGHUP`, which is what a name Node reports and this
+  // runtime does not define would most likely have been.
+  return known ?? 1;
 }
 
 /** The argv for one backend, or `null` where the source returns `None`. */
