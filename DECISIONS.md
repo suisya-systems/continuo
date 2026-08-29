@@ -125,6 +125,8 @@ spaces distinct.
 | D-0901 | The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated | accepted |
 | D-0902 | A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's | accepted |
 | D-0903 | The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes | superseded by D-0906 |
+| D-0904 | Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home | accepted |
+| D-0905 | `isinstance(value, int)` is a question about the config DOCUMENT; the dataclass's own defaults become one exported record | accepted |
 | D-0906 | D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 
@@ -7350,6 +7352,326 @@ way D-0118's are.
 suiteTemplate migration D-0118 started. Measured on Node 22.17.0, better-sqlite3 13.0.3, vitest
 4.1.11. Decision id allocated in the measurement belt's own `D-01xx` band (see "How to use this
 file"), the next free id after D-0118.
+
+---
+
+## D-0904 -- Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home
+
+**Context.** `PORTING_LEDGER.md`'s row for `attention/dedup.py` carries the two dedup namespaces --
+record-once for `events`, cooldown-gated for `pending` -- and rules **out** the module's corruption
+handling in the same breath: "a broken state file recovers as empty" was safe while this was an
+advisory notification ledger, and once dedup state is durable and authoritative an empty ledger says
+nothing has been notified, so every already-handled event is free to fire again. That is the
+resume-without-double-execution violation `D-0001` exists to prevent. `parity/source-inventory.
+belts.md` names the two source cases that pin the defect, and `D-0034` ratified the repair as
+**fail-closed, inside A2**, with rebuilding the state from durable records named as declined-for-now
+rather than silently out of scope. `D-0023` supplies the rest of the procedure: the case that pinned
+an inherited behaviour is inverted in the change that repairs it, and the divergence stays reachable
+from the parity ledger.
+
+What none of that settles is **where the new line falls**, and the source has four silent recovery
+paths, not two. This entry is that boundary.
+
+**Decision 1 -- an ABSENT namespace is empty; a PRESENT but unusable one is a refusal.** The line is
+between "no state was written" and "state was written and cannot be trusted", and it is drawn once
+for the file and for each namespace inside it:
+
+- a **missing file** loads as an empty `DedupState`, unchanged from the source. Nothing has ever
+  been notified, and creating one is the legitimate next step. `test_load_missing_returns_empty`
+  ports straight.
+- a **missing `events` or `pending` key** is an empty namespace, unchanged from the source, for the
+  same reason one level down. `test_load_partial_shape` ports straight, and it is the case that
+  fixes this half of the line.
+- everything else refuses with `DedupStateRefused`: an unreadable file, a blank one, text that is
+  not JSON, a top level that is not an object, a namespace that is present and is not an object, and
+  an entry whose value is not a string. The last two are the repaired defect at a narrower scope --
+  the source substitutes `{}` for the first and silently drops the entry for the second, and a
+  dropped entry is one already-notified key forgotten, which is exactly the effect the repair
+  exists to prevent.
+
+**An undecodable byte is on the refusing side too, and the first draft of this decision got it
+wrong.** The draft read the file with Node's `utf8` mode and recorded that an undecodable file
+reaches a refusal either way, at the JSON parse -- Python raises `UnicodeDecodeError` there, which
+is a `ValueError` and escapes its own `except OSError`, so the source CRASHES rather than
+recovering. That reasoning holds only when the bad byte breaks the syntax. A bad byte **inside a
+JSON string** leaves the document valid: Node substitutes U+FFFD, the parse succeeds, and the state
+loads carrying a dedup key that is not the key that was written -- an already-notified event free to
+fire again, arriving through the reader this repair exists to harden. The file is read as bytes and
+decoded with a fatal `TextDecoder`. Found by the codex review gate on the finished belt, which is
+where the claim's own falsifier finally got exercised.
+
+**A blank file is on the refusing side, and that is the one call here that is not forced.** The
+source returns empty state for it without even a warning, so it could be read as a third flavour of
+"nothing was written". It is not: `saveState` writes through a fully-written temporary file and a
+rename, so it never produces a blank one, and a blank file at that path is therefore a truncation
+from outside -- the same class of event as a half-written document, arriving with no content to say
+so.
+
+**`DedupStateRefused` is its own family, not `src/control_plane/refusals.ts`'s.** That file
+documents itself as *the control plane's* refusals and its class identity is load-bearing across the
+two modules that share it, so a `catch` written about a database must not begin catching an
+attention state file. The cost is one more small class; the alternative couples two subsystems
+`D-0009` separates, for the sake of a message.
+
+**Decision 2 -- the belt's `datetime` transcriptions live in `src/attention/pytime.ts`, not
+privately inside whichever module needed one first.** `dedup.py` and `classifier.py` both round-trip
+an ISO-8601 timestamp through `datetime`, and both depend on CPython's exact answers rather than on
+the platform's:
+
+- `datetime.fromisoformat` accepts a **narrower** grammar than `Date.parse`, which takes shapes it
+  rejects (`"05/12/2026 11:59:00"`, `"May 12 2026"`) and rolls an impossible date forward
+  (`2026-02-30`) where `fromisoformat` raises -- and reads a naive `"2026-05-12T11:59:00"` as
+  **local** time where the source attaches UTC.
+- `datetime.isoformat` prints **no** fractional part when the microsecond field is zero and **six**
+  digits when it is not, where `Date#toISOString` always prints three.
+
+Every one of those differences turns a garbled or old stored timestamp into a recent one, or changes
+the bytes of a durable file.
+
+**The grammar is measured, not recalled, and the first transcription was too narrow.** A2 inherited
+A1's regex -- extended calendar dates, a `T` or space separator -- and the codex review gate
+observed that `fromisoformat` on CPython 3.12 takes considerably more than that: basic format
+(`20260512`, `115900`), ISO week dates (`2026-W20-2`, `2026W202`, `2026-W20`), an hour-only or
+hour-and-minute time, **any** single character as the date/time separator, a two-digit-hour offset,
+a sub-second offset, and a fractional second **truncated** rather than rounded at six digits. Every
+form left out is a stored timestamp the port would read as garbled while the source read it as
+real -- an extra notification where the source applies the cooldown, which is the safe direction and
+still not parity. The grammar was re-derived by running 68 inputs through `datetime.fromisoformat`
+on CPython 3.12.3 (the interpreter interlock's suite runs on at `65f36c5`) and against `parseIso`;
+all 68 now agree, and 26 of them are pinned in a target-only case. The measurement also caught a
+defect the reviewer had not named: a sub-second offset whose fraction was being stripped put the
+instant a whole **second** away, not a microsecond.
+
+**A second review round found four more, and the set grew to 90 inputs.** An ISO week can resolve
+*outside* `datetime`'s own year range (`9999-W52-7` is "year 10000 is out of range"), and letting it
+through was the one divergence here in the dangerous direction -- a garbled stored value read as a
+**future** instant, which suppresses a notification rather than letting it through. `Date.UTC`'s
+two-digit-year remapping had been undone for calendar dates and not for the week resolver, which is
+rule 11's own shape: a repair applied at one entry point and not at its sibling. A UTC offset whose
+hour, minute and second are all zero discards its fraction in CPython, so `+00:00:00.5` is plain UTC
+while `+00:00:02.25` is 2.25 seconds. And the date/time separator is one character to Python, which
+indexes a `str` by code point, and two UTF-16 units here when it is astral. All 90 inputs now agree,
+and each of the four carries its own probe.
+
+**A third round found two more, and one of them was introduced by the first round's own fix.** The
+fractional second attaches to the end of whatever precision was written -- `11.5` is 11:00:00.500000
+and `11:59.5` is 11:59:00.500000, and an abbreviated offset takes one too -- where the grammar
+allowed it only after a seconds field; the set is now 100 inputs and all 100 agree. And the fatal
+`TextDecoder` that closed the U+FFFD hole **strips a leading BOM by default**, where the
+`readFileSync(path, "utf8")` it replaced did not and Python's `utf-8` codec does not either
+(stripping is `utf-8-sig`'s job). CPython's `json.loads` refuses a BOM outright, so the repair had
+quietly moved a file the source rejects onto the accepting side of a repair whose whole point is to
+refuse. That is rule 11's own warning arriving inside the belt that cites it, and the decode now
+reads `{ fatal: true, ignoreBOM: true }` -- in **both** loaders, which is the other half of the same
+round: `loadConfig` had been left on the loose decode for two rounds after `loadState` was hardened,
+so an undecodable byte inside a template body would have loaded altered.
+
+**A fourth round found one defect in each file, and each is a previous decision reaching a case it
+had not considered.** A UTC offset can carry a valid boundary timestamp out of `datetime`'s own
+domain -- `9999-12-31T23:59:59-23:59` parses and then raises `OverflowError` on the source's
+`astimezone(timezone.utc)`, which `_parse_iso`'s `except ValueError` does not catch, so **interlock
+crashes there**. This belt's second inherited-defect repair under `D-0023`, and the repaired answer
+is the `null` every other unusable value already gets: the safe direction, since the year-10000
+`Date` the port produced beforehand reads as a *future* instant and suppresses the notification. And
+the `PyValueError` wrapper the third round put around the config decode had been wrapped around the
+**read** as well, so a directory or a permission denial was reported as malformed configuration --
+the source keeps `OSError` and `UnicodeDecodeError` apart and lets each propagate as itself, so the
+read moved outside the try. The differential set is 104 inputs: 102 comparable ones agree and the
+two CPython raises `OverflowError` on are recorded as repaired, classified separately by the
+generator so a crash can never be scored as a match.
+
+**A fifth round found the same lesson a third time: two callers holding two spellings of one
+domain.** `pyIsoUtc` tested the rendered string, which admits year 0000 where `datetime.MINYEAR` is
+1; `shouldNotify` tested only for `NaN`, which admits `new Date("-000001-01-01T00:00:00Z")` -- a
+valid `Date` whose subtraction from a 2026 timestamp gives a *negative* age, reading as "well inside
+the cooldown" and suppressing the notification exactly as silently as `NaN` did. Both approximations
+were wrong in the same direction, and both were written a round apart, so they now share one
+exported predicate (`isRepresentableInstant`) that a single probe falsifies for both callers at
+once. Three of this belt's nine post-review defects have this one shape -- a rule applied at one of
+two call sites -- which is `D-0024`'s finding restated and is the thing worth carrying out of this
+belt.
+
+**A round on the integrated tip closed the other half of the third round's own decision.**
+`json.JSONDecodeError` is a `ValueError` in Python and `load_config` lets it propagate; `JSON.parse`
+raises a `SyntaxError`, which a caller catching this loader's refusals would miss. Other belts in
+this port *disclose* that difference rather than repairing it, and that would have been defensible
+here too -- except that the config decode two lines above had already been re-raised as
+`PyValueError` on exactly this argument, so the file answered one question two ways. That makes it
+a fourth instance of the shape above rather than a new judgement call, and consistency inside one
+function is the cheaper half to fix.
+
+**A PR review found a fifth instance of the same shape, in a constant rather than a function.**
+`ALLOWED_PLACEHOLDERS` was `Object.freeze(new Set(...))`, which seals an object's own properties
+while a `Set`'s contents live in an internal slot: `.delete("pr")` and `.add("evil")` both
+succeeded, measured, and A3's `render_text` reads this constant on every notification. The
+repository's own `FrozenSet` (`src/session/provider.ts`) was evaluated and **not** reused, measured
+rather than assumed -- it overrides the mutators and still lets `Set.prototype.add.call` reach the
+internal slot, which is precisely the route a parallel lane reported as a P1, and its own header
+discloses the hole. A frozen **array** has no internal slot to reach: six mutation routes including
+the prototype-call ones all throw. The weaker structure is the stronger guarantee, and
+`VALID_SOUND_MODES` one declaration below was already a frozen array standing in for a source
+`frozenset`; the whole API cost is `.includes(name)` where a `Set` would have taken `.has(name)`.
+
+**The case written to pin it was itself green under the regression it guards, on the first draft**
+-- restored to a frozen `Set`, every array route throws for the wrong reason (`push` is not a
+function there) while `.delete` goes through. It now asserts `Array.isArray` first. That is rule 10
+arriving inside the fix for a rule-9 defect, and it is worth recording because the belt's own habit
+of probing every guard is the only thing that caught it.
+
+**The same review found the grammar's last gap, and it was a gap in what the oracle was pointed
+at.** `parseIso` ports `_parse_iso`, whose first line is `if s.endswith("Z"): s = s[:-1] +
+"+00:00"` -- not redundant with `fromisoformat`'s native `Z`, because on a **date-only** value the
+rewrite is what makes `2026-05-12Z` midnight, where a parser knowing `Z` only as a time-zone suffix
+consumes it as the separator and refuses the empty time. Four such forms were `null` here and are
+midnight UTC to the source. The differential oracle had been comparing against bare
+`fromisoformat` rather than against the wrapper, which is why five rounds of measurement did not
+find it: **an oracle is only as good as the function it is pointed at**, and that is the sharper
+form of this belt's own lesson about measuring rather than reasoning. It now models `_parse_iso`,
+114 comparable inputs agree, and the `Z` arm was removed from the offset grammar because nothing
+reaching it can still carry one -- dead code there could mask a bug in the rewrite, and the probe
+confirms two *ported* cases now depend on it. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
+CPython function inside one directory is the drift shape
+`docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written
+and nothing goes red on the day they stop. So the transcriptions get one home in the belt's own
+directory, beside the two modules that need them.
+
+**Rejected alternative: importing them from `classifier.ts`.** It is a smaller diff and it puts
+`fromisoformat` behind a name that has nothing to do with it; a module that transcribes CPython is
+not a detail of the module that first called it.
+
+**Decision 3 -- the rule-9 exposures are guarded rather than disclosed.** Two values this runtime
+admits and CPython excludes reach this module, and each is guarded and pinned by a target-only case
+rather than left in the ledger as a known limitation, because both fail in the direction that loses
+an alarm silently. The dedup key is caller-supplied and Python's `dict` has no inherited keys, so
+both namespaces are built with `Object.create(null)` and read with `Object.hasOwn` -- otherwise a
+task named `constructor` reads as already notified forever. `cooldown_sec` is `int` in the source,
+so `NaN` and the infinities are excluded there; here a `NaN` cooldown makes every comparison false
+and suppresses every pending notification for the life of the process, so it is refused. The **clock**
+argument carries the same exposure and was missed in the first pass, found by the codex review gate:
+`new Date(NaN).getTime()` is `NaN`, so `shouldNotify` answered false for every key at every age while
+`recordNotified` already refused the same value through `pyIsoUtc`. Both paths refuse it now. The
+`parity/attention.dedup.ledger.json` entry for each records the mutation that was measured red.
+
+**One inherited limitation is carried rather than repaired**, and it is A1's disclosure rather than
+a new one: a `Date` resolves to one millisecond and a `datetime` to one microsecond, so a stored
+timestamp within a fraction of a millisecond of a cooldown boundary can be judged on the other side
+of it from the source. Repairing it means carrying an epoch in microseconds through every consumer
+of `parseIso` instead of a `Date`, which is a change to the belt's shared vocabulary rather than to
+one module. The write side has no such limitation: `pyIsoUtc` renders the six digits the source
+renders.
+
+**Falsifier (Decision 1).** The line is drawn on the claim that an absent namespace cannot be the
+residue of a lost one. If a writer is ever added that can produce a document with one namespace
+missing -- a partial write, a migration, a hand-edited file that a tool then re-saves -- then
+"absent means empty" stops being a statement about state that was never written and becomes the
+defect again under a narrower name, and `test_load_partial_shape`'s reading is what would have to
+move. The observation is a second writer of this file appearing anywhere in the port.
+
+**Falsifier (Decision 2).** If A3 or a later belt needs a `datetime` answer these two functions
+cannot give -- a `strftime`, a timezone database, an aware/naive distinction the port has so far had
+no use for -- then a two-function module was the wrong shape and the belt needs the fuller
+transcription that `src/fencing/pysemantics.ts` is for the string primitives. The observation is a
+third consumer arriving with a requirement rather than a call site.
+
+**Falsifier (Decision 3).** `D-0034` already states the one for the repair as a whole: if
+fail-closed is found to lose data a caller needed, the deferred rebuild belt is what was missing,
+not evidence against fail-closed. What would falsify this decision specifically is an operator
+finding a refusal where the source recovered, on a file this port itself wrote -- which would mean
+the refusing side of Decision 1 had caught a shape `saveState` can actually produce.
+
+**Source.** Task `continuo-attention-a2`, 2026-08-29, porting `tests/attention/test_dedup.py`
+(10 cases) from interlock `65f36c5`, under `D-0034`'s ratified constraints. Decision id from the
+`D-09xx` range `D-0034` allocated to the attention belt, and the first id A2 mints in it -- A1 used
+`D-0901`..`D-0903`.
+
+---
+
+## D-0905 -- `isinstance(value, int)` is a question about the config DOCUMENT; the dataclass's own defaults become one exported record
+
+**Context.** `tests/attention/test_config.py`'s 34 cases are the second half of A2, and the loader
+under them is close to a straight translation: the same knobs, the same refusal messages, the same
+backward-compat auto-scale. Two things in it are not translatable as written, and both are the
+shape `docs/test-translation-conventions.md` rule 9 warns about -- the obvious TypeScript is the
+*right* TypeScript, and the ported suite cannot fail on either, because the values that break them
+are values Python's types excluded.
+
+**Decision 1 -- the integer check asks what the DOCUMENT wrote, not what the value is.** Python's
+`json.loads` produces an `int` only for a literal with no `.`, `e` or `E`, so `1.0`, `1e2` and
+`-0.0` are `float`s and `isinstance(value, int)` refuses all three. Every one of them is an ordinary
+integer to `Number.isInteger`. So `loadConfig` parses with `pyJsonLoads` -- which records the
+spelling the source text used -- and asks `pyTypeNameOf`, which answers `int` or `float` per the
+document. That is the same question the source asks and it produces the same answer; it also
+produces the message, because the refusal prints `type(value).__name__`, which is `float` for a
+value that is integral here.
+
+**Why this is not a `Number.isInteger` guard with a note.** The failure is silent and in the
+accepting direction: `cooldown_sec: 1e2` is refused by interlock and would have loaded here, so the
+port would be *wider* than the specification it exists to reproduce, with nothing red. The
+transcription already exists in this repository (`src/fencing/pyjson.ts`,
+`src/fencing/pysemantics.ts`) and is already shared by `src/settings/` and `src/session/`, so the
+cost is an import rather than a new module.
+
+**One divergence in the same area is guarded, and the first draft of this entry argued the
+opposite.** That draft said a knob above 2**53 should be *disclosed* rather than refused: Python's
+`int` is arbitrary-precision and loads it exactly, this runtime rounds it, refusing would make the
+port narrower than its source, and nothing observable followed because all ten knobs are thresholds
+compared against an age. **The loader's own backward-compat auto-scale falsifies the last clause**,
+which the codex review gate found: the auto-scale computes `floor + 1` and then `max + 1`, and past
+2**53 each of those expressions *is* its own input, so `{"pending_decision_min":
+9007199254740992}` produced a ladder with `max == min` and was refused by the constructor with a
+message about `max <= min` -- a refusal naming the wrong knob, for a value interlock accepts. The
+choice was therefore never between refusing and accepting; it was between refusing where the value
+is read and refusing three steps later with a misleading message.
+
+`loadConfig` refuses a value above `MAX_SAFE_INTEGER - 2`, two below the limit because **two**
+successive increments have to stay exact, and the target-only case pins both halves: the refusal,
+and that the largest admitted value still auto-scales to a strictly increasing ladder. This is
+narrower than interlock for an input interlock handles, it is recorded as such here and in
+`parity/attention.config.ledger.json`, and the smallest refused value is some 285 million years in
+minutes.
+
+**Decision 2 -- the dataclass's own defaults become one exported record, read by both the
+constructor and the loader.** `load_config` reads four defaults back out of
+`AttentionConfig.__dataclass_fields__` to decide whether a legacy document's TTL ladder needs
+auto-scaling. A dataclass carries its defaults at runtime and a TypeScript class does not, so the
+choice is between naming them twice and naming them once: `ATTENTION_CONFIG_DEFAULTS` is the once.
+Two copies would reintroduce exactly the drift `__dataclass_fields__` was avoiding, in the place
+where the two disagreeing means a legacy config either fails to load or is scaled against a
+threshold nobody uses -- and no ported case would notice, because every one of them supplies its own
+values.
+
+**Decision 3 -- the maps keyed by an attention kind are `dict`s, and the presence tests over the
+document are own-key tests.** `notify` and `templates` are keyed by a kind the operator's own file
+supplies, so both are built with `Object.create(null)`; `DEFAULT_NOTIFY` already was, under
+`D-0902`, so all three severity and template maps in the module now agree. `__proto__` earns its own
+target-only case because it fails in the opposite direction from `constructor`: assigning it on an
+object literal sets the prototype and stores nothing, so the one kind the operator configured is
+silently absent while every other kind in the same document loads fine. The loader's own presence
+tests over the raw document use `Object.hasOwn` rather than `in` for the same reason, and the ledger
+says plainly that this half is defensive rather than measured -- none of the fourteen top-level JSON
+keys collides with an `Object.prototype` member.
+
+**`D-0902`'s falsifier is answered: A2 extended this file rather than changing it.** `Severity` and
+`DEFAULT_NOTIFY` are byte-identical to what A1 landed, construction and freeze included. The one
+edit above them is the module header, which A1 wrote to describe an A1-shaped file and which now
+describes the finished one; the ledger records that explicitly, because "A2 changed A1's file" is
+the observation `D-0902` asks a reviewer to look for and a header rewrite is not it.
+
+**Falsifier (Decision 1).** If `pyJsonLoads`'s spelling record is ever found not to survive a path
+this loader takes -- a nested container rebuilt rather than carried, which `src/fencing/pyjson.ts`'s
+own header names as a standing obligation on every rebuild site -- then the check silently falls
+back to classifying by value and the float case goes green for the wrong reason. That is what the
+target-only case measures, and it is why it carries five literals rather than one.
+
+**Falsifier (Decision 2).** If a consumer ever needs a default that is not a constant -- one derived
+from another field, or from the environment -- then a frozen record is the wrong shape and the
+defaults belong behind a function. Nothing in interlock's dataclass has such a field today.
+
+**Source.** Task `continuo-attention-a2`, 2026-08-29, porting `tests/attention/test_config.py`
+(34 cases) from interlock `65f36c5`, under `D-0034`'s ratified constraints and `D-0902`'s boundary.
+Decision id from the `D-09xx` range `D-0034` allocated to the attention belt; `D-0901`..`D-0903` are
+A1's and `D-0904` is A2's first.
 
 ---
 

@@ -150,9 +150,13 @@ const LEDGERS = [
   "parity/gate_item11.no-provider-detail-leaks.ledger.json",
   "parity/gate_item11.registry-availability.ledger.json",
   "parity/gate_item11.substitution-scenarios.ledger.json",
-  // lane K -- attention, sub-belt A1 (facts). The subsystem ports in three
-  // sub-belts sharing one D-range (D-0034); A1 is `D-0901`..`D-0903`. One
-  // ledger per source test file, as everywhere else.
+  // lane K -- attention. The subsystem ports in three sub-belts sharing one
+  // D-range (D-0034): A1 (facts, 90 cases, `D-0901`..`D-0903`), A2 (dedup and
+  // config, 44, `D-0904`..`D-0905`) and A3 (notify and pipeline, 60). One
+  // ledger per source test file, as everywhere else, and the sub-belts share
+  // one lane block rather than taking a letter each -- they are one subsystem
+  // and one D-range, and three blocks would invite the letter collision the
+  // comment below describes.
   //
   // The letter is `K` and was drafted as `J`: gate_item11 above was reaching
   // for the same one concurrently and landed on `main` first (PR #69), so this
@@ -175,6 +179,8 @@ const LEDGERS = [
   // itself and points back here.
   "parity/attention.classifier.ledger.json",
   "parity/attention.readers.ledger.json",
+  "parity/attention.dedup.ledger.json",
+  "parity/attention.config.ledger.json",
 ];
 
 /**
