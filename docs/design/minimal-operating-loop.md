@@ -436,15 +436,76 @@ point the opposite way to renewal:
   the epoch inside the write (`:113-114`). So any write still in flight under the pre-gate epoch is
   refused rather than silently landing after the answer.
 
-**What the design must therefore record**, and it is a plan line rather than a decision: each
-control-plane operation after the answer re-acquires and proceeds under the new epoch; nothing holds
-a lease across L5-L6. **Renewal becomes required only if a later lap introduces a long-running
-holder that must keep one identity across the wait** -- and that is the point at which to build it,
-against a case that exists.
+So for the **orchestrator's** lease the rule is a plan line, not a decision: each control-plane
+operation after the answer re-acquires and proceeds under the new epoch, and nothing holds an
+orchestrator lease across L5-L6.
+
+**The endpoint is a different holder, and it is a real open question.** The re-pointed messagebus
+endpoint is a long-running process, and it does not manage its own lease at all:
+
+> `INTERLOCK_MESSAGEBUS_RESOURCE` / `INTERLOCK_MESSAGEBUS_HOLDER` / `INTERLOCK_MESSAGEBUS_EPOCH` --
+> the lease identity this endpoint's writes are fenced under. **The endpoint does not acquire or
+> renew the lease; lease orchestration is the control plane's**, and a stale epoch surfaces as
+> `StaleWriterRefused` out of `poll`, refused durably.
+
+(`src/messagebus/endpoint.ts:42-46`.) The epoch is fixed at startup from the environment, and every
+`poll` write is fenced on both that epoch and the lease still being live. So an endpoint left running
+across an unbounded human wait stops being able to write, whether or not anyone took the lease over.
+**This must be decided for lap 1; it is not covered by the per-verb rule above.**
+
+| | What it means | Assessment |
+|---|---|---|
+| **A** | **Run the endpoint only while a worker turn is live** -- start it at L3, stop it at L4. It never spans the gate, so no renewal is needed and the fixed startup epoch is correct for its whole life. | **Recommended.** It matches the turn shape the lap already has (5.5): a `claude -p` child is one turn, the endpoint exists to serve that turn's `poll`/`ack`, and after L4 there is no worker to serve. It also keeps the "no lease crosses the gate" rule true of the whole lap rather than of one component. |
+| **B** | Give the endpoint an owner process that holds the lease and renews it on a timer. | The general answer, and the one a later unattended lap will need. It is a new long-running component in a lap whose whole point is to be minimal, and it puts renewal on the critical path before anything has shown what TTL is right. |
+| **C** | Restart the endpoint per poll cycle with a freshly acquired epoch. | Works, and re-acquisition raising the epoch makes it safe, but it turns a stdio server into a supervised respawn loop for no gain over A. |
+
+**So renewal is deferred, but only because option A removes the case that needs it** -- not because
+the case does not exist. If the lap is built any other way, renewal moves from deferred to required
+and belongs in step 4 of section 7.
 
 *An earlier draft of this document said the lap should "set the TTL explicitly beyond the lap's
 duration". That was wrong twice over -- no such value exists for an unbounded wait, and the claim
-that the 30-second default expires mid-lap misread a per-verb lease as a per-lap one.*
+that the 30-second default expires mid-lap misread the orchestrator's per-verb lease as a per-lap
+one. The correction in turn missed the endpoint, which is genuinely a per-process holder; the table
+above is that second correction.*
+
+### 4.10 Nobody publishes: L7 has no actor, and the second relay has no acker
+
+The worker is turn-shaped and, once L4 has ingested its terminal result, it has ended. It is also
+deliberately fenced from publishing -- that fence is the whole reason the gate is worth having (4.5).
+And continuo executes no git and no GitHub call anywhere (4.5). **So after the approval, no component
+in the successor stack can push a branch, open a PR, or merge one**, and none of the seams above
+names a replacement. The same hole has a second mouth: `CLOSE_OUTCOME_STAGES` requires the gate to
+reach `forwarded` before it can close as `answered_and_forwarded` (4.2), and `forwarded` is a relayed
+stage, so **something must ack the second relay** -- the one that carries the answer onward. The
+`poll`/`ack` endpoint is worker-facing and pinned to one recipient, and by L7 the worker is gone.
+
+Left implicit, this is where the lap quietly stops. Stated, the answer for lap 1 is small and is the
+honest one:
+
+**The operator is the publisher and the acker of the second relay, and lap 1 says so in writing.** A
+person is present throughout by the lap's own definition (section 2), and section 3.1 already defers
+every automated PR and CI path. Concretely: the second relay's recipient is an operator-facing
+destination rather than the worker's; the operator runs the push, the PR against the recorded base
+branch, and the merge with their own credentials; and a CLI verb records the ack that lets the gate
+close as `answered_and_forwarded`. That keeps the durable decision record -- the property the lap
+exists to gain -- while conceding that the *execution* after the approval is manual in lap 1.
+
+Two things must be recorded alongside it, or the concession will read later as a design:
+
+1. **Which recipient the gate's relays address.** The endpoint refuses at startup a recipient no
+   handler serves, and the registry supplies only `external-notify` (whose effect is a write into a
+   `KeyedDropbox` directory) and a human-gated handler that by design delivers nothing
+   (`src/control_plane/handlers.ts:93`, `:97`, `:190-203`, `:220-225`). So either both relays address
+   `external-notify` and the operator reads the dropbox, or a third handler is written. **This is a
+   decision, not a detail**, and it belongs with the gate verbs in step 10.
+2. **That a privileged publisher is the deferred work, not a missing piece nobody noticed.** The
+   second lap's publisher is the component that turns `run_pr_link` and `ci_observation` from
+   ingestion APIs into something with a producer (4.5). Its permission posture -- it may push, the
+   worker may not -- is the substantive design question, and it is better answered against a lap that
+   has run than before one.
+
+*Required -- as an explicit assignment. The build is near zero; leaving it unassigned is the defect.*
 
 ---
 
@@ -503,11 +564,24 @@ the status CHECK (`0003:81`), rewrites the forward-only trigger into an explicit
 `_ADOPT` and `_COUNT_ATTEMPT`. **On a production database a cancelled relay is still returned as due,
 and the next `_MARK_DELIVERED` attempts `cancelled -> delivered`, which the 0003 trigger aborts.**
 
-Budget the re-point as: one import; the `cancelled` alignment across four predicates; a
-create-and-verify precondition at endpoint startup, since `openProductionControlPlane` refuses an
-absent or behind-head file; and the `test/messagebus` fixture move. Add one more: the outbox's
-fault-injection evidence was accumulated under the old predicates, so the change needs re-measuring
-rather than assuming.
+**The alignment is not only those four query predicates**, and the implementing issue should treat
+the four as the floor rather than the list. Two public operations decide terminality on their own and
+neither knows about `cancelled`:
+
+- **`Outbox.recordAck`** short-circuits only on `ackedAtMs !== null` and refuses only when
+  `deliveredAtMs === null`. A relay that was delivered and *then* cancelled by gate closure passes
+  both checks, so the `UPDATE ... SET status = 'acked' WHERE acked_at_ms IS NULL` attempts
+  `cancelled -> acked`, which the 0003 edge list aborts. That is a reachable race, not a theoretical
+  one: a late ack arriving after the gate closed is exactly what gate closure's relay cancellation
+  creates.
+- **`Outbox.attempt`** recognises `acked` as the terminal status and not `cancelled`.
+
+So budget the re-point as: one import; the `cancelled` alignment across the four query predicates
+**and the terminal-status handling in `recordAck` and `attempt`**, with the enumeration re-derived
+from 0003's edge list rather than from this document; a create-and-verify precondition at endpoint
+startup, since `openProductionControlPlane` refuses an absent or behind-head file; and the
+`test/messagebus` fixture move. Add one more: the outbox's fault-injection evidence was accumulated
+under the old predicates, so the change needs re-measuring rather than assuming.
 
 One bookkeeping fix belongs in the same entry: the broker section heading says "4 further modules not
 collected" while its body and the manifest list five.
@@ -813,9 +887,10 @@ Each step names what it unblocks. Steps 1-3 are strictly ordered; 4-8 have some 
    do not leave it implicit.*
 9. **Close the report ingress: read the transcript and append the escalation event (4.7).**
    *Unblocks: `openGate`, which cannot fire without a prior event.*
-10. **Gate verbs, both relays, and an ack path (4.2, 4.4).** *Unblocks: an approval that closes as
-    `answered_and_forwarded` rather than `withdrawn`.*
-11. **Push, PR against the recorded base branch, merge, close the run.** *Ends the lap.*
+10. **Gate verbs, both relays, and an ack path (4.2, 4.4, 4.10).** *Unblocks: an approval that closes
+    as `answered_and_forwarded` rather than `withdrawn`.*
+11. **The operator publishes: push, PR against the recorded base branch, merge; then close the run
+    (4.10).** *Ends the lap.*
 
 **Off this chain, decidable in any order:** `migrate` (5.2, ratify `not-porting`), `curator` (5.3,
 errata only), S1 (5.5, record that lap 1 evaluates rather than promotes). None of them blocks anything.
