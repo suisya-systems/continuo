@@ -121,6 +121,7 @@ spaces distinct.
 | D-0801 | The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred | accepted |
 | D-0603 | The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types` | accepted |
 | D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
+| D-0904 | Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 
 ---
@@ -7085,3 +7086,118 @@ or does not reproduce the source's comparison faithfully, the belt's approach to
 **Source.** Task `continuo-gate-item11-p1`, 2026-08-29, porting
 `tests/gate_item11/test_no_provider_detail_leaks.py`, `test_registry_availability.py` and
 `test_substitution_scenarios.py` from interlock `65f36c5`, under the belt start D-0034 ratified.
+
+---
+
+## D-0904 -- Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home
+
+**Context.** `PORTING_LEDGER.md`'s row for `attention/dedup.py` carries the two dedup namespaces --
+record-once for `events`, cooldown-gated for `pending` -- and rules **out** the module's corruption
+handling in the same breath: "a broken state file recovers as empty" was safe while this was an
+advisory notification ledger, and once dedup state is durable and authoritative an empty ledger says
+nothing has been notified, so every already-handled event is free to fire again. That is the
+resume-without-double-execution violation `D-0001` exists to prevent. `parity/source-inventory.
+belts.md` names the two source cases that pin the defect, and `D-0034` ratified the repair as
+**fail-closed, inside A2**, with rebuilding the state from durable records named as declined-for-now
+rather than silently out of scope. `D-0023` supplies the rest of the procedure: the case that pinned
+an inherited behaviour is inverted in the change that repairs it, and the divergence stays reachable
+from the parity ledger.
+
+What none of that settles is **where the new line falls**, and the source has four silent recovery
+paths, not two. This entry is that boundary.
+
+**Decision 1 -- an ABSENT namespace is empty; a PRESENT but unusable one is a refusal.** The line is
+between "no state was written" and "state was written and cannot be trusted", and it is drawn once
+for the file and for each namespace inside it:
+
+- a **missing file** loads as an empty `DedupState`, unchanged from the source. Nothing has ever
+  been notified, and creating one is the legitimate next step. `test_load_missing_returns_empty`
+  ports straight.
+- a **missing `events` or `pending` key** is an empty namespace, unchanged from the source, for the
+  same reason one level down. `test_load_partial_shape` ports straight, and it is the case that
+  fixes this half of the line.
+- everything else refuses with `DedupStateRefused`: an unreadable file, a blank one, text that is
+  not JSON, a top level that is not an object, a namespace that is present and is not an object, and
+  an entry whose value is not a string. The last two are the repaired defect at a narrower scope --
+  the source substitutes `{}` for the first and silently drops the entry for the second, and a
+  dropped entry is one already-notified key forgotten, which is exactly the effect the repair
+  exists to prevent.
+
+**A blank file is on the refusing side, and that is the one call here that is not forced.** The
+source returns empty state for it without even a warning, so it could be read as a third flavour of
+"nothing was written". It is not: `saveState` writes through a fully-written temporary file and a
+rename, so it never produces a blank one, and a blank file at that path is therefore a truncation
+from outside -- the same class of event as a half-written document, arriving with no content to say
+so.
+
+**`DedupStateRefused` is its own family, not `src/control_plane/refusals.ts`'s.** That file
+documents itself as *the control plane's* refusals and its class identity is load-bearing across the
+two modules that share it, so a `catch` written about a database must not begin catching an
+attention state file. The cost is one more small class; the alternative couples two subsystems
+`D-0009` separates, for the sake of a message.
+
+**Decision 2 -- the belt's `datetime` transcriptions live in `src/attention/pytime.ts`, not
+privately inside whichever module needed one first.** `dedup.py` and `classifier.py` both round-trip
+an ISO-8601 timestamp through `datetime`, and both depend on CPython's exact answers rather than on
+the platform's:
+
+- `datetime.fromisoformat` accepts a **narrower** grammar than `Date.parse`, which takes shapes it
+  rejects (`"05/12/2026 11:59:00"`, `"May 12 2026"`) and rolls an impossible date forward
+  (`2026-02-30`) where `fromisoformat` raises -- and reads a naive `"2026-05-12T11:59:00"` as
+  **local** time where the source attaches UTC.
+- `datetime.isoformat` prints **no** fractional part when the microsecond field is zero and **six**
+  digits when it is not, where `Date#toISOString` always prints three.
+
+Every one of those differences turns a garbled or old stored timestamp into a recent one, or changes
+the bytes of a durable file. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
+CPython function inside one directory is the drift shape
+`docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written
+and nothing goes red on the day they stop. So the transcriptions get one home in the belt's own
+directory, beside the two modules that need them.
+
+**Rejected alternative: importing them from `classifier.ts`.** It is a smaller diff and it puts
+`fromisoformat` behind a name that has nothing to do with it; a module that transcribes CPython is
+not a detail of the module that first called it.
+
+**Decision 3 -- the rule-9 exposures are guarded rather than disclosed.** Two values this runtime
+admits and CPython excludes reach this module, and each is guarded and pinned by a target-only case
+rather than left in the ledger as a known limitation, because both fail in the direction that loses
+an alarm silently. The dedup key is caller-supplied and Python's `dict` has no inherited keys, so
+both namespaces are built with `Object.create(null)` and read with `Object.hasOwn` -- otherwise a
+task named `constructor` reads as already notified forever. `cooldown_sec` is `int` in the source,
+so `NaN` and the infinities are excluded there; here a `NaN` cooldown makes every comparison false
+and suppresses every pending notification for the life of the process, so it is refused. The
+`parity/attention.dedup.ledger.json` entry for each records the mutation that was measured red.
+
+**One inherited limitation is carried rather than repaired**, and it is A1's disclosure rather than
+a new one: a `Date` resolves to one millisecond and a `datetime` to one microsecond, so a stored
+timestamp within a fraction of a millisecond of a cooldown boundary can be judged on the other side
+of it from the source. Repairing it means carrying an epoch in microseconds through every consumer
+of `parseIso` instead of a `Date`, which is a change to the belt's shared vocabulary rather than to
+one module. The write side has no such limitation: `pyIsoUtc` renders the six digits the source
+renders.
+
+**Falsifier (Decision 1).** The line is drawn on the claim that an absent namespace cannot be the
+residue of a lost one. If a writer is ever added that can produce a document with one namespace
+missing -- a partial write, a migration, a hand-edited file that a tool then re-saves -- then
+"absent means empty" stops being a statement about state that was never written and becomes the
+defect again under a narrower name, and `test_load_partial_shape`'s reading is what would have to
+move. The observation is a second writer of this file appearing anywhere in the port.
+
+**Falsifier (Decision 2).** If A3 or a later belt needs a `datetime` answer these two functions
+cannot give -- a `strftime`, a timezone database, an aware/naive distinction the port has so far had
+no use for -- then a two-function module was the wrong shape and the belt needs the fuller
+transcription that `src/fencing/pysemantics.ts` is for the string primitives. The observation is a
+third consumer arriving with a requirement rather than a call site.
+
+**Falsifier (Decision 3).** `D-0034` already states the one for the repair as a whole: if
+fail-closed is found to lose data a caller needed, the deferred rebuild belt is what was missing,
+not evidence against fail-closed. What would falsify this decision specifically is an operator
+finding a refusal where the source recovered, on a file this port itself wrote -- which would mean
+the refusing side of Decision 1 had caught a shape `saveState` can actually produce.
+
+**Source.** Task `continuo-attention-a2`, 2026-08-29, porting `tests/attention/test_dedup.py`
+(10 cases) from interlock `65f36c5`, under `D-0034`'s ratified constraints. Decision id from the
+`D-09xx` range `D-0034` allocated to the attention belt, and the first id A2 mints in it -- A1 used
+`D-0901`..`D-0903`.

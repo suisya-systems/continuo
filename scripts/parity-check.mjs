@@ -150,6 +150,19 @@ const LEDGERS = [
   "parity/gate_item11.no-provider-detail-leaks.ledger.json",
   "parity/gate_item11.registry-availability.ledger.json",
   "parity/gate_item11.substitution-scenarios.ledger.json",
+  // lane K -- attention, sub-belt A2 (dedup and config). The subsystem ports in
+  // three sub-belts sharing one D-range (D-0034): A1 (facts, 90 cases),
+  // A2 (dedup and config, 44) and A3 (notify and pipeline, 60). A1 holds
+  // `D-0901`..`D-0903` and registers `attention.classifier` and
+  // `attention.readers` in this same lane; A2 mints from `D-0904`. One ledger
+  // per source test file, as everywhere else.
+  //
+  // `parity/attention.broker-journal-contract.ledger.json` is deliberately NOT
+  // in this list, and A1's block above is where that is said. In short:
+  // `tests/attention/test_broker_journal_contract.py` is quarantined upstream by
+  // a module-level `pytest.importorskip`, so pytest collects no node id from it
+  // and it has no inventory file for the loop below to read.
+  "parity/attention.dedup.ledger.json",
 ];
 
 /**
