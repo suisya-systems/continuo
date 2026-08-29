@@ -347,8 +347,10 @@ would be cheap to act on.
 
 **What would falsify this:** if continuo, or a layer built on it, grows a surface that promotes
 skills by writing into a live skill directory, the subject exists and this belt should be reopened.
-That is a live possibility rather than a theoretical one -- see `suisya-systems/cadenza#9` for the
-agentic-layer direction that would create such a subject.
+That is a live possibility rather than a theoretical one: the successor stack's operating layer is
+where a skill-promotion surface would be built if one is built at all, and no such surface exists
+today. If one appears, this belt is reopened here -- nothing about that reopening is decided in
+another repository.
 
 ### `gate_record` -- `not-porting` (ratified 2026-08-28) -- 64 cases
 
