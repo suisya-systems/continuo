@@ -61,10 +61,13 @@ async function waitForReport(
   readout: SessionReadout,
   entry: ProviderEntry,
 ): Promise<SessionReadout> {
-  const deadline = Date.now() + OBSERVE_TIMEOUT_MS;
+  // `performance.now()`, not `Date.now()`: monotonic, the same as the source's
+  // own `time.monotonic()` -- a wall-clock deadline could be pushed arbitrarily
+  // far out by a clock step during the poll.
+  const deadline = performance.now() + OBSERVE_TIMEOUT_MS;
   let current = readout;
   while (current.observation === Observation.COULD_NOT_OBSERVE) {
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       return current;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
