@@ -8,7 +8,7 @@ import { transaction } from "./txn.js";
 /**
  * G3 -- watcher liveness: the expected roster, and the fenced unconditional trace.
  *
- * `docs/production-schema.md` section 8 and `D-0035`. The failure this module
+ * `docs/production-schema.md` section 8 and interlock `D-0035`. The failure this module
  * is written against is `tools/relay_scan.py`'s: a broken cron accumulated
  * undelivered events for twenty days, and nothing in the database said so,
  * because a watcher that stops writes no row and *no row looks exactly like a
