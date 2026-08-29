@@ -6,8 +6,8 @@ plane for a coding-agent organization, its measurement harness, and its per-role
 The name is cadenza's structural counterpart. A basso continuo underpins the piece and realizes
 chords from figures, as this control plane realizes behavior from policy rows and rules.
 
-> **Status: porting, well advanced.** 1,973 node ids are ported, out of the 2,038 not declined --
-> a pool, not a commitment: 65 of them (`broker`'s 54, `migrate`'s 11) carry statuses that are still
+> **Status: porting, well advanced.** 1,973 node ids are ported, out of the 2,027 not declined --
+> a pool, not a commitment: 54 of them (`broker`'s 54) carry statuses that are still
 > proposals, undecided at continuo's own human gate rather than agreed to be ported. The per-subsystem record is
 > [`parity/source-inventory.belts.md`](./parity/source-inventory.belts.md) and is kept up to date
 > per belt. The package is `private` and is not published (`DECISIONS.md` D-0008).
