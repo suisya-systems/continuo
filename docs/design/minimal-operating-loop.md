@@ -39,6 +39,54 @@ wrong one changes the answer:
 Citations to `DECISIONS.md` are by entry id only, per that file's own rule that it is never cited by
 line number. Citations to source are `path:line` at the revisions above.
 
+**Two operator premises this document is written under.** Both were settled after the survey and are
+recorded on cadenza#22. They are **premises supplied to this document, not findings of it** -- the
+sections they touch say what they change and, where a judgement survives them unchanged, say that
+too:
+
+1. **The end state is a single web application.** Neither repository has a process today; continuo is
+   `private` and unpublished (`D-0008`) and cadenza has no `bin`. One host process owns the SQLite
+   record of truth, serves a human-facing web UI, and speaks MCP over localhost to agent sessions
+   (the host-local exception, ratified 2026-06-14 -- an org-doctrine ratification this document takes
+   as given rather than verifies). **The only other processes are the agent sessions themselves.**
+2. **Working assumption, not a settled decision: that application is hosted by cadenza**, as an
+   outermost adapter beside the existing catalog adapter. The provider-agnostic constraint binds
+   cadenza's `domain`, `application` and `ports` layers rather than the repository, so the placement
+   is architecturally available.
+
+**Premise 1 is structural and this document is written on it. Premise 2 is not**, and it is recorded
+as a working assumption deliberately: fixing it here without a counter-proposal on the page would be
+the same error this document criticises elsewhere -- a position hardened by repetition rather than by
+grounds -- just pointed inward instead of upstream. So both readings, and the trigger that settles it.
+
+**Why cadenza.** The command surface -- approving a gate, issuing a delegation -- is the semantic
+half cadenza's charter claims, so a surface over it is a surface over cadenza's own vocabulary. And
+it adds no repository: this document already records that neither `DECISIONS.md` can hold a decision
+binding both repositories (section 8), so a shape that multiplies cross-repository decisions walks
+straight into a defect that is already named.
+
+**The counter-proposal, and the fact that supports it.** Put the application in its own package --
+a third repository, or a separate workspace package -- and keep cadenza pure. What argues for it is an
+asymmetry visible in cadenza#22's own ownership table: of the four things a console renders, **three
+are continuo's** (the delegation record, run and belt state with `awaiting_user` events, the outbox)
+and one is cadenza's (gate semantics), with the operator conversation undecided. A host placed in
+cadenza therefore lives in the repository that owns the minority of what it draws, and reaches for the
+majority across a package boundary. Keeping it separate also leaves cadenza's layer discipline intact
+rather than widening it (below).
+
+**The cost of premise 2, which is checkable and easy to under-read as "just another adapter".**
+Cadenza's import-boundary gate is not a layer allowlist alone; it is a **per-binding external
+allowlist**, and `src/adapters` -- described in the test as "the one layer that is allowed I/O, and
+only this much of it" -- currently admits exactly `node:fs`'s `readFileSync` and `statSync`
+(`cadenza@origin/main test/architecture/import-boundaries.test.ts`, `ALLOWED_EXTERNALS_BY_LAYER`). A
+web host needs an HTTP server, continuo's exports, and a SQLite driver reached through them, each
+named binding by binding. That is a deliberate widening of the one check keeping cadenza I/O-minimal.
+
+**Revisit trigger: the first line of application code.** Unlike premise 1, this choice is not
+structural -- the same data model, the same ports, the same continuo dependency (6.4) under either
+answer; only the directory changes. It is therefore cheap to change until an application exists, and
+should be settled at that moment rather than before or long after.
+
 ---
 
 ## 1. The gap is structural, not a residue of the port
@@ -169,6 +217,14 @@ its scope.
   one database, gates reachable, runs with real statuses, the delegation record persisted.
 - **Explicitly out of scope:** the console itself. No UI, no HTTP server, no identity provider.
   cadenza#22 is not scheduled by this document and this document does not schedule it.
+
+**What is settled about where it will be built, and what is not** (section 0). Settled: the console is
+the web surface of a *single host application* rather than a service of its own. Not settled: whether
+that application lives in cadenza's `src/adapters/` layer or in its own package -- the working
+assumption is cadenza, the counter-proposal and the asymmetry favouring it are in section 0, and the
+trigger is the first line of application code. One consequence holds either way and belongs here:
+**the application must be able to import continuo, and today nothing can** (6.4). That, with the
+schema choice, is what actually gates cadenza#22.
 
 **The ownership split the console forces** matches what section 6.3 concluded independently, with one
 open item. cadenza#22 assigns the delegation record to continuo -- citing continuo's own `task` known
@@ -455,7 +511,9 @@ rather than optional hardening.
 nor claude-org-ja is in the catalog.**
 
 *Deferrable for lap 1 -- the workspace can be cut from an operator-named path and base branch. Not
-deferrable if the lap is to use cadenza at all, and the packaging decision is cadenza's.*
+deferrable once an application exists, at which point "no callable artifact" stops being a seam and
+becomes the packaging decision in 6.4 -- and if the application is hosted in cadenza (section 0,
+premise 2), cadenza needs a `bin` and a build of its own on top of that.*
 
 ### 4.9 The lease must not span the human wait, and a longer TTL is not the fix
 
@@ -487,7 +545,10 @@ operation after the answer re-acquires and proceeds under the new epoch, and not
 orchestrator lease across L5-L6.
 
 **The endpoint is the other holder, and it is where renewal becomes unavoidable.** The re-pointed
-messagebus endpoint is a long-running process, and it does not manage its own lease at all:
+messagebus endpoint is a long-running process, and it does not manage its own lease at all.
+(Section 0's premise 1 may dissolve this *component* -- a host application serving MCP in-process has
+no endpoint child -- but not the requirement: the host is itself long-running and its outbox writes
+are epoch-fenced just the same. Section 5.1's re-check spells this out.)
 
 > `INTERLOCK_MESSAGEBUS_RESOURCE` / `INTERLOCK_MESSAGEBUS_HOLDER` / `INTERLOCK_MESSAGEBUS_EPOCH` --
 > the lease identity this endpoint's writes are fenced under. **The endpoint does not acquire or
@@ -650,6 +711,43 @@ under the old predicates, so the change needs re-measuring rather than assuming.
 
 One bookkeeping fix belongs in the same entry: the broker section heading says "4 further modules not
 collected" while its body and the manifest list five.
+
+#### Re-checked under the single-application premise
+
+This judgement was reached before premise 1 of section 0 was settled, and parts of it were phrased as
+though the successor stack had a general inter-process transport problem. Re-checked against the
+premise, **the verdict does not change, and two of its three legs get stronger.** The point of writing
+the re-check out is that the premise is exactly the kind that could have overturned it.
+
+- **The schema half is unchanged and is if anything more clearly right.** Gate tables exist only in
+  the production schema, and the premise says one host process owns one record of truth. Two
+  mutually-refusing databases were already indefensible; under a single application they are not
+  expressible.
+- **The transport half shrinks further, in the direction the recommendation already went.** With one
+  host process, the only cross-process hop left in the whole system is host to agent session. That is
+  precisely what the outbox plus an MCP surface serve, and it is emphatically not what
+  `broker/server.py` was: an HTTP daemon with bind tokens and a sidecar whose job was pushing into a
+  pane. Declining it becomes easier to justify, not harder.
+- **The endpoint's *form* does change, and this is the one substantive consequence.** `endpoint.ts`
+  is today a separate stdio MCP child whose lease epoch is fixed at startup from the environment. If
+  the host serves MCP over localhost in-process, that child disappears, and with it the specific
+  problem section 4.9 solves -- an external launcher holding a lease on a subprocess's behalf. **It
+  does not retire renewal**: the host is long-running and its outbox writes are still epoch-fenced, so
+  it must renew its own lease. It makes renewal simpler (in-process, no env hand-off) rather than
+  unnecessary. Section 4.9's requirement stands; its option table is about a component that may not
+  exist in the end state.
+
+**And one thing the premise makes materially more live, which is worth recording as the falsifier
+rather than discovered later.** The 54 residents cases are unmanaged-process detection and reclamation.
+Under premise 1 the agent sessions are *the only other processes in the system*, so "an agent process
+that outlived the host, or that no run's binding names" stops being hypothetical and becomes the one
+process-identity category the architecture has. The decline still holds for lap 1 on its own grounds
+-- no component on either side of the port reads or writes a residents registry, ja never wrote one,
+and the reap policy contradicts `src/supervisor.ts:699-703` -- but the entry should carry this as its
+falsifier, in the shape section 5.3 argues for: **if the host application grows a reaper for orphaned
+agent sessions, the subject exists here and this decline is superseded.** That is a condition a future
+reader can evaluate without opening another repository, which is exactly what `D-0035`'s curator
+falsifier failed to be.
 
 **Band: continuo.** **Depends on: the schema decision (6.1).**
 
@@ -865,9 +963,11 @@ run**, which makes the documented concurrency residual at
 
 ---
 
-## 6. Three decisions the seams force that were not on the list of five
+## 6. Four decisions the seams force that were not on the list of five
 
-These rank with the five. The first outranks all of them.
+These rank with the five. The first outranks all of them; the fourth (6.4) comes from the operator
+premises in section 0 rather than from a seam, and is included here because it is a decision of the
+same weight with the same absence of an owner.
 
 ### 6.1 Which control-plane schema the lap runs on -- and a verb that creates it
 
@@ -923,6 +1023,55 @@ scaffold (5.5), so an S1 promotion can move it.
 
 ---
 
+### 6.4 How cadenza takes a dependency on continuo
+
+**This decision survives premise 2 either way, which is why it is here rather than parked behind it.**
+The host application needs continuo whether it lives in cadenza or in its own package; only the
+identity of the importer changes, and obstacles 1 and 3 below do not change at all. Today **nothing
+can import continuo**, by three independent obstacles, none of them hard -- just undecided.
+
+1. **continuo refuses to publish.** `"private": true` at `0.0.0`, and `D-0008` says `npm publish`
+   refuses until that entry is superseded. The same entry is unusually helpful about the cost,
+   though: "The `files` and `exports` fields are nonetheless maintained from the start, so the
+   eventual first publish is a decision rather than a packaging project." Verified -- `exports`,
+   `files` and `bin` are all present, and `check:package` already runs `publint --strict` and `attw`
+   against the packed tarball.
+2. **cadenza's import gate does not admit it** -- *this obstacle applies only if the application is
+   hosted in cadenza.* `ALLOWED_EXTERNALS_BY_LAYER` is per-binding, and `src/adapters` admits two
+   `node:fs` functions. `FORBIDDEN_PACKAGES` blocks `interlock` and `claude-org-runtime` -- continuo
+   is neither, so there is no conflict to resolve, only an allowlist to extend, binding by binding
+   (section 0). A separate application package has no such gate to widen.
+3. **continuo carries a native runtime dependency.** `better-sqlite3` plus its types, under `D-0009`'s
+   prebuilt-binary-and-`--ignore-scripts` policy and a Node floor of `>=22.14.0`. Whatever consumes
+   continuo inherits all three.
+
+**Options.**
+
+| | What it means | Assessment |
+|---|---|---|
+| **A. Supersede `D-0008` and publish** `@suisya-systems/continuo` | An ordinary npm dependency in cadenza. | **Recommended.** `D-0008`'s own consequence clause says the packaging work is already done, and the entry exists to make publication *deliberate* rather than to prevent it -- superseding it is the intended path, not a workaround. It is also the only option that makes the version cadenza builds against a stated fact rather than a checkout state, which matters once two repositories ship one application. |
+| **B. Git dependency pinned by sha** | `"@suisya-systems/continuo": "github:suisya-systems/continuo#<sha>"`, no registry. | **Does not work as things stand, and the reason is concrete.** npm builds a git dependency by running its `prepare` script, and continuo has none -- `scripts` has `build`, `pretest` and `check:package` but no `prepare` or `prepack`. So the install produces a package whose `main: ./dist/index.js` points at nothing. Adding `prepare` then collides with `D-0009`'s `--ignore-scripts` install policy, which exists to keep a C++ toolchain off every platform. Choosing B means reopening `D-0009`'s blast radius to avoid superseding `D-0008`, which is the worse trade. |
+| **C. One workspace across both repositories** | An npm workspace or a monorepo move; cadenza resolves continuo from the local tree. | Cheapest to start and it defers both other decisions, which is its whole appeal and its whole problem: it works on a developer's machine and answers nothing about how the application is distributed. Reasonable as a temporary measure **if** the entry says so and names A as the destination; a bad end state, because it makes "which continuo is this running" a property of a checkout. |
+
+**Recommendation: A**, with C acceptable as an explicitly temporary bridge while the first lap is
+built. Whichever is taken, the entry should record the two inherited constraints -- the native
+dependency and the Node floor -- because they become the *application's* constraints the moment
+cadenza hosts it.
+
+**Band: continuo, plus cadenza if premise 2 holds.** Superseding `D-0008` is continuo's either way.
+Extending the import allowlist is cadenza's only if cadenza hosts the application; if it does not,
+this stops being a paired decision entirely -- which is one more small argument for the
+counter-proposal, since section 8 records that nothing in either repository can hold a decision
+binding both.
+
+**Where it sits on the critical path: off it, for lap 1.** Section 7 builds the lap as continuo CLI
+verbs plus an operator, and none of that needs cadenza to import anything. The dependency becomes
+blocking at the point cadenza#22's console is built, which is after the lap by section 2.1. It should
+be decided early anyway -- it gates cadenza#22, it is cheap, and leaving it open invites option C to
+become the end state by inertia.
+
+---
+
 ## 7. The order
 
 Each step names what it unblocks. Steps 1-3 are strictly ordered; 4-8 have some slack.
@@ -960,7 +1109,12 @@ Each step names what it unblocks. Steps 1-3 are strictly ordered; 4-8 have some 
     merge; then close the run (4.10).** *Ends the lap.*
 
 **Off this chain, decidable in any order:** `migrate` (5.2, ratify `not-porting`), `curator` (5.3,
-errata only), S1 (5.5, record that lap 1 evaluates rather than promotes). None of them blocks anything.
+errata only), S1 (5.5, record that lap 1 evaluates rather than promotes). None of them blocks the lap.
+
+**Off this chain but on cadenza#22's:** the continuo dependency (6.4). The lap does not need it --
+section 7 is continuo CLI verbs plus an operator -- but the console cannot start without it, and it
+should be taken early precisely because it is cheap and because the temporary option becomes
+permanent by inertia otherwise.
 
 ---
 
@@ -969,7 +1123,8 @@ errata only), S1 (5.5, record that lap 1 evaluates rather than promotes). None o
 **Continuo's band:** the schema choice; the `db` mount; the run writer and event vocabulary; lease
 policy and renewal; the outbox `cancelled` alignment and the endpoint re-point; the delegation record
 and its `task`-adjacent DDL; the report ingress; the gate verbs; the fence wiring; the broker
-disposition; the `migrate` belt status; the curator errata; and S1's post-lap promotion or amendment.
+disposition; the `migrate` belt status; the curator errata; S1's post-lap promotion or amendment; and
+**superseding `D-0008` to publish the package** (6.4).
 
 **Cadenza's band:**
 
@@ -988,8 +1143,11 @@ disposition; the `migrate` belt status; the curator errata; and S1's post-lap pr
 - **The catalog's contents.** `config/projects.toml` registers `interlock` and `cadenza` and neither
   continuo nor claude-org-ja. A registry that cannot name the projects the successor stack operates on
   is a cheaper decision than G2 and probably a more urgent one.
-- **Packaging.** `private: true`, no `bin`, no `exports`, no `build`. Whether cadenza is an npm library
-  continuo imports, a continuo subcommand, or a separate process is cadenza's to decide first.
+- **Packaging, and it is now a bigger question than it was.** `private: true`, no `bin`, no `exports`,
+  no `build`. If section 0's premise 2 holds, cadenza is not a library continuo imports but **the host
+  of the application**, and it needs a `bin`, a build, and a widened import allowlist on top of the
+  continuo dependency (6.4). If the counter-proposal holds instead, cadenza stays a library and this
+  bullet stays the small question it was -- which is part of what the trigger in section 0 decides.
 - **`LocalPathVerifier`'s owner** -- unimplemented in both languages, and the G1 design document calls
   it mandatory before a clone.
 
