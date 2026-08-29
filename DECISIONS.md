@@ -68,7 +68,7 @@ spaces distinct.
 | D-0033 | A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test | accepted |
 | D-0034 | The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named | accepted |
 | D-0035 | `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending` | accepted |
-| D-0036 | interlock is an archived source, not a decision-maker: every question continuo has open is settled at continuo's own human gate | accepted |
+| D-0036 | interlock is a frozen source, not a decision-maker: every question continuo has open is settled at continuo's own human gate | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -8139,7 +8139,7 @@ refused, would let half the transcription be wrong with the oracle green.
 cases) from interlock `65f36c5`.
 ---
 
-## D-0036 -- interlock is an archived source, not a decision-maker: every question continuo has open is settled at continuo's own human gate
+## D-0036 -- interlock is a frozen source, not a decision-maker: every question continuo has open is settled at continuo's own human gate
 
 **Context.** `D-0023` established one consequence of interlock being frozen -- an inherited defect is
 repaired here, because no upstream repair is coming. The premise is broader than the consequence
@@ -8156,9 +8156,13 @@ frozen. A reader -- human or agent -- who takes "pending upstream" at face value
 waiting is the correct behaviour, and waiting is unbounded here. The text produced the mistake, so
 the text is what gets fixed.
 
-**Decision.** interlock is the **archived source** of this port. It supplies test cases, prior
-design reasoning, and `PORTING_LEDGER.md` classifications, and it is cited as the design lineage of
-record. It supplies **no decisions and no answers**. Concretely:
+**Decision.** interlock is the **frozen source** of this port -- not archived: on GitHub
+`isArchived` is `false`, the last push was 2026-08-21 UTC, and 8 issues are still open there. What
+makes it frozen is not its repository state but its trajectory: development moved to this TypeScript
+port, and `interlock#63` has sat unanswered since it was raised, with no sign anyone upstream is
+going to act on it. It supplies test cases, prior design reasoning, and `PORTING_LEDGER.md`
+classifications, and it is cited as the design lineage of record. It supplies **no decisions and no
+answers**. Concretely:
 
 1. **No continuo status, belt, or document is ever "blocked upstream" or "pending upstream".** There
    is no upstream process left to be pending on. Where such a phrase appears it is wrong, not merely
