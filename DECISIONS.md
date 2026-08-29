@@ -122,6 +122,7 @@ spaces distinct.
 | D-0603 | The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types` | accepted |
 | D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
 | D-0904 | Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home | accepted |
+| D-0905 | `isinstance(value, int)` is a question about the config DOCUMENT; the dataclass's own defaults become one exported record | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 
 ---
@@ -7201,3 +7202,80 @@ the refusing side of Decision 1 had caught a shape `saveState` can actually prod
 (10 cases) from interlock `65f36c5`, under `D-0034`'s ratified constraints. Decision id from the
 `D-09xx` range `D-0034` allocated to the attention belt, and the first id A2 mints in it -- A1 used
 `D-0901`..`D-0903`.
+
+---
+
+## D-0905 -- `isinstance(value, int)` is a question about the config DOCUMENT; the dataclass's own defaults become one exported record
+
+**Context.** `tests/attention/test_config.py`'s 34 cases are the second half of A2, and the loader
+under them is close to a straight translation: the same knobs, the same refusal messages, the same
+backward-compat auto-scale. Two things in it are not translatable as written, and both are the
+shape `docs/test-translation-conventions.md` rule 9 warns about -- the obvious TypeScript is the
+*right* TypeScript, and the ported suite cannot fail on either, because the values that break them
+are values Python's types excluded.
+
+**Decision 1 -- the integer check asks what the DOCUMENT wrote, not what the value is.** Python's
+`json.loads` produces an `int` only for a literal with no `.`, `e` or `E`, so `1.0`, `1e2` and
+`-0.0` are `float`s and `isinstance(value, int)` refuses all three. Every one of them is an ordinary
+integer to `Number.isInteger`. So `loadConfig` parses with `pyJsonLoads` -- which records the
+spelling the source text used -- and asks `pyTypeNameOf`, which answers `int` or `float` per the
+document. That is the same question the source asks and it produces the same answer; it also
+produces the message, because the refusal prints `type(value).__name__`, which is `float` for a
+value that is integral here.
+
+**Why this is not a `Number.isInteger` guard with a note.** The failure is silent and in the
+accepting direction: `cooldown_sec: 1e2` is refused by interlock and would have loaded here, so the
+port would be *wider* than the specification it exists to reproduce, with nothing red. The
+transcription already exists in this repository (`src/fencing/pyjson.ts`,
+`src/fencing/pysemantics.ts`) and is already shared by `src/settings/` and `src/session/`, so the
+cost is an import rather than a new module.
+
+**One divergence in the same area is disclosed rather than guarded**, because guarding it would be
+the divergence. Python's `int` is arbitrary-precision; a `cooldown_sec` above 2**53 loads exactly
+there and is rounded to the nearest double here. Refusing it would make this port *narrower* than
+its source for an input the source handles. Nothing observable follows: all ten of these knobs are
+thresholds compared against an age, and both readings of such a value are the same unreachable
+threshold. It is recorded in `parity/attention.config.ledger.json` so a later consumer that does
+arithmetic on one of them -- rather than a comparison -- knows which claim it can make.
+
+**Decision 2 -- the dataclass's own defaults become one exported record, read by both the
+constructor and the loader.** `load_config` reads four defaults back out of
+`AttentionConfig.__dataclass_fields__` to decide whether a legacy document's TTL ladder needs
+auto-scaling. A dataclass carries its defaults at runtime and a TypeScript class does not, so the
+choice is between naming them twice and naming them once: `ATTENTION_CONFIG_DEFAULTS` is the once.
+Two copies would reintroduce exactly the drift `__dataclass_fields__` was avoiding, in the place
+where the two disagreeing means a legacy config either fails to load or is scaled against a
+threshold nobody uses -- and no ported case would notice, because every one of them supplies its own
+values.
+
+**Decision 3 -- the maps keyed by an attention kind are `dict`s, and the presence tests over the
+document are own-key tests.** `notify` and `templates` are keyed by a kind the operator's own file
+supplies, so both are built with `Object.create(null)`; `DEFAULT_NOTIFY` already was, under
+`D-0902`, so all three severity and template maps in the module now agree. `__proto__` earns its own
+target-only case because it fails in the opposite direction from `constructor`: assigning it on an
+object literal sets the prototype and stores nothing, so the one kind the operator configured is
+silently absent while every other kind in the same document loads fine. The loader's own presence
+tests over the raw document use `Object.hasOwn` rather than `in` for the same reason, and the ledger
+says plainly that this half is defensive rather than measured -- none of the fourteen top-level JSON
+keys collides with an `Object.prototype` member.
+
+**`D-0902`'s falsifier is answered: A2 extended this file rather than changing it.** `Severity` and
+`DEFAULT_NOTIFY` are byte-identical to what A1 landed, construction and freeze included. The one
+edit above them is the module header, which A1 wrote to describe an A1-shaped file and which now
+describes the finished one; the ledger records that explicitly, because "A2 changed A1's file" is
+the observation `D-0902` asks a reviewer to look for and a header rewrite is not it.
+
+**Falsifier (Decision 1).** If `pyJsonLoads`'s spelling record is ever found not to survive a path
+this loader takes -- a nested container rebuilt rather than carried, which `src/fencing/pyjson.ts`'s
+own header names as a standing obligation on every rebuild site -- then the check silently falls
+back to classifying by value and the float case goes green for the wrong reason. That is what the
+target-only case measures, and it is why it carries five literals rather than one.
+
+**Falsifier (Decision 2).** If a consumer ever needs a default that is not a constant -- one derived
+from another field, or from the environment -- then a frozen record is the wrong shape and the
+defaults belong behind a function. Nothing in interlock's dataclass has such a field today.
+
+**Source.** Task `continuo-attention-a2`, 2026-08-29, porting `tests/attention/test_config.py`
+(34 cases) from interlock `65f36c5`, under `D-0034`'s ratified constraints and `D-0902`'s boundary.
+Decision id from the `D-09xx` range `D-0034` allocated to the attention belt; `D-0901`..`D-0903` are
+A1's and `D-0904` is A2's first.

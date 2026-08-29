@@ -1,0 +1,368 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "Reproduced on the porting host at 65f36c5 as 2194 collected + 5 modules skipped at collection time (pytest reports these separately from the collected count); 2194 + 5 = 2199. The 5 collection-time skips are 5 of the 8 skipped. Carried from parity/control-plane.ledger.json, which established it; this lane re-derives nothing."
+    },
+    "subsystem": {
+      "name": "attention",
+      "collected": 194,
+      "inventory": "parity/source-inventory/attention.all.txt",
+      "note": "The attention subsystem is six source files carrying node ids -- test_classifier.py (61), test_readers.py (29), test_config.py (34), test_dedup.py (10), test_notify.py (34) and test_cli.py (26) -- and one that carries none (test_broker_journal_contract.py, a collection-time skip; see parity/attention.broker-journal-contract.ledger.json). D-0034 splits the 194 into three sub-belts sharing the D-09xx range: A1 (classifier + readers, 90), A2 (config + dedup, 44) and A3 (notify + cli, 60). This is A2's config file and the sub-belt's second: 10 + 34 = 44 of 44, and 134 of the subsystem's 194 with A1's 90."
+    },
+    "file": {
+      "path": "tests/attention/test_config.py",
+      "collected": 34,
+      "inventory": "parity/source-inventory/attention.test_config.txt",
+      "status": "34 passed, re-run at 65f36c5 on the porting host with `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/attention/test_config.py -q -p no:cacheprovider` (Python 3.12.3, pytest 9.1.1). `source_status` is `passed` for all 34. The file carries NO capability gate and no parametrize: grepping it at 65f36c5 for `skipif`, `xfail`, `pytest.skip` and `pytest.mark` returns zero lines, so there is nothing here to translate into a `skipIf` and nothing among interlock's 8 skipped or 1 xfailed. `grep -c '^def test_'` is 34, which is the node id count exactly -- every case is a plain function, and the target ids are in the same order."
+    }
+  },
+  "target": {
+    "test_file": "test/attention/config.test.ts",
+    "target_only_tests": {
+      "count": 7,
+      "ids": [
+        "test/attention/config.test.ts::attention config > a float literal is not an integer, however round it looks (target-only)",
+        "test/attention/config.test.ts::attention config > an integer literal spelled with a leading minus is still an integer (target-only)",
+        "test/attention/config.test.ts::attention config > a notify or template kind naming an Object.prototype member is not inherited (target-only)",
+        "test/attention/config.test.ts::attention config > a config document keyed by an Object.prototype member is read as data (target-only)",
+        "test/attention/config.test.ts::attention config > a template key present with a null value is refused, not defaulted (target-only)",
+        "test/attention/config.test.ts::attention config > the sound refusal prints the modes in sorted order (target-only)",
+        "test/attention/config.test.ts::attention config > the placeholder allowlist is the design's six names (target-only)"
+      ],
+      "note": "Seven cases, none counted as ported coverage. Every one was measured red under a named mutation and green again on revert (docs/test-translation-conventions.md rule 10); the probe ids are C1..C8 and the measurements are quoted here and in the per-entry reasons above. `a float literal is not an integer, however round it looks` (C1: answering the int question from the VALUE -- `typeof x === \"number\" && Number.isInteger(x)` -- instead of from the document turns it red, `expected PyValueError to be thrown, but nothing was thrown`). This is rule 9's most consequential instance in this belt and the reason the loader parses with `pyJsonLoads`: `1.0`, `1e2`, `1E2`, `6.0e1` and `-0.0` are all `float` to Python's `json.loads` and all refused by `isinstance(value, int)`, and all five are ordinary integers to `Number.isInteger`. A `cooldown_sec: 1e2` that interlock refuses would have loaded silently, and the refusal message names the type the DOCUMENT wrote (`got float`), which is `type(value).__name__` exactly. `an integer literal spelled with a leading minus is still an integer` is the complement, and it is here so the int check cannot pass by refusing everything: a plain integer literal has to reach the NON-NEGATIVE guard rather than the type guard, and the two produce different sentences. C8 (removing the non-negative guard) turns it red along with two ported cases. `a notify or template kind naming an Object.prototype member is not inherited` and `a config document keyed by an Object.prototype member is read as data` are rule 9's other family: the attention kind is a caller-supplied string used as a map key, Python's `dict` has no inherited keys, and on an object literal `cfg.notify[\"constructor\"]` answers with a function -- a severity nobody configured, for a kind nobody wrote. `__proto__` needs the second case of its own because it fails in the opposite direction: assigning it on a literal SETS THE PROTOTYPE and stores nothing, so the one kind the operator configured is silently absent while every other kind in the same document loads fine. C2 (both maps built as `{}`) turns both cases red. Note also what that case's own FIXTURE had to change: the document is written as JSON text rather than through `JSON.stringify` of an object literal, because a `__proto__` key in a literal sets the prototype there too and the fixture would have shipped a document that never carried the key under test. `a template key present with a null value is refused, not defaulted` (C3: `template[\"title\"] ?? \"\"` turns it red) -- `tmpl.get(\"title\", \"\")` defaults only on an ABSENT key, and the case asserts both halves so the fix cannot be to refuse an absent one too. `the sound refusal prints the modes in sorted order` (C4: listing the modes in declaration order turns it red, `expected 'config.sound must be one of ['off',...' to be '...['all',...'`) -- the source builds the message from `sorted(_VALID_SOUND_MODES)` over a frozenset, so the printed order is sorted and not declaration order, and the whole message is what an operator reads to fix their file; the ported case checks only the substring `config.sound`. `the placeholder allowlist is the design's six names` (C5: dropping one name turns it red) -- nothing in A2 READS this set, because `notify.render_text` is A3's, so without a case here the constant could be emptied or misspelled and the whole sub-belt would stay green."
+    },
+    "approved_non_running": [],
+    "conditionally_collected": [],
+    "notes": [
+      "`approved_non_running` is empty because the file uses no non-running construct. Checked directly against scripts/parity-check.mjs's own NON_RUNNING patterns -- `(test|it|describe).skip`, `(test|it|describe).todo`, `(test|it).fails`, `skipIf(` and `xfail(` -- over test/attention/config.test.ts with comments and string literals INCLUDED, which is stricter than the sweep: no match. The source has no capability gate to carry and the port adds none. `conditionally_collected` is empty for the same reason: all 34 mapped ids plus the 7 target-only ones were present in `vitest list --json` when this ledger was written (41 collected from this file, 41 passed).",
+      "ALL 34 ARE `ported` AND NONE IS `adapted`, which is worth defending rather than leaving to look like an oversight, because `PORTING_LEDGER.md` classes `attention/config.py` itself as `rewrite`. That classification is about the MODULE's fate in interlock's own successor -- its knobs are keyed to a vocabulary interlock is replacing -- and it is not a statement about what a translation of its test file may assert. Case by case, nothing here reads a different fact or asserts a different property from its source: the constructor is `__post_init__`, the loader is `load_config`, the refusal messages are byte-identical to the source's for every input a case supplies, and the field names differ only by `D-0201`'s camelCase rule, which no ledger in this port has ever counted as an adaptation. The two places where the port's MECHANISM differs -- the integer check and the two map constructions -- are described in the notes below and are pinned by target-only cases; neither changes what a ported case reads or asserts, which is the line this port's other ledgers draw (see parity/session.stub-provider.ledger.json's note on the same question).",
+      "THE RULE 9 ANSWERS, which `docs/test-translation-conventions.md` requires in the porting report. (1) WHICH CALLER-SUPPLIED STRINGS ARE USED AS A MAP KEY: the attention kind, in `notify` and in `templates`, on both the loader's write path and every consumer's read path. Both maps are built with `Object.create(null)`, and `DEFAULT_NOTIFY` already was (A1, `D-0902`), so all three severity/template maps in the module agree. The loader's own presence tests over the DOCUMENT use `Object.hasOwn` rather than `in` for the same reason, though that half is defensive rather than measurable: none of the fourteen top-level JSON keys collides with an `Object.prototype` member, and the target-only case says so instead of implying a measurement it did not make. (2) WHICH `number` PARAMETERS THE SOURCE TYPES `int`: all ten of the JSON integer knobs, and the answer is the document-spelling check described in the next note rather than a `Number.isInteger` guard.",
+      "`isinstance(value, int)` IS A QUESTION ABOUT THE DOCUMENT, NOT ABOUT THE VALUE, and that is why this loader parses with `pyJsonLoads` and asks `pyTypeNameOf`. Python's `json.loads` produces an `int` only for a literal with no `.`, `e` or `E`; `1.0` and `1e2` are floats and are refused. Both reach the same `number` in this runtime, where `Number.isInteger` says yes to each, so the obvious guard accepts two shapes interlock refuses -- and it also cannot produce the message, because `type(value).__name__` is `float` for values that are integral here. `pyJsonLoads` records the spelling the source text used and `pyTypeNameOf` reports `int` or `float` from it, which is the same question and the same answer; `bool` and `str` fall out of the same call. This is the port's existing CPython transcription (`src/fencing/pyjson.ts`, `src/fencing/pysemantics.ts`), already shared by `src/settings/` and `src/session/`, not a second local rendering.",
+      "ONE DIVERGENCE IS DISCLOSED RATHER THAN GUARDED, because guarding it would be the divergence. Python's `int` is arbitrary-precision, so a document writing `cooldown_sec: 12345678901234567890` loads that exact value; this runtime rounds it to the nearest double, and `pyTypeNameOf` still answers `int`, so the value is accepted and carried rounded. Refusing it would make the port narrower than its source for an input the source handles. Nothing observable follows from the rounding here: every one of the ten knobs is a threshold compared against an age in minutes or seconds, and both readings of a value above 2**53 are the same unreachable threshold. Recorded so a later consumer that does ARITHMETIC on one of these knobs -- rather than a comparison -- knows the claim it can and cannot make.",
+      "WHAT REPLACED `__dataclass_fields__`, since the source reads its own defaults back out of it. `load_config` needs four default values (`pending_decision_max`, `pending_decision_drop`, `user_replied_min`, `pending_decision_min`) to decide whether a legacy document's TTL ladder needs auto-scaling, and it reads them from the dataclass rather than repeating the literals. A TypeScript class carries no such record, so the defaults are named once in an exported `ATTENTION_CONFIG_DEFAULTS` and BOTH the constructor and the loader read them from there. The alternative -- literals in the constructor and a second set in the loader -- would reintroduce exactly the drift `__dataclass_fields__` was avoiding, in a place where the two copies disagreeing means a legacy config either fails to load or is scaled against a threshold nobody uses.",
+      "THE TWO CONSTANTS THAT NOTHING IN THIS SUB-BELT READS, named so a reviewer can see they were considered. `ALLOWED_PLACEHOLDERS` is consumed by `notify.render_text`, which is A3's; it is carried here because that is where the source keeps it, and it is pinned by a target-only case because an unread constant is otherwise free to rot. `SoundMode` has one consumer, the loader's own validation, and `Template` has one, the loader's construction -- both exercised by ported cases.",
+      "WHAT A1 LANDED AND A2 DID NOT TOUCH. `D-0902` required A2 to FILL THIS FILE IN rather than replace it, and its falsifier was A2 having to CHANGE it. `Severity` and `DEFAULT_NOTIFY` are byte-identical to what A1 landed, including the `Object.create(null)` construction and the frozen wrapper; the only edit above them is the module header, which A1 wrote to describe an A1-shaped file and which now describes the finished one. Recorded here rather than left to the diff, because \"A2 changed A1's file\" is the observation D-0902's falsifier asks a reviewer to look for, and a header rewrite is not it."
+    ]
+  },
+  "totals": {
+    "source_cases": 34,
+    "ported": 34,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_defaults_match_design_doc",
+      "target_id": "test/attention/config.test.ts::attention config > the defaults match the design document",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation of all twelve assertions, under `D-0201`'s camelCase rule for the field names (`cooldown_sec` is `cooldownSec`); the JSON keys an operator writes keep their snake_case spelling, and so do the refusal messages that name them. `cfg.notify == {}` and `cfg.templates == {}` are compared as spread copies rather than as the maps themselves, because both are built with `Object.create(null)` (rule 9) and spreading them is what makes a failure readable; the compared content is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_default_notify_severity_part_b_rebalance",
+      "target_id": "test/attention/config.test.ts::attention config > the Part B rebalance leaves only the human-only-recovery kinds urgent",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, including the loop over the six demoted kinds and its per-iteration message (pytest's `assert ... , demoted` is vitest's second argument to `expect`). The table it reads is A1's, landed under `D-0902` and unchanged by A2.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_default_notify_secretary_awaiting_user_urgent",
+      "target_id": "test/attention/config.test.ts::attention config > secretary_awaiting_user joins the urgent tier by default",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, one assertion.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_backward_compat_legacy_notify_omits_secretary_awaiting_user",
+      "target_id": "test/attention/config.test.ts::attention config > a legacy notify map omitting secretary_awaiting_user still gets the urgent default",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `\"secretary_awaiting_user\" not in cfg.notify` becomes `Object.hasOwn(cfg.notify, ...)` rather than an `in` test or an `undefined` comparison: Python's `in` over a `dict` is an own-key question, and `in` here would reach `Object.prototype`. The second assertion, that the design default still applies via `DEFAULT_NOTIFY`, is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_load_missing_file_returns_defaults",
+      "target_id": "test/attention/config.test.ts::attention config > a missing file returns the defaults",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `tmp_path / \"missing.json\"` is a path inside `caseRoot(\"attn-config\")` where nothing was written, and `cfg == AttentionConfig()` is `toEqual(new AttentionConfig())`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_load_none_returns_defaults",
+      "target_id": "test/attention/config.test.ts::attention config > a null path returns the defaults",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The source's `Path | None` parameter is `string | null` here; `null` rather than `undefined` because the source distinguishes \"no path given\" from \"a path that does not exist\" and both must stay distinguishable at the call site.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_load_full_config",
+      "target_id": "test/attention/config.test.ts::attention config > a full config round-trips into every field",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation of all eleven assertions. `cfg.templates[\"ci_failed\"] == Template(title=..., body=...)` is `toEqual(new Template({...}))` -- a frozen dataclass's value equality is what `toEqual` gives over a class instance -- and the sparseness assertion `\"approval_blocked\" not in cfg.notify` is `Object.hasOwn`, for the reason the entry above gives.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_invalid_sound_rejected",
+      "target_id": "test/attention/config.test.ts::attention config > an unknown sound mode is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `pytest.raises(ValueError, match=\"config.sound\")` is `expectRefusal(..., PyValueError, /config.sound/)`, which keeps both halves of the source assertion. The `.` is left UNESCAPED deliberately: pytest's `match` is a regular-expression search and the source's `.` matches any character there, so escaping it would make the target case assert marginally more than its source (rule 0's ceiling half). The full message, which the source never checks, is pinned by a target-only case instead.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_invalid_notify_severity_rejected",
+      "target_id": "test/attention/config.test.ts::attention config > an unknown notify severity is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; the `match` string is unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_negative_int_rejected",
+      "target_id": "test/attention/config.test.ts::attention config > a negative integer is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. Probe C8: removing the non-negative guard turns this case red, `expected PyValueError to be thrown, but nothing was thrown`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_non_int_for_int_field_rejected",
+      "target_id": "test/attention/config.test.ts::attention config > a non-integer for an integer field is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation of the case. The MECHANISM under it is rewritten and the ledger notes below say why in full: `isinstance(value, int)` is a question about the document rather than about the value, because Python's `json.loads` makes an `int` only from a literal with no `.`, `e` or `E`. The case's own input (`\"lots\"`) is refused by either reading, so nothing here observes the difference; a target-only case carries the inputs that do.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_bool_not_accepted_as_int",
+      "target_id": "test/attention/config.test.ts::attention config > a boolean is not accepted as an integer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, and the source's comment is carried with it: `bool` is a subclass of `int` in Python, so `isinstance(True, int)` is true and the source excludes it explicitly. `typeof true` is not `number` in this runtime, so `pyTypeNameOf` answers `bool` and the same refusal fires -- the guard is not free here either, it is simply free in a different place.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_template_must_be_object",
+      "target_id": "test/attention/config.test.ts::attention config > a template that is not an object is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_template_title_body_must_be_strings",
+      "target_id": "test/attention/config.test.ts::attention config > a template title and body must both be strings",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The port reads `title` and `body` with an own-key test rather than with `??`, because `tmpl.get(\"title\", \"\")` defaults only when the KEY IS ABSENT and a key present with `null` gives `None`, which the source refuses; a target-only case pins both halves of that.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_top_level_must_be_object",
+      "target_id": "test/attention/config.test.ts::attention config > a top level that is not an object is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `isinstance(raw, dict)` becomes a predicate that also excludes an array, because a JSON array IS an object in this runtime and is a `list` in Python -- without that half the document `[1, 2]` would reach the loader as a mapping with no keys and load the defaults silently. Probe C6: dropping the `Array.isArray` half turns this case red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_load_pending_decision_max_and_drop",
+      "target_id": "test/attention/config.test.ts::attention config > the new TTL knobs round-trip from JSON",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, three assertions.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_backward_compat_missing_ttl_keys_fills_defaults",
+      "target_id": "test/attention/config.test.ts::attention config > a config with no TTL keys keeps working on the defaults",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, three assertions.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_pending_decision_max_must_exceed_min",
+      "target_id": "test/attention/config.test.ts::attention config > pending_decision_max must exceed pending_decision_min",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The source's `__post_init__` is the class constructor here, so a keyword-argument construction that trips the ladder trips at the same point, and the message carries the JSON spelling of both knobs exactly as the source prints it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_pending_decision_max_must_strictly_exceed_min",
+      "target_id": "test/attention/config.test.ts::attention config > pending_decision_max equal to min is rejected: the demotion window must be real",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation; the docstring's point (a real demotion window, so `max == min` is not enough) is carried into the target title.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_pending_decision_drop_must_exceed_max",
+      "target_id": "test/attention/config.test.ts::attention config > pending_decision_drop must exceed pending_decision_max",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_pending_decision_drop_below_max_rejected",
+      "target_id": "test/attention/config.test.ts::attention config > pending_decision_drop below pending_decision_max is rejected",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_pending_decision_max_must_exceed_user_replied_min",
+      "target_id": "test/attention/config.test.ts::attention config > pending_decision_max must exceed user_replied_min as well",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, including the docstring's reasoning, which is why the third ladder check exists at all: a `user_replied_min` at or above `max` leaves the user_reply ladder with no urgent tier and silently suppresses every relay-gap alert.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_backward_compat_user_replied_min_above_default_max_auto_scales",
+      "target_id": "test/attention/config.test.ts::attention config > a legacy user_replied_min above the default max auto-scales the ladder",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. `cfg.pending_decision_max > 2880` is `toBeGreaterThan`, not an equality against 2881: the source asserts the relation and not the arithmetic, and pinning `+1` here would make the case assert more than its source. Probe C7: removing the auto-scale turns this case red with the loader's own `pending_decision_max must be greater than user_replied_min (1440 <= 2880)`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_load_config_propagates_ttl_validation",
+      "target_id": "test/attention/config.test.ts::attention config > an invalid TTL ladder in JSON surfaces through loadConfig",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. What it pins is that the constructor's validation is reached THROUGH the loader rather than only by direct construction, which is what makes the four ladder cases above cover the file route too.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_negative_pending_decision_max_rejected",
+      "target_id": "test/attention/config.test.ts::attention config > the non-negative guard applies to the new knobs too",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_backward_compat_min_above_default_max_auto_scales",
+      "target_id": "test/attention/config.test.ts::attention config > a legacy pending_decision_min above the default max auto-scales the ladder",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, with the same `toBeGreaterThan` reading as its `user_replied_min` twin. Probe C7 turns this red too, with `pending_decision_max must be greater than pending_decision_min (1440 <= 2880)`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_backward_compat_explicit_max_above_default_drop_auto_scales",
+      "target_id": "test/attention/config.test.ts::attention config > an explicit max above the default drop scales drop too",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. It is the case that pins the SECOND auto-scale rule -- an explicit `max` above the default `drop` scales `drop` -- and the equality on `max` (20000) beside the relation on `drop` is the source's own asymmetry, kept.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_explicit_inversion_in_config_still_rejected",
+      "target_id": "test/attention/config.test.ts::attention config > the auto-scale does not mask an explicit inversion in the document",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, and the case that fixes what the auto-scale reads. Both presence tests are against the DOCUMENT (`Object.hasOwn(raw, \"pending_decision_max\")`), not against the accumulated keyword arguments, exactly as the source's `\"pending_decision_max\" not in raw` is -- so a value the operator wrote is never quietly raised to satisfy validation.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_duplicate_sidecar_window_default_and_override",
+      "target_id": "test/attention/config.test.ts::attention config > the duplicate-sidecar window has a default and is operator-tunable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, both halves (the default on a default-built config, the override through the loader).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_duplicate_sidecar_window_rejects_non_int",
+      "target_id": "test/attention/config.test.ts::attention config > the duplicate-sidecar window rejects a non-integer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation. The source's `pytest.raises(ValueError)` carries no `match`, so neither does this one -- adding one would assert more than the source.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_duplicate_sidecar_default_severity_is_urgent",
+      "target_id": "test/attention/config.test.ts::attention config > duplicate_sidecar defaults to urgent: only a human can resolve a double claimer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, one assertion against A1's table.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_delivery_signal_window_default_and_override",
+      "target_id": "test/attention/config.test.ts::attention config > the delivery-signal window has a longer default and is operator-tunable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, both halves, with the docstring's reason for the longer default carried as a comment: the two delivery signals are one-shot, so a window as short as the duplicate-sidecar one would silently drop a still-unresolved mute.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_delivery_signal_window_rejects_non_int",
+      "target_id": "test/attention/config.test.ts::attention config > the delivery-signal window rejects a non-integer",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, no `match`, for the same reason as its duplicate-sidecar twin. The docstring's point -- that an unvalidated string would reach `now_epoch - window_sec` inside the reader and raise mid-scan on a long-running watch -- is carried as a comment.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_config.py::test_delivery_signal_default_severities_are_urgent",
+      "target_id": "test/attention/config.test.ts::attention config > both delivery-ownership kinds default to urgent",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Straight translation, two assertions against A1's table.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

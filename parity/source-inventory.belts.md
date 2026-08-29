@@ -102,14 +102,40 @@ source does not have is what the parity check exists to catch -- and the child-l
 the second was retired structurally instead, by making every teardown await its child's exit rather
 than merely signal it.
 
-### `attention` -- `retarget` -- 194 cases
+### `attention` -- `in-scope` for A2 (**ported: 44 of 44 cases**), `retarget` for A1 and A3 -- 194 cases
 
 Belt start ratified at the human gate on 2026-08-30 (D-0034), split into three sub-belts sharing
 one D-range, `D-09xx`: A1 (facts, 90 cases), A2 (dedup and config, 44 cases) and A3 (notify and
 pipeline, 60 cases). The status keeps its `retarget` spelling here -- starting the belt is not the
 same axis as completing it (the same distinction D-0032's belts used); each sub-belt's rows move to
-`in-scope` at its own completion. `test_broker_journal_contract.py` is **not** part of these 194
-cases -- it has no node ids and sits in the `broker` section below as a collection-time skip.
+`in-scope` at its own completion. **A2 completed 2026-08-29** (`D-0904` and `D-0905` used), so its
+44 rows carry that spelling. `test_broker_journal_contract.py` is **not** part of these 194 cases --
+it has no node ids and sits in the `broker` section below as a collection-time skip.
+
+**A2 -- dedup and config, 44 of 44 ported.** `tests/attention/test_dedup.py` (10) and
+`tests/attention/test_config.py` (34), against `src/attention/dedup.ts`, `src/attention/pytime.ts`
+and the A2 half of `src/attention/config.ts` that `D-0902` reserved:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/attention/test_config.py` | 34 | `parity/attention.config.ledger.json` |
+| `tests/attention/test_dedup.py` | 10 | `parity/attention.dedup.ledger.json` |
+
+**The `test_dedup.py` retarget this document called for is done, and it is the belt's one
+deliberate divergence from interlock.** The two corruption cases named below assert the OPPOSITE of
+their source: `D-0034` ratified the fail-closed repair inside A2 and `D-0023` requires the case that
+pinned an inherited behaviour to be inverted in the change that repairs it, so both are recorded
+`adapted` with the divergence stated. `D-0904` draws the new boundary -- an ABSENT namespace is
+empty, a PRESENT but unusable one is a refusal -- and the source has four silent recovery paths
+where interlock's own suite pins only two, so the other two are closed by target-only cases rather
+than left unprotected. Rebuilding the corrupted state from durable records instead of refusing it
+is the larger repair `D-0034` named as declined-for-now; nothing in A2 forecloses it and no belt is
+yet chosen for it. The config file needed no such retarget: all 34 cases are straight translations,
+and the ledger defends that reading rather than leaving it to look like an oversight.
+
+The two decisions A2 minted are `D-0904` (the fail-closed boundary, and one home for the belt's
+`datetime` transcriptions) and `D-0905` (`isinstance(value, int)` is a question about the config
+document, not about the value; the dataclass's own defaults become one exported record).
 
 Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
 (mechanism)` or `rewrite`; **none** is a straight carry. `test_classifier.py` (61) carries the
@@ -503,8 +529,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29) | 1,715 |
-| `retarget` | `attention`, `gate_item11`, `broker` | 312 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` A2 only (**ported** 2026-08-29) | 1,759 |
+| `retarget` | `attention` A1 and A3, `gate_item11`, `broker` | 268 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
 | | **18** | **2,194** |

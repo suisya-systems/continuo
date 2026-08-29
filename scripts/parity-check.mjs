@@ -163,6 +163,7 @@ const LEDGERS = [
   // a module-level `pytest.importorskip`, so pytest collects no node id from it
   // and it has no inventory file for the loop below to read.
   "parity/attention.dedup.ledger.json",
+  "parity/attention.config.ledger.json",
 ];
 
 /**
