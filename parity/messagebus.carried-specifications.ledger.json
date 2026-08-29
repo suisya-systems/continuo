@@ -1,0 +1,134 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "messagebus",
+      "collected": 43,
+      "inventory": "parity/source-inventory/messagebus.all.txt",
+      "note": "The S8 durable-messaging belt, interlock tests/messagebus, 5 files. One ledger per source file (D-0019). The belt's whole design constraint is that it adds NO delivery store: interlock's own bus.py opens by defining itself as a thin facade that uses the S7 outbox API as found, so send / recipient-filtered poll / ack / envelope / endpoint is the entire owned surface and retry counting, delivery state transitions, lease fencing, destination dedup and ack persistence all stay in src/control_plane/outbox.ts. The single xfailed case in the whole 2,199-case source baseline lives in this belt (tests/messagebus/test_carried_specifications.py's recipient-aliasing specification)."
+    },
+    "file": {
+      "path": "tests/messagebus/test_carried_specifications.py",
+      "collected": 7,
+      "inventory": "parity/source-inventory/messagebus.test_carried_specifications.txt",
+      "note": "Carried v1 delivery invariants re-pointed at the new contract (interlock Q-0023 -> interlock D-0028); the quarantined tests/broker/ suites they come from drive a deleted module and do not run. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Measured 2026-08-29 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/messagebus/ -p no:cacheprovider`: 42 passed, 1 xfailed."
+    }
+  },
+  "target": {
+    "test_file": "test/messagebus/carried-specifications.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`bus.send(message_id=..., recipient=..., payload=..., dedup_key=..., now_ms=..., epoch=..., run_id=...)`, `bus.poll(recipient, now_ms=..., epoch=..., clock=...)`, `bus.ack(message_id, now_ms=..., recipient=...)` -- Python keyword arguments in snake_case",
+        "to": "the same three verbs taking a single options object in camelCase: `send({messageId, recipient, payload, dedupKey, nowMs, epoch, runId})`, `poll(recipient, {nowMs, epoch, clock})`, `ack(messageId, {nowMs, recipient})`",
+        "why": "The shape `src/control_plane/outbox.ts` already established for the same arguments, so the facade and the module it fronts are called the same way. JavaScript has no keyword arguments; an options object is the repository's settled substitute, and matching the outbox matters more here than anywhere because this class exists to be a thin skin over it. Systematic and therefore not repeated per case.",
+        "affects": "every case that drives the bus"
+      },
+      {
+        "from": "`pytest.raises(ValueError)` -- Python spells both the outbox's usage errors and the bus's own recipient-boundary refusal as the one builtin",
+        "to": "`expectRefusal(..., OutboxUsageError)` for the outbox's, and `expectRefusal(..., MessageBusUsageError)` for the bus's own",
+        "why": "`docs/test-translation-conventions.md` records why `expectRefusal` asserts the class as well as the message: a refusal family whose members differ only by message stays green while the taxonomy a caller acts on is wrong. Python collapses these two into `ValueError` because that is the builtin available; keeping them collapsed here would mean an ack refused by the WRONG layer still passed the test. The outbox's own refusals keep reaching callers unchanged, which is the source's stated 'exceptions are the outbox's own' doctrine.",
+        "affects": "the two ack-refusal cases and the endpoint's tool-error case"
+      },
+      {
+        "from": "`@pytest.mark.xfail(strict=True, reason=...)`",
+        "to": "`xfail({strict: true, reason: ...})` from `test/testkit/marks.ts`, which is `test.fails` with the reason appended to the title",
+        "why": "pytest's default xfail is NON-strict and tolerates an unexpected pass; `test.fails` does not. The testkit requires the strictness at the call site precisely so a translator has to have read which one the source used, and this is the source's one `xfail` in the whole 2,199-case suite -- the case the helper was written for before any belt had met one.",
+        "affects": "the recipient-aliasing specification"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None: every collected test in this file translates one source case."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/messagebus/carried-specifications.test.ts",
+        "constructs": {
+          "xfail": 1
+        },
+        "reason": "The source's one `@pytest.mark.xfail(strict=True)` -- the only xfail in interlock's whole suite, and the `1 xfailed` in the recorded suite baseline. It is a carried v1 invariant (recipient aliasing) that the MessageBus contract deliberately does not satisfy yet, landed failing rather than deleted so the gap stays visible; interlock D-0028 is the decision, and the source's own docstring says the day it passes the mark must be removed. Re-derived rather than taken on trust: `scripts/parity-check.mjs`'s NON_RUNNING sweep was re-run over `test/messagebus/` after the `stripComments` then `blankStrings` pre-pass, and reports `xfail` 1 in this file and zero of every construct in the other four files -- the mentions of `xfail` and `test.fails` in this file's own docstring are inside a block comment and are prose, not uses."
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 7,
+    "ported": 5,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/messagebus/test_carried_specifications.py::test_a_message_is_sent_only_to_a_registered_recipient",
+      "target_id": "test/messagebus/carried-specifications.test.ts::carried v1 delivery invariants, against the new contract > a message is sent only to a registered recipient",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_carried_specifications.py::test_a_settled_message_is_never_presented_again",
+      "target_id": "test/messagebus/carried-specifications.test.ts::carried v1 delivery invariants, against the new contract > a settled message is never presented again",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_carried_specifications.py::test_pull_then_ack_walks_the_claim_then_confirm_states",
+      "target_id": "test/messagebus/carried-specifications.test.ts::carried v1 delivery invariants, against the new contract > pull then ack walks the claim-then-confirm states",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_carried_specifications.py::test_a_poll_returns_only_the_polling_recipients_rows",
+      "target_id": "test/messagebus/carried-specifications.test.ts::carried v1 delivery invariants, against the new contract > a poll returns only the polling recipient's rows",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_carried_specifications.py::test_an_ack_from_the_wrong_recipient_is_refused",
+      "target_id": "test/messagebus/carried-specifications.test.ts::carried v1 delivery invariants, against the new contract > an ack from the wrong recipient is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- an ack naming a recipient the message is not addressed to is refused BEFORE the settlement write, and the row is still `delivered` afterwards. Adapted because the class asserted is one this port had to introduce: Python spells this refusal `ValueError`, the same builtin the outbox uses for its own usage errors, so a Python assertion cannot tell 'the facade refused the cross-recipient ack' from 'the outbox refused something else'. `MessageBusUsageError` is thrown only by code in `src/messagebus/`, so the case now pins WHICH layer refused. Measured: routing the refusal through `OutboxUsageError` instead turns the case red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_carried_specifications.py::test_a_non_ascii_payload_survives_delivery_byte_for_byte",
+      "target_id": "test/messagebus/carried-specifications.test.ts::carried v1 delivery invariants, against the new contract > a non-ASCII payload survives delivery byte for byte",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_carried_specifications.py::test_a_send_to_a_registered_alias_reaches_the_canonical_recipient",
+      "target_id": "test/messagebus/carried-specifications.test.ts::carried v1 delivery invariants, against the new contract > a send to a registered alias reaches the canonical recipient [xfail(strict): failing specification (interlock Q-0023 -> interlock D-0028): recipient aliasing is not part of the MessageBus contract yet; carried from tests/broker/test_store.py::test_enqueue_matches_by_name]",
+      "disposition": "adapted",
+      "source_status": "xfailed",
+      "target_status": "expected-fail",
+      "reason": "The carried specification is landed failing, exactly as the source lands it, and for the same stated reason: the contract has one name per recipient, the gap stays visible, and the day an implementation satisfies it the unexpected pass is a loud reminder to remove the mark. Adapted because `@pytest.mark.xfail(strict=True)` has no Vitest spelling and is mapped through `test/testkit/marks.ts`'s `xfail({strict: true})`, which resolves to `test.fails` -- the correct mapping for STRICT xfail and the wrong one for the default, per that helper's own rationale. Two consequences recorded here rather than left to be discovered: the reason travels in the test TITLE (which is why this target id carries a suffix the others do not), and the construct needs an explicit approval in `target.approved_non_running` below or `scripts/parity-check.mjs` fails the build.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

@@ -1,0 +1,158 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "messagebus",
+      "collected": 43,
+      "inventory": "parity/source-inventory/messagebus.all.txt",
+      "note": "The S8 durable-messaging belt, interlock tests/messagebus, 5 files. One ledger per source file (D-0019). The belt's whole design constraint is that it adds NO delivery store: interlock's own bus.py opens by defining itself as a thin facade that uses the S7 outbox API as found, so send / recipient-filtered poll / ack / envelope / endpoint is the entire owned surface and retry counting, delivery state transitions, lease fencing, destination dedup and ack persistence all stay in src/control_plane/outbox.ts. The single xfailed case in the whole 2,199-case source baseline lives in this belt (tests/messagebus/test_carried_specifications.py's recipient-aliasing specification)."
+    },
+    "file": {
+      "path": "tests/messagebus/test_messagebus.py",
+      "collected": 10,
+      "inventory": "parity/source-inventory/messagebus.test_messagebus.txt",
+      "note": "interlock's item 6 acceptance core, and the durable half of interlock Issue #19 together with the import-graph assertion beside it. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Measured 2026-08-29 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/messagebus/ -p no:cacheprovider`: 42 passed, 1 xfailed."
+    }
+  },
+  "target": {
+    "test_file": "test/messagebus/messagebus.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`bus.send(message_id=..., recipient=..., payload=..., dedup_key=..., now_ms=..., epoch=..., run_id=...)`, `bus.poll(recipient, now_ms=..., epoch=..., clock=...)`, `bus.ack(message_id, now_ms=..., recipient=...)` -- Python keyword arguments in snake_case",
+        "to": "the same three verbs taking a single options object in camelCase: `send({messageId, recipient, payload, dedupKey, nowMs, epoch, runId})`, `poll(recipient, {nowMs, epoch, clock})`, `ack(messageId, {nowMs, recipient})`",
+        "why": "The shape `src/control_plane/outbox.ts` already established for the same arguments, so the facade and the module it fronts are called the same way. JavaScript has no keyword arguments; an options object is the repository's settled substitute, and matching the outbox matters more here than anywhere because this class exists to be a thin skin over it. Systematic and therefore not repeated per case.",
+        "affects": "every case that drives the bus"
+      },
+      {
+        "from": "`@dataclass(frozen=True) DeliveredEnvelope` with snake_case fields, and `dataclasses.asdict(envelope)` at the wire",
+        "to": "a frozen class with camelCase fields, and an explicit `envelopeToWire` in `endpoint.ts` that spells the snake_case wire keys out",
+        "why": "The TypeScript surface is camelCase like the rest of the port, but the WIRE is not the API: `message_id` is the argument name the `ack` tool's own `inputSchema` declares, and an MCP client configured against interlock already parses those keys. So the rename stops at the transport boundary, and it is written out at that boundary rather than falling out of a serializer -- a serializer would make the wire contract a side effect of a naming convention.",
+        "affects": "the envelope and the endpoint's two tool payloads"
+      },
+      {
+        "from": "`pytest.raises(ValueError)` -- Python spells both the outbox's usage errors and the bus's own recipient-boundary refusal as the one builtin",
+        "to": "`expectRefusal(..., OutboxUsageError)` for the outbox's, and `expectRefusal(..., MessageBusUsageError)` for the bus's own",
+        "why": "`docs/test-translation-conventions.md` records why `expectRefusal` asserts the class as well as the message: a refusal family whose members differ only by message stays green while the taxonomy a caller acts on is wrong. Python collapses these two into `ValueError` because that is the builtin available; keeping them collapsed here would mean an ack refused by the WRONG layer still passed the test. The outbox's own refusals keep reaching callers unchanged, which is the source's stated 'exceptions are the outbox's own' doctrine.",
+        "affects": "the two ack-refusal cases and the endpoint's tool-error case"
+      },
+      {
+        "from": "pytest's `bus_env` / `bus_env_factory` fixtures, defined in `tests/messagebus/conftest.py` over `tests/messagebus/_env.py`",
+        "to": "`busEnv()` / `busEnvFactory()` in `test/messagebus/_env.ts`, called from the test body, with the source's `yield`-teardown becoming `onTestFinished`",
+        "why": "Vitest has no `conftest.py`, so the source's split between the module that knows the control plane and the conftest that exposes it as fixtures has nothing to sit on and the two are merged. The property that split existed to produce -- no single file in the suite knows both the control plane and a session backend -- is unchanged and is still checked file by file by `import-graph.test.ts`. `onTestFinished` rather than an `afterEach` because it runs on failure too: a database left open by a failing case leaks a handle into whatever runs next, and under `sequence.shuffle` (D-0005) that is a different case each run.",
+        "affects": "every case in the belt"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None: every collected test in this file translates one source case."
+    }
+  },
+  "totals": {
+    "source_cases": 10,
+    "ported": 8,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_a_dropped_first_delivery_resends_to_exactly_one_ack",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > a dropped first delivery resends to exactly one ack",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_a_message_stays_due_until_the_ack_and_not_after",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > a message stays due until the ack and not after",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_a_send_to_an_unregistered_recipient_is_refused_before_the_write",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > a send to an unregistered recipient is refused before the write",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_an_ack_for_a_never_polled_message_is_refused",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > an ack for a never polled message is refused",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- an ack for a message no poll ever delivered is refused, and the refusal comes from the outbox rather than from this facade. Adapted only in what is asserted about the exception: the source's `pytest.raises(ValueError)` becomes `expectRefusal(..., OutboxUsageError, /has not been delivered/)`, which pins the class AND the message where the source could pin only the builtin. Measured: dropping the `recordAck` delivered-at-null guard turns the case red on the class, not merely on the text.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_poll_presents_only_the_polling_recipients_messages",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > poll presents only the polling recipient's messages",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_a_stale_writer_cannot_poll_a_delivery_out",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > a stale writer cannot poll a delivery out",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_a_message_acked_between_polls_is_skipped_without_audit_noise",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > a message acked between polls is skipped without audit noise",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_a_message_settled_mid_poll_is_skipped_not_an_error",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > a message settled mid poll is skipped, not an error",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_a_poll_outliving_its_lease_stops_at_the_expiry",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > a poll outliving its lease stops at the expiry",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- with a live clock the attempt past the lease expiry is refused loudly and the second row is left `pending`, so the fence holds through the poll rather than only at its first row. Adapted because the clock stub had to gain a failure the source got for free: `iter([...])` plus `next()` raises `StopIteration` on a third read, and a JavaScript closure over an array would silently return `undefined` and hand the outbox a `NaN` instant. The stub therefore throws an explicit error naming the third read, which keeps 'this case describes exactly two attempts' an assertion instead of an assumption.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_messagebus.py::test_two_tasks_settle_independently",
+      "target_id": "test/messagebus/messagebus.test.ts::the message bus: drop, resend, exactly one ack > two tasks settle independently",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    }
+  ]
+}

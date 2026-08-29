@@ -1,0 +1,96 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item2",
+      "collected": 34,
+      "inventory": "parity/source-inventory/gate_item2.all.txt",
+      "note": "See parity/gate_item2.orchestrator-walk.ledger.json for the subsystem-level note. This ledger is the third of the subsystem's three files and the one that stays entirely 'not-ported' (deferred) in this change -- see D-0801 and the per-entry reason."
+    },
+    "file": {
+      "path": "tests/gate_item2/test_session_driver_harness.py",
+      "collected": 6,
+      "inventory": "parity/source-inventory/gate_item2.test_session_driver_harness.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 6 pass there (re-run 2026-08-29 against the read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item2/ -p no:cacheprovider`: 34 passed, of which 6 are this file's). Skipped entirely at pytest collection time on non-Linux hosts via `pytestmark = pytest.mark.skipif(not _LINUX, ...)`; unaffected by that here since every entry is deferred rather than run."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item2/session-driver-harness.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. No target file exists yet -- every entry is deferred."
+    }
+  },
+  "totals": {
+    "source_cases": 6,
+    "ported": 0,
+    "adapted": 0,
+    "not_ported": 6,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_the_manifest_carries_all_four_injection_points",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "Deferred, not a translation gap: this file drives tests.fault_injection.controller.Controller / execute_case / assert_invariants against SESSION_ADAPTER from tests/fault_injection/session_driver.py -- the fault-injection harness itself, real SIGKILL and all. Continuo's port of that harness (test/fault_injection/, feat/continuo-fault-injection-port, HEAD 16a9c2c at the time this belt paused) carries a SESSION_ADAPTER whose execution-path methods (bootstrap, spawn, roleArguments, observer, invariantQueries, queryParameters, effectKeys, holderOf) all deliberately throw ContractViolation: its own header states the four session-start cases are 'a follow-on on the session belt landing' (D-0601) that has not yet been done, distinct from the session belt itself (D-0301/D-0302, PR #61) which HAS landed. So the six node ids here need a SessionAdapter re-bound to src/supervisor.ts and src/session/claude_cli_provider.ts before they can run meaningfully, which is fault_injection's own file to change, not gate_item2's. Ratified as a follow-on task (2026-08-29, human decision via secretary, option (a')): gate_item2 ships as 28/34 and the SessionAdapter follow-on + these six cases + fault_injection's own four full-profile session-start manifest cases are dispatched as a separate task. A faithful draft of all six cases against the current controller.ts / manifest.ts APIs is held at (gitignored, not in this ledger's target file) tmp/session-driver-harness.draft.test.ts on this task's branch (feat/continuo-gate-item2-port) as a handoff asset for the follow-on worker -- it 1:1-translates Controller/executeCase/assertInvariants exactly as the ported test/fault_injection/cases.test.ts already calls them, and is expected to need rework once the adapter is real (explicitly accepted by the human decision). What unblocks this ledger: the SessionAdapter follow-on landing, at which point this entry set is replaced with real target_ids and dispositions in a follow-up PR.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__before_durable_write__sigkill]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "Deferred, not a translation gap: this file drives tests.fault_injection.controller.Controller / execute_case / assert_invariants against SESSION_ADAPTER from tests/fault_injection/session_driver.py -- the fault-injection harness itself, real SIGKILL and all. Continuo's port of that harness (test/fault_injection/, feat/continuo-fault-injection-port, HEAD 16a9c2c at the time this belt paused) carries a SESSION_ADAPTER whose execution-path methods (bootstrap, spawn, roleArguments, observer, invariantQueries, queryParameters, effectKeys, holderOf) all deliberately throw ContractViolation: its own header states the four session-start cases are 'a follow-on on the session belt landing' (D-0601) that has not yet been done, distinct from the session belt itself (D-0301/D-0302, PR #61) which HAS landed. So the six node ids here need a SessionAdapter re-bound to src/supervisor.ts and src/session/claude_cli_provider.ts before they can run meaningfully, which is fault_injection's own file to change, not gate_item2's. Ratified as a follow-on task (2026-08-29, human decision via secretary, option (a')): gate_item2 ships as 28/34 and the SessionAdapter follow-on + these six cases + fault_injection's own four full-profile session-start manifest cases are dispatched as a separate task. A faithful draft of all six cases against the current controller.ts / manifest.ts APIs is held at (gitignored, not in this ledger's target file) tmp/session-driver-harness.draft.test.ts on this task's branch (feat/continuo-gate-item2-port) as a handoff asset for the follow-on worker -- it 1:1-translates Controller/executeCase/assertInvariants exactly as the ported test/fault_injection/cases.test.ts already calls them, and is expected to need rework once the adapter is real (explicitly accepted by the human decision). What unblocks this ledger: the SessionAdapter follow-on landing, at which point this entry set is replaced with real target_ids and dispositions in a follow-up PR.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__after_record_before_effect__sigkill]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "Deferred, not a translation gap: this file drives tests.fault_injection.controller.Controller / execute_case / assert_invariants against SESSION_ADAPTER from tests/fault_injection/session_driver.py -- the fault-injection harness itself, real SIGKILL and all. Continuo's port of that harness (test/fault_injection/, feat/continuo-fault-injection-port, HEAD 16a9c2c at the time this belt paused) carries a SESSION_ADAPTER whose execution-path methods (bootstrap, spawn, roleArguments, observer, invariantQueries, queryParameters, effectKeys, holderOf) all deliberately throw ContractViolation: its own header states the four session-start cases are 'a follow-on on the session belt landing' (D-0601) that has not yet been done, distinct from the session belt itself (D-0301/D-0302, PR #61) which HAS landed. So the six node ids here need a SessionAdapter re-bound to src/supervisor.ts and src/session/claude_cli_provider.ts before they can run meaningfully, which is fault_injection's own file to change, not gate_item2's. Ratified as a follow-on task (2026-08-29, human decision via secretary, option (a')): gate_item2 ships as 28/34 and the SessionAdapter follow-on + these six cases + fault_injection's own four full-profile session-start manifest cases are dispatched as a separate task. A faithful draft of all six cases against the current controller.ts / manifest.ts APIs is held at (gitignored, not in this ledger's target file) tmp/session-driver-harness.draft.test.ts on this task's branch (feat/continuo-gate-item2-port) as a handoff asset for the follow-on worker -- it 1:1-translates Controller/executeCase/assertInvariants exactly as the ported test/fault_injection/cases.test.ts already calls them, and is expected to need rework once the adapter is real (explicitly accepted by the human decision). What unblocks this ledger: the SessionAdapter follow-on landing, at which point this entry set is replaced with real target_ids and dispositions in a follow-up PR.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__after_effect_before_record__sigkill]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "Deferred, not a translation gap: this file drives tests.fault_injection.controller.Controller / execute_case / assert_invariants against SESSION_ADAPTER from tests/fault_injection/session_driver.py -- the fault-injection harness itself, real SIGKILL and all. Continuo's port of that harness (test/fault_injection/, feat/continuo-fault-injection-port, HEAD 16a9c2c at the time this belt paused) carries a SESSION_ADAPTER whose execution-path methods (bootstrap, spawn, roleArguments, observer, invariantQueries, queryParameters, effectKeys, holderOf) all deliberately throw ContractViolation: its own header states the four session-start cases are 'a follow-on on the session belt landing' (D-0601) that has not yet been done, distinct from the session belt itself (D-0301/D-0302, PR #61) which HAS landed. So the six node ids here need a SessionAdapter re-bound to src/supervisor.ts and src/session/claude_cli_provider.ts before they can run meaningfully, which is fault_injection's own file to change, not gate_item2's. Ratified as a follow-on task (2026-08-29, human decision via secretary, option (a')): gate_item2 ships as 28/34 and the SessionAdapter follow-on + these six cases + fault_injection's own four full-profile session-start manifest cases are dispatched as a separate task. A faithful draft of all six cases against the current controller.ts / manifest.ts APIs is held at (gitignored, not in this ledger's target file) tmp/session-driver-harness.draft.test.ts on this task's branch (feat/continuo-gate-item2-port) as a handoff asset for the follow-on worker -- it 1:1-translates Controller/executeCase/assertInvariants exactly as the ported test/fault_injection/cases.test.ts already calls them, and is expected to need rework once the adapter is real (explicitly accepted by the human decision). What unblocks this ledger: the SessionAdapter follow-on landing, at which point this entry set is replaced with real target_ids and dispositions in a follow-up PR.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__identity-readback-committed__sigkill]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "Deferred, not a translation gap: this file drives tests.fault_injection.controller.Controller / execute_case / assert_invariants against SESSION_ADAPTER from tests/fault_injection/session_driver.py -- the fault-injection harness itself, real SIGKILL and all. Continuo's port of that harness (test/fault_injection/, feat/continuo-fault-injection-port, HEAD 16a9c2c at the time this belt paused) carries a SESSION_ADAPTER whose execution-path methods (bootstrap, spawn, roleArguments, observer, invariantQueries, queryParameters, effectKeys, holderOf) all deliberately throw ContractViolation: its own header states the four session-start cases are 'a follow-on on the session belt landing' (D-0601) that has not yet been done, distinct from the session belt itself (D-0301/D-0302, PR #61) which HAS landed. So the six node ids here need a SessionAdapter re-bound to src/supervisor.ts and src/session/claude_cli_provider.ts before they can run meaningfully, which is fault_injection's own file to change, not gate_item2's. Ratified as a follow-on task (2026-08-29, human decision via secretary, option (a')): gate_item2 ships as 28/34 and the SessionAdapter follow-on + these six cases + fault_injection's own four full-profile session-start manifest cases are dispatched as a separate task. A faithful draft of all six cases against the current controller.ts / manifest.ts APIs is held at (gitignored, not in this ledger's target file) tmp/session-driver-harness.draft.test.ts on this task's branch (feat/continuo-gate-item2-port) as a handoff asset for the follow-on worker -- it 1:1-translates Controller/executeCase/assertInvariants exactly as the ported test/fault_injection/cases.test.ts already calls them, and is expected to need rework once the adapter is real (explicitly accepted by the human decision). What unblocks this ledger: the SessionAdapter follow-on landing, at which point this entry set is replaced with real target_ids and dispositions in a follow-up PR.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_two_runs_of_one_case_produce_identical_traces",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "not-run",
+      "reason": "Deferred, not a translation gap: this file drives tests.fault_injection.controller.Controller / execute_case / assert_invariants against SESSION_ADAPTER from tests/fault_injection/session_driver.py -- the fault-injection harness itself, real SIGKILL and all. Continuo's port of that harness (test/fault_injection/, feat/continuo-fault-injection-port, HEAD 16a9c2c at the time this belt paused) carries a SESSION_ADAPTER whose execution-path methods (bootstrap, spawn, roleArguments, observer, invariantQueries, queryParameters, effectKeys, holderOf) all deliberately throw ContractViolation: its own header states the four session-start cases are 'a follow-on on the session belt landing' (D-0601) that has not yet been done, distinct from the session belt itself (D-0301/D-0302, PR #61) which HAS landed. So the six node ids here need a SessionAdapter re-bound to src/supervisor.ts and src/session/claude_cli_provider.ts before they can run meaningfully, which is fault_injection's own file to change, not gate_item2's. Ratified as a follow-on task (2026-08-29, human decision via secretary, option (a')): gate_item2 ships as 28/34 and the SessionAdapter follow-on + these six cases + fault_injection's own four full-profile session-start manifest cases are dispatched as a separate task. A faithful draft of all six cases against the current controller.ts / manifest.ts APIs is held at (gitignored, not in this ledger's target file) tmp/session-driver-harness.draft.test.ts on this task's branch (feat/continuo-gate-item2-port) as a handoff asset for the follow-on worker -- it 1:1-translates Controller/executeCase/assertInvariants exactly as the ported test/fault_injection/cases.test.ts already calls them, and is expected to need rework once the adapter is real (explicitly accepted by the human decision). What unblocks this ledger: the SessionAdapter follow-on landing, at which point this entry set is replaced with real target_ids and dispositions in a follow-up PR.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

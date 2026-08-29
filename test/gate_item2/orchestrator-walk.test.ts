@@ -1,0 +1,631 @@
+import type { Database as SqliteDatabase } from "better-sqlite3";
+import { describe, expect, onTestFinished, test } from "vitest";
+
+import { acquire, LeaseHeld, StaleWriterRefused } from "../../src/control_plane/lease.js";
+import * as sessionBinding from "../../src/control_plane/session_binding.js";
+import { Failure, FailureKind, type Ok } from "../../src/session/provider.js";
+import {
+  IdentityUnconfirmed,
+  LoserTerminated,
+  OrchestrationRefused,
+  SessionOrchestrator,
+} from "../../src/supervisor.js";
+import { caseRoot } from "../testkit/cases.js";
+import {
+  activeRows,
+  Clock,
+  expectAsyncRefusal,
+  makeControlPlane,
+  makeOrchestrator,
+  makeUuids,
+  RESOURCE,
+  RUN_ID,
+  refusals,
+  ScriptedProvider,
+  TTL_MS,
+  takeOver,
+  unconfirmed,
+} from "./helpers.js";
+
+/**
+ * The Interlock-mediated proof, layer by layer (issue #18).
+ *
+ * Ported from interlock `tests/gate_item2/test_orchestrator_walk.py` at
+ * `65f36c5`.
+ *
+ * Every case here runs a crash-and-retry shape *through* the control plane
+ * and asserts the outcome the provider cannot supply: the losing claimant
+ * never becomes a process, a second writer is refused durably, and
+ * re-identification after a kill yields exactly one session for the run. The
+ * provider fixture refuses nothing (see `./helpers.ts`), so every pass here
+ * is a pass with the provider's own refusal assumed absent -- it is defence
+ * in depth, not the mechanism. No assertion reads an exit code; every one
+ * reads a durable row or the provider's recorded call list.
+ */
+
+function harness(): {
+  readonly cp: SqliteDatabase;
+  readonly clock: Clock;
+  readonly provider: ScriptedProvider;
+  readonly uuids: () => string;
+  readonly workspace: string;
+} {
+  const cp = makeControlPlane();
+  onTestFinished(() => {
+    cp.close();
+  });
+  return {
+    cp,
+    clock: new Clock(),
+    provider: new ScriptedProvider(),
+    uuids: makeUuids(),
+    workspace: caseRoot("gate-item2-orch"),
+  };
+}
+
+// --------------------------------------------------------------------------
+// the admission ordering itself
+// --------------------------------------------------------------------------
+
+describe("the admission ordering itself", () => {
+  test("the binding is committed before the provider is asked to spawn", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const seen: [string, string][] = [];
+
+    provider.onStart = (request) => {
+      const row = cp
+        .prepare(
+          "SELECT binding_phase, observation FROM session WHERE session_id = ?" +
+            " AND released_at_ms IS NULL",
+        )
+        .get(request.sessionId) as { binding_phase: string; observation: string } | undefined;
+      expect(row, "the spawn ran before the binding was committed").toBeDefined();
+      const defined = row as { binding_phase: string; observation: string };
+      seen.push([defined.binding_phase, defined.observation]);
+      return undefined;
+    };
+
+    const outcome = await makeOrchestrator(cp, clock, provider, uuids, workspace).start();
+
+    // The write-ahead had already committed -- and honestly: the row said
+    // 'spawned'/'unobserved', never claiming a read-back that had not happened.
+    expect(seen).toStrictEqual([["spawned", "unobserved"]]);
+    expect(outcome.path).toBe("started");
+    expect(outcome.binding.bindingPhase).toBe("identity_confirmed");
+    expect(outcome.binding.observation).toBe("observed");
+  });
+
+  test("the readback is committed not assumed", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const outcome = await makeOrchestrator(cp, clock, provider, uuids, workspace).start();
+    const row = cp
+      .prepare(
+        "SELECT binding_phase, observation, provider_state FROM session WHERE session_id = ?",
+      )
+      .get(outcome.sessionId) as {
+      binding_phase: string;
+      observation: string;
+      provider_state: string;
+    };
+    expect([row.binding_phase, row.observation]).toEqual(["identity_confirmed", "observed"]);
+    expect(row.provider_state).toBe("running");
+  });
+
+  test("an identity that never reads back is never confirmed", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.nextReadouts = Array.from({ length: 10 }, () => unconfirmed("ignored"));
+    await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace).start(),
+      IdentityUnconfirmed,
+    );
+    const rows = activeRows(cp);
+    expect(rows).toHaveLength(1);
+    const [, phase, observation] = rows[0] as [string, string, string];
+    expect(phase).toBe("spawned");
+    expect(observation).toBe("unobserved");
+  });
+});
+
+// --------------------------------------------------------------------------
+// the losing claimant never becomes a process
+// --------------------------------------------------------------------------
+
+describe("the losing claimant never becomes a process", () => {
+  test("a claimant against a live lease never reaches the provider", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    await makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start();
+    await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-b").start(),
+      LeaseHeld,
+    );
+    // One spawn ever; the second claimant died at the lease, not at the
+    // provider, and wrote nothing.
+    expect(provider.startCalls).toHaveLength(1);
+    expect(activeRows(cp)).toHaveLength(1);
+  });
+
+  test("the u27 shape through interlock spawns only the winner", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // sup-a acquires the lease and dies before prepare_binding commits: the
+    // uuid factory is the seam between acquire and the admission write.
+    const die = (): never => {
+      throw new Error("claimant killed inside the admission window");
+    };
+
+    await expect(
+      new SessionOrchestrator(cp, provider, {
+        runId: RUN_ID,
+        holder: "sup-a",
+        workspace: "w",
+        role: "worker",
+        nowMs: clock.nowMs,
+        sessionUuidFactory: die,
+        ttlMs: TTL_MS,
+      }).start(),
+    ).rejects.toThrow("claimant killed inside the admission window");
+    expect(provider.startCalls).toEqual([]);
+    expect(activeRows(cp)).toEqual([]);
+
+    // The retry: through Interlock it must wait out the dead claimant's
+    // lease (a lease cannot tell dead from slow), then it alone spawns.
+    await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a-retry").recover(),
+      LeaseHeld,
+    );
+    clock.advancePastExpiry();
+    const outcome = await makeOrchestrator(
+      cp,
+      clock,
+      provider,
+      uuids,
+      workspace,
+      "sup-a-retry",
+    ).recover();
+    expect(outcome.path).toBe("started");
+    expect(provider.startCalls.map((request) => request.sessionId)).toEqual([outcome.sessionId]);
+    expect(activeRows(cp).map((row) => row[0])).toEqual([outcome.sessionId]);
+  });
+
+  test("a stale claimant returning before its admission write never spawns", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const stopAndLose = (): string => {
+      // The world moves while sup-a is stopped between its acquire and its
+      // admission write: the lease expires and sup-b takes over (epoch up).
+      takeOver(cp, clock, "sup-b");
+      return "11111111-1111-4111-8111-111111111111";
+    };
+
+    await expectAsyncRefusal(
+      () =>
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+          sessionUuidFactory: stopAndLose,
+        }).start(),
+      StaleWriterRefused,
+    );
+
+    expect(provider.startCalls).toEqual([]); // the loser never became a process
+    expect(activeRows(cp)).toEqual([]);
+    const recorded = refusals(cp);
+    expect(recorded).toHaveLength(1);
+    expect(String((recorded[0] as Record<string, unknown>).kind)).toContain("prepare_binding");
+  });
+
+  test("a claimant stopped inside the critical section is terminated measured", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.onStart = (_request) => {
+      takeOver(cp, clock, "sup-b");
+      return undefined;
+    };
+
+    const caught = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start(),
+      LoserTerminated,
+    );
+
+    // The process was created (that is the residual) -- and then terminated,
+    // immediately and measurably, before any identity was confirmed.
+    expect(provider.stopCalls).toEqual([caught.sessionId]);
+    expect(caught.terminationLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(refusals(cp).some((row) => String(row.kind).includes("post_spawn_gate"))).toBe(true);
+    // The loser's binding never reached identity_confirmed.
+    const binding = sessionBinding.bindingForSession(cp, caught.sessionId);
+    expect(binding !== undefined && binding.bindingPhase === "spawned").toBe(true);
+  });
+});
+
+// --------------------------------------------------------------------------
+// recovery: the four injection points, re-identified from SQLite alone
+// --------------------------------------------------------------------------
+
+describe("recovery: the four injection points, re-identified from SQLite alone", () => {
+  test("killed before the binding commit recovery starts fresh", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    clock.advancePastExpiry(); // any prior claimant's lease is history
+    const outcome = await makeOrchestrator(
+      cp,
+      clock,
+      provider,
+      uuids,
+      workspace,
+      "sup-2",
+    ).recover();
+    expect(outcome.path).toBe("started");
+    expect(provider.startCalls).toHaveLength(1);
+    expect(activeRows(cp).map((row) => row[0])).toEqual([outcome.sessionId]);
+  });
+
+  test("killed between commit and spawn recovery respawns the bound identity", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const lease = acquire(cp, {
+      resource: RESOURCE,
+      holder: "sup-1",
+      nowMs: clock.nowMs(),
+      ttlMs: TTL_MS,
+    });
+    const sessionId = uuids();
+    sessionBinding.prepareBinding(cp, lease, {
+      sessionId,
+      runId: RUN_ID,
+      provider: "scripted",
+      nowMs: clock.nowMs(),
+    });
+    clock.advancePastExpiry();
+
+    const outcome = await makeOrchestrator(
+      cp,
+      clock,
+      provider,
+      uuids,
+      workspace,
+      "sup-2",
+    ).recover();
+    expect(outcome.path).toBe("respawned");
+    expect(outcome.sessionId).toBe(sessionId); // the committed identity, not a new one
+    expect(provider.startCalls.map((request) => request.sessionId)).toEqual([sessionId]);
+    expect(provider.resumeCalls).toEqual([]);
+    expect(outcome.binding.bindingPhase).toBe("identity_confirmed");
+  });
+
+  test("killed after the mark but before the spawn ran recovery respawns", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const lease = acquire(cp, {
+      resource: RESOURCE,
+      holder: "sup-1",
+      nowMs: clock.nowMs(),
+      ttlMs: TTL_MS,
+    });
+    const sessionId = uuids();
+    sessionBinding.prepareBinding(cp, lease, {
+      sessionId,
+      runId: RUN_ID,
+      provider: "scripted",
+      nowMs: clock.nowMs(),
+    });
+    sessionBinding.markSpawned(cp, lease, { sessionId, runId: RUN_ID, nowMs: clock.nowMs() });
+    clock.advancePastExpiry();
+
+    const outcome = await makeOrchestrator(
+      cp,
+      clock,
+      provider,
+      uuids,
+      workspace,
+      "sup-2",
+    ).recover();
+    expect(outcome.path).toBe("respawned");
+    expect(outcome.sessionId).toBe(sessionId);
+    expect(provider.startCalls.map((request) => request.sessionId)).toEqual([sessionId]);
+    expect(provider.resumeCalls).toEqual([]);
+  });
+
+  test("killed between spawn and readback recovery resumes never reclaims", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const lease = acquire(cp, {
+      resource: RESOURCE,
+      holder: "sup-1",
+      nowMs: clock.nowMs(),
+      ttlMs: TTL_MS,
+    });
+    const sessionId = uuids();
+    sessionBinding.prepareBinding(cp, lease, {
+      sessionId,
+      runId: RUN_ID,
+      provider: "scripted",
+      nowMs: clock.nowMs(),
+    });
+    sessionBinding.markSpawned(cp, lease, { sessionId, runId: RUN_ID, nowMs: clock.nowMs() });
+    provider.plant(sessionId, [], false); // the provider knows the dead child
+    clock.advancePastExpiry();
+
+    const outcome = await makeOrchestrator(
+      cp,
+      clock,
+      provider,
+      uuids,
+      workspace,
+      "sup-2",
+    ).recover();
+    expect(outcome.path).toBe("resumed");
+    expect(provider.startCalls).toEqual([]);
+    expect(provider.resumeCalls).toEqual([sessionId]);
+    expect(outcome.binding.bindingPhase).toBe("identity_confirmed");
+  });
+
+  test("killed after the readback commit recovery resumes and rewrites nothing", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const outcome = await makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-1").start();
+    const confirmedAt = (
+      cp
+        .prepare("SELECT binding_phase FROM session WHERE session_id = ?")
+        .get(outcome.sessionId) as {
+        binding_phase: string;
+      }
+    ).binding_phase;
+    expect(confirmedAt).toBe("identity_confirmed");
+
+    clock.advancePastExpiry();
+    const recovered = await makeOrchestrator(
+      cp,
+      clock,
+      provider,
+      uuids,
+      workspace,
+      "sup-2",
+    ).recover();
+    expect(recovered.path).toBe("resumed");
+    expect(recovered.sessionId).toBe(outcome.sessionId);
+    expect(provider.resumeCalls).toEqual([outcome.sessionId]);
+    expect(provider.startCalls).toHaveLength(1); // still only the original spawn
+    // Exactly one active binding, same identity, still confirmed.
+    expect(activeRows(cp)).toEqual([[outcome.sessionId, "identity_confirmed", "observed"]]);
+  });
+
+  test("every recovery ends with exactly one active binding", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const outcome = await makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-1").start();
+    for (let generation = 2; generation < 5; generation += 1) {
+      clock.advancePastExpiry();
+      const recovered = await makeOrchestrator(
+        cp,
+        clock,
+        provider,
+        uuids,
+        workspace,
+        `sup-${generation}`,
+      ).recover();
+      expect(recovered.sessionId).toBe(outcome.sessionId);
+      expect(activeRows(cp)).toHaveLength(1);
+    }
+  });
+});
+
+// --------------------------------------------------------------------------
+// the U32 shape, mediated; orphans; refusal durability
+// --------------------------------------------------------------------------
+
+describe("the U32 shape, mediated; orphans; refusal durability", () => {
+  test("the u32 shape through interlock issues no second resume", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const outcome = await makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-1").start();
+    clock.advancePastExpiry();
+    const first = await makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-2").recover();
+    expect(first.sessionId).toBe(outcome.sessionId);
+    await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-3").recover(),
+      LeaseHeld,
+    );
+    expect(provider.resumeCalls).toEqual([outcome.sessionId]); // exactly one, ever
+  });
+
+  test("a stale recoverer is refused before its resume", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const outcome = await makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-1").start();
+    clock.advancePastExpiry();
+
+    const recoverer = makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-2");
+    const originalReadState = provider.readState.bind(provider);
+
+    provider.readState = async (sessionId: string) => {
+      provider.readState = originalReadState;
+      takeOver(cp, clock, "sup-3");
+      return originalReadState(sessionId);
+    };
+
+    await expectAsyncRefusal(() => recoverer.recover(), StaleWriterRefused);
+    expect(provider.resumeCalls).toEqual([]); // refused before the verb, not after
+    expect(refusals(cp).some((row) => String(row.kind).includes("post_spawn_gate"))).toBe(true);
+    expect(outcome.sessionId).toBeTruthy(); // the binding still names the one session
+  });
+
+  test("an orphan the binding does not name is never adopted", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const orphan = "99999999-9999-4999-8999-999999999999";
+    provider.plant(orphan, [], true); // a leftover from some other life
+    clock.advancePastExpiry();
+
+    const outcome = await makeOrchestrator(
+      cp,
+      clock,
+      provider,
+      uuids,
+      workspace,
+      "sup-2",
+    ).recover();
+    expect(outcome.sessionId).not.toBe(orphan);
+    expect(provider.resumeCalls).toEqual([]); // the orphan was not resumed
+    expect(provider.startCalls.map((request) => request.sessionId)).not.toContain(orphan);
+    // The orphan is still enumerable -- unadopted, not erased.
+    const listed = await provider.listSessions();
+    const roster = new Set(
+      (listed as Ok<readonly (typeof outcome.readout)[]>).value.map((r) => r.sessionId),
+    );
+    expect(roster.has(orphan)).toBe(true);
+  });
+
+  test("a claimant that stalls in the readback never returns success", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const stalled: { b?: Awaited<ReturnType<SessionOrchestrator["recover"]>> } = {};
+
+    const takeoverDuringWait = async (): Promise<void> => {
+      if (stalled.b !== undefined) {
+        return;
+      }
+      clock.advancePastExpiry(); // A's lease dies while A is stalled
+      // From here the provider reports the session normally -- which is
+      // exactly what a stale A sees on waking.
+      for (const session of provider.sessions.values()) {
+        session.readouts = [];
+      }
+      // B's full recovery, run inline while A is stalled: resume the
+      // session and confirm the binding under B's (live) lease.
+      stalled.b = await makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-b").recover();
+    };
+
+    // A's readouts stay unconfirmed until B has taken over.
+    provider.nextReadouts = Array.from({ length: 4 }, () => unconfirmed("pending"));
+    const a = makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+      wait: takeoverDuringWait,
+      readbackAttempts: 3,
+    });
+    const caught = await expectAsyncRefusal(() => a.start(), LoserTerminated);
+
+    expect(stalled.b, "B's recovery never ran while A was stalled").toBeDefined();
+    const b = stalled.b as NonNullable<typeof stalled.b>;
+    expect(b.sessionId).toBe(caught.sessionId);
+    // A left a durable refusal and stood down from the stop: B has confirmed
+    // the binding, so a session-level stop from A could have killed the very
+    // worker B adopted. A's possibly-rogue process is surfaced as an
+    // unresolved hazard, not silently trusted and not blindly killed.
+    expect(caught.stopAttempted).toBe(false);
+    expect(provider.stopCalls).not.toContain(caught.sessionId);
+    expect(caught.message).toContain("UNRESOLVED hazard");
+    expect(refusals(cp).some((row) => String(row.kind).includes("post_spawn_gate"))).toBe(true);
+    expect(activeRows(cp)).toEqual([[b.sessionId, "identity_confirmed", "observed"]]);
+  });
+
+  test("a provider failure does not bypass the fence", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.onStart = (_request) => {
+      takeOver(cp, clock, "sup-b");
+      return new Failure(
+        FailureKind.UNINTERPRETABLE_RESPONSE,
+        "the readout failed after Popen; a process may exist",
+      );
+    };
+    await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start(),
+      LoserTerminated,
+    );
+    expect(refusals(cp).some((row) => String(row.kind).includes("post_spawn_gate"))).toBe(true);
+  });
+
+  test("a fruitless readback still ends in a fenced write", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const loseWhilePolling = (): void => {
+      takeOver(cp, clock, "sup-b");
+    };
+    provider.nextReadouts = Array.from({ length: 10 }, () => unconfirmed("never"));
+    const caught = await expectAsyncRefusal(
+      () =>
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+          wait: loseWhilePolling,
+          readbackAttempts: 2,
+        }).start(),
+      LoserTerminated,
+    );
+    // No takeover writer had confirmed anything, so the loser's own child
+    // was stopped rather than left as a hazard.
+    expect(caught.stopAttempted).toBe(true);
+    expect(provider.stopCalls).toContain(caught.sessionId);
+  });
+
+  test("an unconfirmed stop is reported as unconfirmed", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.onStart = (_request) => {
+      takeOver(cp, clock, "sup-b");
+      return undefined;
+    };
+    const realStop = provider.stop.bind(provider);
+    provider.stop = async (sessionId: string) => {
+      provider.stopCalls.push(sessionId);
+      return new Failure(FailureKind.TIMED_OUT, "child did not exit within 2s of SIGKILL");
+    };
+    const caught = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start(),
+      LoserTerminated,
+    );
+    expect(caught.stopConfirmed).toBe(false);
+    expect(caught.message).toContain("NOT confirmed");
+    provider.stop = realStop;
+  });
+
+  test("a loser stands down while a newer writer is mid walk", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.onStart = (_request) => {
+      clock.advancePastExpiry();
+      const leaseB = acquire(cp, {
+        resource: RESOURCE,
+        holder: "sup-b",
+        nowMs: clock.nowMs(),
+        ttlMs: TTL_MS,
+      });
+      // B is mid-walk: it has crossed its gate (reached the provider) but
+      // has not confirmed. Driving B's real gate write is the point.
+      makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-b")._postSpawnGate(leaseB, {
+        moment: "before-resume",
+      });
+      return undefined;
+    };
+    const caught = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start(),
+      LoserTerminated,
+    );
+    expect(caught.stopAttempted).toBe(false);
+    expect(provider.stopCalls).not.toContain(caught.sessionId);
+  });
+
+  test("recovery through a different provider is refused", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const lease = acquire(cp, {
+      resource: RESOURCE,
+      holder: "sup-0",
+      nowMs: clock.nowMs(),
+      ttlMs: TTL_MS,
+    });
+    sessionBinding.prepareBinding(cp, lease, {
+      sessionId: uuids(),
+      runId: RUN_ID,
+      provider: "some-other-backend",
+      nowMs: clock.nowMs(),
+    });
+    clock.advancePastExpiry();
+    await expectAsyncRefusal(
+      () =>
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-1", {
+          providerName: "scripted",
+        }).recover(),
+      OrchestrationRefused,
+      "different provider",
+    );
+    expect(provider.startCalls).toEqual([]);
+    expect(provider.resumeCalls).toEqual([]);
+  });
+
+  test("refusals are rows not log lines", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const stopAndLose = (): string => {
+      takeOver(cp, clock, "sup-b");
+      return "22222222-2222-4222-8222-222222222222";
+    };
+    await expectAsyncRefusal(
+      () =>
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+          sessionUuidFactory: stopAndLose,
+        }).start(),
+      StaleWriterRefused,
+    );
+    const recorded = refusals(cp);
+    expect(recorded.length, "a refused admission left no durable record").toBeGreaterThan(0);
+    expect(recorded.every((row) => Boolean(row.refusal_reason))).toBe(true);
+  });
+});

@@ -239,12 +239,44 @@ control plane, asserted structurally so a leak fails the build the day it is int
 against continuo's module graph before any of the 64 cases mean anything. Continuo has the machinery
 for that already -- `import.meta.glob` package walks (D-0114) and the write-scan (D-0115).
 
-### `gate_item2` -- `candidate-lane` -- 34 cases
+### `gate_item2` -- `candidate-lane` -- 34 cases, **28 ported, 6 deferred (2026-08-29)**
 
 Downstream of `session`. Every case runs a crash-and-retry through the control
 plane and asserts a durable row rather than an exit code, which is a shape that translates directly.
 It needs the provider fixture that `session` brings, so it is a belt that follows rather than a
 belt that leads.
+
+Belt started 2026-08-29, D-range `D-08xx` (`D-0801`). Ported to `src/control_plane/session_binding.ts`
+(the staged session<->run binding) and `src/supervisor.ts` (`SessionOrchestrator`, the lease-before-
+spawn walk -- `async` end to end per D-0801, since it composes the `Promise`-returning S1 verbs
+D-0301 gave continuo's `SessionProvider`).
+
+**28 of 34 cases are translated: 26 `ported`, 2 `adapted`, 0 `not-ported`, 0 waivers**, and the
+remaining 6 are recorded `not-ported` (deferred), across all three of the source's files, one ledger
+per file (D-0019):
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/gate_item2/test_orchestrator_walk.py` | 23 | `parity/gate_item2.orchestrator-walk.ledger.json` |
+| `tests/gate_item2/test_mediated_real_provider.py` | 5 | `parity/gate_item2.mediated-real-provider.ledger.json` |
+| `tests/gate_item2/test_session_driver_harness.py` | 6 | `parity/gate_item2.session-driver-harness.ledger.json` |
+
+**`test_session_driver_harness.py`'s 6 cases are deferred to a dedicated follow-on task**, ratified by
+human decision 2026-08-29 (via secretary). It drives `tests.fault_injection.controller` / the S1
+adapter `tests.fault_injection.session_driver.SessionAdapter` -- the fault-injection harness itself,
+real SIGKILL and all. `fault_injection` is its own `candidate-lane` belt below, being ported
+concurrently in a sibling worktree; what actually blocks these 6 is narrower than "wait for that belt
+to land" -- `SessionAdapter`'s execution-path methods are a stub that deliberately throws (its own
+header names this as its own declared follow-on, D-0601, on the session belt landing, which has
+happened, PR #61, without the adapter itself being re-bound yet). The follow-on task's scope is
+therefore: re-bind `SessionAdapter` to `src/supervisor.ts` / `src/session/claude_cli_provider.ts`, land
+these 6 node ids, and land `fault_injection`'s own 4 full-profile session-start manifest cases together
+-- one task, since a `SessionAdapter` real enough for one is real enough for both. A faithful draft of
+all 6 cases against the current `controller.ts` / `manifest.ts` APIs is held at
+`tmp/session-driver-harness.draft.test.ts` (gitignored) on `feat/continuo-gate-item2-port`, as a
+handoff asset; see that ledger's per-entry reason for its exact provenance and the rework it expects.
+The belt stays `candidate-lane` rather than moving to `in-scope` until those 6 (plus `fault_injection`'s
+own 4) land.
 
 ### `broker` -- `retarget` -- 54 cases collected, 4 further modules not collected
 
@@ -269,15 +301,84 @@ inventory and nothing may be invented.
 Whatever continuo decides about them, it decides after interlock does. They are `retarget` upstream
 first.
 
-### `messagebus` -- `in-scope` (ratified 2026-08-28) -- 43 cases
+### `messagebus` -- `in-scope` (ratified 2026-08-28) -- **ported: 43 of 43 cases**
 
-Ratified into scope at the human gate; belt started 2026-08-28, D-range `D-05xx`.
+Ratified into scope at the human gate on 2026-08-28; belt started 2026-08-28 and **completed**
+2026-08-29, D-range `D-05xx` (`D-0501`..`D-0504` used).
+
+The status keeps its `in-scope` spelling for the reason the `canary` and `session` sections give:
+the vocabulary this document is checked against records **porting intent** (D-0031), and finishing a
+belt does not retract the decision to take it on.
 
 A durable-messaging belt, and the destination the five quarantined broker modules
 above are pointed at. `tests/messagebus/` drives `claude_org_runtime/messagebus/`: the bus, an
 endpoint, carried specifications, a stale-readout case, and an import-graph guard. It is small now
 and will not stay small, which is an argument for porting it early rather than late -- continuo's
 `control_plane/outbox.ts` is already the at-most-once half of the same problem.
+
+Ported to `src/messagebus/` (`bus.ts`, `endpoint.ts`, `index.ts`) -- three modules and no data file,
+which is itself the belt's headline decision.
+
+**All 43 cases are translated: 18 `ported`, 23 `adapted`, 2 `not-ported`, 0 waivers**, across five
+ledgers -- one per source file, per D-0019:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/messagebus/test_import_graph.py` | 16 | `parity/messagebus.import-graph.ledger.json` |
+| `tests/messagebus/test_messagebus.py` | 10 | `parity/messagebus.bus.ledger.json` |
+| `tests/messagebus/test_endpoint.py` | 8 | `parity/messagebus.endpoint.ledger.json` |
+| `tests/messagebus/test_carried_specifications.py` | 7 | `parity/messagebus.carried-specifications.ledger.json` |
+| `tests/messagebus/test_stale_readout.py` | 2 | `parity/messagebus.stale-readout.ledger.json` |
+
+Two further target-only cases sit beside them, each defending something the port had to write and
+the source therefore carries no warrant for. One is a probe that writes a file naming every route
+around the import scan (a type-only import, an `export ... from`, a `require()` and a dynamic
+`import()` inside function bodies) and asserts the scan sees all four and judges all four session
+edges: the source's import-graph file has no probe, and this port had to rewrite the scan in another
+language with two extra escape routes in it, so the machinery is defended in the target the way
+`canary` and `secretary` defend theirs. The other pins the endpoint's epoch parser against Python's
+`int()` grammar, acceptances and refusals both -- the source reads the epoch with `int()` inside a
+`try`, so the grammar *is* its validation and no source case drives a malformed value, while here the
+epoch is a fencing token and a spelling that wrongly parses starts an endpoint fenced under a number
+nobody wrote.
+
+**The two `not-ported` cases are both parametrizations over a file that does not exist here.** The
+suite-side confinement check is parametrized over a **directory listing**, and interlock's
+`tests/messagebus/` holds eight files where continuo's `test/messagebus/` holds six: `__init__.py`
+is Python's package marker, and `conftest.py` is pytest's fixture module, whose two fixtures live in
+`_env.ts` beside the module they were built on. Neither has a TypeScript counterpart to name, and
+inventing an id for one would put a case in the ledger that asserts nothing. **No coverage is lost:**
+the listing is still a listing, so every file the directory actually holds is scanned, and a file
+added later gets a case -- and an unmapped-target failure until it gets a ledger entry too.
+
+**The belt's headline decision is D-0501: this package adds no delivery store.** interlock's own
+`bus.py` opens by defining itself as a thin facade that uses the S7 outbox API *as found*, and that
+constraint is what makes the belt small. `send` is a registry lookup then `Outbox.enqueue`; `poll` is
+`Outbox.due` filtered to one recipient, each row re-read and then `Outbox.attempt`; `ack` is a
+recipient-boundary check then `Outbox.recordAck`. Retry counting, the delivery state machine, lease
+fencing, destination dedup and ack persistence stay in `src/control_plane/outbox.ts` -- already 74
+ported cases of exactly those -- because two answers to a delivery question is how a message gets
+delivered twice or not at all. The package therefore ships no table, no migration and no DDL, and
+the import-graph walk fails on a non-TypeScript file appearing in it rather than skipping one.
+
+**The one xfail in interlock's entire 2,199-case baseline is in this belt** and is carried as one:
+`test_a_send_to_a_registered_alias_reaches_the_canonical_recipient` is a v1 invariant the new
+contract does not satisfy yet, landed failing through `test/testkit/marks.ts`'s strict `xfail` --
+the helper written for a case no belt had met until now -- with its approval and its reason in
+`parity/messagebus.carried-specifications.ledger.json`.
+
+**What item 6 asked for in CI is here as a running test.** `test/messagebus/import-graph.test.ts` is
+the static assertion that no messagebus module takes a dependency edge to a session backend, and its
+mirror -- that only the stale-readout case in this suite knows the session vocabulary, and that it
+reaches the control plane only through the suite's helpers. The stale-readout case itself drives a
+**real** stub-provider child process into both stalenesses interlock names (a session id whose child
+is gone; a `readState` that answers "could not observe") and asserts the delivery transcript is
+*equal* to the one recorded with no session backend in the process at all -- not similar, equal.
+
+**One piece of open work, recorded rather than done: D-0504.** This is the third structural AST scan
+in the repository and the third copy of `importedModules`. `test/testkit/` is frozen and a change to
+it is its own PR (`docs/test-translation-conventions.md`), so the extraction is written down as the
+right end state and deliberately left for that PR rather than smuggled into a belt.
 
 ### `scrub` -- `not-porting` (ratified 2026-08-28) -- 20 cases
 
@@ -370,7 +471,7 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (ratified 2026-08-28), `secretary` (**ported** 2026-08-29) | 1,681 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29) | 1,681 |
 | `candidate-lane` | `gate_item2` | 34 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |
@@ -393,6 +494,6 @@ decision gets made by nobody.
 
 D-ranges are allocated per belt (`DECISIONS.md`, the index table's note). The 2026-08-28
 ratification (D-0032) allocated `D-03xx` to `session`, `D-04xx` to `canary` and `D-05xx` to
-`messagebus`; `D-0601` allocated `D-06xx` to `fault_injection` and `D-0701` allocated `D-07xx`
-to `secretary`. No range is allocated to any belt still proposed here; that allocation is part of
-the same human gate as the statuses.
+`messagebus`; `D-0601` allocated `D-06xx` to `fault_injection`, `D-0701` `D-07xx` to `secretary`
+and `D-0801` `D-08xx` to `gate_item2`. No range is allocated to any belt still proposed here; that
+allocation is part of the same human gate as the statuses.

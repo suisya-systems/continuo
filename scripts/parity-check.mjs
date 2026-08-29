@@ -104,12 +104,39 @@ const LEDGERS = [
   // belt in the inventory; the D-range is `D-07xx` (D-0701).
   "parity/secretary.behaviour.ledger.json",
   "parity/secretary.structural.ledger.json",
-  // lane G -- fault_injection (the S9/I-11 acceptance harness). Lettered `G`
-  // for the reason the session block above gives for `E`: this belt and the
-  // session belt appended concurrently and both reached for `E`, so the one
-  // that landed second moves rather than sharing a letter. One ledger per
-  // source test file, as everywhere else; the belt's own directory is
-  // test/fault_injection/ rather than test/contract/ (DECISIONS.md D-0601).
+  // lane G -- messagebus (S8: the worker-outbound bus, its MCP endpoint, and
+  // item 6's static no-session-edge assertion). Five files; the D-range is
+  // `D-05xx`. Every ledger here is prefixed `messagebus.`, and there is
+  // deliberately no bare `messagebus.ledger.json` -- the belt has no single
+  // file that would earn the unqualified name.
+  "parity/messagebus.bus.ledger.json",
+  "parity/messagebus.carried-specifications.ledger.json",
+  "parity/messagebus.endpoint.ledger.json",
+  "parity/messagebus.import-graph.ledger.json",
+  "parity/messagebus.stale-readout.ledger.json",
+  // lane H -- gate_item2 (issue #18's crash-and-retry proof). Downstream of
+  // the session belt above; the D-range is `D-08xx` (D-0801). Lettered `H`
+  // rather than `G`: `messagebus` and this lane were both appended as the
+  // next free letter concurrently and `messagebus` landed on `main` first
+  // (PR #63), so this lane takes the letter that was actually free at merge
+  // time rather than the one it was drafted under. All three source files
+  // are ledgered: the third, test_session_driver_harness.py, is entirely
+  // `not-ported` (deferred to a follow-on task -- see D-0801 and that
+  // ledger's per-entry reason).
+  "parity/gate_item2.orchestrator-walk.ledger.json",
+  "parity/gate_item2.mediated-real-provider.ledger.json",
+  "parity/gate_item2.session-driver-harness.ledger.json",
+  // lane I -- fault_injection (the S9/I-11 acceptance harness). The letter is
+  // simply the next free one, and it has moved three times: this belt first
+  // reached for `E` while the session belt was reaching for the same letter
+  // concurrently, then `G` once secretary had taken `F`, and now `I` because
+  // messagebus and gate_item2 both landed ahead of it. The rule the session
+  // block states is what settles each collision -- the belt that lands second
+  // moves rather than sharing a letter -- and it is worth reading the list
+  // before picking, because assuming a letter is exactly how the first
+  // collision happened. One ledger per source test file, as everywhere else;
+  // the belt's own directory is test/fault_injection/ rather than
+  // test/contract/ (DECISIONS.md D-0601).
   "parity/fault-injection.cases.ledger.json",
   "parity/fault-injection.conformance.ledger.json",
   "parity/fault-injection.import-graph.ledger.json",
