@@ -40,7 +40,7 @@ spaces distinct.
 | D-0005 | The double-green rule, and where it is enforced | accepted |
 | D-0006 | ASCII-only for anything continuo prints | accepted |
 | D-0007 | The SQLite value-representation contract | accepted |
-| D-0008 | The package is `private` until publication is decided | superseded by D-0039 |
+| D-0008 | The package is `private` until publication is decided | superseded by D-0045 |
 | D-0009 | Install with `--ignore-scripts`; the prebuilt binary is the artifact | accepted |
 | D-0010 | Biome is the linter and formatter | accepted |
 | D-0011 | Package-quality tooling: publint, attw, knip, Dependabot, editor pins | accepted |
@@ -69,10 +69,10 @@ spaces distinct.
 | D-0034 | The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named | accepted |
 | D-0035 | `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending` | accepted |
 | D-0036 | interlock is a frozen source, not a decision-maker: every question continuo has open is settled at continuo's own human gate | accepted |
-| D-0037 | `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire | accepted |
-| D-0038 | Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives | accepted |
-| D-0039 | `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs | accepted |
-| D-0040 | `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run | accepted |
+| D-0043 | `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire | accepted |
+| D-0044 | Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives | accepted |
+| D-0045 | `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs | accepted |
+| D-0046 | `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -479,7 +479,7 @@ accidental `npm publish` is then one command away).
 no release automation reads it. The `files` and `exports` fields are nonetheless maintained from the
 start, so the eventual first publish is a decision rather than a packaging project.
 
-**Status.** superseded by `D-0039`
+**Status.** superseded by `D-0045`
 
 **Source.** interlock#74 refinement comment; Codex design review 2026-08-22, Nit.
 
@@ -8239,7 +8239,7 @@ misleading text -- not the misreading -- is the thing to remove.
 
 ---
 
-## D-0037 -- `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire
+## D-0043 -- `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire
 
 **Context.** `D-0035` left `migrate` (11 cases, `tests/test_migrate.py`) at `decision-pending` with
 one explicit revisiting trigger: "the run-boundary cutover bridge actually being designed". That
@@ -8286,7 +8286,7 @@ is outstanding work near this belt. It is outstanding as an *episode-level* adap
 - `D-0035` is **not rewritten**. Its ID and `accepted` status stand, and this file's rules make
   partial supersession unavailable, so its clause 2 (`migrate` stays `decision-pending`) and its
   `migrate` falsifier are read through this entry: they record the status as it was on 2026-08-29,
-  and the status now lives here. The same motion `D-0038` makes for clause 1.
+  and the status now lives here. The same motion `D-0044` makes for clause 1.
 - `parity/source-inventory.belts.md` has to move the `migrate` section and the roll-up table from
   `decision-pending` to `not-porting`, which takes the ratified `not-porting` total from 156 to 167
   cases and the effective porting target from `2,194 - 156 = 2,038` to `2,194 - 167 = 2,027`. The
@@ -8312,9 +8312,18 @@ ported, which is parity accounting that lies.
 `docs/design/minimal-operating-loop.md` section 5.2. Decision id allocated by the window in the
 shared band (`D-0019`..`D-0099`, see "How to use this file").
 
+**Why this batch (`D-0043`..`D-0046`) skips `D-0037`..`D-0042`.** The next free numbers would have
+shadowed interlock decisions that continuo documents still cite unqualified -- `D-0037` and `D-0039`
+in `docs/time-base-policy.md` and `docs/production-schema.md` are interlock's, and a reader
+following one of those numbers into this file would have landed on a real but unrelated entry.
+Starting above interlock's highest ID (`D-0042`) removes that class of collision for every later
+entry too. The gap means nothing else: a range is an allocation, and an ID is permanent whether or
+not its neighbours are ever used. The unqualified citations themselves are repaired in the same
+change, per this file's rule that an interlock decision is cited as `interlock D-00NN`.
+
 ---
 
-## D-0038 -- Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives
+## D-0044 -- Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives
 
 **Context.** `D-0035` clause 1 ratified `curator` (71 cases) as `not-porting`. The status is right
 and is not in question here: nothing on the lap writes skill material. `grep -rn skills src/`
@@ -8388,7 +8397,7 @@ shared band (`D-0019`..`D-0099`).
 
 ---
 
-## D-0039 -- `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs
+## D-0045 -- `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs
 
 **Context.** `D-0008` made the package `private` "until publication is decided", and said so in a
 form that anticipated this entry: "the `files` and `exports` fields are nonetheless maintained from
@@ -8471,7 +8480,7 @@ in the shared band (`D-0019`..`D-0099`).
 
 ---
 
-## D-0040 -- `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run
+## D-0046 -- `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run
 
 **Context.** Nothing in `src/` creates a run or advances one: the run-lifecycle writer is unbuilt,
 and `registerConsumer` appears only at its definition and in the barrel, so the consumer half of the

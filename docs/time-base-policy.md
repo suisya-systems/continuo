@@ -10,8 +10,10 @@
     updated in lockstep and will drift once interlock is archived.
   - **The lineage of record is still interlock.** Per interlock#74, interlock's `DECISIONS.md`
     (`D-0001`..`D-0042`), `investigation/` and `docs/parity-audit.md` remain the design lineage, and
-    a `D-00NN` cited below without qualification is an **interlock** decision id, not one of
-    continuo's `DECISIONS.md` entries. Continuo's own decisions are cited as `continuo D-00NN`.
+    every decision reference below is written `interlock D-00NN` explicitly rather than relying on
+    a bare `D-00NN` being read as interlock's. Continuo's own decisions are cited as
+    `continuo D-00NN`. A bare `D-00NN` anywhere in this file is a citation that has not been
+    qualified yet, not a continuo decision.
   - **Language-specific notes** may be adjusted here (interlock#74 allows it); the numbers, tables
     and decisions may not -- those are what `parity/` asserts against.
 -->
@@ -23,8 +25,8 @@ it) and `Q-0019` (who owns each of the retired loop's non-detection duties). Eve
 [`production-schema.md`](./production-schema.md) refers to as a tolerance or an interval is decided
 here, and every one of them is **policy data**, not a constant in code.
 
-**Status: design, not implementation.** Decisions filed from this document: `D-0031` (the time base)
-and `D-0032` (duty owners).
+**Status: design, not implementation.** Decisions filed from this document: interlock `D-0031`
+(the time base) and interlock `D-0032` (duty owners).
 
 **Why these two together.** `Q-0003` asks what latency the organisation accepts; `Q-0019` asks who
 is obliged to act inside it. A budget with no owner is not enforceable and an owner with no budget
@@ -34,11 +36,11 @@ has nothing to be late against, which is why the design review put them in the s
 
 ## 1. Why the numbers are data
 
-`D-0002` retires a `/loop 3m` whose period was itself the answer to every timing question, and
-`Q-0003` records the 2026-07-20 review's demand: the *requirement basis* for any period — the
-tolerable detection latency — must be settled before the period is. The failure mode being avoided
-is a constant that acquires authority by being in the code, which is `D-0026`'s shape applied to
-numbers instead of schemas.
+interlock `D-0002` retires a `/loop 3m` whose period was itself the answer to every timing
+question, and `Q-0003` records the 2026-07-20 review's demand: the *requirement basis* for any
+period — the tolerable detection latency — must be settled before the period is. The failure mode
+being avoided is a constant that acquires authority by being in the code, which is interlock
+`D-0026`'s shape applied to numbers instead of schemas.
 
 So every value below is a row in `policy_detection_latency` / `policy_gate_stage_tolerance` /
 `policy_gate_stage_owner` (DDL in [`production-schema.md`](./production-schema.md) §10), inserted by
@@ -135,8 +137,8 @@ milliseconds would bake one scope's interval into a row every other scope also r
 | `watcher_silence` | A watcher stopped attempting for a scope | 3 (`scope_interval_multiple`) | **10 min** | `tools/relay_scan.py` found its equivalent failure after **20 days**; any bounded number is the improvement, and three missed polls distinguishes a stopped watcher from a slow one |
 | `watcher_error_streak` | A watcher is attempting and only failing | 5 (`consecutive_count`) | **10 min** | A separate class from silence because the remedy differs (a broken credential, not a dead process) |
 | `watcher_scope_uncovered` | An enabled scope has no liveness row at all | 0 (`absolute_ms`) | **10 min** | There is nothing to wait for: an unwatched scope is wrong the moment it exists |
-| `session_no_evidence` | A session produced no activity evidence past tolerance | 10 min (`absolute_ms`) | **15 min** | `NO_ACTIVITY_EVIDENCE` is **not an anomaly** (`D-0005`, `D-0006`); this class raises an incident for *assessment*, never a verdict, and the tolerance is deliberately generous because the p90 run is 2.55 h and quiet stretches are ordinary |
-| `observation_unavailable` | The observation path itself failed | 5 min (`absolute_ms`) | **10 min** | `D-0006`: an observation outage must not be able to masquerade as a fleet-wide worker failure, so it is its own class with its own alarm |
+| `session_no_evidence` | A session produced no activity evidence past tolerance | 10 min (`absolute_ms`) | **15 min** | `NO_ACTIVITY_EVIDENCE` is **not an anomaly** (interlock `D-0005`, interlock `D-0006`); this class raises an incident for *assessment*, never a verdict, and the tolerance is deliberately generous because the p90 run is 2.55 h and quiet stretches are ordinary |
+| `observation_unavailable` | The observation path itself failed | 5 min (`absolute_ms`) | **10 min** | interlock `D-0006`: an observation outage must not be able to masquerade as a fleet-wide worker failure, so it is its own class with its own alarm |
 | `lease_orphan` | A lease expired with work still attributed to its holder | 1 (`lease_ttl_multiple`) | **2 × lease TTL** | Expressed in TTLs because the TTL is the thing that defines staleness here |
 
 ### 3.3 The reconcile interval
@@ -168,8 +170,8 @@ appears inside a projection of program tick counts — an assumption used to pro
 10-minute pass would blow the `relay_gap` and `ci_outcome_undrained` budgets outright. The estimate
 it fed (roughly 470–1,576 program ticks per 100 runs) is affected: at 120 s the reconcile pass alone
 contributes about 5× what a 10-minute pass would. That is accepted, and the reason it is acceptable
-is `D-0002`'s own scope note, restated in `ACCEPTANCE.md` §5: **program-tick reduction is explicitly
-not the objective.** The objectives are AI workload, determinism, reproducibility and
+is interlock `D-0002`'s own scope note, restated in `ACCEPTANCE.md` §5: **program-tick reduction is
+explicitly not the objective.** The objectives are AI workload, determinism, reproducibility and
 recoverability, and a program pass takes no model turn (AC-1). Trading program ticks for detection
 latency is trading the thing that is not the goal for the thing AC-10 measures.
 
@@ -226,7 +228,8 @@ tolerance by accident.
 **The delivery stall is a separate predicate at 2 minutes**, over `gate_relay` joined to `outbox`,
 because a relay that was enqueued and never acked is stalled in the delivery layer while the gate's
 stage is legitimately unchanged. Ageing the stage would report the wrong thing about the wrong
-component; `D-0037`'s ack-gated advance is what makes the two states distinguishable at all.
+component; interlock `D-0037`'s ack-gated advance is what makes the two states distinguishable at
+all.
 
 ---
 
@@ -242,7 +245,7 @@ inventing it:
 - **Misses** — a labelled condition that persisted past `L` with no incident. Counted against the
   fixture labels and the shadow, never against Interlock's own rows alone, for the reason
   [`measurement-harness.md`](./measurement-harness.md) §3 gives.
-- **False termination** — counted at the applied `action`, per `D-0039`.
+- **False termination** — counted at the applied `action`, per interlock `D-0039`.
 
 ---
 
@@ -253,18 +256,18 @@ places it there. The 2026-07-20 review enumerates five duties.
 
 | Retired duty (v1) | Owner in Interlock | Mechanism | Basis |
 |---|---|---|---|
-| **Pull-fallback drain** — the DELEGATE receive path when the sidecar is unhealthy | **Dispatcher Core**, reconcile pass | There is no separate pull path: delivery is the outbox, fed transactionally from the event append, and the pass re-attempts `pending`/`failed` consumption rows | `D-0002` (program-side reconcile loop is kept), `D-0030` (§5.4 of the schema document removes the second delivery path by construction) |
-| **Curate-inflight management** | **Curator** for the work; **Dispatcher Core** for the aging | The Curator runs on demand and produces proposals; a proposal awaiting human approval is a `Gate`, and Core ages it like any other | `D-0018` (Curator is on-demand and not resident), `D-0008` (deadline evaluation is the deterministic layer's) |
-| **CI relay** | **Dispatcher Core** | The CI watcher appends to the spine; fan-out to consumers happens in the append transaction; the pass backstops undrained rows. No relay scanner exists as a separate process | `D-0030`, `#64` (single event spine) |
-| **`pending_decisions` aging** | **Dispatcher Core** detects; **Secretary** acts | Core evaluates the stage tolerances of §4 and raises `relay_gap`; the Secretary owns the `received → presented` and `answered → forwarded` legs and is the ball holder the incident names | `D-0008` (dedup, deadline evaluation, incident creation are Core's), `D-0016` (Secretary is the single human window), `D-0032` |
-| **Auto-stop** | **Nobody automatically.** Core raises the incident; the Secretary, a human, or a privileged handler executes | Core may name a stall *candidate* and may not conclude one; the Dispatcher AI may recommend and may not execute; the applied `action` row is written by the third layer | `D-0008` (Core does not pronounce a verdict on an ambiguous stall), `D-0004` / AC-6 (no direct terminate/restart from the AI), `D-0016` |
+| **Pull-fallback drain** — the DELEGATE receive path when the sidecar is unhealthy | **Dispatcher Core**, reconcile pass | There is no separate pull path: delivery is the outbox, fed transactionally from the event append, and the pass re-attempts `pending`/`failed` consumption rows | interlock `D-0002` (program-side reconcile loop is kept), interlock `D-0030` (§5.4 of the schema document removes the second delivery path by construction) |
+| **Curate-inflight management** | **Curator** for the work; **Dispatcher Core** for the aging | The Curator runs on demand and produces proposals; a proposal awaiting human approval is a `Gate`, and Core ages it like any other | interlock `D-0018` (Curator is on-demand and not resident), interlock `D-0008` (deadline evaluation is the deterministic layer's) |
+| **CI relay** | **Dispatcher Core** | The CI watcher appends to the spine; fan-out to consumers happens in the append transaction; the pass backstops undrained rows. No relay scanner exists as a separate process | interlock `D-0030`, `#64` (single event spine) |
+| **`pending_decisions` aging** | **Dispatcher Core** detects; **Secretary** acts | Core evaluates the stage tolerances of §4 and raises `relay_gap`; the Secretary owns the `received → presented` and `answered → forwarded` legs and is the ball holder the incident names | interlock `D-0008` (dedup, deadline evaluation, incident creation are Core's), interlock `D-0016` (Secretary is the single human window), interlock `D-0032` |
+| **Auto-stop** | **Nobody automatically.** Core raises the incident; the Secretary, a human, or a privileged handler executes | Core may name a stall *candidate* and may not conclude one; the Dispatcher AI may recommend and may not execute; the applied `action` row is written by the third layer | interlock `D-0008` (Core does not pronounce a verdict on an ambiguous stall), interlock `D-0004` / AC-6 (no direct terminate/restart from the AI), interlock `D-0016` |
 
 The last row is the one that changes behaviour rather than relocating it, so it is worth saying
 plainly: **v1's loop could stop a worker; Interlock's reconcile pass cannot.** That is not an
-oversight to be fixed later — it is `D-0004` and the `CHARTER.md` §4 boundary table working as
-designed, and it is why AC-10's false-termination counter must be defined at the applied action
-rather than at the recommendation (`D-0039`). A design that quietly gave the pass an auto-stop would
-be reintroducing the layer the fork exists to remove.
+oversight to be fixed later — it is interlock `D-0004` and the `CHARTER.md` §4 boundary table
+working as designed, and it is why AC-10's false-termination counter must be defined at the applied
+action rather than at the recommendation (interlock `D-0039`). A design that quietly gave the pass
+an auto-stop would be reintroducing the layer the fork exists to remove.
 
 ### 6.1 Gate ownership, resolved
 
