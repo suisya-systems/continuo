@@ -1,0 +1,711 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "attention",
+      "collected": 194,
+      "inventory": "parity/source-inventory/attention.all.txt",
+      "note": "The attention belt ports in three sub-belts sharing one D-range (D-0034): A1 (facts, 90 cases -- this ledger and parity/attention.readers.ledger.json), A2 (dedup and config, 44) and A3 (notify and pipeline, 60). tests/attention/test_broker_journal_contract.py is NOT one of the 194 -- it has no node ids -- and has its own zero-entry ledger, parity/attention.broker-journal-contract.ledger.json, outside this checker's file-to-inventory linkage."
+    },
+    "file": {
+      "path": "tests/attention/test_classifier.py",
+      "collected": 61,
+      "inventory": "parity/source-inventory/attention.test_classifier.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; the eight parametrize expansions are node ids in their own right and each has its own entry."
+    }
+  },
+  "target": {
+    "test_file": "test/attention/classifier.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "a row / entry / journal record with no fact state, and an `AttentionEvent` that has no such field",
+        "to": "a row that carries a `factState` the classifier copies onto the event, uninterpreted",
+        "why": "This is the retarget. `source-inventory.belts.md` names this file's invariant -- every row of the vocabulary has a pinned expectation -- and rules that the mechanism is re-derived onto the closed fact-state set; `D-0034` additionally forbids inventing the mapping from the source's eighteen `kind` values to the six states. There are only two ways a fact can reach an event: the classifier derives it, or the caller supplies it, and deriving it IS the forbidden table. So the field is a required input with no default (a default is that table with one row), and every ported case names one. The fact states are rotated across cases of the same kind on purpose, so that no reader can extract a mapping from the pattern; the target-only case 'the same row under a different fact state classifies identically' asserts the absence directly. D-0903 records it.",
+        "affects": "59 of the 61 cases -- every one that constructs an event"
+      },
+      {
+        "from": "`classify_pending(entry, now, pending_decision_min, user_replied_min, notify_map=None, *, pending_decision_max=1440, pending_decision_drop=10080)`",
+        "to": "`classifyPending(entry, now, { pendingDecisionMin, userRepliedMin, notifyMap?, pendingDecisionMax?, pendingDecisionDrop? })`",
+        "why": "TypeScript has neither keyword arguments nor keyword-only parameters, so a transcription would have made five positional parameters where the source has two positional, one optional and two keyword-only -- and a caller that swapped `min` for `max` would type-check. The defaults are the source's and are applied in the same place.",
+        "affects": "the pending and classify_all cases"
+      },
+      {
+        "from": "`datetime` / `timedelta` / `.isoformat().replace(\"+00:00\", \"Z\")`",
+        "to": "`Date` and `minutesAgo(n)`, which renders the same instant in the same spelling",
+        "why": "One instant, one spelling, so the TTL ladder's boundaries are compared against the same strings the source compares. The parse on the production side is deliberately NOT `new Date(...)`: `Date.parse` accepts shapes `fromisoformat` rejects and reads a naive timestamp as LOCAL time, which would move a row across the 15-minute threshold by the runner's timezone offset. Two target-only cases pin the naive-is-UTC rule and the refusal of an impossible date.",
+        "affects": "the pending and classify_all cases"
+      },
+      {
+        "from": "`dict` lookups on `_NOTIFY_SUBKIND_TO_KIND`, `_DEFAULT_TEMPLATES` and `DEFAULT_NOTIFY`, keyed by strings the payload supplies",
+        "to": "`Object.create(null)` maps read with `Object.hasOwn` (`getOwn`)",
+        "why": "`docs/test-translation-conventions.md` rule 9: Python's `dict` has no inherited keys and an object literal carries `Object.prototype`, so a payload whose `kind` is `constructor` would be classified as something nobody wrote. A target-only case pins it; measured, an ordinary object literal plus a plain index turns that case red. The one place this is NOT what closes the hole is the notify-map lookup, where the two-value severity check already rejects anything the prototype could return -- said out loud in the code rather than left to look load-bearing.",
+        "affects": "the subkind and severity cases, and one target-only case"
+      },
+      {
+        "from": "`@dataclass(frozen=True)`, enforced at runtime",
+        "to": "a class with `readonly` fields plus `Object.freeze(this)`",
+        "why": "`readonly` is erased at emit, so a plain JavaScript caller could downgrade a severity in place -- the same gap the session belt found for `Enum` and `frozenset` and closed the same way. A target-only case pins it; measured, removing the freeze turns it red.",
+        "affects": "every case, and one target-only case"
+      }
+    ],
+    "target_only_tests": {
+      "count": 16,
+      "ids": [
+        "test/attention/classifier.test.ts::attention classifier > target-only -- every fact-state row has a pinned expectation",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- the classifier carries the fact it was given[ACTIVE_EVIDENCE]",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- the classifier carries the fact it was given[KNOWN_WAIT]",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- the classifier carries the fact it was given[EXPLICIT_BLOCK]",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- the classifier carries the fact it was given[NO_ACTIVITY_EVIDENCE]",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- the classifier carries the fact it was given[OBSERVATION_UNAVAILABLE]",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- the classifier carries the fact it was given[TERMINAL]",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- the same row under a different fact state classifies identically",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an attention event cannot be rewritten after construction",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a payload key that names an Object.prototype member is not a subkind",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an ISO created_at keeps Python's fractional-second spelling",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a naive received_at is read as UTC, not as the runner's local time",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an out-of-range date is malformed rather than rolled forward",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- a non-finite pr does not take the classifier down",
+        "test/attention/classifier.test.ts::attention classifier > target-only -- an unknown kind falls back to the generic template"
+      ],
+      "why": "Three groups. (1) The retargeted invariant: `PINNED_FACT_STATES` holds one pinned expectation per vocabulary row, the guard asserts set equality against `FACT_STATES` in both directions plus a non-emptiness check, and six parametrized cases assert the carry-through. This shape is GREEN on an empty vocabulary, so `D-0903` requires the probes below to be measured rather than assumed. (2) What the port had to write and the source carries no warrant for: the runtime freeze, the `Object.create(null)` lookups, the hand-built ISO rendering, the explicit ISO grammar, and the `int(float('inf'))` repair. (3) One branch the SOURCE leaves untested and a transcription loses silently -- the 120-character summary cut, whose ellipsis is U+2026 and whose `rstrip` runs before the ellipsis is appended.",
+      "mutation_probes": [
+        {
+          "probe": "remove one row from `PINNED_FACT_STATES`",
+          "against": "target-only -- every fact-state row has a pinned expectation",
+          "measured": "red"
+        },
+        {
+          "probe": "add a seventh key to `PINNED_FACT_STATES`",
+          "against": "target-only -- every fact-state row has a pinned expectation",
+          "measured": "red"
+        },
+        {
+          "probe": "empty `FACT_STATES` in `src/attention/fact_state.ts` -- the anti-vacuity probe, since the per-row loop is green on an empty vocabulary",
+          "against": "target-only -- every fact-state row has a pinned expectation",
+          "measured": "red"
+        },
+        {
+          "probe": "point one pinned expectation at a different fact state",
+          "against": "target-only -- the classifier carries the fact it was given",
+          "measured": "red"
+        },
+        {
+          "probe": "derive the fact state from the row's kind instead of carrying the given one -- the forbidden mapping, introduced on purpose",
+          "against": "target-only -- the same row under a different fact state classifies identically",
+          "measured": "red"
+        },
+        {
+          "probe": "drop `fact_state` from `toDict()`",
+          "against": "target-only -- the classifier carries the fact it was given",
+          "measured": "red"
+        },
+        {
+          "probe": "remove `Object.freeze(this)` from the event constructor",
+          "against": "target-only -- an attention event cannot be rewritten after construction",
+          "measured": "red"
+        },
+        {
+          "probe": "build the subkind table as an ordinary object literal and index it directly",
+          "against": "target-only -- a payload key that names an Object.prototype member is not a subkind",
+          "measured": "red"
+        },
+        {
+          "probe": "read a naive timestamp with `new Date(text)` instead of the explicit ISO grammar",
+          "against": "target-only -- a naive received_at is read as UTC, not as the runner's local time",
+          "measured": "red"
+        },
+        {
+          "probe": "append the ellipsis without `rstrip`",
+          "against": "target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+          "measured": "red"
+        },
+        {
+          "probe": "append three dots instead of U+2026",
+          "against": "target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+          "measured": "red"
+        }
+      ]
+    }
+  },
+  "totals": {
+    "source_cases": 61,
+    "ported": 2,
+    "adapted": 59,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "`_severity_for` falls back to `normal` for any kind `DEFAULT_NOTIFY` does not name, so a typo in an attention kind produces a quiet `normal` notification rather than a refusal.",
+      "why": "The source's behaviour, and the source's reason: the map is a default table that ja-side config may extend, so an unknown kind is expected rather than exceptional. Repairing it would change what the runtime does for every downstream caller, which is an upstream decision."
+    },
+    {
+      "behaviour": "`_default_text` falls back to `(\"Attention\", \"{kind} event\")` for an unknown kind, so a kind added to `_NOTIFY_SUBKIND_TO_KIND` and forgotten in `_DEFAULT_TEMPLATES` notifies with a placeholder title instead of failing.",
+      "why": "The source's fallback, carried. A target-only case pins the fallback's shape so it cannot drift, but the fallback itself is not repaired: making it raise would take the watcher down on a config the source tolerates."
+    },
+    {
+      "behaviour": "`classify_pending` reads `status`, `task_id` and the timestamps out of an untyped register and coerces rather than validating; an entry whose `received_at` is a number, not a string, reads as malformed and therefore urgent.",
+      "why": "The source's posture, stated in its own docstring: false positives are preferable to false negatives for a relay-gap watcher. Carried unchanged, including for the shapes only the wider TypeScript type admits."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_approval_blocked_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent approval_blocked is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_relay_gap_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent relay_gap_suspected is normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_silent_worker_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent silent worker output is normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_unknown_subkind_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent with an unknown subkind is ignored",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_failure_urgent[failed]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a failing status is urgent[failed]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_failure_urgent[canceled]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a failing status is urgent[canceled]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_failure_urgent[incomplete]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a failing status is urgent[incomplete]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize expansion keeps pytest's node id through `parametrize()` from the testkit, so the target id is a byte-stable function of the source id.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_ci_completed_success_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > ci_completed with a successful status is ignored",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_worker_completed_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > worker_completed is normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pr_merged_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pr_merged is normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_progress_event_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a progress or unknown event is ignored",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_stale_pending_decision_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a stale pending decision is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_fresh_pending_decision_not_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a fresh pending decision is not urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_below_min_no_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: below min produces no event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_min_to_max_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: min to max is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_max_to_drop_demoted_to_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: max to drop is demoted to normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_ttl_above_drop_suppressed_for_notify",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision TTL: above drop is suppressed for notify",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant. `to_dict()['suppressed']` becomes `toDict()['suppressed']`, over the same wire-shaped snake_case object.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_decision_demotion_respects_notify_map_override",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > pending decision demotion respects a notify map override",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_below_min_no_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: below min produces no event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_min_to_max_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: min to max is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_max_to_drop_demoted_to_normal",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: max to drop is demoted to normal",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_ttl_above_drop_suppressed_for_notify",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply TTL: above drop is suppressed for notify",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_skipped_when_resolution_is_to_worker",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply is skipped once the resolution is to_worker",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_fires_for_other_resolution_kinds",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > user reply fires for other resolution kinds",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_not_forwarded_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a user reply that was never forwarded is urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_user_reply_recent_no_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a recent user reply produces no event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_resolved_pending_ignored",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a resolved pending entry is ignored",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_combines_inputs",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll combines its inputs",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_event_default_title_uses_runtime_text",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the default title uses the bundled runtime text",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. `\"99\" in ev.body` becomes `toContain`, the same substring question.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_missing_id_returns_none",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a row with no id returns null",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. `row.pop(\"id\")` becomes a row literal written without the key: a `pop` on a frozen input object would be a different assertion about a different object, and the property under test is that a row lacking an id yields nothing.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_pending_missing_task_id_returns_none",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a pending entry with no task id returns null",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_map_overrides_severity_event",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a notify map override reaches the emitted event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. `notify_map=` becomes the `notifyMap` option, for the signature reason above.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_map_overrides_severity_pending",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a notify map override reaches a pending event",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_map_unknown_value_falls_back_to_default",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > an unknown notify map value falls back to the default",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The source needs a `# type: ignore[dict-item]` to write an invalid severity; the port's `NotifyMap` is typed `Record<string, string>` for the same reason -- the value being invalid is the point of the case, so the type must admit it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_malformed_received_at_treated_as_stale",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a malformed received_at is treated as stale",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant. The parse behind it is written as an explicit ISO grammar rather than handed to `new Date(...)`, which accepts shapes `fromisoformat` rejects; two target-only cases pin the difference.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_missing_received_at_treated_as_stale",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a missing received_at is treated as stale",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[pane_silent-pane_silent-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[pane_silent-pane_silent-normal]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize id is pytest's own, kept through `parametrize()`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[pane_crashed-pane_crashed-urgent]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[pane_crashed-pane_crashed-urgent]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize id is pytest's own, kept through `parametrize()`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[worker_stalled-worker_stalled-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[worker_stalled-worker_stalled-normal]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize id is pytest's own, kept through `parametrize()`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[worker_not_reported-worker_not_reported-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[worker_not_reported-worker_not_reported-normal]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize id is pytest's own, kept through `parametrize()`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_production_subkinds_severity[error-worker_error-normal]",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent production subkinds carry their severity[error-worker_error-normal]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The parametrize id is pytest's own, kept through `parametrize()`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_subkind_table_includes_awaiting_user",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the notify subkind table includes awaiting_user",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: a lookup in the subkind table, which constructs no event and therefore needs no fact state. The table is a module-private name in the source (`_NOTIFY_SUBKIND_TO_KIND`) and is exported here because the case reads it, which is D-0101's rule.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_notify_sent_awaiting_user_classifies_urgent",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > notify_sent awaiting_user classifies as urgent",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_secretary_awaiting_user_default_text_non_empty",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the secretary_awaiting_user default text is non-empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: `_default_text` returns a `(title, body)` pair and the case asserts both are non-empty and that the task id reaches the body. No event is constructed, so no fact state is involved. `assert title` becomes `toBeTruthy()`, which is Python's truth test on a string.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_names_owner_and_both_instances",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > duplicate_sidecar names the owner and both instances",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_is_cooldown_gated_not_write_once",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > duplicate_sidecar is cooldown-gated rather than write-once",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_key_is_per_contesting_pair",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the duplicate_sidecar key is per contesting pair",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_ts_becomes_iso_created_at",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a duplicate_sidecar ts becomes an ISO created_at",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The ISO rendering is hand-built rather than `Date#toISOString`, which always prints three fractional digits where `datetime.isoformat()` prints none or six; a target-only case pins both spellings.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_malformed_fields_still_notify",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > duplicate_sidecar with malformed fields still notifies",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_duplicate_sidecar_severity_override_applies",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a duplicate_sidecar severity override applies",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_broker_duplicates_collapses_repeats_per_pair",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyBrokerDuplicates collapses repeats per pair",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. `{ev.summary: ev for ev in out}` becomes a `Map`, and `set(by_summary)` its key set, so a summary that is `null` cannot collide with a missing key the way an object literal's would.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_appends_broker_duplicates",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll appends broker duplicates",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_without_broker_duplicates_is_unchanged",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll without broker duplicates is unchanged",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_adopt_expired_names_the_adoption_that_failed",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > delivery_adopt_expired names the adoption that failed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_adopt_expired_body_separates_restored_from_orphaned",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > the delivery_adopt_expired body separates restored from orphaned",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The `restored` branch is taken through `pyTruthy`, not `||`: Python's falsy set includes `[]` and `{}` where JavaScript's does not, and a journal that wrote `restored: {}` would take opposite branches in the two runtimes.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_superseded_keys_on_the_instance_that_went_mute",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > delivery_superseded keys on the instance that went mute",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_unrecognised_delivery_event_is_never_invented_into_an_alert",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > an unrecognised delivery event is never invented into an alert",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_delivery_signal_with_missing_identifiers_still_notifies",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > a delivery signal with missing identifiers still notifies",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The whitespace-only owner is stripped through `pyStrip`, whose whitespace set is `str.isspace()`'s rather than `String#trim`'s -- the two differ in both directions and the case's `\"   \"` is exactly a strip test.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_broker_delivery_signals_collapses_repeats_per_incident",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyBrokerDeliverySignals collapses repeats per incident",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_appends_broker_delivery_signals",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll appends broker delivery signals",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_classifier.py::test_classify_all_without_delivery_signals_is_unchanged",
+      "target_id": "test/attention/classifier.test.ts::attention classifier > classifyAll without delivery signals is unchanged",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the row carries a `factState` the source's row does not have, and the event carries it back. That is the retarget `D-0034` requires and `D-0903` records -- every ported case gives its fact state explicitly so that no kind-to-state table exists for a case to depend on. The assertions are the source's, unchanged. The thresholds move from positional parameters to one options object, because the source's signature mixes positional and keyword-only arguments and TypeScript has neither. `datetime` becomes `Date`, and `_NOW` is the same instant.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

@@ -102,14 +102,41 @@ source does not have is what the parity check exists to catch -- and the child-l
 the second was retired structurally instead, by making every teardown await its child's exit rather
 than merely signal it.
 
-### `attention` -- `retarget` -- 194 cases
+### `attention` -- `in-scope` for A1 (**ported: 90 of 90 cases**), `retarget` for A2 and A3 -- 194 cases
 
 Belt start ratified at the human gate on 2026-08-30 (D-0034), split into three sub-belts sharing
 one D-range, `D-09xx`: A1 (facts, 90 cases), A2 (dedup and config, 44 cases) and A3 (notify and
 pipeline, 60 cases). The status keeps its `retarget` spelling here -- starting the belt is not the
 same axis as completing it (the same distinction D-0032's belts used); each sub-belt's rows move to
-`in-scope` at its own completion. `test_broker_journal_contract.py` is **not** part of these 194
-cases -- it has no node ids and sits in the `broker` section below as a collection-time skip.
+`in-scope` at its own completion. **A1 completed 2026-08-29** (`D-0901`..`D-0903` used), so its 90
+rows carry that spelling and A2's 44 and A3's 60 stay `retarget`. `test_broker_journal_contract.py`
+is **not** part of these 194 cases -- it has no node ids and sits in the `broker` section below as
+a collection-time skip.
+
+**A1 -- facts, 90 of 90 ported.** `tests/attention/test_readers.py` (29) and
+`tests/attention/test_classifier.py` (61), ported to `src/attention/` (`fact_state.ts`,
+`readers.ts`, `classifier.ts`, and the one `config.ts` constant `D-0902` records) with
+`test/attention/readers.test.ts` and `test/attention/classifier.test.ts` beside them:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/attention/test_classifier.py` | 61 | `parity/attention.classifier.ledger.json` |
+| `tests/attention/test_readers.py` | 29 | `parity/attention.readers.ledger.json` |
+
+The three decisions A1 minted are `D-0901` (the six-name vocabulary is **adopted** by the detector
+layer rather than restated for a lint's sake, closing what `D-0034` ratified A1 would close),
+`D-0902` (the one `config.ts` constant the classifier imports lands here; the config belt stays
+A2's) and `D-0903` (the classifier carries a fact state it is **given** and derives none -- the
+shape that satisfies `D-0034`'s "the mapping is not invented by this port").
+
+**`test_broker_journal_contract.py`'s zero-entry ledger.** `D-0034` ratified that this file gets a
+standalone, metadata-only ledger recording **zero entries**, outside the parity checker's normal
+file-to-inventory linkage, so that its absence from every attention ledger is a checked-in
+statement rather than something a later reader has to decide was deliberate. It is
+`parity/attention.broker-journal-contract.ledger.json`, and it is named -- with the reason it is
+absent -- in `scripts/parity-check.mjs`'s `LEDGERS` list, in a comment beside the attention lane
+rather than as an entry, because the checker's first act on a ledger is to read the inventory file
+it points at and this file has none to point at.
 
 Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
 (mechanism)` or `rewrite`; **none** is a straight carry. `test_classifier.py` (61) carries the
@@ -491,8 +518,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29) | 1,715 |
-| `retarget` | `attention`, `gate_item11`, `broker` | 312 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` A1 only (**ported** 2026-08-29) | 1,805 |
+| `retarget` | `attention` A2 and A3, `gate_item11`, `broker` | 222 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
 | | **18** | **2,194** |

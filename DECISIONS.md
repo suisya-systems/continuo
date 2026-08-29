@@ -121,6 +121,9 @@ spaces distinct.
 | D-0801 | The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred | accepted |
 | D-0603 | The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types` | accepted |
 | D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
+| D-0901 | The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated | accepted |
+| D-0902 | A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's | accepted |
+| D-0903 | The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes | accepted |
 
 ---
 
@@ -6998,3 +7001,180 @@ new hazard this task's four cases cannot exercise.
 **Source.** Task `continuo-session-adapter-followon`, 2026-08-29, porting
 `tests/gate_item2/test_session_driver_harness.py` from interlock `65f36c5` and re-binding
 `test/fault_injection/session_driver.ts` per D-0601's declared follow-on.
+
+---
+
+## D-0901 -- The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated
+
+**Context.** `D-0302` wrote the six watcher fact states into this repository and was explicit about
+how far that went: "a restatement for the oracle's sake, not an adoption. Continuo has no watcher
+and this entry does not give it one." The names existed here so that the ported S1 prose lint had
+something to read; nothing in `src/` was entitled to treat them as its own vocabulary. Two places
+nevertheless carried the list already -- `src/measurement/fixtures.ts`, which refuses a seventh
+value on a fixture label, and `test/fault_injection/contract.ts`, which validates against it -- and
+each had its own local reason, which is exactly the shape a vocabulary drifts apart in.
+
+`D-0034` ratified, at the 2026-08-30 human gate, that A1 would be the belt that closes this: "A1's
+own work will carry a new `D-` entry, in the range this belt allocates, that supersedes D-0302's
+limitation and adopts the vocabulary as more than a lint oracle." This is that entry, and it is the
+first in the `D-09xx` range D-0034 allocated to the attention belt.
+
+**Decision.** The closed set is the vocabulary continuo's **detector layer** uses. It is stated in
+`src/attention/fact_state.ts` as a union type, a frozen list and a refusal, and nowhere in that
+module is there a predicate, a semantics, or a mapping from anything to a fact state -- interlock
+`Q-0012` is open and a port does not answer an upstream question by shipping an implementation of
+it. The set, unchanged from `D-0302` and from interlock `D-0005`:
+
+- `ACTIVE_EVIDENCE`
+- `KNOWN_WAIT`
+- `EXPLICIT_BLOCK`
+- `NO_ACTIVITY_EVIDENCE`
+- `OBSERVATION_UNAVAILABLE`
+- `TERMINAL`
+
+The procedural half is carried with the names, as it was at `D-0302` and at interlock `D-0005`: a
+seventh state is added by a new `D-` entry in this file, never by editing a list inside a module or
+a test.
+
+**`D-0302` is superseded in its limitation and left textually untouched.** Not out of tidiness:
+`test/session/provider-contract.test.ts` locates the closed set by splitting `DECISIONS.md` on the
+literal heading `## D-0302 \u2014`, and that indirection is the substance of the ported case rather
+than plumbing. Amending the entry risks the parse; rewriting the lint to read this entry instead
+would change a ported case to suit a decision made after it. So both entries carry the list, which
+is a drift risk this belt creates and therefore has to close --
+`test/contract/fact-state-vocabulary.test.ts` asserts that `D-0901`, `D-0302`,
+`src/attention/fact_state.ts`, `src/measurement/fixtures.ts` and
+`test/fault_injection/contract.ts` all state the same six names in the same order, and that the two
+`src/` copies are frozen rather than merely typed `readonly`. The harness copy is closed by `as
+const` alone -- a compile-time claim that is erased at emit -- and strengthening it would be an
+edit to a landed belt's file, which `D-0504` established belongs in its own PR rather than in
+whichever belt happens to notice. The contract test therefore **records** that difference with an
+assertion rather than repairing it, so that the day someone freezes it the record goes red and is
+updated deliberately.
+
+**The DDL is the sixth party and agrees by carrying no constraint at all.** `incident.fact_state`
+is unconstrained text in both `src/control_plane/spike_schema.sql` and
+`src/control_plane/migrations/0001_initial.sql`, because a `CHECK` duplicating the closed set would
+turn a `D-` entry that extends it into a migration of a schema that promises none. `D-0034`
+ratified that this belt carries that as-is rather than repairing it, so the contract test asserts
+the **absence**: the only `CHECK` mentioning the column is `length(fact_state) > 0`, and no fact
+state is named inside the table. `test/control_plane/spike-schema.test.ts` keeps its behavioural
+pin (an unknown fact state inserts successfully) and is not touched.
+
+**Falsifier.** `D-0302`'s own falsifier still stands and is inherited rather than retired: if
+interlock adds a seventh fact state and neither entry here is updated, both this repository's lists
+pass while the source's fails. What would falsify *this* entry specifically is a consumer that
+needs to know what a state means -- if a belt reaches for a predicate over the set and cannot
+proceed without one, the adoption was made a step too early and `Q-0012` had to be answered
+upstream first. The contract test is the observation for the drift risk this entry creates: if it
+ever goes red because two lists disagree, the two-entry arrangement is what was wrong, not the
+adoption.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29, porting `tests/attention/test_readers.py`
+and `tests/attention/test_classifier.py` from interlock `65f36c5`. Decision id from the `D-09xx`
+range allocated to the attention belt by `D-0034`, and the first id A1 mints in it.
+
+---
+
+## D-0902 -- A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's
+
+**Context.** `D-0034` split the attention belt into A1 (facts, 90 cases), A2 (dedup and config, 44
+cases) and A3 (notify and pipeline, 60 cases). The split is by *test file*, and the source's module
+graph does not respect it: `classifier.py` -- A1's subject -- imports `DEFAULT_NOTIFY` from
+`config.py`, which is A2's. A1 cannot resolve a severity without it, and A2 cannot start until A1
+has landed the classifier those cases run against.
+
+Three options were weighed. **Waiting for A2** inverts the dependency the source has and would
+leave A1's 61 classifier cases unportable. **Moving the constant into `classifier.ts`** makes the
+port's module graph differ from the source's for a scheduling reason, and A2 would then have to
+move it back, which is a diff whose only content is undoing this one. **Landing the file with only
+what A1 needs** keeps the graph the source's and leaves A2 an ordinary addition.
+
+**Decision.** `src/attention/config.ts` exists and holds exactly two names: `Severity` and
+`DEFAULT_NOTIFY`, both carried from the source unchanged. `AttentionConfig`, the loader, `Template`,
+the placeholder allowlist and the sound modes are **not** here and are A2's to add;
+`tests/attention/test_config.py`'s 34 cases are untouched by this belt and are not in any ledger it
+writes. The file's own header says so, so the next reader of it does not have to reconstruct the
+split from two decision entries.
+
+`DEFAULT_NOTIFY` is built with `Object.create(null)` and read with `Object.hasOwn`, per
+`docs/test-translation-conventions.md` rule 9: the attention kind is a caller-supplied string used
+as a map key, Python's `dict` has no inherited keys, and an object literal carries
+`Object.prototype`. A target-only case pins that a notify map keyed by `toString` overrides nothing.
+
+**This was put to the window rather than decided in the belt.** The scope boundary between A1 and
+A2 is a ratified one, and a worker narrowing or widening it on its own authority is the failure
+mode `D-0031`'s gate exists to prevent. The window's answer, on 2026-08-29, was that a minimum seam
+inside a ratified three-way split is an implementation detail it can settle, on two conditions --
+that the ledger and a `D-` entry record the boundary, and that the file itself carries a line for
+A2's brief. Both are met.
+
+**Falsifier.** If A2 finds that `DEFAULT_NOTIFY` cannot be completed in place -- that the loader
+needs it to be a different shape, say, or that the config belt's own cases pin a construction this
+file forecloses -- then landing it early was wrong and the constant should have travelled with its
+belt. The observation is A2 having to *change* this file rather than *extend* it.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29. Boundary confirmed by the window in the same
+task before implementation began.
+
+---
+
+## D-0903 -- The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes
+
+**Context.** `parity/source-inventory.belts.md` classes every `attention` file as `carry
+(invariant) / rewrite (mechanism)` and names `test_classifier.py`'s invariant as the strongest in
+the subsystem: *every row of the fact vocabulary has a pinned expectation*. In the source, the
+vocabulary being pinned is its own eighteen-value classification table -- the `notify_sent`
+subtypes and the per-kind severity defaults. Continuo has neither a watcher nor that table's
+purpose, and `D-0034` ratified that the port re-derives the invariant onto the closed fact-state
+set instead, while **not** inventing the mapping from the source's eighteen `kind` values to the
+six states: "every ported case is required to give its fact state explicitly, so no
+continuo-authored kind-to-state table exists for a belt case to silently depend on."
+
+That leaves the shape of the port to decide, and there are only two ways a fact state can reach an
+`AttentionEvent`: the classifier derives it, or the caller supplies it. Deriving it is the
+forbidden table under another name -- a `switch`, a default, or a lookup are the same object.
+
+**Decision 1 -- the fact is an input, required, and carried uninterpreted.** Every row
+`src/attention/classifier.ts` accepts carries a `factState`, and the event it produces carries that
+same value back. Nothing in the module reads it, branches on it, or validates it against the row's
+kind. This is the posture `D-0021` and `D-0302` already give `SessionReadout`, where a provider's
+own lifecycle word is carried without conversion because conversion belongs to the detector layer;
+the classifier is downstream of that layer, so the fact arrives already decided.
+
+The field is **required and has no default**. An optional field needs a fallback, and the only
+fallback available is a function of the row -- which is the table again, with one row. Requiring it
+makes a caller who has not decided a compile error instead of a silent guess.
+
+**Decision 2 -- the retargeted invariant is a guard whose falsification is measured, not assumed.**
+`test/attention/classifier.test.ts` holds `PINNED_FACT_STATES`, one pinned expectation per
+vocabulary row, and asserts set equality against `FACT_STATES` in both directions. Its keys are the
+vocabulary and its values are what the classifier must do with each; it is not a mapping *to* a
+fact state and nothing in the belt reads it as one. The fact states named by the 61 ported cases
+are deliberately rotated across cases of the same kind, so no reader can extract a kind-to-state
+table from the pattern, and a target-only case asserts the absence directly: the same row under two
+different fact states classifies identically in every field but the one that was varied.
+
+A "for every row of the vocabulary" check is **green on an empty vocabulary**, which is precisely
+the shape that rots into a guard nobody has seen fail. So the belt follows the secretary belt's
+seven-probe precedent and records each probe measured red in
+`parity/attention.classifier.ledger.json`, rather than shipping an unfalsified guard with a
+confident comment on it.
+
+**Rejected alternative: parametrising the carry-through over `FACT_STATES` directly.** It is
+shorter and it covers all six automatically, and that is the problem -- a table derived from the
+vocabulary agrees with the vocabulary by construction and can never disagree with it, so the guard
+would assert nothing about whether anybody had actually pinned anything. The literals are written
+out for the same reason `D-0302` refused to copy a list into a test: the check has to be able to
+fail.
+
+**Falsifier.** If a later belt -- A3's pipeline, most likely -- finds that no caller is in a
+position to supply a fact state, then the fact does not belong on the classifier's input at all and
+this shape is wrong; the observation would be A3 having to invent a value to pass, which is the
+forbidden mapping arriving one layer up. Conversely, if `Q-0012` is settled upstream and a genuine
+kind-to-state derivation is published, this entry is superseded by one that adopts it rather than
+amended -- the port does not get to author that mapping either way.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29, porting
+`tests/attention/test_classifier.py` (61 cases) from interlock `65f36c5`, under `D-0034`'s
+ratified constraints.

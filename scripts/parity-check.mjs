@@ -142,6 +142,24 @@ const LEDGERS = [
   "parity/fault-injection.import-graph.ledger.json",
   "parity/fault-injection.manifest.ledger.json",
   "parity/fault-injection.protocol.ledger.json",
+  // lane J -- attention, sub-belt A1 (facts). The subsystem ports in three
+  // sub-belts sharing one D-range (D-0034); A1 is `D-0901`..`D-0903`. One
+  // ledger per source test file, as everywhere else.
+  //
+  // `parity/attention.broker-journal-contract.ledger.json` is deliberately NOT
+  // in this list, and this comment is where that is said rather than being left
+  // for a reader to infer from its absence. `tests/attention/
+  // test_broker_journal_contract.py` is quarantined upstream by a module-level
+  // `pytest.importorskip`, so pytest collects no node id from it and it has no
+  // inventory file -- and the first thing the loop below does with a ledger is
+  // read the inventory its `source.file.inventory` names. D-0034 ratified that
+  // the file still gets a standalone, metadata-only ledger recording ZERO
+  // entries, outside this checker's file-to-inventory linkage, so that its
+  // absence from every attention ledger is a checked-in statement rather than
+  // something a later reader has to decide was an oversight. That file explains
+  // itself and points back here.
+  "parity/attention.classifier.ledger.json",
+  "parity/attention.readers.ledger.json",
 ];
 
 /**

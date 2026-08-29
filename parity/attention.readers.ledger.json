@@ -1,0 +1,349 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "attention",
+      "collected": 194,
+      "inventory": "parity/source-inventory/attention.all.txt",
+      "note": "The attention belt ports in three sub-belts sharing one D-range (D-0034): A1 (facts, 90 cases -- this ledger and parity/attention.classifier.ledger.json), A2 (dedup and config, 44) and A3 (notify and pipeline, 60). tests/attention/test_broker_journal_contract.py is NOT one of the 194 -- it has no node ids -- and has its own zero-entry ledger, parity/attention.broker-journal-contract.ledger.json, outside this checker's file-to-inventory linkage."
+    },
+    "file": {
+      "path": "tests/attention/test_readers.py",
+      "collected": 29,
+      "inventory": "parity/source-inventory/attention.test_readers.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order."
+    }
+  },
+  "target": {
+    "test_file": "test/attention/readers.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`sqlite3.connect(f\"file:{p}?mode=ro\", uri=True)` -- a lazy connection whose first statement is what fails on a file that is not a database",
+        "to": "`openDatabase(path, { readonly: true })` -- `better-sqlite3`, which issues `PRAGMA foreign_keys` before returning and therefore fails at open",
+        "why": "The port has one place where a SQLite connection is created (`src/sqlite/open.ts`) and going around it would be the first exception to that. The observable the source's cases assert -- an empty list and a warning naming the state DB -- is produced on either path, and the source's own comment on the non-SQLite case explicitly allows both.",
+        "affects": "the five `read_events` cases"
+      },
+      {
+        "from": "`capsys.readouterr().err`",
+        "to": "`capturedStderr(action)`, a `process.stderr.write` spy restored with `onTestFinished`",
+        "why": "The reader warns with `print(file=sys.stderr)` and the source asserts on the rendered text, including one case that asserts it is EMPTY. That is a `capsys` assertion, not a `caplog` one: there is no log record to assert a level or a logger name about, so rule 7's `LogSink` mapping does not apply and inventing a seam would put a test-shaped indirection into a production path the source reaches directly. `test/measurement/cli.test.ts` sets the precedent.",
+        "affects": "six cases across both readers"
+      },
+      {
+        "from": "`monkeypatch.setattr(readers_mod, \"_chunk_reaches_cutoff\", spy)`",
+        "to": "`patchSeam(readers.readersSeams, \"chunkReachesCutoff\", spy)`",
+        "why": "ESM resolves bindings at link time, so a module's own internal call cannot be redirected from outside; `vi.mock` reaches importers, not intra-module calls. The seam record reproduces Python's late binding rather than working around it (`docs/test-translation-conventions.md` rule 5). Its liveness is a target-only case, because a seam production stopped routing through would leave the linearity case green for the wrong reason.",
+        "affects": "one case, plus one target-only case"
+      },
+      {
+        "from": "`buf.decode(\"utf-8\", \"replace\").splitlines()`",
+        "to": "`Buffer#toString(\"utf8\")` plus `splitLinesKeepEnds` (`src/sqlite/complete-statement.ts`) with the terminator stripped",
+        "why": "`Buffer#toString` already substitutes U+FFFD, so the replace half is free. The SPLIT half is not: `str.splitlines()` breaks on eleven code points where `String#split(\"\\n\")` breaks on one, and the journal is written with `ensure_ascii=False`, so a U+2028 inside an owner name really does end a line for the source. A target-only case pins it; measured, splitting on `\\n` alone turns that case red.",
+        "affects": "every journal case, and one target-only case"
+      },
+      {
+        "from": "`json.loads`, which accepts the literals `NaN` and `Infinity`",
+        "to": "`JSON.parse`, which rejects them",
+        "why": "The two corruption cases write those literals and assert the rows are dropped. They are dropped in both runtimes; here they are dropped as unparseable rather than by the finiteness guard. The guard is still reachable -- `JSON.parse('1e400')` is `Infinity` -- and a target-only case reaches it, so the branch is not left as dead code the belt would happily delete.",
+        "affects": "the two corruption cases, and one target-only case"
+      }
+    ],
+    "target_only_tests": {
+      "count": 3,
+      "ids": [
+        "test/attention/readers.test.ts::attention readers > target-only -- production routes the walk through the seam",
+        "test/attention/readers.test.ts::attention readers > target-only -- a ts JSON.parse renders as Infinity is skipped",
+        "test/attention/readers.test.ts::attention readers > target-only -- a journal line split by a Python line boundary is unparseable"
+      ],
+      "why": "Each defends machinery the PORT wrote and the source therefore carries no warrant for. The seam is required by the ESM constraint and would rot into a decoration without a liveness case (measured red by calling `chunkReachesCutoff` directly). The other two close the two places where `JSON.parse` and `String#split` are narrower than `json.loads` and `str.splitlines()`: without them the finiteness guard would be unreachable from any ported case, and the line-boundary list would be uncheckable (measured red by returning `ts` unchecked, and by splitting on `\\n` alone)."
+    }
+  },
+  "totals": {
+    "source_cases": 29,
+    "ported": 13,
+    "adapted": 16,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "A warning line interpolates `windowSec` and `maxScanBytes` with JavaScript's number formatting, so a 300-second window renders `300s` where Python's float renders `300.0s`.",
+      "why": "The source types both as `float` and this port types them `number`, which has no int/float distinction to preserve. No case asserts the numeral -- the two that read the warning match on `freshness window` -- and manufacturing a Python float spelling for a diagnostic would be inventing a property the port cannot hold anywhere else either."
+    },
+    {
+      "behaviour": "`readEvents` narrows `occurred_at`, `actor` and `payload_json` to the types the schema declares; a column holding an unexpected type is coerced rather than surfaced.",
+      "why": "The source hands the row's values through untouched because Python's dict is untyped end to end. Matching that exactly would mean typing the whole reader's output `unknown`, which pushes the same coercion into every caller instead of doing it once at the boundary. No source case constructs such a row."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_events_missing_file_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read events: a missing file returns empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: a path that does not exist yields an empty list, with no connection opened.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_events_empty_db_no_table_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read events: an empty database with no events table returns empty",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the fixture and the reader both change SQLite driver -- `sqlite3.connect` becomes `better-sqlite3` through `openDatabase(path, { readonly: true })`. The assertions are the source's, unchanged. The `sqlite_master` probe that answers 'is there an `events` table' is the source's own query, run through `prepare().get()`, whose miss is `undefined` where Python's `fetchone()` miss is `None`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_events_filters_to_relevant_kinds",
+      "target_id": "test/attention/readers.test.ts::attention readers > read events: the select filters to the relevant kinds",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the fixture and the reader both change SQLite driver -- `sqlite3.connect` becomes `better-sqlite3` through `openDatabase(path, { readonly: true })`. The assertions are the source's, unchanged. The `IN (?,?,?,?)` placeholder list is built from `RELEVANT_EVENT_KINDS` exactly as the source builds it, so the narrowing is still a property of the SELECT rather than of a post-filter.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_events_returns_rows_ordered_by_id",
+      "target_id": "test/attention/readers.test.ts::attention readers > read events: rows come back ordered by id",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the fixture and the reader both change SQLite driver -- `sqlite3.connect` becomes `better-sqlite3` through `openDatabase(path, { readonly: true })`. The assertions are the source's, unchanged. The id comparison is coerced with `Number()` because the column arrives as a `number` here and as an `int` there, and the assertion is about the ordering rather than the type.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_events_handles_invalid_payload_json",
+      "target_id": "test/attention/readers.test.ts::attention readers > read events: an invalid payload_json decodes to an empty payload",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the fixture and the reader both change SQLite driver -- `sqlite3.connect` becomes `better-sqlite3` through `openDatabase(path, { readonly: true })`. The assertions are the source's, unchanged. `json.loads` becomes `JSON.parse` inside the same defensive `try`; both reject `not-json` and both fall back to an empty object.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_pending_decisions_missing_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read pending decisions: a missing file returns empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_pending_decisions_malformed_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read pending decisions: malformed JSON returns empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: `json.JSONDecodeError` and `SyntaxError` are both swallowed by the same bare catch the source writes.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_pending_decisions_wrong_type_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read pending decisions: a document of the wrong type returns empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: `isinstance(data, list)` becomes `Array.isArray(data)`, which is the same question in this runtime.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_pending_decisions_filters_non_dict_entries",
+      "target_id": "test/attention/readers.test.ts::attention readers > read pending decisions: non-object entries are filtered out",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight. `isinstance(d, dict)` becomes an object test that explicitly excludes arrays, because an array IS an object in JavaScript and is NOT a `dict` in Python -- without the exclusion a list-of-lists register would pass the filter the source rejects.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_events_non_sqlite_file_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read events: a file that is not a database returns empty and warns",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the fixture and the reader both change SQLite driver -- `sqlite3.connect` becomes `better-sqlite3` through `openDatabase(path, { readonly: true })`. The assertions are the source's, unchanged. Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here. The source's own comment allows either the connect or the master-table read to be the failing step; here it is the connect, because `openDatabase` issues a pragma before returning while `sqlite3.connect` is lazy. The case asserts the source's substring, which both paths satisfy.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_missing_journal_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: a missing journal returns empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_picks_only_the_duplicate_event",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: only the duplicate event is picked",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_drops_rows_outside_window",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: rows outside the window are dropped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_skips_corrupt_and_undateable_rows",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: corrupt and undateable rows are skipped",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: the same eight malformed lines are written and the same single row survives, but two of them take a different route. `json.loads` accepts the literals `NaN` and `Infinity` and the reader's finiteness guard rejects the resulting value; `JSON.parse` rejects those literals outright, so those two lines are dropped one step earlier, as unparseable. The finiteness guard is still reachable in this runtime -- `JSON.parse('1e400')` yields `Infinity` -- and a target-only case pins it, so the branch cannot be deleted with the belt still green.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_scan_follows_window_not_a_byte_cap",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: the scan follows the window rather than a byte cap",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: the same 201-line journal, the same 256-byte chunk, the same assertion that the live pair survives the trailing traffic.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_stops_walking_past_the_window",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: the walk stops at the first line past the window",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here. The assertion is the source's: the walk is proved to have stopped at the window boundary by the ABSENCE of the cap warning, not by counting bytes.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_walk_inspects_each_chunk_once",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: the walk inspects each chunk once",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `monkeypatch.setattr(readers_mod, '_chunk_reaches_cutoff', spy)` becomes `patchSeam(readers.readersSeams, 'chunkReachesCutoff', spy)`. ESM bindings are resolved at link time and cannot be rebound from outside, and `vi.mock` replaces a module for its importers rather than for a module's own internal calls, so the production call site goes through a seam record (`docs/test-translation-conventions.md` rule 5). The spy's observations and both assertions -- more than one chunk seen, no chunk larger than the chunk size -- are the source's. A target-only case pins the seam's liveness; measured: calling `chunkReachesCutoff` directly turns that case red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_reports_a_capped_scan",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: hitting the safety cap is reported",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_survives_multibyte_chunk_cut",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: a chunk boundary inside a codepoint is survivable",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted in two mechanisms, with the same assertion. The byte offset the case needs is found with `Buffer#indexOf` over the file's bytes rather than `bytes.index(str.encode())`, and the decode is `Buffer#toString('utf8')`, which substitutes U+FFFD for an invalid sequence exactly as Python's `errors='replace'` does. The multibyte owner is written as `\\u`-escapes so the test file stays ASCII; the bytes on disk are the same three-byte codepoints.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_unreadable_journal_warns",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: an unreadable journal warns",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here. The directory-where-a-file-should-be raises at a different syscall in the two runtimes -- `Path.open('rb')` raises `IsADirectoryError` immediately, while POSIX `open(2)` on a directory succeeds and Node's `readSync` is what fails -- so the try block wraps the whole walk rather than only the open. Both degrade to no signals with the source's warning substring.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_duplicates_projection_is_exactly_three_keys",
+      "target_id": "test/attention/readers.test.ts::attention readers > read broker duplicates: the projection is exactly three keys",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: `set(r)` over a dict becomes `new Set(Object.keys(row))`, and the key set is compared exactly rather than the three values being spot-checked, as the source insists.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_missing_journal_returns_empty",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: a missing journal returns empty",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_picks_only_the_two_ownership_events",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: only the two ownership events are picked",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight: the same seven-line journal, the same two survivors in the same order.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_drops_rows_outside_the_window",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: rows outside the window are dropped",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Translated straight.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_keep_the_raw_per_event_fields",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: the raw per-event fields are kept",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted, and this one is worth reading rather than skimming. Four of the six assertions are the source's unchanged: the per-event fields survive the read, and both timestamps equal 980.0 and 990.0. The remaining two are `isinstance(ts, float)`, which pin that the reader converted an `int` to a `float`. JavaScript has a single numeric type, so there is no conversion to observe and no way for the reader to hand back 'the journal's own int' -- the failure those assertions exist to catch does not exist here. They are translated as `typeof ts === 'number'`, which is what remains observable, beside the value equality that WOULD catch a reader that stopped normalizing (a `ts` left as the string `\"980\"` fails `toBe(980.0)`). Recorded `adapted` rather than `waived` deliberately: the property the case pins -- a usable, finite epoch equal to what the journal held -- is asserted in full, and the untranslatable half is a distinction in Python's type system rather than a behaviour of the reader. It is called out here so a reviewer can disagree with that reading rather than have it buried in a `ported`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_skips_corrupt_and_undateable_rows",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: corrupt and undateable rows are skipped",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted for the same reason as the duplicate-sidecar corruption case: the `NaN` and `Infinity` literals are rejected by `JSON.parse` one step earlier than the source's finiteness guard rejects the parsed value. The same eight lines are written and the same single row survives.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_unreadable_journal_warns",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: an unreadable journal warns",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_reports_a_capped_scan",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: hitting the safety cap is reported",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/attention/test_readers.py::test_read_broker_delivery_signals_scan_follows_the_window",
+      "target_id": "test/attention/readers.test.ts::attention readers > read delivery signals: the scan follows the window",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Adapted: `capsys` becomes a `process.stderr.write` spy (`capturedStderr`, the shape `test/measurement/cli.test.ts` already uses). The subject really is the rendered stderr text -- the source warns with `print(file=sys.stderr)` -- so no `LogSink` seam was invented for it; rule 7 of the translation conventions governs `caplog`, which asserts over log RECORDS, and there is no record here. Both of the source's assertions are kept, including the silent-stderr one that proves the walk did not hit the cap.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}
