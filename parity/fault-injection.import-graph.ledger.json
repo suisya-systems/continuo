@@ -1,0 +1,101 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "fault_injection",
+      "collected": 98,
+      "inventory": "parity/source-inventory/fault_injection.all.txt",
+      "note": "The S9/I-11 fault-injection harness, interlock tests/fault_injection/, 5 test files plus the durable modules they drive (contract, controller, manifest + frozen manifest.json, conformance) and two adapters. One ledger per source file. The subsystem is an acceptance HARNESS rather than a product module: there is no claude_org_runtime/fault_injection/, and the port therefore lands in a directory of its own (test/fault_injection/) rather than in src/ -- see DECISIONS.md D-0601, which also records why it is not merged into test/contract/."
+    },
+    "file": {
+      "path": "tests/fault_injection/test_import_graph.py",
+      "collected": 3,
+      "inventory": "parity/source-inventory/fault_injection.test_import_graph.txt",
+      "note": "The structural seam: exactly two modules in the harness may import the implementation under test, asserted over the parsed syntax tree rather than agreed socially. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. It was taken under the DEFAULT profile (S9_PROFILE unset, so `fast`), which is why the 98 ids contain 21 manifest cases and not all 59 the frozen matrix holds -- the other 38 are `full`-only and are not collected by a default run. That distinction is load-bearing for this belt's completion claim and is spelled out in the cases ledger."
+    }
+  },
+  "target": {
+    "test_file": "test/fault_injection/import-graph.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "Python `ast.parse` + `ast.walk` over each fault_injection/*.py",
+        "to": "`ts.createSourceFile(..., setParentNodes=true)` + a recursive `ts.forEachChild` visitor over each test/fault_injection/*.ts",
+        "why": "The source prefers ast over a regex because the escapes that matter (an import in a function body, one behind TYPE_CHECKING) are exactly what a line-oriented pattern gets wrong. The same is true in TypeScript, plus two more routes a regex or a scan of built JS would miss: `import type` (erased at emit) and dynamic `import()`. typescript is already a devDependency and test/canary/structural.test.ts sets the precedent.",
+        "affects": "all three cases"
+      },
+      {
+        "from": "Python dotted-root membership: the imported root equals 'claude_org_runtime'",
+        "to": "resolve(harnessDir, specifier) for relative specifiers, then path containment in src/ (with a trailing separator); bare specifiers returned unchanged and always allowed",
+        "why": "TypeScript has no package-dotted namespace. Resolving to an absolute path is what stops `../../src/control_plane/schema.js` from being judged by its bare tail. Bare specifiers are the stdlib/third-party imports the source's root filter allows.",
+        "affects": "cases 1 and 2"
+      },
+      {
+        "from": "`HARNESS_ROOT.glob('*.py')` (manifest.json excluded for free by the extension)",
+        "to": "a full directory listing, filtered to *.ts for scanning, with manifest.json and the two .mjs loader shims on an explicit NON_MODULE_FILES allowlist and any other non-.ts file throwing",
+        "why": "docs/test-translation-conventions.md rule 10 instance 3: an extension-defined subject set silently stopped covering the fencing package's most security-relevant file the day it shipped as .mjs, and stayed green. Naming the exception makes the next added artifact a red test rather than a quiet narrowing.",
+        "affects": "case 1"
+      },
+      {
+        "from": "`assert not offenders, \"message\"` / `assert X in Y, name`",
+        "to": "`expect(value, \"message\").toEqual(...)` / `.toBeGreaterThan(0)` / `.toBe(false)`",
+        "why": "House style in test/canary/structural.test.ts, which carries the same shape of structural assertion. Each assertion keeps the source's own failure sentence so a regression reads the same way.",
+        "affects": "all three cases"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    }
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "The foreignness predicate is containment-based and, like the source's root-equality test, is not bit-identical to it. The source would let a sibling top-level package named `claude_org_runtime_extra` through (different root); the port lets a sibling DIRECTORY `srcfoo/` through only if its resolved path began with the src path plus a separator -- it does not, so the port is marginally tighter here. No behaviour was widened; noted so the integrator knows the two are not identical predicates.",
+      "why": "Path containment is the honest analogue of Python's package-root resolution, and the near-miss the source tolerates has no TypeScript counterpart worth reproducing as a bug."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/fault_injection/test_import_graph.py::test_only_the_adapter_imports_the_implementation_under_test",
+      "target_id": "test/fault_injection/import-graph.test.ts::the import seam > only the adapter imports the implementation under test",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same property, different tree and different parser. (a) SUBJECT: the source walks HARNESS_ROOT.glob('*.py') with ast; the port lists the harness directory and parses each *.ts with the TypeScript compiler API (ts.createSourceFile + a full ts.forEachChild walk) -- a real parse, not a regex, for the same reason the source prefers ast. The three non-.ts artifacts (manifest.json and the two .mjs loader shims) are excluded by an explicit NON_MODULE_FILES allowlist rather than by an extension filter, so a future .json/.mjs added here FAILS the walk instead of silently leaving the guard (docs/test-translation-conventions.md rule 10 instance 3). A nested directory throws for the same reason. (b) FOREIGNNESS: Python's root-package test (the imported root equals 'claude_org_runtime') becomes path containment -- a relative specifier is resolved against the importing file's directory and is foreign if it lands under src/. The comparison is against a path ending in a separator, so a sibling directory whose name merely starts with 'src' is not swept in. Bare specifiers (node:fs, better-sqlite3, typescript, vitest) are allowed, which is the source's stdlib/third-party allowance; the package exports only '.' (interlock D-0002) so no bare specifier can name a sibling continuo module. (c) ROUTES: the walk collects static imports and re-exports, `import type` (erased at emit and therefore invisible to any scan of built JavaScript), dynamic import() and require() from inside a function body -- the TypeScript analogues of the source's 'an import in a function, one behind TYPE_CHECKING'. Failure message keeps the source's sentence with the offending files and their foreign imports rendered repo-relative."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_import_graph.py::test_the_adapter_exists_and_does_import_it",
+      "target_id": "test/fault_injection/import-graph.test.ts::the import seam > the adapter exists and does import it",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Straight port of the assertion with the subject re-pointed: ADAPTER_MODULES is {spike_driver.ts, session_driver.ts} and each must import something under src/. The adaptation is that 'imports the forbidden root' becomes 'has at least one foreign import', counted by the same resolver the case above uses, so the two halves of the seam are asserted through one definition rather than two that could drift. Worth naming because it is the half that keeps session_driver.ts honest: that module cannot yet drive a case (src/session/ does not exist at this revision), so it would be easy to leave it a pure stub -- and a pure stub would make this assertion fail. It binds through createControlPlane, the store the session walk's first durable write lands in, exported as SESSION_STORE_FACTORY so a tidy-up cannot drop the import without turning this case red."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_import_graph.py::test_the_contract_and_controller_name_no_spike_symbol",
+      "target_id": "test/fault_injection/import-graph.test.ts::the import seam > the contract and controller name no spike symbol",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Same four forbidden identifiers (Outbox, KeyedDropbox, ProtectedWrite, FencedStatement) over the same three durable modules (contract.ts, controller.ts, manifest.ts), with the identifier set built from the parsed tree rather than from the text. The source unions ast.Name ids with ast.Attribute attrs; the TypeScript analogue is every ts.Identifier node, which covers both a bare reference and a property name, and additionally covers a type annotation -- which is the case the source's docstring names explicitly ('would still have to be edited when S7 is discarded ... even in a type hint'). A string literal is not an Identifier, so prose-in-code still does not count, exactly as in the source. Note the near-miss the port has to survive and does: controller.ts references INVARIANT_NO_UNOWNED_OUTBOX, which CONTAINS 'OUTBOX' but is not the identifier 'Outbox', and the source's membership test is equality for the same reason."
+    }
+  ],
+  "totals": {
+    "source_cases": 3,
+    "ported": 0,
+    "adapted": 3,
+    "not_ported": 0,
+    "waivers": 0
+  }
+}

@@ -112,7 +112,10 @@ spaces distinct.
 | D-0502 | The MCP wire keeps interlock's snake_case keys and env names; the endpoint is launched as the built module by path | accepted |
 | D-0503 | The facade's own caller bug gets a class the outbox does not share | accepted |
 | D-0504 | The third AST scan stays in its belt; the frozen testkit is not changed by this PR | accepted |
+| D-0601 | The fault-injection belt takes `D-06xx`, its own `test/fault_injection/` directory, and two adapter classes | accepted |
+| D-0602 | The fault-injection watchdogs are scaled for this port's runners, and the manifest's numbers are left alone | accepted |
 | D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
+| D-0801 | The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred | accepted |
 
 ---
 
@@ -6629,5 +6632,141 @@ in either lane's totals.
 
 **Source.** Task `continuo-gate-item2-port`, 2026-08-29, porting `tests/gate_item2/` from interlock
 `65f36c5`. Decision id from the `D-08xx` range this entry allocates.
+
+---
+
+## D-0601 — The fault-injection belt takes `D-06xx`, its own `test/fault_injection/` directory, and two adapter classes
+
+**Context.** `parity/source-inventory.belts.md` classed `fault_injection` (98 cases) as
+`candidate-lane` and left three questions open in writing: which `D-` range the belt gets, whether
+the cases merge into `test/contract/` or take a directory of their own, and what it means to run a
+"conformance battery with one adapter in it". This entry answers all three before any code lands,
+because each one is load-bearing on how the other 97 cases are written.
+
+**Decision 1 -- the band is `D-06xx`.** The index note in this file allocates `D-0019`..`D-0099` to
+the control plane and the window, `D-01xx` measurement, `D-02xx` fencing and settings, `D-03xx`
+session, `D-04xx` canary, `D-05xx` messagebus (the last three by D-0032). `D-06xx` is the next free
+range and is reserved here for the fault-injection belt. As the index note already says, the range
+is an allocation and not a meaning: nothing about an entry follows from which range it is in. The
+point is only that concurrent lanes appending at once conflict in the index table and never over an
+ID.
+
+**Decision 2 -- the cases get `test/fault_injection/`, not `test/contract/`.** `belts.md` floated
+the merge on the grounds that continuo "already has the same instinct in `test/contract/`". The
+instinct is the same; the shape is not. `test/contract/` holds assertions *about* continuo's
+modules. This belt ports an independent acceptance system: it has a wire protocol
+(`contract.ts`), a spawn/barrier/kill/restart engine (`controller.ts`), a frozen case matrix and
+its generator (`manifest.ts`, `manifest.json`), a conformance battery (`conformance.ts`), a
+collection-time policy layer for lanes, profiles and budgets (`policy.ts`), and role drivers that
+run as **real child processes**. Merging six such modules into a directory of ordinary contract
+tests would bury the seam that `test_import_graph.py` exists to police -- the rule that exactly one
+module may import the implementation under test -- in a directory where every file imports
+implementations by design. Interlock keeps the harness in `tests/fault_injection/` for the same
+reason, and the belt keeps that boundary.
+
+**Decision 3 -- the adapters are two classes, and only one of them is a battery subject.** The
+source's `ADAPTERS` tuple in `test_conformance.py` has one member and its docstring says the others
+join "when I-12 and I-14 land". Read carelessly, "a conformance battery with one adapter" sounds
+like a comparison test with nothing to compare against. It is not a comparison test. It is a
+**qualification exam**: `conformance.ts` asserts the contract itself -- every checkpoint reachable
+and blocking, the barrier round-trip, a real SIGKILL leaving a readable database, an idempotent
+restart, an injected clock, identical traces under one seed, the CLI surface, and that no invariant
+query is vacuous -- so an adapter that has not passed it cannot contribute matrix results. One
+subject is a complete exam; a second subject adds coverage of the *next* adapter, not of the exam.
+
+So the belt names the two roles explicitly rather than leaving them implied by a tuple:
+
+- a **`FullFaultAdapter`** is a battery subject. It implements the whole `Adapter` surface and the
+  conformance battery runs against every one the build ships. Today that is exactly one, the spike
+  driver over `src/control_plane`.
+- a **`CaseAdapter`** is the narrower thing a manifest case's `adapter` field may name. It is
+  resolved from a registry at collection time and needs only what the cases routed to it use.
+
+The distinction is structural, not documentary: the registry refuses to be empty, and every
+`adapter` name a manifest case declares must resolve in it, so a case routed to an adapter nobody
+registered fails at collection rather than as a spawn failure in CI. That is the same rule the
+source states for its own manifest validation ("an unknown adapter must refuse at collection, never
+surface as a spawn failure") raised to cover the registry as well as the name.
+
+**What this belt does *not* claim.** The manifest carries 59 cases, of which 55 route to the spike
+adapter and 4 to the session adapter (`session-start`, gate item 2's four injection points). The
+session driver stands on a `SessionOrchestrator` and a C2 provider that continuo has not ported --
+`src/session/` does not exist at this revision. Those four cases are therefore declared in the
+ledger as a **follow-on dependency**, not as passing coverage, and this belt's completion claim is
+"the acceptance harness is ported and the spike adapter passes the battery", never "98 cases at
+parity". The two are different sentences and the ledger keeps them apart.
+
+**Falsifier.** If `test/fault_injection/` is later merged into `test/contract/` without the import
+seam surviving, `test/fault_injection/import-graph.test.ts` goes red naming the module that
+reached the implementation. If a second full adapter is added without passing the battery,
+`test/fault_injection/conformance.test.ts` collects it and fails. If the adapter registry is
+emptied, its own structural case fails rather than the matrix silently collecting nothing.
+
+---
+
+## D-0602 — The fault-injection watchdogs are scaled for this port's runners, and the manifest's numbers are left alone
+
+**Context.** `manifest.json` carries interlock's CI budgets: a `fast` profile with a 15s per-case
+watchdog and a 10s per-barrier one. Those numbers are calibrated on interlock's runners. On PR #62
+they met continuo's, and two cases failed on the `windows-latest` / node 22 cell:
+
+    CaseTimeout: disp__attempt__after_effect_before_record__sigkill outran its 15s budget
+    CaseTimeout: disp__lease-acquire__lease-acquired__clock-fwd outran its 15s budget
+
+**The stack is the whole diagnosis.** Both failed at the *identical* site --
+`Controller.checkDeadline` -> `Controller.spawn` -> `executeCase` at the FIRST spawn, the one
+immediately after `bootstrap()`. Neither case had started a role process. Creating the schema alone
+had consumed the entire budget. The same suite was green on windows/node 24 and on all four ubuntu
+cells, and both cases pass everywhere else, so nothing distinguishes them except which machine they
+happened to run on.
+
+That is a phenomenon this repository has already measured and already written down. From
+`vitest.config.ts`, for one test on one commit in one workflow:
+
+    linux-latest              28ms
+    windows-latest (healthy) 321ms
+    windows-latest (slow)  13,556ms
+
+a 42x spread between two Windows runners with no code between them, on work that is exactly what a
+case does -- the control plane runs `synchronous = FULL` (interlock D-0012), so every commit fsyncs,
+and a case creates, migrates and re-reads a database several times.
+
+**Two hypotheses were measured and discarded before this one.** The port spawns a child per role and
+type-strips `src/control_plane` on each spawn, so per-spawn cost was the obvious suspect: measured at
+**210ms median** (n=5, linux/node 22), and `NODE_COMPILE_CACHE` moved it not at all (208ms vs 210ms).
+Spawn count was the second: the two failures were assumed to be the multi-spawn cases until the stack
+showed both dying before *any* spawn. Neither survived contact with the evidence, and both are
+recorded here because a reader's first instinct will be the same as mine was.
+
+**Decision.** The budgets are scaled **where they are used**, by this port, and the manifest keeps
+interlock's numbers:
+
+- `PORT_BUDGET_SCALE = 3` applied to the per-case, combination and per-barrier budgets;
+- held under `RUNNER_BUDGET_CEILING_S = 50`, because Vitest's own `testTimeout` is 60s and the two
+  failures are not equivalent. The harness's `CaseTimeout` names the case, carries the `S9-REPRO`
+  line and runs the teardown ladder; the runner's says a test took too long and leaves the role
+  processes to a teardown that never ran. Keeping the harness strictly faster preserves the
+  attributable failure design section 8.2 asks for.
+
+**What is NOT changed, and why.** `manifest.json`'s profile numbers stay exactly as interlock wrote
+them. A ported case -- `the profiles carry the budgets the watchdogs enforce` -- asserts them
+literally, and editing them would make this port's evidence disagree with its source over a fact
+about interlock's CI rather than about continuo's. The source's own docstring says these are
+"harness engineering parameters, not acceptance thresholds", revisable by an ordinary diff; this
+entry takes that at its word while leaving the recorded values alone.
+
+**One place this is stricter than the source, stated plainly.** The `full` profile's combination
+budget is 60s, which already equals the runner's timeout, so a 60s harness budget could never fire
+first. The ceiling holds it at 50s. That is a tighter number than interlock's on that one cell, and
+it buys a better failure rather than a weaker one.
+
+**Why not simply raise the runner's timeout.** `testTimeout` lives in `vitest.config.ts`, which every
+lane shares; a belt does not get to widen the whole suite's tolerance to fix its own cell.
+
+**Falsifier.** If a case's runtime grows past the scaled budget for a reason that is not runner
+weather -- a matrix that has genuinely got slower -- the watchdog still fires and still names the
+case, which is what design section 9 asks of it. If the scale is ever suspected of hiding growth,
+the measurement to redo is the one above: run the belt on a healthy runner and compare against the
+unscaled number.
 
 ---

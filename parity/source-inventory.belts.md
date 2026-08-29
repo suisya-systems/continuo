@@ -116,15 +116,45 @@ That last point is why this is `retarget` and not `candidate-lane`: a straight t
 would carry a behaviour the source repository has already decided is wrong, and continuo's D-0023
 says an inherited defect is repaired at the first belt that touches it, not reproduced.
 
-### `fault_injection` -- `candidate-lane` -- 98 cases
+### `fault_injection` -- `in-scope` (ratified 2026-08-29) -- **ported: 98 of 98 cases**
+
+Ratified into scope at the human gate on 2026-08-29 (the dispatch of this belt carried the
+ratification, as the window recorded); belt started and completed 2026-08-29, D-range `D-06xx` (`D-0601` used -- it reserves the range and
+settles the three questions the paragraphs below used to leave open).
 
 An acceptance harness rather than a product module. There is no
 `claude_org_runtime/fault_injection/`; `test_conformance.py` is a battery run against every adapter
 a build ships, and `test_manifest.py` / `test_protocol.py` / `test_import_graph.py` pin the shape
-adapters must satisfy. Continuo already has the same instinct in `test/contract/`, so this may end
-up merged into that directory rather than given a directory of its own. The Issue names fault
-injection specifically, which is the argument for a belt; the counter-argument is that a conformance
-battery with one adapter in it is a battery for a build continuo does not yet have.
+adapters must satisfy.
+
+This document previously floated merging the cases into `test/contract/` and questioned whether "a
+conformance battery with one adapter in it" was worth a belt. Both are answered in `D-0601` and the
+answers went the other way:
+
+- **It gets its own directory.** `test/contract/` holds assertions *about* continuo's modules; this
+  is an independent acceptance system with a wire protocol, a spawn/barrier/kill/restart engine, a
+  frozen case matrix and its generator, a conformance battery, a collection-time policy layer, and
+  role drivers that run as **real child processes**. Merging six such modules into a directory where
+  every file imports implementations by design would bury the seam `test_import_graph.py` exists to
+  police. It is ported to `test/fault_injection/` (`contract.ts`, `controller.ts`, `manifest.ts` +
+  `manifest.json`, `conformance.ts`, `policy.ts`, `spike_driver.ts`, `session_driver.ts`, two `.mjs`
+  loader shims) with the five case files beside them.
+- **One adapter is a complete exam, not half a comparison.** The battery is a qualification, not a
+  comparison test: it asserts the contract itself -- every checkpoint reachable and blocking, the
+  barrier round trip, a real SIGKILL leaving a readable database, an idempotent restart, an injected
+  clock, identical traces under one seed, the CLI surface, and that no invariant query is vacuous.
+  A second subject would add coverage of that adapter, not of the exam. `D-0601` makes the
+  distinction structural by naming two adapter classes: a `FullFaultAdapter` is a battery subject,
+  a `CaseAdapter` is only something a manifest case may route to.
+
+**What "98 of 98" does and does not say.** The frozen matrix holds 59 cases; the inventory's 98 ids
+were collected under the default (`fast`) profile, which selects 21 of them. All 98 are ported and
+measured green. The other 38 cases are `full`-only and are not part of this evidence set -- and four
+of those route to the `session` adapter, whose walk stands on a `SessionOrchestrator` and a C2
+provider that `src/session/` does not yet provide. `session_driver.ts` is a registered `CaseAdapter`
+that refuses loudly when driven rather than a stub that would let those four report something about
+a walk that never happened. The follow-on is declared in
+`parity/fault-injection.cases.ledger.json`, not left to be discovered.
 
 ### `canary` -- `in-scope` (ratified 2026-08-28) -- **ported: 70 of 70 cases**
 
@@ -441,8 +471,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29) | 1,583 |
-| `candidate-lane` | `fault_injection`, `gate_item2` | 132 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29) | 1,681 |
+| `candidate-lane` | `gate_item2` | 34 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
@@ -464,5 +494,6 @@ decision gets made by nobody.
 
 D-ranges are allocated per belt (`DECISIONS.md`, the index table's note). The 2026-08-28
 ratification (D-0032) allocated `D-03xx` to `session`, `D-04xx` to `canary` and `D-05xx` to
-`messagebus`. No range is allocated to any belt still proposed here; that allocation is part of
-the same human gate as the statuses.
+`messagebus`; `D-0601` allocated `D-06xx` to `fault_injection`, `D-0701` `D-07xx` to `secretary`
+and `D-0801` `D-08xx` to `gate_item2`. No range is allocated to any belt still proposed here; that
+allocation is part of the same human gate as the statuses.

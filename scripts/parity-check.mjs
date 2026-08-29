@@ -126,6 +126,22 @@ const LEDGERS = [
   "parity/gate_item2.orchestrator-walk.ledger.json",
   "parity/gate_item2.mediated-real-provider.ledger.json",
   "parity/gate_item2.session-driver-harness.ledger.json",
+  // lane I -- fault_injection (the S9/I-11 acceptance harness). The letter is
+  // simply the next free one, and it has moved three times: this belt first
+  // reached for `E` while the session belt was reaching for the same letter
+  // concurrently, then `G` once secretary had taken `F`, and now `I` because
+  // messagebus and gate_item2 both landed ahead of it. The rule the session
+  // block states is what settles each collision -- the belt that lands second
+  // moves rather than sharing a letter -- and it is worth reading the list
+  // before picking, because assuming a letter is exactly how the first
+  // collision happened. One ledger per source test file, as everywhere else;
+  // the belt's own directory is test/fault_injection/ rather than
+  // test/contract/ (DECISIONS.md D-0601).
+  "parity/fault-injection.cases.ledger.json",
+  "parity/fault-injection.conformance.ledger.json",
+  "parity/fault-injection.import-graph.ledger.json",
+  "parity/fault-injection.manifest.ledger.json",
+  "parity/fault-injection.protocol.ledger.json",
 ];
 
 /**
