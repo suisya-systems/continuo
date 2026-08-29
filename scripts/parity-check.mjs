@@ -104,6 +104,14 @@ const LEDGERS = [
   // belt in the inventory; the D-range is `D-07xx` (D-0701).
   "parity/secretary.behaviour.ledger.json",
   "parity/secretary.structural.ledger.json",
+  // lane G -- gate_item2 (issue #18's crash-and-retry proof). Downstream of
+  // the session belt above; the D-range is `D-08xx` (D-0801). Two of the
+  // three source files so far -- test_session_driver_harness.py (6 cases)
+  // is deferred, pending the fault_injection belt it drives through; see
+  // that file's absence from this list and parity/gate_item2.orchestrator-
+  // walk.ledger.json's subsystem note.
+  "parity/gate_item2.orchestrator-walk.ledger.json",
+  "parity/gate_item2.mediated-real-provider.ledger.json",
 ];
 
 /**

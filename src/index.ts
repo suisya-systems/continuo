@@ -363,6 +363,20 @@ export {
   SPIKE_SCHEMA_PATH,
   STATE_TABLES,
 } from "./control_plane/schema.js";
+export {
+  activeBinding,
+  bindingForSession,
+  confirmIdentity,
+  markSpawned,
+  PHASE_IDENTITY_CONFIRMED,
+  PHASE_PREPARED,
+  PHASE_SPAWNED,
+  prepareBinding,
+  REASON_PREPARED,
+  REASON_SPAWNED,
+  releaseBinding,
+  SessionBinding,
+} from "./control_plane/session_binding.js";
 export { SPIKE_APPLICATION_ID } from "./control_plane/spike.js";
 export {
   currentScope,
@@ -1048,3 +1062,18 @@ export {
 } from "./settings/sandbox_doctor.js";
 export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";
+export {
+  defaultIdentityConfirmation,
+  IdentityUnconfirmed,
+  LoserTerminated,
+  OrchestrationOutcome,
+  OrchestrationRefused,
+  ProviderStartFailed,
+  SEAM_AFTER_ADMISSION_BEFORE_SPAWN,
+  SEAM_AFTER_READBACK_COMMIT,
+  SEAM_AFTER_SPAWN_BEFORE_READBACK_COMMIT,
+  SEAM_BEFORE_ADMISSION_COMMIT,
+  SEAMS,
+  SessionOrchestrator,
+  type SessionOrchestratorOptions,
+} from "./supervisor.js";
