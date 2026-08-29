@@ -303,9 +303,14 @@ export function loadConfig(path: string | null): AttentionConfig {
   // silently mutates a template or a notify key that the document is then loaded with), and
   // `TextDecoder` strips a leading BOM by default where Python's `utf-8` codec keeps it and
   // `json.loads` refuses it.
+  // The READ is outside the try on purpose. A path that exists but cannot be read -- a directory,
+  // a permission denial, a file that disappeared after the check above -- is an `OSError` in the
+  // source and propagates as one; wrapping it in the decoder's refusal would tell a caller its
+  // configuration is malformed when the problem is operational. Only the DECODE is wrapped.
+  const bytes = readFileSync(path);
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(path));
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch (error) {
     // `read_text(encoding="utf-8")` raises `UnicodeDecodeError`, which IS a `ValueError`, and
     // `load_config` lets it propagate -- so a caller catching `ValueError` around this loader

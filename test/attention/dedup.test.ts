@@ -387,6 +387,15 @@ describe("attention dedup", () => {
       ["2026-05-12T1159.5", "2026-05-12T11:59:00.500Z"],
       ["2026-05-12T11:59:00+09.5", "2026-05-12T02:58:59.500Z"],
       ["2026-05-12T11:5900", null],
+      // An offset can carry a boundary timestamp out of `datetime`'s own domain. CPython's own
+      // `_parse_iso` CRASHES on these two -- `astimezone` raises `OverflowError`, which its
+      // `except ValueError` does not catch -- so the port repairs rather than carries (D-0023),
+      // and the repaired answer is the `null` every other unusable value already gets. Added after
+      // the review gate's fourth round.
+      ["9999-12-31T23:59:59+23:59", "9999-12-31T00:00:59.000Z"],
+      ["0001-01-01T00:00:00-23:59", "0001-01-01T23:59:00.000Z"],
+      ["9999-12-31T23:59:59-23:59", null],
+      ["0001-01-01T00:00:00+23:59", null],
       // The boundary rows, all added after the codex review gate's second round.
       ["9999-W52-5", "9999-12-31T00:00:00.000Z"],
       ["0001-W01-1", "0001-01-01T00:00:00.000Z"],

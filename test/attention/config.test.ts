@@ -12,7 +12,7 @@
  * ledger.
  */
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
@@ -421,6 +421,25 @@ describe("attention config", () => {
     const bom = join(caseRoot("attn-config"), "bom.json");
     writeFileSync(bom, `\ufeff${JSON.stringify({ cooldown_sec: 60 })}`, "utf8");
     expect(() => loadConfig(bom)).toThrow();
+  });
+
+  test("a path that exists but cannot be read surfaces the filesystem error (target-only)", () => {
+    // A directory where the config file belongs: `readFileSync` raises `EISDIR`. The source's
+    // `read_text` raises `OSError` there and `UnicodeDecodeError` -- a `ValueError` -- for a bad
+    // byte, and `load_config` lets both propagate as themselves. Wrapping the read inside the
+    // decoder's catch would tell a caller its configuration is malformed when the problem is
+    // operational, so only the DECODE is wrapped.
+    const path = join(caseRoot("attn-config"), "attention.json");
+    mkdirSync(path);
+    let thrown: unknown;
+    try {
+      loadConfig(path);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(PyValueError);
+    expect(String((thrown as Error).message)).toMatch(/EISDIR|illegal operation on a directory/);
   });
 
   test("a notify or template kind naming an Object.prototype member is not inherited (target-only)", () => {

@@ -7199,7 +7199,21 @@ quietly moved a file the source rejects onto the accepting side of a repair whos
 refuse. That is rule 11's own warning arriving inside the belt that cites it, and the decode now
 reads `{ fatal: true, ignoreBOM: true }` -- in **both** loaders, which is the other half of the same
 round: `loadConfig` had been left on the loose decode for two rounds after `loadState` was hardened,
-so an undecodable byte inside a template body would have loaded altered. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+so an undecodable byte inside a template body would have loaded altered.
+
+**A fourth round found one defect in each file, and each is a previous decision reaching a case it
+had not considered.** A UTC offset can carry a valid boundary timestamp out of `datetime`'s own
+domain -- `9999-12-31T23:59:59-23:59` parses and then raises `OverflowError` on the source's
+`astimezone(timezone.utc)`, which `_parse_iso`'s `except ValueError` does not catch, so **interlock
+crashes there**. This belt's second inherited-defect repair under `D-0023`, and the repaired answer
+is the `null` every other unusable value already gets: the safe direction, since the year-10000
+`Date` the port produced beforehand reads as a *future* instant and suppresses the notification. And
+the `PyValueError` wrapper the third round put around the config decode had been wrapped around the
+**read** as well, so a directory or a permission denial was reported as malformed configuration --
+the source keeps `OSError` and `UnicodeDecodeError` apart and lets each propagate as itself, so the
+read moved outside the try. The differential set is 104 inputs: 102 comparable ones agree and the
+two CPython raises `OverflowError` on are recorded as repaired, classified separately by the
+generator so a crash can never be scored as a match. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written

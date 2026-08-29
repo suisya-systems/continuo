@@ -117,7 +117,20 @@ export function parseIso(text: string): Date | null {
   }
   ms -= Math.round(offsetSeconds * 1000);
   const parsed = new Date(ms);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  // The OFFSET can carry an otherwise valid boundary timestamp out of `datetime`'s own domain:
+  // `9999-12-31T23:59:59-23:59` parses in `fromisoformat` and then raises `OverflowError: date
+  // value out of range` on the source's `astimezone(timezone.utc)`, measured. That is an INHERITED
+  // DEFECT rather than a behaviour to carry -- `_parse_iso` catches only `ValueError`, so the
+  // OverflowError escapes it and takes the watcher down -- and `D-0023` repairs an inherited defect
+  // at the first belt that touches it. `null` is the answer the two caught exceptions already give
+  // for every other unusable value, and it is the safe direction: a garbled timestamp lets the
+  // notification through, where a year-10000 `Date` would read as a FUTURE instant and suppress it.
+  // A1 repaired the same OverflowError family in `int()` for the same reason.
+  const year = parsed.getUTCFullYear();
+  return year < 1 || year > 9999 ? null : parsed;
 }
 
 /** A calendar date and how many characters of the input it consumed. */
