@@ -1,0 +1,74 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "messagebus",
+      "collected": 43,
+      "inventory": "parity/source-inventory/messagebus.all.txt",
+      "note": "The S8 durable-messaging belt, interlock tests/messagebus, 5 files. One ledger per source file (D-0019). The belt's whole design constraint is that it adds NO delivery store: interlock's own bus.py opens by defining itself as a thin facade that uses the S7 outbox API as found, so send / recipient-filtered poll / ack / envelope / endpoint is the entire owned surface and retry counting, delivery state transitions, lease fencing, destination dedup and ack persistence all stay in src/control_plane/outbox.ts. The single xfailed case in the whole 2,199-case source baseline lives in this belt (tests/messagebus/test_carried_specifications.py's recipient-aliasing specification)."
+    },
+    "file": {
+      "path": "tests/messagebus/test_stale_readout.py",
+      "collected": 2,
+      "inventory": "parity/source-inventory/messagebus.test_stale_readout.txt",
+      "note": "interlock ACCEPTANCE.md item 6's 'UI attached but its session state deliberately stale', translated for C2 where there is no UI: the stale state is a provider readout that is stale or wrong. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Measured 2026-08-29 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/messagebus/ -p no:cacheprovider`: 42 passed, 1 xfailed."
+    }
+  },
+  "target": {
+    "test_file": "test/messagebus/stale-readout.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`provider.start(...)` / `read_state(...)` / `stop(...)` / `list_sessions()` returning a result synchronously",
+        "to": "the same verbs returning a `Promise`, awaited",
+        "why": "D-0301, decided by the session belt: interlock supervises children with blocking calls and uses that as a guarantee, and Node releases a child's exit status only on an event-loop turn. The stale-readout case takes the consequence rather than working around it.",
+        "affects": "both cases"
+      },
+      {
+        "from": "the `provider` fixture's `yield` teardown, which stops every listed session",
+        "to": "the same loop registered with `onTestFinished`, awaited",
+        "why": "It runs on failure too, and it AWAITS each stop. A teardown that returns before the child is gone leaves a process holding handles inside a directory the runner is about to remove -- the child-leak hazard D-0301 retired structurally.",
+        "affects": "both cases"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None: every collected test in this file translates one source case."
+    }
+  },
+  "totals": {
+    "source_cases": 2,
+    "ported": 0,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/messagebus/test_stale_readout.py::test_delivery_is_unchanged_when_the_sessions_child_is_gone",
+      "target_id": "test/messagebus/stale-readout.test.ts::delivery is unchanged under a deliberately stale session readout > delivery is unchanged when the session's child is gone",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, and the strong form of it is kept: the transcript recorded with the staleness present is compared for EQUALITY with the baseline and with the expected transcript, so 'delivery outcomes are unchanged' is a comparison rather than an interpretation. The staleness is produced by a REAL child process through the S3 stub provider, not by a substituted seam -- a staleness nothing actually produced would make this a comparison of one transcript with itself. Adapted because the provider's verbs are Promise-returning here (D-0301: Node releases a child's exit status only on an event-loop turn, so interlock's blocking supervision has no equivalent), which makes the case `async` and its teardown an awaited stop rather than a signalled one. The first staleness is unchanged: start a session, stop it, and assert that the roster still answers for the id with a `providerState` beginning `exited-`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_stale_readout.py::test_delivery_is_unchanged_when_the_state_cannot_be_observed",
+      "target_id": "test/messagebus/stale-readout.test.ts::delivery is unchanged under a deliberately stale session readout > delivery is unchanged when the state cannot be observed",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, and the strong form of it is kept: the transcript recorded with the staleness present is compared for EQUALITY with the baseline and with the expected transcript, so 'delivery outcomes are unchanged' is a comparison rather than an interpretation. The staleness is produced by a REAL child process through the S3 stub provider, not by a substituted seam -- a staleness nothing actually produced would make this a comparison of one transcript with itself. Adapted because the provider's verbs are Promise-returning here (D-0301: Node releases a child's exit status only on an event-loop turn, so interlock's blocking supervision has no equivalent), which makes the case `async` and its teardown an awaited stop rather than a signalled one. The second staleness is unchanged: a child told to announce only after 300 seconds, so every read lands in the window where the session exists, the child runs, and its state is `Observation.COULD_NOT_OBSERVE` -- asserted again after the delivery sequence, as the source does, so the staleness is known to have held for the whole of it and not merely before it.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

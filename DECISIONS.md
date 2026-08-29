@@ -108,6 +108,10 @@ spaces distinct.
 | D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
 | D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
 | D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
+| D-0501 | The messagebus package owns `send`, `poll` and `ack`, and nothing the outbox already owns | accepted |
+| D-0502 | The MCP wire keeps interlock's snake_case keys and env names; the endpoint is launched as the built module by path | accepted |
+| D-0503 | The facade's own caller bug gets a class the outbox does not share | accepted |
+| D-0504 | The third AST scan stays in its belt; the frozen testkit is not changed by this PR | accepted |
 | D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
 
 ---
@@ -6343,6 +6347,205 @@ of run 33203831023. `test/testkit/` is frozen and a change to it is its own PR m
 belts that need it rebase onto it (`docs/test-translation-conventions.md`); this decision and that
 PR are the same change. Decision id allocated by the window in the shared band
 (`D-0019`..`D-0099`).
+
+---
+
+## D-0501 -- The messagebus package owns `send`, `poll` and `ack`, and nothing the outbox already owns
+
+**Context.** The messagebus belt ports interlock `tests/messagebus/` at `65f36c5` -- 43 node ids over
+five files, S8's worker-outbound bus, its MCP endpoint, the carried v1 delivery specifications, a
+stale-readout case and an import-graph guard.
+
+Every one of those cases is about *delivery*, and continuo already has a delivery module:
+`src/control_plane/outbox.ts`, 74 ported source cases of resend, ack, dedup and fencing. The obvious
+way to make a "message bus" is to give it a `message` table, a delivery state machine and a retry
+loop of its own, and the result would be **two answers to every delivery question** -- two retry
+counts, two definitions of "settled", two fences -- with nothing in the build able to say which is
+authoritative. Two answers to a delivery question is how a message gets delivered twice, or not at
+all.
+
+interlock decided this before continuo met it, and put the decision in the first paragraph of its
+own `bus.py`: *the existing outbox API is used as found, not modified* (its Issue `#19` scope note),
+so that the fault-injection evidence S7 accumulated keeps describing the path this bus actually
+takes.
+
+**Decision.** `src/messagebus/` is a **facade**. Its entire owned surface is:
+
+- `send` -- a registry lookup, then `Outbox.enqueue` unchanged;
+- `poll` -- `Outbox.due`, filtered to one recipient, each row re-read and then `Outbox.attempt`;
+- `ack` -- a recipient-boundary check, then `Outbox.recordAck` unchanged;
+- `DeliveredEnvelope` -- the presentation record `poll` returns;
+- `endpoint.ts` -- the JSON-RPC transport that exposes `poll` and `ack`.
+
+**Everything else is the outbox's and is not re-implemented here.** Retry counting, the
+pending/delivered/acked transition, lease fencing and refusal recording, destination-level
+idempotency, and ack persistence all stay in `src/control_plane/outbox.ts`. This package adds **no
+table, no migration and no DDL**: `src/messagebus/` contains three `.ts` files and no data file, and
+`import-graph.test.ts`'s walk fails on a non-TypeScript file appearing there rather than skipping it.
+Refusals raised by the outbox propagate through the facade unwrapped, so a fence refusal reaches the
+caller as the outbox's own class and message.
+
+The one place the facade has judgement of its own is `poll`'s skip of a message settled since the
+`due()` snapshot, and it is a **skip, not a state change**: the row is left exactly as the outbox
+left it.
+
+**Alternatives.**
+
+- **A messagebus-owned delivery table (rejected).** It is what the name suggests and what a reader
+  expects, and it would have made the belt self-contained. It also duplicates a subsystem with 74
+  ported cases behind it, and the duplicate would be the one with no fault-injection evidence.
+- **Wrapping the outbox's refusals in messagebus classes (rejected).** It reads tidier at the
+  boundary and it hides the fence: a caller that catches a `MessageBusError` cannot tell a stale
+  lease from a malformed argument, and the stale lease is the one it must not retry.
+
+**Falsifier.** If a delivery property is ever needed that the outbox genuinely cannot express -- a
+per-recipient visibility timeout, say, or a priority order -- then the facade has to either grow
+state or push the feature down into S7, and this entry stops being a complete description. The
+repair is the second: interlock's scope note is about not *modifying* the outbox API during the
+spike, not about never extending it. The observation that would show the trade was wrong is a
+`src/messagebus/` module that finds itself reading or writing an `outbox`, `action` or `lease` row
+directly; there are none today, and `MessageBus` reaches SQLite only through an `Outbox` instance it
+constructs.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29, porting `tests/messagebus/` from interlock
+`65f36c5`. The constraint is interlock's own, quoted from `bus.py` at that revision, and was
+restated as the belt's headline design constraint at the window. Decision id from the `D-05xx` range
+allocated to this belt by D-0032.
+
+---
+
+## D-0502 -- The MCP wire keeps interlock's snake_case keys and env names; the endpoint is launched as the built module by path
+
+**Context.** The endpoint is not library API. It is a **process** a worker's MCP configuration
+launches, speaking line-delimited JSON-RPC on stdio. Three things about it are contracts with
+something outside this repository, and each has an in-repository convention pulling the other way:
+
+- the tool payload keys (`message_id`, `dedup_key`, `retry_count`, `receipt_ref`, ...) against the
+  port's camelCase;
+- the environment variables (`INTERLOCK_MESSAGEBUS_DB` and its five siblings) against the package's
+  own name;
+- how the child is started, where the source's `python -m claude_org_runtime.messagebus.endpoint`
+  has no TypeScript spelling at all.
+
+**Decision.**
+
+1. **The wire keeps the source's snake_case keys, and the rename stops at the transport boundary.**
+   `DeliveredEnvelope` is camelCase like everything else in `src/`; `endpoint.ts` carries an explicit
+   `envelopeToWire` that spells the wire keys out. `message_id` is the argument name the `ack` tool's
+   own `inputSchema` declares, so it is part of a published tool contract rather than a naming
+   preference -- and it is written out at the boundary rather than produced by a serializer, because
+   a serializer would make a wire contract a side effect of a naming convention.
+
+2. **The environment variables keep the `INTERLOCK_MESSAGEBUS_` prefix**, for the same reason
+   `STATE_FILE_ENV` in `src/session/stub_provider.ts` keeps `INTERLOCK_STUB_STATE_FILE`: the name is
+   read by a configuration file this repository does not own, and renaming it buys nothing and
+   breaks a worker's MCP config on the day of the rename.
+
+3. **The child is `node dist/messagebus/endpoint.js`** -- the built module, which is what an MCP
+   configuration would actually launch -- guarded by the `isEntryPoint()` shape `src/cli.ts` already
+   uses (`realpathSync` on both sides, because a symlinked launcher makes the URL form disagree with
+   `process.argv[1]`). The two end-to-end cases assert `dist/messagebus/endpoint.js` exists, with a
+   message naming `npm run pretest`, so a missing build is a legible red rather than a spawn failure.
+   `test/measurement/cli.test.ts` makes the same choice for `dist/cli.js`.
+
+4. **Every line the endpoint writes goes through `pythonJsonDocumentSorted`**, not
+   `JSON.stringify`. The source emits `ensure_ascii=True` and D-0006 requires ASCII for anything
+   continuo prints; rather than write a fourth JSON renderer (D-0017 rule 4: one renderer), the
+   endpoint uses the transcription `src/control_plane/python_json.ts` already carries. It sorts
+   object keys where the source's call does not, which carries no meaning in JSON and no consumer
+   here compares response text.
+
+**Falsifier.** If continuo ever publishes its own MCP server naming and the `INTERLOCK_` prefix
+becomes actively misleading to an operator reading their own config, point 2 should be revisited --
+with a deprecation window that reads both names, not a rename. If `dist/` stops being the thing a
+consumer runs (a bundler, a single-file build), point 3's path moves with it, and the two cases that
+name it are where that shows up.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29, porting
+`tests/messagebus/test_endpoint.py` from interlock `65f36c5`.
+
+---
+
+## D-0503 -- The facade's own caller bug gets a class the outbox does not share
+
+**Context.** Python spells both the outbox's usage errors and the bus's cross-recipient ack refusal
+as the one builtin, `ValueError`, because that is the builtin available. Two source cases assert
+`pytest.raises(ValueError)` against refusals raised by **different layers**:
+`test_an_ack_for_a_never_polled_message_is_refused` (the outbox's) and
+`test_an_ack_from_the_wrong_recipient_is_refused` (the facade's).
+
+A literal translation would assert one class for both, and `docs/test-translation-conventions.md`
+already records why that is dangerous: a refusal family whose members differ only by message stays
+green while the taxonomy a caller acts on is wrong, which is why `expectRefusal` asserts the class as
+well as the text.
+
+**Decision.** `MessageBusUsageError` exists and is thrown **only** by code in `src/messagebus/`. It
+is used for exactly one thing: an ack naming a recipient the message is not addressed to. The
+outbox's `OutboxUsageError`, `HandlerRejected`, `HumanGateRequired` and `StaleWriterRefused` keep
+reaching callers unchanged through the facade, which is D-0501's "exceptions are the outbox's own"
+in its concrete form. The two ack cases therefore now pin **which layer refused**, which the source's
+assertions could not.
+
+This is a **narrowing, not a widening**: nothing that was refused before is accepted, and nothing
+that was accepted is refused. What changed is what a caller can distinguish.
+
+**Falsifier.** If a second facade-level refusal appears whose caller should handle it differently
+from the recipient-boundary one, `MessageBusUsageError` becomes a family and this entry needs a
+successor naming the members. If the endpoint's tool-error text is ever depended on by a client
+matching the literal word `ValueError`, this decision has a cost it does not have today -- the text
+renders `constructor.name`, so the class name is what a client sees.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29, porting
+`tests/messagebus/test_carried_specifications.py` and `tests/messagebus/test_messagebus.py` from
+interlock `65f36c5`.
+
+---
+
+## D-0504 -- The third AST scan stays in its belt; the frozen testkit is not changed by this PR
+
+**Context.** `test/messagebus/import-graph.test.ts` is the **third** structural scan in this
+repository, after `test/canary/structural.test.ts` and `test/secretary/structural.test.ts`. All
+three parse `src/**` with the TypeScript compiler API and walk it, and all three carry a near-identical
+`importedModules` helper. Three copies of a helper is the point at which duplication normally gets
+factored out, and the belt's brief raised exactly that.
+
+Two facts pull against it. First, `docs/test-translation-conventions.md` freezes `test/testkit/`: a
+change to it **is its own PR, merged before the belts that need it rebase onto it** -- the rule
+D-0033 was landed under. Second, the three scans ask **different questions**. canary and secretary
+ask *"does this package import anything outside an allowlist?"*; messagebus asks *"does any import,
+anywhere, name a session backend?"*, plus a ban on dynamic-import primitives that neither of the
+others has. Only `importedModules` is genuinely common; `calledNames`, `referencedIdentifiers` and
+`exportedNames` have no messagebus use, and `namesASessionBackend` has no canary or secretary use.
+
+**Decision.** The scan stays local to `test/messagebus/`, and `test/testkit/` is **not touched by
+this belt**. The duplication is recorded here rather than left to be rediscovered at the fourth
+instance.
+
+The shared extraction remains the right end state, and this entry says what it should be when it
+happens: a `test/testkit/ast.ts` exporting `importedModules` alone -- the one helper all three
+already agree on, and the one whose subtleties (`import type` seen because it is erased at emit,
+`export ... from` counted as an edge, relative specifiers resolved to absolute paths, dynamic
+`import()` and `require()` reached inside function bodies) are what a fourth hand-written copy would
+get wrong. Its own contract test would be target-only, as the rest of the testkit's are. The
+question each belt asks *about* the resulting set stays in that belt, because it is that belt's
+subject and not a helper.
+
+**Why not now:** doing it here would put a frozen-testkit change inside a belt PR, against the rule,
+and would make this belt's merge depend on a second PR landing first -- in an environment where two
+other lanes are appending to `DECISIONS.md`, `belts.md` and `scripts/parity-check.mjs` concurrently
+and the worker cannot force-push. The cost of waiting is one more copy of one function; the cost of
+not waiting is a cross-cutting change to the file every belt's tests import, merged under a belt's
+review rather than its own.
+
+**Falsifier.** If a fourth structural scan is written before the extraction happens, the trade has
+gone wrong: at four copies the odds that they have silently drifted -- one of them missing
+`export ... from`, say, which is a real dependency edge -- are high enough that a divergence is more
+likely than not, and the extraction should be done first. The observation that would show it
+*already* wrong is any disagreement between the three existing `importedModules` bodies about which
+node kinds are edges; they were compared at this belt's writing and agree.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29. The freeze rule is
+`docs/test-translation-conventions.md` and D-0033's own closing paragraph.
 
 ---
 

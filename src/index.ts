@@ -896,6 +896,30 @@ export {
   WindowReport,
   WORKER_ESCALATION_EPISODES_QUERY,
 } from "./measurement/index.js";
+/**
+ * S8 -- the worker-outbound `MessageBus` (interlock Issue `#19`, interlock
+ * D-0009's delivery half).
+ *
+ * Re-exported through `src/messagebus/index.ts` rather than from `bus.ts`
+ * directly, because the barrel *is* the surface: it names the bus, its envelope
+ * and its one refusal, and omits `Endpoint` / `EndpointConfig`. The endpoint is
+ * a process a worker's MCP configuration launches by path
+ * (`node dist/messagebus/endpoint.js`), the way the deny hook is (D-0204), not a
+ * delivery verb a consumer of this package calls.
+ *
+ * The package exports only `.` (D-0002), so this block is what makes the bus
+ * reachable by an installed consumer at all -- and a throwaway (interlock
+ * D-0026) whose delivery contract cannot be driven from outside is not a spike
+ * anyone can evaluate.
+ */
+export {
+  DeliveredEnvelope,
+  type DeliveredEnvelopeFields,
+  MessageBus,
+  type MessageBusOptions,
+  MessageBusUsageError,
+  type PollOptions,
+} from "./messagebus/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
 /**
  * The item 8 rehearsal (interlock Issue `#21`, interlock D-0022): the stub
