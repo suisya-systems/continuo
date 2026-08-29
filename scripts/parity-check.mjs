@@ -104,6 +104,16 @@ const LEDGERS = [
   // belt in the inventory; the D-range is `D-07xx` (D-0701).
   "parity/secretary.behaviour.ledger.json",
   "parity/secretary.structural.ledger.json",
+  // lane G -- messagebus (S8: the worker-outbound bus, its MCP endpoint, and
+  // item 6's static no-session-edge assertion). Five files; the D-range is
+  // `D-05xx`. Every ledger here is prefixed `messagebus.`, and there is
+  // deliberately no bare `messagebus.ledger.json` -- the belt has no single
+  // file that would earn the unqualified name.
+  "parity/messagebus.bus.ledger.json",
+  "parity/messagebus.carried-specifications.ledger.json",
+  "parity/messagebus.endpoint.ledger.json",
+  "parity/messagebus.import-graph.ledger.json",
+  "parity/messagebus.stale-readout.ledger.json",
 ];
 
 /**
