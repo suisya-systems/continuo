@@ -14,7 +14,7 @@ said so explicitly, to cadenza's. The recommendations are recommendations, not d
 the specification the successor must reproduce. Roughly a third of ja's delegation machinery exists
 to compensate for its substrate -- a tiling terminal whose panes are the only addressable workers --
 and section 3 names those parts as *not needed* rather than *not yet ported*. It also does not defer
-anything to interlock: per `D-0036`, interlock is an archived source that answers nothing, and a
+anything to interlock: per `D-0036`, interlock is a frozen source that answers nothing, and a
 recommendation of the form "revisit when upstream settles it" is not an available answer here.
 
 **Companion documents.** [`../production-schema.md`](../production-schema.md) is the DDL every
@@ -31,7 +31,7 @@ wrong one changes the answer:
 
 | Repository | Revision read | Note |
 |---|---|---|
-| continuo | `e54c6be` (`origin/main`, D-0036) | This branch was one commit behind and was rebased before writing. A document authored on the earlier commit would have re-introduced the "retarget upstream first" wording `D-0036` had just removed. |
+| continuo | `78b17a2` (`origin/main`) | Rebased twice while this was written, both times because main had moved under a claim in here. First onto `e54c6be` (`D-0036`): the branch started one commit behind, and a document authored there would have re-introduced the "retarget upstream first" wording `D-0036` had just removed. Then onto `78b17a2` (continuo#81), which made `D-0036` say interlock is a **frozen** rather than an *archived* source -- `isArchived` is `false` on GitHub, the last push was 2026-08-21 and eight issues are open -- and which replaced the dangling `cadenza#9` reference section 5.3 flags. Both rebases changed text in here; 5.3 records what #81 already did so this document does not ask for it twice. |
 | cadenza | `origin/main` `47ad373` | **Not the local checkout**, which was six commits behind and Python-only. At `origin/main` the G1 TypeScript rewrite is complete at 330/330 and `src/index.ts` is a TypeScript barrel exporting `composeCatalog` and `resolveProject`. Any claim that a continuo/cadenza seam must cross a Python boundary is false at this revision. |
 | claude-org-ja | working tree at `/home/happy_ryo/work/org/claude-org-ja` | Read as a reference implementation, not as a specification. |
 | interlock | working tree at `/home/happy_ryo/work/org/workers/interlock` | Frozen source. Read for facts about what the port left behind, never for decisions. |
@@ -832,15 +832,24 @@ payload of a delegated task.
 
 **Two errata are needed, and one of them is a fact about the record itself.**
 
-1. **The falsifier's one concrete hook is dead, and was dead when written.** `D-0035` cites
+1. **The falsifier's one concrete hook is dead, and was dead when written. Half of this erratum has
+   since been applied; the half that remains is the half that matters.** `D-0035` cites
    `suisya-systems/cadenza#9`'s "agentic-layer direction" as "a live candidate, not a theoretical
-   one", and `parity/source-inventory.belts.md:348-351` mirrors it. cadenza#9 is a **G2 delegation
-   contract freeze marker**. It contains no agent-layer, skill, or promotion content; no such issue
-   exists anywhere in cadenza; and `grep -rniE "skill|agent"` over cadenza's `src/` returns zero.
-   Further, a GraphQL query for `userContentEdits` on issue #9 returns an empty list -- the body has
-   never been edited since creation on 2026-08-29T03:38Z, which **precedes** `D-0035`'s ratification
-   the same day. The clause was unsupported when it was written, not merely stale. This task's own
-   brief reproduced the confusion, which is direct evidence that the wording misleads.
+   one". cadenza#9 is a **G2 delegation contract freeze marker**. It contains no agent-layer, skill,
+   or promotion content; no such issue exists anywhere in cadenza; and `grep -rniE "skill|agent"`
+   over cadenza's `src/` returns zero. Further, a GraphQL query for `userContentEdits` on issue #9
+   returns an empty list -- the body has never been edited since creation on 2026-08-29T03:38Z, which
+   **precedes** `D-0035`'s ratification the same day. The clause was unsupported when it was written,
+   not merely stale. This task's own brief reproduced the confusion, which is direct evidence that
+   the wording misleads.
+
+   **What changed while this document was being written.** continuo#81 (`78b17a2`, merged
+   2026-08-30) replaced the mirrored sentence in `parity/source-inventory.belts.md:348-353` with a
+   self-contained falsifier that names no other repository -- exactly the shape recommended below.
+   So the *document* half is done and is not being asked for again here. **`D-0035`'s own falsifier
+   still carries the dead pointer**, correctly, because that file does not rewrite entries. The
+   erratum this section proposes is therefore narrower than it was when drafted: it is now only the
+   `DECISIONS.md` half.
 2. **The premise sentence is contradicted by shipped code.** `D-0035` grounds the decision on
    "continuo is a safety-substrate library, not the operator of those sessions". But
    `src/session/claude_cli_provider.ts:1-8` declares itself the provider "over Interlock-supervised
@@ -848,18 +857,22 @@ payload of a delegated task.
    one to keep: **continuo does not own the skill-promotion surface** -- verified, no writer, no gate
    module.
 
-**Recommendation: keep `not-porting`; file a short errata entry in `D-0036`'s shape.** That is: leave
-`D-0035` untouched with its ID and `accepted` status, and have the new entry state how it is to be
-read -- restating the withdrawal condition repo-agnostically (any surface, in continuo or a layer
-built on it, that writes into a live skill directory reopens the belt), recording what cadenza#9
-actually is, and narrowing the premise. `DECISIONS.md`'s own rules make partial supersession
-unavailable, and `D-0036` has just set the precedent for exactly this motion. The mirror in
-`parity/source-inventory.belts.md` is a document, not a decision entry, and may be rewritten in place.
+**Recommendation: keep `not-porting`; file a short errata entry in `D-0036`'s shape, covering the
+`DECISIONS.md` half only.** That is: leave `D-0035` untouched with its ID and `accepted` status, and
+have the new entry state how it is to be read -- restating the withdrawal condition repo-agnostically
+(any surface, in continuo or a layer built on it, that writes into a live skill directory reopens the
+belt), recording what cadenza#9 actually is, and narrowing the premise. `DECISIONS.md`'s own rules
+make partial supersession unavailable, and `D-0036` has just set the precedent for exactly this
+motion. **The belts-document half is already done** (continuo#81), so the entry should cite that
+change rather than re-propose it; and 5.1's re-check supplies the *positive* form of the same
+condition, phrased against this stack rather than against another repository -- if the host
+application grows a reaper, or a skill-promotion surface, the subject exists here.
 
-Rejected: leaving it alone at zero cost -- the pointer stays dead and a future reader re-derives this
-confusion, and it is the last outward-facing deferral left in a document `D-0036` otherwise swept
-clean. Also rejected: reopening curator because the premise sentence is wrong -- that reads the
-premise as if it were the falsifier, and would reopen 71 cases for a surface that does not exist.
+Rejected: leaving it alone at zero cost -- the pointer stays dead in `DECISIONS.md`, and a reader who
+finds the belts document's new self-contained falsifier and then the entry's old one has two
+different withdrawal conditions for one decision, which is worse than the single wrong one was. Also
+rejected: reopening curator because the premise sentence is wrong -- that reads the premise as if it
+were the falsifier, and would reopen 71 cases for a surface that does not exist.
 
 **Band: continuo.** **Unblocks: nothing on the lap.** This should be batched with the lap's other
 entries, not sequenced ahead of them.
@@ -881,7 +894,7 @@ member.
 There are three clauses and they are not all dead:
 
 - **`cadenza README.md:48-50`: "G2 delegation contract - blocked on interlock settling its own
-  contract."** This one **is** unanswerable. interlock is archived and settles nothing. It is the same
+  contract."** This one **is** unanswerable. interlock is frozen and settles nothing. It is the same
   structural defect continuo removed from its own documents as `D-0036`, still standing in cadenza.
 - **cadenza#9's second disjunct**, "the interlock-side contract question it depends on is resolved" --
   same defect, same verdict.
