@@ -8505,10 +8505,13 @@ that gets written is the collapse, for the ordinary reason that it is one functi
    Step one is (a) a run-lifecycle module whose writes go through the existing protected-write gate
    -- `fencedUpdate` and `protectedWrite` in `src/control_plane/lease.ts`, where `run` already holds
    a seat in `PROTECTED_TABLES` -- and (b) a `writer_epoch` column on the `run` table, which is the
-   column that gate stamps. **A DDL trigger that refuses a `run` write without a live lease is not
-   introduced in this step.** It is the mechanism that would make rule 1 enforced rather than
-   observed, and it is a *separate* decision: introducing it now fails every existing test that
-   writes a `run` row without holding a lease (28 such sites at the time of this decision).
+   column that gate stamps. **A DDL trigger that refuses a status transition made without a live
+   lease is not introduced in this step.** Such a trigger is `BEFORE UPDATE OF status ON run` and
+   nothing wider: `docs/production-schema.md` section 4.2's writer table fences `run.status` with
+   the run lease epoch and assigns *no* fence to `run` creation, so an insert must stay
+   lease-free. The trigger is the mechanism that would make rule 1 enforced rather than observed,
+   and it is a *separate* decision: introducing it now fails every existing test that advances a
+   `run` row's status without holding a lease (28 such sites at the time of this decision).
 
 **Consequences.**
 
@@ -8519,8 +8522,9 @@ that gets written is the collapse, for the ordinary reason that it is one functi
 - **Rule 1 is, at step one, a convention plus a gate that the single writer opts into.** Nothing
   stops a second writer that does not go through the module until the trigger question is answered.
   That is stated here rather than glossed, so the guarantee is not read as stronger than it is.
-- Answering the trigger question means either migrating those 28 sites onto lease-holding helpers or
-  deciding the trigger is not worth its test cost. Neither is decided here.
+- Answering the trigger question means either migrating those 28 status-advancing sites onto
+  lease-holding helpers or deciding the trigger is not worth its test cost. Neither is decided
+  here. Whichever way it goes, run *creation* stays unfenced, per the writer table above.
 - **Implementation is out of scope for this entry.** No module, column, migration, or test is added
   by it; only `DECISIONS.md` changes.
 
@@ -8539,8 +8543,8 @@ hard to undo; it was that a resolution mistake had nothing between it and the ru
 fewer parties, not fewer mistakes.
 
 **Rejected alternative: introduce the live-lease trigger with the module, in one step.** It is the
-stronger guarantee and it is where this should end up, but it converts 28 existing tests into
-failures in the same change that introduces the writer, which buries the writer's own review under a
+stronger guarantee and it is where this should end up, but it converts 28 existing status-advancing
+test sites into failures in the same change that introduces the writer, which buries the writer's own review under a
 test migration.
 
 **Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on
