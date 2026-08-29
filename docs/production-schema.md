@@ -1703,7 +1703,7 @@ implementation carries.
 ## 12. Known holes, stated rather than filled
 
 The `Q-` items below are questions **interlock recorded and never answered**. interlock is frozen
-(`D-0036`), so none of them is pending upstream: each is unanswered, and each is continuo's to settle
+(`continuo D-0036`), so none of them is pending upstream: each is unanswered, and each is continuo's to settle
 at its own human gate when a change needs it settled. Listing one here means this document declines
 to answer it by inertia -- not that it is waiting on anyone.
 

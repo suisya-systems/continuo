@@ -40,7 +40,7 @@ spaces distinct.
 | D-0005 | The double-green rule, and where it is enforced | accepted |
 | D-0006 | ASCII-only for anything continuo prints | accepted |
 | D-0007 | The SQLite value-representation contract | accepted |
-| D-0008 | The package is `private` until publication is decided | accepted |
+| D-0008 | The package is `private` until publication is decided | superseded by D-0045 |
 | D-0009 | Install with `--ignore-scripts`; the prebuilt binary is the artifact | accepted |
 | D-0010 | Biome is the linter and formatter | accepted |
 | D-0011 | Package-quality tooling: publint, attw, knip, Dependabot, editor pins | accepted |
@@ -69,6 +69,10 @@ spaces distinct.
 | D-0034 | The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named | accepted |
 | D-0035 | `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending` | accepted |
 | D-0036 | interlock is a frozen source, not a decision-maker: every question continuo has open is settled at continuo's own human gate | accepted |
+| D-0043 | `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire | accepted |
+| D-0044 | Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives | accepted |
+| D-0045 | `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs | accepted |
+| D-0046 | `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -475,7 +479,7 @@ accidental `npm publish` is then one command away).
 no release automation reads it. The `files` and `exports` fields are nonetheless maintained from the
 start, so the eventual first publish is a decision rather than a packaging project.
 
-**Status.** accepted
+**Status.** superseded by `D-0045`
 
 **Source.** interlock#74 refinement comment; Codex design review 2026-08-22, Nit.
 
@@ -8232,3 +8236,326 @@ the answer is to find that text rather than to restate the rule.
 **Source.** Task `continuo-upstream-authority-sweep`, 2026-08-30. Prompted by the window reporting
 `broker` as blocked on upstream `Q-0023` on the same date, and the owner's correction that the
 misleading text -- not the misreading -- is the thing to remove.
+
+---
+
+## D-0043 -- `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire
+
+**Context.** `D-0035` left `migrate` (11 cases, `tests/test_migrate.py`) at `decision-pending` with
+one explicit revisiting trigger: "the run-boundary cutover bridge actually being designed". That
+trigger has since fired. `docs/design/minimal-operating-loop.md` section 5.2 is that design, and it
+reviewed the belt against both sides of the port. So the status is not deferrable as it stands: a
+`decision-pending` whose only trigger has already fired is a status nothing can move.
+
+The status question was put to the human gate with that review as its evidence.
+
+**Decision.** `migrate` moves from `decision-pending` to `not-porting`. The grounds are that the
+belt's subject evaporated on both sides, not that porting it is expensive:
+
+1. **The belt's subject is ja v1 *file* artefacts.** `interlock
+   src/claude_org_runtime/migrate/v1_to_v2.py:1` states it: migrate `.state/` artefacts from the v1
+   (claude-org-ja) layout to v2. There are two branches -- journal JSONL and org-state markdown --
+   and the assertions are about key normalisation (`worker` -> `task_id`, `dir` -> `worker_dir`,
+   `pane` -> `pane_id`/`pane_name`) and markdown column augmentation.
+2. **Both inputs are gone or reshaped on the live ja side.** `ja tools/journal_append.py:9-18`
+   records `.state/journal.jsonl` as decommissioned with the `events` table as the sole write
+   target, and no such file exists in ja today. ja's live registry header is
+   `| Task ID | Pattern | Directory | Project | Status |`, which matches none of the three lowercase
+   keys `_augment_header` switches on, so that branch is a copy-through no-op against live ja state.
+3. **The successor's cutover is specified as *no* state conversion**, in three independent places in
+   this repository: `src/control_plane/spike.ts:5-8`, `src/control_plane/migrator.ts:584-592`, and
+   `src/canary/routing.ts:23-30` ("There is no other rollback code path -- no migration hook, no
+   state converter"). Routing at the run boundary is the design; converting in-flight state is not.
+4. **The dependency question `D-0035` deferred is small and already answered by the frozen tree.**
+   The `jsonschema`-equivalent question gates 2 of the 11 cases, and both already skip in
+   interlock's own frozen tree; a further three reach modules interlock deleted and skip
+   unconditionally.
+
+**Falsifier.** The replacement for `D-0035`'s fired trigger, stated so that it can still fire and so
+that it can be evaluated without opening another repository's issue tracker: **if a cutover is ever
+specified that must convert in-flight state rather than route at the run boundary, or if a v1 shadow
+episode adapter is built that reads ja's file artefacts rather than ja's `events` table, then the
+subject exists here and this decision is superseded** -- not edited. The second disjunct is the live
+one: `V1Reference` (`src/measurement/shadow.ts:603-682`) has no producer in `src/`, and
+`--v1-shadow-run-ids` supplies a different type (`V1ShadowInput`, a cohort exclusion), so an adapter
+is outstanding work near this belt. It is outstanding as an *episode-level* adapter over ja's
+`events` table; only a file-reading one would restore this belt's subject.
+
+**Consequences.**
+
+- `D-0035` is **not rewritten**. Its ID and `accepted` status stand, and this file's rules make
+  partial supersession unavailable, so its clause 2 (`migrate` stays `decision-pending`) and its
+  `migrate` falsifier are read through this entry: they record the status as it was on 2026-08-29,
+  and the status now lives here. The same motion `D-0044` makes for clause 1.
+- `parity/source-inventory.belts.md` has to move the `migrate` section and the roll-up table from
+  `decision-pending` to `not-porting`, which takes the ratified `not-porting` total from 156 to 167
+  cases and the effective porting target from `2,194 - 156 = 2,038` to `2,194 - 167 = 2,027`. The
+  inventory itself stays at 2,194: the evidence set is unconditional and does not shrink with the
+  decision. **That edit is not made by this entry** -- this task writes `DECISIONS.md` only -- and
+  is a declared follow-on.
+- **No code changes.** Nothing in `src/` or `test/` is added, deleted, or re-pointed.
+- **Do not conflate this belt with a `continuo migrate` CLI verb.** The CLI mount over
+  `createProductionControlPlane` / `migrateControlPlane` / `verifyProductionDatabase` (proposed as
+  `continuo db create|migrate|verify` in `docs/design/minimal-operating-loop.md` section 6.1) shares
+  only the word. Ratifying this belt neither authorises nor blocks that mount.
+
+**Rejected alternative: keep `decision-pending` on a new trigger.** Re-arming on a condition the same
+evidence rules out produces a status nothing can falsify, which is the defect being repaired here,
+one iteration later.
+
+**Rejected alternative: port it as a rewrite against the shadow adapter.** Every assertion in the
+belt is about journal key names or markdown column augmentation, none of which survives a move to
+episode-level correlation. It would port approximately zero assertions while counting a belt as
+ported, which is parity accounting that lies.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on the review in
+`docs/design/minimal-operating-loop.md` section 5.2. Decision id allocated by the window in the
+shared band (`D-0019`..`D-0099`, see "How to use this file").
+
+**Why this batch (`D-0043`..`D-0046`) skips `D-0037`..`D-0042`.** The next free numbers would have
+shadowed interlock decisions that continuo documents still cite unqualified -- `D-0037` and `D-0039`
+in `docs/time-base-policy.md` and `docs/production-schema.md` are interlock's, and a reader
+following one of those numbers into this file would have landed on a real but unrelated entry.
+Starting above interlock's highest ID (`D-0042`) removes that class of collision for every later
+entry too. The gap means nothing else: a range is an allocation, and an ID is permanent whether or
+not its neighbours are ever used. The unqualified citations themselves are repaired in the same
+change, per this file's rule that an interlock decision is cited as `interlock D-00NN`.
+
+---
+
+## D-0044 -- Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives
+
+**Context.** `D-0035` clause 1 ratified `curator` (71 cases) as `not-porting`. The status is right
+and is not in question here: nothing on the lap writes skill material. `grep -rn skills src/`
+returns five hits and every one is a denial or a comment -- `src/fencing/roles.json:92-93` denies
+`Write(**/.claude/skills/**)` and `Edit(**/.claude/skills/**)` for the curator role, `:100` adds
+`denyWrite`, and the remaining two are prose in `role_configs_schema.json`. There is no promotion
+gate, candidate digest, or path-audit module anywhere in `src/`.
+
+Two things about the *entry* are wrong, and one of them is a fact about the record itself. This is
+the motion `D-0036` set the precedent for: an entry that stands, with a separate entry saying how it
+is to be read.
+
+**Decision.** `curator` stays `not-porting`. `D-0035` keeps its ID and its `accepted` status and is
+not edited. This entry is the errata, and it has three parts.
+
+1. **The withdrawal condition is restated without naming another repository.** Read `D-0035`'s
+   `curator` falsifier as: *if continuo, or any layer built on it, grows a surface that writes into
+   a live skill directory, the subject exists here and the decision is superseded.* The continuo
+   half of that condition is checkable in this repository; the layer half is checkable in whatever
+   layer is built on continuo, which is a surface this project is party to rather than an issue in
+   a repository it only reads. Neither half sends a reader to a foreign issue tracker for a status,
+   which is what the withdrawn clause did. That clause -- the one pointing at
+   `suisya-systems/cadenza#9` -- is withdrawn, per part 2.
+2. **`cadenza#9` is not what `D-0035` says it is, and was not when the entry was written.**
+   `D-0035` cites it as an "agentic-layer direction" and "a live candidate, not a theoretical one".
+   cadenza#9 is a **G2 delegation-contract freeze marker**. It carries no agent-layer, skill, or
+   promotion content; `grep -rniE "skill|agent"` over cadenza's `src/` returns zero; and the issue
+   body has never been edited since it was created on 2026-08-29T03:38Z, which *precedes*
+   `D-0035`'s ratification on the same day. So the clause was unsupported when written, not merely
+   stale. It has already misled once: this task's own brief reproduced the confusion.
+3. **The premise sentence is narrower than `D-0035` states it.** `D-0035` grounds the decision on
+   "continuo is a safety-substrate library, not the operator of those sessions". Shipped code
+   contradicts the second half: `src/session/claude_cli_provider.ts:1-8` declares itself the
+   provider "over Interlock-supervised `claude -p`" and spawns with `-p` at `:1307` and `:1566`. The
+   claim that survives, and the only one the decision needs, is: **continuo does not own the
+   skill-promotion surface** -- verified by the absence of any writer and any gate module.
+
+**Consequences.**
+
+- The 71 cases stay declined; the `not-porting` totals and the effective porting target are
+  unchanged by this entry. `test_promotion_gate.py`'s recorded value if the answer had been yes
+  stays as `D-0035` wrote it -- it is the reason a future reversal would be cheap to act on.
+- **The belts-document half is already done and is not re-proposed here.** The `curator` section of
+  `parity/source-inventory.belts.md` already carries a self-contained falsifier that names no other
+  repository, in the shape part 1 restates. This entry exists because that file does not rewrite
+  `DECISIONS.md` entries, so without it a reader who finds the belts document's condition and then
+  `D-0035`'s has two different withdrawal conditions for one decision.
+- Only `DECISIONS.md` is touched. No code, no belt status, no parity ledger changes.
+
+**Falsifier.** Part 1 is superseded by the event it names -- a live skill-directory writer -- which
+supersedes `D-0035` with it. Part 2 is falsified by the record: if cadenza#9 is shown to have
+carried agent-layer or skill-promotion content at the time `D-0035` was ratified, the first erratum
+is wrong and the original clause was merely stale rather than unsupported. Part 3 is falsified if a
+skill-promotion writer or gate module appears in `src/`, which is part 1's condition in its
+continuo-local form -- the narrower claim is the one that fails first, and it fails here.
+
+**Rejected alternative: leave `D-0035` alone at zero cost.** The dead pointer stays in the file a
+reader is sent to for decisions, and it has already produced one confusion; and the two-conditions
+problem above is worse than a single wrong condition was.
+
+**Rejected alternative: reopen `curator` because the premise sentence is wrong.** That reads a
+premise as if it were a falsifier, and would reopen 71 cases against a surface that does not exist.
+
+**Rejected alternative: edit `D-0035` in place.** This file's rules make an ID permanent and its text
+unrewritten, and they do not offer partial supersession -- `D-0035` covers two subsystems and only
+one of them is being read differently here.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on the review in
+`docs/design/minimal-operating-loop.md` section 5.3. Decision id allocated by the window in the
+shared band (`D-0019`..`D-0099`).
+
+---
+
+## D-0045 -- `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs
+
+**Context.** `D-0008` made the package `private` "until publication is decided", and said so in a
+form that anticipated this entry: "the `files` and `exports` fields are nonetheless maintained from
+the start, so the eventual first publish is a decision rather than a packaging project". That is
+verified -- `exports`, `files` and `bin` are all present, and `check:package` already runs
+`publint --strict` and `attw` against the packed tarball.
+
+The host application that runs the lap needs to import continuo, and today nothing can: `"private":
+true` at `0.0.0` refuses `npm publish` by `D-0008`'s own terms. The decision is which shape the
+dependency takes, and it survives whether the application is hosted in cadenza or in a package of
+its own -- only the identity of the importer changes.
+
+**Decision.** Publish `@suisya-systems/continuo` to the registry and let consumers take it as an
+ordinary npm dependency. `D-0008` is **superseded by this entry**, which is the path `D-0008` was
+written to make deliberate rather than to prevent. It is also the only option under which the
+version a consumer builds against is a stated fact rather than a property of somebody's checkout,
+which starts to matter the moment two repositories ship one application.
+
+**Two constraints are inherited, and they become the consuming application's constraints the moment
+it depends on continuo.** They are recorded here because they are not visible from the dependency
+line:
+
+1. **A native runtime dependency.** `better-sqlite3` (plus its types), under `D-0009`'s policy of
+   installing with `--ignore-scripts` and treating the prebuilt binary as the artifact. A consumer
+   that installs continuo without that policy is back in the `node-gyp` territory `D-0009` exists to
+   keep off every platform.
+2. **A Node floor.** `engines.node` is `>=22.14.0 <23 || >=24.0.0 <25` (`D-0003`): floor 22.14.0,
+   and odd majors excluded. The consumer inherits the whole range, not just the floor.
+
+**The release path must have a build step, and this entry does not ship without naming it.**
+Superseding `D-0008` is not by itself enough to publish something that works. `dist/` is gitignored
+(`.gitignore:2`), `npm publish` runs no build of its own, and `scripts` has `build`, `pretest` and
+`check:package` but **no `prepare` and no `prepack`**. A publish from a fresh checkout therefore
+ships a tarball whose `main` and `exports` point at files that are not in it. The fix is small and
+already in the repository, and it is one of exactly two:
+
+- **the release path runs `npm run check:package`** -- which builds, then checks the packed tarball
+  with `publint --strict` and `attw` -- before it publishes; or
+- **a `prepack` hook is added**, which npm runs on the publishing side.
+
+`prepack` is deliberately **not** `prepare`: `prepare` is what npm runs when a *consumer* installs a
+git dependency, and adding it would collide with `D-0009`'s `--ignore-scripts` install policy.
+`prepack` runs where the tarball is built, so it does not reopen that blast radius.
+
+**Consequences.**
+
+- `package.json` drops `"private": true` and takes a real `version`; `npm publish` stops refusing.
+- Whichever build step above is chosen has to exist **before** the first publish, or the first
+  publish reproduces byte for byte the defect option B was rejected for.
+- **This entry changes no files other than `DECISIONS.md`.** Lifting `private`, setting the version,
+  and wiring the release path are a separate change; this is the decision that authorises them.
+- Any import allowlist on the consuming side (cadenza's `ALLOWED_EXTERNALS_BY_LAYER`, if cadenza
+  hosts the application) is extended binding by binding on that side. `FORBIDDEN_PACKAGES` there
+  blocks `interlock` and `claude-org-runtime`; continuo is neither, so there is nothing to resolve,
+  only an allowlist to widen -- and that is the consumer's change, not this one.
+
+**Rejected alternative: a git dependency pinned by sha.** npm builds a git dependency by running its
+`prepare` script, and continuo has none, so the install produces a package whose
+`main: ./dist/index.js` points at nothing. Adding `prepare` to fix that collides with `D-0009`'s
+`--ignore-scripts` policy -- it reopens `D-0009`'s blast radius to avoid superseding `D-0008`, which
+is the worse trade.
+
+**Rejected alternative: one workspace across both repositories.** Cheapest to start, and it defers
+both other decisions, which is its whole appeal and its whole problem: it works on a developer's
+machine and answers nothing about how the application is distributed. Acceptable only as an
+explicitly temporary bridge while the first lap is built, and only if it names publication as the
+destination -- as a permanent shape it makes "which continuo is this running" a property of a
+checkout.
+
+**Falsifier.** If a published tarball is found whose `main` or `exports` do not resolve inside the
+package, the build step named above was not in the release path and the prerequisite half of this
+decision was not met -- the repair is the release path, not the decision. Separately: if the
+application turns out to ship as a single tree that never resolves continuo from a registry, the
+dependency shape this entry chose is answering a question that stopped existing, and it should be
+revisited rather than maintained.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on the option table in
+`docs/design/minimal-operating-loop.md` section 6.4 (option A). Decision id allocated by the window
+in the shared band (`D-0019`..`D-0099`).
+
+---
+
+## D-0046 -- `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run
+
+**Context.** Nothing in `src/` creates a run or advances one: the run-lifecycle writer is unbuilt,
+and `registerConsumer` appears only at its definition and in the barrel, so the consumer half of the
+close is unbuilt too. What has to be settled before either is written is **who owns the
+transition**, because the production schema deliberately splits it. `docs/production-schema.md`
+section 4.2 states that `run.status` is exclusively one writer's, and that an observer of a merge
+does **not** move a run to `completed`: it appends `pr_merged` and a *consumer* of that event makes
+the transition. Section 7.1 records what the collapse of those two roles cost in v1 -- a
+repo-resolution mistake wrote a foreign PR's metadata onto a run row, and the tool exited `ok`.
+
+The lap has no CI watcher, so the split has no second party by default. Left unstated, the shape
+that gets written is the collapse, for the ordinary reason that it is one function shorter.
+
+**Decision.**
+
+1. **`run.status` has exactly one in-place writer.** One code path performs the transition; no other
+   path may write the column. A write to `run.status` reaching the row from anywhere else is an
+   **anomaly**, not an alternative route -- it is treated as a fault to be surfaced, not as a
+   supported call site to be documented.
+2. **For lap 1, the admission command plays the consumer's part.** The event is appended by whatever
+   observes the fact, and the admission command consumes it and makes the transition. The collapse
+   -- the observer transitioning the run directly -- is **not** taken, even though lap 1 has no
+   watcher to justify keeping the roles apart. The split is not bureaucracy: it is the control that
+   was missing when v1 wrote another repository's PR metadata onto a run row.
+3. **The lease is scoped to the run.** The resource name is per run identifier, so two runs never
+   contend and one run has a single claimant. Kinds are composed against that resource by
+   `effect_kind(resource, effect)` and read back with `resourceOfKind`
+   (`src/control_plane/lease.ts`), which is what ties an `action` row's `writer_epoch` to the lease
+   that allocated it.
+4. **The first implementation step is bounded, and the DDL trigger is deliberately left undecided.**
+   Step one is (a) a run-lifecycle module whose writes go through the existing protected-write gate
+   -- `fencedUpdate` and `protectedWrite` in `src/control_plane/lease.ts`, where `run` already holds
+   a seat in `PROTECTED_TABLES` -- and (b) a `writer_epoch` column on the `run` table, which is the
+   column that gate stamps. **A DDL trigger that refuses a status transition made without a live
+   lease is not introduced in this step.** Such a trigger is `BEFORE UPDATE OF status ON run` and
+   nothing wider: `docs/production-schema.md` section 4.2's writer table fences `run.status` with
+   the run lease epoch and assigns *no* fence to `run` creation, so an insert must stay
+   lease-free. The trigger is the mechanism that would make rule 1 enforced rather than observed,
+   and it is a *separate* decision: introducing it now fails every existing test that advances a
+   `run` row's status without holding a lease (28 such sites at the time of this decision).
+
+**Consequences.**
+
+- The `run` table gains `writer_epoch`. The events layer already speaks the column
+  (`src/control_plane/events.ts`), and the existing `run_status_is_forward_only` trigger
+  (`src/control_plane/migrations/0001_initial.sql`) is unaffected: it constrains the *direction* of
+  a transition, this decision constrains *who* may make one.
+- **Rule 1 is, at step one, a convention plus a gate that the single writer opts into.** Nothing
+  stops a second writer that does not go through the module until the trigger question is answered.
+  That is stated here rather than glossed, so the guarantee is not read as stronger than it is.
+- Answering the trigger question means either migrating those 28 status-advancing sites onto
+  lease-holding helpers or deciding the trigger is not worth its test cost. Neither is decided
+  here. Whichever way it goes, run *creation* stays unfenced, per the writer table above.
+- **Implementation is out of scope for this entry.** No module, column, migration, or test is added
+  by it; only `DECISIONS.md` changes.
+
+**Falsifier.** If a legitimate operation is found that must advance two runs in one transaction, the
+run-scoped lease is the wrong granularity and rule 3 is superseded. If a `run.status` write is
+observed reaching the table outside the lifecycle module and nothing detects it, then step one's
+bounded shape is not a control at all and the trigger question has to be answered rather than
+deferred. And if the consumer indirection in rule 2 is found to have no reader on the lap -- no
+event that any party other than the admission command appends -- then the split is being paid for
+without buying the separation it exists for, and the collapse should be reconsidered explicitly
+rather than drifted into.
+
+**Rejected alternative: collapse the roles for lap 1 and split them when a watcher arrives.**
+Cheapest now, and it is exactly the shape v1 shipped. The cost of the collapse was not that it was
+hard to undo; it was that a resolution mistake had nothing between it and the run row. Lap 1 has
+fewer parties, not fewer mistakes.
+
+**Rejected alternative: introduce the live-lease trigger with the module, in one step.** It is the
+stronger guarantee and it is where this should end up, but it converts 28 existing status-advancing
+test sites into failures in the same change that introduces the writer, which buries the writer's own review under a
+test migration.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on
+`docs/design/minimal-operating-loop.md` section 6.2, against `docs/production-schema.md` sections
+4.2 and 7.1. Decision id allocated by the window in the shared band (`D-0019`..`D-0099`).
