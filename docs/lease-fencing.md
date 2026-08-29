@@ -29,7 +29,8 @@ its tests are the durable half. Nothing here is promoted by having discharged a 
 claimant identity throughout and deliberately never a role. D-0029 has since answered this, in the
 production schema's writer table (section 4.2): `lease`'s single writer is "the acquiring claimant",
 not a role, so this module's choice stands as the answer rather than a deferral. (Which *table*
-records lease history is a separate question and stays open -- §5 below.)
+records lease history is a separate question, unanswered upstream and continuo's to settle -- §5
+below.)
 
 ---
 

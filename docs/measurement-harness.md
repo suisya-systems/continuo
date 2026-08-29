@@ -415,7 +415,7 @@ the Markdown and JSON renderings, with:
 | `schema_migration_head` | Version *and* name of the newest applied migration |
 | `db_fingerprint`, `fingerprint_mode` | A sha256 over the ordered rows of every table read, so two reports over "the same" database are provably over the same content. The weaker aggregate mode is available and is labelled as weaker |
 | `policy_revision_id` | The tolerances and owners in force (`time-base-policy.md` section 1). A report is meaningless without it, since every latency judgement is against those numbers |
-| `detector_versions` | The **set** of `detector_version` values observed in the period, not a single value -- a period spanning a detector change contains both, and collapsing them hides it (interlock `Q-0009` governs the compatibility rule and is open; the report's obligation is to expose the set, not to resolve it) |
+| `detector_versions` | The **set** of `detector_version` values observed in the period, not a single value -- a period spanning a detector change contains both, and collapsing them hides it (interlock `Q-0009` governs the compatibility rule and is unanswered -- see section 7; the report's obligation is to expose the set, not to resolve it) |
 | `adapter_versions` | The set of `ai_invocation.adapter_version` values, same reasoning, for the AC-9 token seam |
 | `query_definitions` | Every query the report ran, as text, plus a sha256 over the set. The queries are data, in the same spirit as the spike's `RECONSTRUCTION_QUERIES`, so a reader can run them by hand |
 | `fixture_suite_ref` | Commit and case count of the labelled corpus, split positive/negative |

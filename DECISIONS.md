@@ -8185,7 +8185,8 @@ record. It supplies **no decisions and no answers**. Concretely:
 - `docs/measurement-harness.md`, `docs/production-schema.md`, `docs/canary-routing-rehearsal.md`,
   `docs/secretary-intake-boundary.md`, `docs/lease-fencing.md` and
   `docs/test-translation-conventions.md` say "unanswered" where they said "open" or "settled
-  upstream", with one framing sentence per known-holes list.
+  upstream", with one framing sentence per known-holes list. `README.md` states the same thing about
+  interlock in its design-lineage section.
 - **Entries already in this file are not rewritten**, per this file's own rule that an ID is never
   rewritten. `D-0035`'s "undecided upstream", `D-0901`'s "had to be answered upstream first", and
   similar phrasings in earlier entries stay as written and are read through this entry: they record

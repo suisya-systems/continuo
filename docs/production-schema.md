@@ -73,7 +73,7 @@ re-derived".
 | `session` | **carried verbatim** | The staged binding (`prepared` → `spawned` → `identity_confirmed`), the one-active-binding-per-run partial unique index, and the observation/`provider_state` equality pair are re-confirmed unchanged. They were derived from gate item 2 under injection (`docs/crash-window-orchestration.md`), not from convenience. |
 | `lease` | **carried verbatim** | Epoch monotonicity, holder-change raising the epoch, resource immutability, no-delete. `docs/lease-fencing.md` is the derivation and it is unaffected by anything here. |
 | `outbox` | **carried verbatim, then extended** | Carried including the deliberate non-uniqueness of `dedup_key`; §9.4 adds gate relay identity in a separate table rather than by tightening this one. Extended once since: `0003_outbox_cancelled_status.sql` adds the terminal `cancelled` status (§5.7), which the spike vocabulary has no counterpart for and which is therefore the one place this table is **not** what the spike says. |
-| `incident` | **carried verbatim** | `Q-0002` is still open; nothing here narrows it. |
+| `incident` | **carried verbatim** | `Q-0002` is unanswered (§12); nothing here narrows it. |
 | `action` | **carried verbatim** | `exactly_once_mechanism` and the one-effect-per-key partial unique index are the `ACCEPTANCE.md` §2 clause and are unchanged. |
 | `task` | **new** | Named by `D-0001` but absent from the spike (the gate items did not exercise it). Out of scope for G3/G4; §12 records it as a known hole rather than inventing it here. |
 | `assessment` | **new** | Same: named by `D-0001`, absent from the spike, not exercised by G3/G4. §12. |
