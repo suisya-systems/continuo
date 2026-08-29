@@ -67,6 +67,7 @@ spaces distinct.
 | D-0032 | Three not-porting proposals are ratified, and three belts start with D-ranges allocated | accepted |
 | D-0033 | A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test | accepted |
 | D-0034 | The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named | accepted |
+| D-0035 | `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending` | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -6881,6 +6882,43 @@ D-range allocation, which stays burned either way.
 
 **Source.** Ratified by the user on 2026-08-30, task `continuo-belt-ratification-2`. Decision id
 allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to use this file").
+
+---
+
+## D-0035 -- `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending`
+
+**Context.** `parity/source-inventory.belts.md` held both `curator` (71 cases) and `migrate` (11
+cases) at `decision-pending`: whether continuo carries either surface at all was undecided upstream,
+and porting either would have settled that by implication rather than by an explicit answer. D-0031
+requires a human gate before either status moves.
+
+**Decision.** The human gate was passed on 2026-08-29, for two subsystems, recorded together
+because they were reviewed in one pass (continuo#77).
+
+1. **`curator` moves from `decision-pending` to `not-porting`.** The promotion gate's premise is
+   that a filesystem write into a live skill directory *is* the promotion, which is a claim about
+   running Claude Code sessions. continuo is a safety-substrate library, not the operator of those
+   sessions, so it does not own that surface, and the tests have no subject here. The existing note
+   that `test_promotion_gate.py` would be high-value *if* the answer had been yes is kept, unedited,
+   as the reason a future reversal would be cheap to act on. The effective porting target moves from
+   `2,194 - 85 = 2,109` (D-0032's count) to `2,194 - 156 = 2,038`, `156 = 85 + 71`.
+2. **`migrate` stays `decision-pending`, reviewed rather than left unexamined.** `tests/test_migrate.py`
+   checks v1-to-v2 key normalisation against a migration/comparison bridge that exists in neither
+   repository; deciding to port it would not produce anything to port it against. The status is
+   unchanged, but `source-inventory.belts.md` now records that this was reviewed at the human gate on
+   2026-08-29 and deliberately left pending, so a later reader does not mistake it for an unexamined
+   entry.
+
+**Falsifier.** For `curator`: if continuo, or a layer built on it, grows a surface that promotes
+skills by writing into a live skill directory, the subject exists and this decision is superseded,
+not edited -- `suisya-systems/cadenza#9`'s agentic-layer direction is a live candidate, not a
+theoretical one. For `migrate`: the trigger for revisiting is the run-boundary cutover bridge
+actually being designed; the `jsonschema`-equivalent dependency question comes with it and does not
+need answering before then.
+
+**Source.** Ratified by the user on 2026-08-29, task `continuo-decision-pending-ratification`,
+continuo#77. Decision id allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to
+use this file").
 
 ---
 

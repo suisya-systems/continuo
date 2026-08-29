@@ -321,17 +321,25 @@ continuo ports well (`control_plane` is 585 cases of it). D-0401 is where that f
 `recursive_triggers = ON` is the pragma without which `INSERT OR REPLACE` walks straight through the
 immutability triggers.
 
-### `curator` -- `decision-pending` -- 71 cases
+### `curator` -- `not-porting` (ratified 2026-08-29, D-0035) -- 71 cases
 
 `tests/curator/` covers skill-candidate promotion: a digest, a path audit, and
 gate item 9's five negatives. The promotion gate's whole premise is that a filesystem write into a
-live skill directory *is* the promotion, which is a claim about running Claude Code sessions --
-continuo is a library, and whether it owns that surface at all is not settled. Porting the tests
-would settle it by implication.
+live skill directory *is* the promotion, which is a claim about running Claude Code sessions.
+Ratified at the human gate on 2026-08-29: continuo is a safety-substrate library and does not
+operate those sessions, so it does not own that surface, and porting the tests would have settled
+the question by implication in the other direction. The reason recorded is that continuo does not
+own the skill-promotion surface, so the tests have no subject here.
 
-If the answer is yes, `test_promotion_gate.py` is high-value: every negative asserts both that the
-decision was a refusal *and* that nothing landed on disk, which is the two-sided shape that catches
-a gate that refuses in name only.
+If the answer had been yes, `test_promotion_gate.py` is high-value: every negative asserts both
+that the decision was a refusal *and* that nothing landed on disk, which is the two-sided shape
+that catches a gate that refuses in name only. That stays useful as the reason a future reversal
+would be cheap to act on.
+
+**What would falsify this:** if continuo, or a layer built on it, grows a surface that promotes
+skills by writing into a live skill directory, the subject exists and this belt should be reopened.
+That is a live possibility rather than a theoretical one -- see `suisya-systems/cadenza#9` for the
+agentic-layer direction that would create such a subject.
 
 ### `gate_record` -- `not-porting` (ratified 2026-08-28) -- 64 cases
 
@@ -600,6 +608,12 @@ call `pytest.importorskip("jsonschema")` inside the test body rather than at mod
 the broker five they *are* collected and *are* in the inventory; they will skip on a host without
 `jsonschema` and continuo will need a decision about the equivalent dependency.
 
+**Reviewed at the human gate on 2026-08-29 and deliberately left pending (D-0035).** This is not an
+unexamined entry: deciding to port would not produce anything to port it against, since the bridge
+`PORTING_LEDGER.md` calls for does not exist in either repository yet. The trigger for revisiting is
+the run-boundary cutover bridge actually being designed; the `jsonschema`-equivalent dependency
+question above comes with it and does not need answering before then.
+
 ### `package_smoke` -- `not-porting` (ratified 2026-08-28) -- 1 case
 
 Ratified at the human gate on 2026-08-28: continuo does not port this subsystem, on the grounds
@@ -623,12 +637,12 @@ continuo does not ship would assert nothing.
 |---|---|---|
 | `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` (all three sub-belts, **ported** 2026-08-29), `gate_item11` (ratified and **ported** 2026-08-29) | 1,973 |
 | `retarget` | `broker` | 54 |
-| `decision-pending` | `curator`, `migrate` | 82 |
-| `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
+| `decision-pending` | `migrate` | 11 |
+| `not-porting` (ratified 2026-08-28; `curator` ratified 2026-08-29) | `gate_record`, `scrub`, `package_smoke`, `curator` | 156 |
 | | **18** | **2,194** |
 
-With the 85 `not-porting` cases ratified out, continuo's effective porting target is
-**2,194 − 85 = 2,109** node ids -- the pool of cases not declined, not a commitment to port all of
+With the 156 `not-porting` cases ratified out, continuo's effective porting target is
+**2,194 − 156 = 2,038** node ids -- the pool of cases not declined, not a commitment to port all of
 it: within that pool, every status not marked ratified remains a proposal. The inventory itself
 stays at 2,194: the evidence set is unconditional and does not shrink with the decision.
 
