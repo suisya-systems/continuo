@@ -123,7 +123,8 @@ spaces distinct.
 | D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
 | D-0901 | The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated | accepted |
 | D-0902 | A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's | accepted |
-| D-0903 | The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes | accepted |
+| D-0903 | The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes | superseded by D-0906 |
+| D-0906 | D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 
 ---
@@ -7265,3 +7266,81 @@ or does not reproduce the source's comparison faithfully, the belt's approach to
 **Source.** Task `continuo-gate-item11-p1`, 2026-08-29, porting
 `tests/gate_item11/test_no_provider_detail_leaks.py`, `test_registry_availability.py` and
 `test_substitution_scenarios.py` from interlock `65f36c5`, under the belt start D-0034 ratified.
+
+---
+
+## D-0906 -- D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed
+
+**Context.** `D-0903` decided that `src/attention/classifier.ts` takes the watcher's fact state as a
+**required input** and carries it onto the event uninterpreted. The reasoning was that a fact can
+only reach an event two ways -- the classifier derives it, or the caller supplies it -- and that
+deriving it is the kind-to-state table `D-0034` forbids this port from inventing. Supplying it put
+the decision back where it was made.
+
+That entry carried a falsifier, and the falsifier fired:
+
+> If a later belt -- A3's pipeline, most likely -- finds that no caller is in a position to supply a
+> fact state, then the fact does not belong on the classifier's input at all and this shape is
+> wrong; the observation would be A3 having to invent a value to pass, which is the forbidden
+> mapping arriving one layer up.
+
+**A3 reported exactly that observation.** Porting `tests/attention/test_cli.py`, it found nothing in
+continuo's attention pipeline able to produce a fact state to hand the classifier: the CLI reads
+`events`, `pending_decisions.json` and the broker journal, and none of them carries one. A caller
+there could only have invented a value -- and inventing one per row shape is the same table
+`D-0034` forbids, one layer up, which is the sentence above almost word for word.
+
+**Decision.** `D-0903`'s shape is withdrawn. `src/attention/classifier.ts` names no fact state
+anywhere: the input types carry none, `AttentionEvent` has no `factState`, and `to_dict()` emits no
+`fact_state`. The 61 ported cases become plain translations of their source, which is what they
+were always asserting -- none of them ever asserted anything **about** a fact state, they only had
+to supply one.
+
+`D-0034`'s ratified constraint is satisfied more simply than before, and the distinction is worth
+stating because the entry's literal wording no longer holds. That wording -- "every ported case is
+required to give its fact state explicitly" -- was a **means**, and its stated **end** was that "no
+continuo-authored kind-to-state table exists for a belt case to silently depend on". A module that
+carries no fact at all cannot hold such a table, so the end is met without the means. Reading the
+ratified text that way is not this belt's call to make alone, which is why it went to the human gate
+and is recorded here as the answer that came back rather than as an inference.
+
+**The retargeted invariant is withdrawn, not re-homed, and this is the part that costs something.**
+`parity/source-inventory.belts.md` proposed that `test_classifier.py`'s strongest invariant -- every
+row of the fact vocabulary has a pinned expectation -- be re-derived onto the closed fact-state set.
+With the fact gone from this subsystem there is nothing in the classifier for that invariant to be
+about: it presupposes a fact the port does not carry, so it is not re-derivable here in principle
+rather than merely inconvenient to place. It is **abandoned**, and the belts document says so in
+those words instead of quietly dropping the sentence.
+
+What remains is narrower and is not offered as an equivalent. `test/contract/fact-state-vocabulary.
+test.ts` pins that every place stating the six names states the same six in the same order, and that
+the DDL still constrains `incident.fact_state` only for emptiness. That is an agreement between
+statements of a vocabulary; it is **not** "every row has a pinned expectation", and conflating the
+two would be describing coverage this port does not have -- the exact failure the ledger exists to
+prevent.
+
+**What survives.** `D-0901` stands: the six-name vocabulary is still adopted, and
+`src/attention/fact_state.ts` still holds it. That adoption never rested on the classifier -- it is
+justified by three consumers that predate this belt (`src/measurement/fixtures.ts`'s seventh-value
+refusal, `test/fault_injection/contract.ts`'s vocabulary check, and the DDL's deliberate absence of
+a constraint) and by `D-0034`'s ratification that A1 would be the belt to make it. `D-0902` also
+stands; it is about a config constant and is untouched by this.
+
+**`D-0903` is superseded, not amended.** The entry stays in this file exactly as written, marked
+superseded in the index, for the same reason `D-0901` left `D-0302` alone: an entry that recorded a
+decision and named what would falsify it, and was then falsified by that named observation, is more
+useful intact than edited. The eight target-only cases that went with the shape were measured red
+against five distinct mutations while it stood, and
+`parity/attention.classifier.ledger.json` keeps that record under
+`withdrawn_by_D_0906` -- evidence that the shape was load-bearing while it existed, not decoration.
+
+**Falsifier.** If continuo later grows a detector layer that does produce fact states, this entry is
+the one that was premature and the shape `D-0903` described is what should return -- the observation
+would be a caller with a real fact and nowhere to put it. Note that this is not symmetric with what
+happened here: `D-0903` was withdrawn because nothing could supply a value, and it would return
+because something can, so the two readings cannot both be right at the same time.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29, on the A3 lane's report against
+`tests/attention/test_cli.py`. Decision id allocated by the window in the `D-09xx` range that
+`D-0034` gave the attention belt (`D-0904`/`D-0905` are A2's). Ratified at the human gate before
+this belt made the change.

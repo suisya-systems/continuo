@@ -116,18 +116,24 @@ a collection-time skip.
 **A1 -- facts, 90 of 90 ported.** `tests/attention/test_readers.py` (29) and
 `tests/attention/test_classifier.py` (61), ported to `src/attention/` (`fact_state.ts`,
 `readers.ts`, `classifier.ts`, and the one `config.ts` constant `D-0902` records) with
-`test/attention/readers.test.ts` and `test/attention/classifier.test.ts` beside them:
+`test/attention/readers.test.ts` and `test/attention/classifier.test.ts` beside them. Note that
+`fact_state.ts` is **not** imported by `classifier.ts` and never was after `D-0906`: the vocabulary
+is adopted here (`D-0901`) on the strength of consumers that predate this belt, and the classifier
+carries no fact state at all.
 
 | source file | cases | ledger |
 |---|---|---|
 | `tests/attention/test_classifier.py` | 61 | `parity/attention.classifier.ledger.json` |
 | `tests/attention/test_readers.py` | 29 | `parity/attention.readers.ledger.json` |
 
-The three decisions A1 minted are `D-0901` (the six-name vocabulary is **adopted** by the detector
-layer rather than restated for a lint's sake, closing what `D-0034` ratified A1 would close),
-`D-0902` (the one `config.ts` constant the classifier imports lands here; the config belt stays
-A2's) and `D-0903` (the classifier carries a fact state it is **given** and derives none -- the
-shape that satisfies `D-0034`'s "the mapping is not invented by this port").
+The decisions A1 minted are `D-0901` (the six-name vocabulary is **adopted** rather than restated
+for a lint's sake, closing what `D-0034` ratified A1 would close), `D-0902` (the one `config.ts`
+constant the classifier imports lands here; the config belt stays A2's), `D-0903` (the classifier
+carries a fact state it is **given** and derives none) and `D-0906`, which supersedes `D-0903`
+after its falsifier fired: the classifier carries no fact state, because nothing can supply one.
+`D-0903` is left in `DECISIONS.md` exactly as written and marked superseded -- an entry that named
+what would falsify it and was then falsified by that named observation is more useful intact than
+edited.
 
 **`test_broker_journal_contract.py`'s zero-entry ledger.** `D-0034` ratified that this file gets a
 standalone, metadata-only ledger recording **zero entries**, outside the parity checker's normal
@@ -140,8 +146,18 @@ it points at and this file has none to point at.
 
 Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
 (mechanism)` or `rewrite`; **none** is a straight carry. `test_classifier.py` (61) carries the
-strongest invariant -- that every fact-vocabulary row has a pinned expectation -- but the mechanism
-is re-derived onto a closed fact-state set. `test_dedup.py` is called out explicitly: its two
+strongest invariant -- that every fact-vocabulary row has a pinned expectation -- and this document
+proposed re-deriving it onto the closed fact-state set. **That re-derivation was attempted and then
+abandoned; `D-0906` records why, and the sentence is corrected here rather than quietly dropped.**
+A1 first met it by making the fact a required input the classifier carried uninterpreted
+(`D-0903`), so that every ported case pinned one. A3's pipeline then found that nothing in continuo
+can produce a fact state to supply -- the observation `D-0903`'s own falsifier had named -- so the
+shape was withdrawn. With no fact carried anywhere in the subsystem, the invariant has nothing here
+to be about: it presupposes the fact, so it is not re-derivable in principle rather than merely
+hard to place. What is left is narrower and is **not** offered as an equivalent --
+`test/contract/fact-state-vocabulary.test.ts` pins that every statement of the six names agrees
+with every other and that the DDL still constrains `incident.fact_state` only for emptiness, which
+is an agreement between statements of a vocabulary rather than a pinned expectation per row. `test_dedup.py` is called out explicitly: its two
 corruption cases pin "malformed state loads as an empty `DedupState`", and the ledger rules that
 behaviour out for durable dedup state, so those two must be re-authored to assert fail-closed
 rather than ported.

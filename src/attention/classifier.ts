@@ -4,14 +4,19 @@
  * No I/O, no subprocesses. Given the rows returned by `readers.ts`, this module produces a
  * deterministic list of {@link AttentionEvent} records that downstream code can consume.
  *
- * Ported from interlock `claude_org_runtime/attention/classifier.py` at `65f36c5`, **retargeted**:
- * every row this module classifies arrives carrying a {@link FactState}, and the event it
- * produces carries that same fact **uninterpreted**. There is no table here from an attention
- * `kind` to a fact state and there is not meant to be one. interlock `Q-0012` -- what each fact
- * state means, and when it holds -- is open; a port that invented the mapping would be answering
- * it in code, and `D-0034` ratified that this belt does not. The caller says which fact it
- * observed, exactly as `SessionReadout` carries a provider's own lifecycle word without
- * converting it (`D-0021`, `D-0302`). `D-0903` records the shape and what falsifies it.
+ * Ported from interlock `claude_org_runtime/attention/classifier.py` at `65f36c5`. **This module
+ * does not name a fact state anywhere, and that absence is the design.** `D-0034` ratified that
+ * the port must not invent the mapping from the source's eighteen `kind` values to the six fact
+ * states -- interlock `Q-0012`, what each state means and when it holds, is open, and a port does
+ * not answer an upstream question in code.
+ *
+ * `D-0903` satisfied that by making the fact a required INPUT the caller supplies. `D-0906`
+ * withdrew it: A3's pipeline found that nothing in continuo is in a position to supply one, which
+ * is the observation `D-0903`'s own falsifier named, so a caller could only have invented a value
+ * -- the forbidden mapping arriving one layer up. Carrying no fact at all satisfies the ratified
+ * constraint more simply than carrying one nobody can produce. The vocabulary itself is still
+ * adopted (`D-0901`, `src/attention/fact_state.ts`); it is justified by consumers that predate
+ * this belt and does not depend on this module.
  *
  * Importing `readers.ts` here is for its journal **event-name constants** only, never its loaders
  * -- this module stays pure. Sharing the names is what keeps the filter and the classifier from
@@ -21,7 +26,6 @@
 
 import { getOwn, pyOr, pyStr, pyStrip, pyTruthy } from "../fencing/pysemantics.js";
 import { DEFAULT_NOTIFY, type Severity } from "./config.js";
-import type { FactState } from "./fact_state.js";
 import { DELIVERY_ADOPT_EXPIRED_EVENT, DELIVERY_SUPERSEDED_EVENT } from "./readers.js";
 
 /**
@@ -66,32 +70,20 @@ const EVENTS_SOURCE = "state.db.events";
 /** The `pending_decisions.json` namespace. */
 const PENDING_SOURCE = "pending_decisions";
 
-/**
- * Anything this module classifies arrives with the fact the detector layer observed.
- *
- * Required, not optional, and never defaulted. An optional field would need a fallback, and the
- * only fallback available is a mapping from the row's own shape to a fact state -- which is the
- * table `D-0034` forbids this belt from inventing. Requiring it puts the decision back where it
- * was made and makes a caller that has not made one a compile error rather than a silent guess.
- */
-export interface FactBearing {
-  readonly factState: FactState;
-}
-
 /** One `events` row, as the classifier consumes it. */
-export type EventRowInput = FactBearing & {
+export interface EventRowInput {
   readonly id?: unknown;
   readonly occurred_at?: unknown;
   readonly actor?: unknown;
   readonly kind?: unknown;
   readonly payload?: unknown;
-};
+}
 
 /** One `pending_decisions.json` entry, as the classifier consumes it. */
-export type PendingEntryInput = FactBearing & Readonly<Record<string, unknown>>;
+export type PendingEntryInput = Readonly<Record<string, unknown>>;
 
 /** One broker-journal row, as the classifier consumes it. */
-export type JournalRowInput = FactBearing & Readonly<Record<string, unknown>>;
+export type JournalRowInput = Readonly<Record<string, unknown>>;
 
 /** Severity overrides, keyed by attention kind. */
 export type NotifyMap = Readonly<Record<string, string>>;
@@ -104,9 +96,6 @@ export type NotifyMap = Readonly<Record<string, string>>;
  * `suppressed` is the "age >= drop" marker: the classifier still emits the record so triage tools
  * can list it, but a dispatcher must NOT route it to notify -- no desktop notification, no bell,
  * no dedup-state update.
- *
- * `factState` is the fact the row arrived with, carried through unchanged. Nothing in this class
- * reads it or branches on it; it is data in transit, and that is the whole of its contract here.
  */
 export class AttentionEvent {
   readonly key: string;
@@ -115,7 +104,6 @@ export class AttentionEvent {
   readonly title: string;
   readonly body: string;
   readonly source: string;
-  readonly factState: FactState;
   readonly taskId: string | null;
   readonly worker: string | null;
   readonly pr: number | null;
@@ -131,7 +119,6 @@ export class AttentionEvent {
     title: string;
     body: string;
     source: string;
-    factState: FactState;
     taskId?: string | null;
     worker?: string | null;
     pr?: number | null;
@@ -146,7 +133,6 @@ export class AttentionEvent {
     this.title = fields.title;
     this.body = fields.body;
     this.source = fields.source;
-    this.factState = fields.factState;
     this.taskId = fields.taskId ?? null;
     this.worker = fields.worker ?? null;
     this.pr = fields.pr ?? null;
@@ -160,12 +146,7 @@ export class AttentionEvent {
     Object.freeze(this);
   }
 
-  /**
-   * The source's `to_dict()`: wire-shaped, snake_case, and omitting every field that is `None`.
-   *
-   * `fact_state` is always present, because it is always set -- the same reason `key` and `kind`
-   * are unconditional rather than in the optional loop.
-   */
+  /** The source's `to_dict()`: wire-shaped, snake_case, and omitting every field that is `None`. */
   toDict(): Record<string, unknown> {
     const out: Record<string, unknown> = {
       key: this.key,
@@ -174,7 +155,6 @@ export class AttentionEvent {
       title: this.title,
       body: this.body,
       source: this.source,
-      fact_state: this.factState,
     };
     const optional: [string, string | number | null][] = [
       ["task_id", this.taskId],
@@ -219,7 +199,6 @@ export function classifyEvent(
   const worker = strOrNone(pyOr(getOwn(payload, "worker"), row.actor));
   const pr = coerceInt(getOwn(payload, "pr"));
   const occurredAt = strOrNone(row.occurred_at);
-  const factState = row.factState;
 
   if (kind === "notify_sent") {
     const sub = pyStr(pyOr(getOwn(payload, "kind"), ""));
@@ -235,7 +214,6 @@ export function classifyEvent(
       title,
       body,
       source: EVENTS_SOURCE,
-      factState,
       taskId,
       worker,
       pr,
@@ -256,7 +234,6 @@ export function classifyEvent(
       title,
       body,
       source: EVENTS_SOURCE,
-      factState,
       taskId,
       worker,
       pr,
@@ -274,7 +251,6 @@ export function classifyEvent(
       title,
       body,
       source: EVENTS_SOURCE,
-      factState,
       taskId,
       worker,
       pr,
@@ -323,7 +299,6 @@ export function classifyPending(
   const rawMessage = getOwn(entry, "raw_message");
   const receivedAt = strOrNone(getOwn(entry, "received_at"));
   const userRepliedAt = getOwn(entry, "user_replied_at");
-  const factState = entry.factState;
   if (taskId === null) {
     return null;
   }
@@ -342,7 +317,6 @@ export function classifyPending(
         title,
         body,
         source: PENDING_SOURCE,
-        factState,
         taskId,
         summary: shortSummary(rawMessage),
         createdAt: receivedAt,
@@ -369,7 +343,6 @@ export function classifyPending(
         title,
         body,
         source: PENDING_SOURCE,
-        factState,
         taskId,
         summary: shortSummary(rawMessage),
         createdAt: strOrNone(userRepliedAt),
@@ -410,7 +383,6 @@ export function classifyDuplicateSidecar(
     title,
     body,
     source: BROKER_JOURNAL_SOURCE,
-    factState: record.factState,
     worker: owner,
     summary,
     createdAt: isoFromEpoch(getOwn(record, "ts")),
@@ -486,7 +458,6 @@ export function classifyDeliverySignal(
     title,
     body,
     source: BROKER_JOURNAL_SOURCE,
-    factState: record.factState,
     worker: owner,
     summary,
     createdAt: isoFromEpoch(getOwn(record, "ts")),

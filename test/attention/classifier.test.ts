@@ -1,51 +1,27 @@
 /**
  * Ported from interlock `tests/attention/test_classifier.py` at `65f36c5` -- 61 cases.
  *
- * **This is the retargeted file.** `parity/source-inventory.belts.md` names its invariant as the
- * strongest in the attention subsystem -- *every row of the vocabulary has a pinned expectation* --
- * and says the mechanism is re-derived onto the closed fact-state set. Two rules govern how that
- * was done, both ratified in `D-0034` before this belt started:
+ * **No case here names a fact state, and that absence is the point.** `D-0034` ratified that this
+ * port must not invent the mapping from the source's eighteen `kind` values to the six fact
+ * states, because interlock `Q-0012` -- what each state means -- is open upstream.
  *
- * 1. **Every ported case gives its fact state explicitly.** The row hands the classifier the fact
- *    the detector layer observed and the classifier carries it through uninterpreted. Which fact
- *    a case names is the case's own datum.
- * 2. **No mapping from an attention `kind` to a fact state is invented, here or in `src/`.** There
- *    is deliberately no table in this file, and the fact states are rotated across cases of the
- *    same kind precisely so that no reader can extract one from the pattern. The target-only case
- *    "the same row under a different fact state classifies identically" is the assertion that the
- *    absence is real rather than an accident of which values were picked.
+ * `D-0903` met that by making the fact a required input every case supplied explicitly. `D-0906`
+ * withdrew the shape: A3's pipeline found nothing in continuo can supply one, which is exactly the
+ * observation `D-0903`'s falsifier named, so a caller could only have invented a value. Carrying
+ * no fact satisfies the ratified constraint more simply than carrying one nobody can produce, and
+ * these 61 cases are now plain translations of their source.
  *
- * The retargeted invariant lives in `PINNED_FACT_STATES` below and in the guard over it. The
- * ledger (`parity/attention.classifier.ledger.json`) records the mutation probes that were
- * measured red against that guard, because a "for every row of the vocabulary" check is green on
- * an empty vocabulary and would otherwise be a guard nobody had seen fail.
+ * The retargeted invariant `parity/source-inventory.belts.md` asked for -- every row of the fact
+ * vocabulary having a pinned expectation -- is **not** re-derived here, and `D-0906` records why:
+ * it presupposes a fact this subsystem does not carry, so there is nothing in this file for it to
+ * be about. What survives is the vocabulary's own agreement across every place that states it,
+ * which `test/contract/fact-state-vocabulary.test.ts` pins.
  */
 
 import { describe, expect, test } from "vitest";
 
 import * as classifier from "../../src/attention/classifier.js";
-import { FACT_STATES, type FactState } from "../../src/attention/fact_state.js";
 import { parametrize } from "../testkit/parametrize.js";
-
-/**
- * One pinned expectation per row of the closed fact-state vocabulary.
- *
- * **This is not a mapping from anything to a fact state.** Its keys are the vocabulary and its
- * values are what the classifier must do with each -- carry it back unchanged. It is the
- * retargeted form of the source file's own invariant, which pins every row of the classification
- * vocabulary rather than sampling it.
- *
- * Written as literals rather than derived from `FACT_STATES`, because a table derived from the
- * vocabulary agrees with the vocabulary by construction and could never disagree with it.
- */
-const PINNED_FACT_STATES: Readonly<Record<string, FactState>> = Object.freeze({
-  ACTIVE_EVIDENCE: "ACTIVE_EVIDENCE",
-  KNOWN_WAIT: "KNOWN_WAIT",
-  EXPLICIT_BLOCK: "EXPLICIT_BLOCK",
-  NO_ACTIVITY_EVIDENCE: "NO_ACTIVITY_EVIDENCE",
-  OBSERVATION_UNAVAILABLE: "OBSERVATION_UNAVAILABLE",
-  TERMINAL: "TERMINAL",
-});
 
 const NOW = new Date(Date.UTC(2026, 4, 12, 12, 0, 0));
 
@@ -72,7 +48,6 @@ function row(fields: {
   payload?: Record<string, unknown>;
   actor?: string | null;
   occurredAt?: string;
-  factState: FactState;
 }): classifier.EventRowInput {
   return {
     id: "id" in fields ? fields.id : 1,
@@ -80,7 +55,6 @@ function row(fields: {
     actor: fields.actor ?? null,
     kind: fields.kind,
     payload: fields.payload ?? {},
-    factState: fields.factState,
   };
 }
 
@@ -90,20 +64,18 @@ function minutesAgo(minutes: number): string {
 }
 
 /** The source's `_pending`: a pending entry whose `received_at` is N minutes ago. */
-function pending(receivedAgoMin: number, factState: FactState): classifier.PendingEntryInput {
+function pending(receivedAgoMin: number): classifier.PendingEntryInput {
   return {
     task_id: "ttl-task",
     received_at: minutesAgo(receivedAgoMin),
     raw_message: "should we ship?",
     status: "pending",
-    factState,
   };
 }
 
 /** The source's `_user_replied`: an escalated entry whose `user_replied_at` is N minutes ago. */
 function userReplied(
   repliedAgoMin: number,
-  factState: FactState,
   extra: Record<string, unknown> = {},
 ): classifier.PendingEntryInput {
   return {
@@ -113,33 +85,24 @@ function userReplied(
     status: "escalated",
     user_replied_at: minutesAgo(repliedAgoMin),
     ...extra,
-    factState,
   };
 }
 
 /** The source's `_dup_row`, as the reader hands it over. */
-function dupRow(options: {
-  ts?: number;
-  owner?: unknown;
-  instances?: unknown;
-  factState: FactState;
-}): classifier.JournalRowInput {
+function dupRow(
+  options: { ts?: number; owner?: unknown; instances?: unknown } = {},
+): classifier.JournalRowInput {
   return {
     ts: options.ts ?? 1000.0,
     owner: "owner" in options ? options.owner : "sec",
     instances: "instances" in options ? options.instances : ["b1", "a2"],
-    factState: options.factState,
   };
 }
 
 /** The source's `_expired_row`. */
-function expiredRow(options: {
-  ts?: number;
-  owner?: string;
-  adoptionId?: string;
-  restored?: boolean;
-  factState: FactState;
-}): classifier.JournalRowInput {
+function expiredRow(
+  options: { ts?: number; owner?: string; adoptionId?: string; restored?: boolean } = {},
+): classifier.JournalRowInput {
   const restored = options.restored ?? true;
   return {
     ts: options.ts ?? 1000.0,
@@ -151,17 +114,13 @@ function expiredRow(options: {
     generation: 4,
     restored,
     restored_generation: restored ? 3 : null,
-    factState: options.factState,
   };
 }
 
 /** The source's `_superseded_row`. */
-function supersededRow(options: {
-  ts?: number;
-  owner?: string;
-  instance?: string;
-  factState: FactState;
-}): classifier.JournalRowInput {
+function supersededRow(
+  options: { ts?: number; owner?: string; instance?: string } = {},
+): classifier.JournalRowInput {
   return {
     ts: options.ts ?? 1000.0,
     event: "delivery_register_superseded",
@@ -169,7 +128,6 @@ function supersededRow(options: {
     instance: options.instance ?? "inst-old",
     state: "active",
     latched: true,
-    factState: options.factState,
   };
 }
 
@@ -181,7 +139,6 @@ describe("attention classifier", () => {
       row({
         kind: "notify_sent",
         payload: { kind: "approval_blocked", task_id: "issue-19-20", worker: "worker-foo" },
-        factState: "EXPLICIT_BLOCK",
       }),
     );
 
@@ -199,7 +156,6 @@ describe("attention classifier", () => {
       row({
         kind: "notify_sent",
         payload: { kind: "relay_gap_suspected", task_id: "T1" },
-        factState: "ACTIVE_EVIDENCE",
       }),
     );
 
@@ -214,7 +170,6 @@ describe("attention classifier", () => {
       row({
         kind: "notify_sent",
         payload: { kind: "pane_output_without_peer_msg", worker: "wkr" },
-        factState: "NO_ACTIVITY_EVIDENCE",
       }),
     );
 
@@ -225,9 +180,7 @@ describe("attention classifier", () => {
 
   test("notify_sent with an unknown subkind is ignored", () => {
     expect(
-      classifier.classifyEvent(
-        row({ kind: "notify_sent", payload: { kind: "heartbeat" }, factState: "KNOWN_WAIT" }),
-      ),
+      classifier.classifyEvent(row({ kind: "notify_sent", payload: { kind: "heartbeat" } })),
     ).toBeNull();
   });
 
@@ -245,7 +198,6 @@ describe("attention classifier", () => {
         row({
           kind: "ci_completed",
           payload: { status, pr: 42, task_id: "ci-pr-42" },
-          factState: "TERMINAL",
         }),
       );
 
@@ -263,7 +215,6 @@ describe("attention classifier", () => {
         row({
           kind: "ci_completed",
           payload: { status: "success", pr: 1 },
-          factState: "TERMINAL",
         }),
       ),
     ).toBeNull();
@@ -276,7 +227,6 @@ describe("attention classifier", () => {
       row({
         kind: "worker_completed",
         payload: { task_id: "issue-19", worker: "worker-19" },
-        factState: "TERMINAL",
       }),
     );
 
@@ -290,7 +240,6 @@ describe("attention classifier", () => {
       row({
         kind: "pr_merged",
         payload: { pr: 7, task_id: "issue-7" },
-        factState: "OBSERVATION_UNAVAILABLE",
       }),
     );
 
@@ -305,12 +254,8 @@ describe("attention classifier", () => {
   test("a progress or unknown event is ignored", () => {
     // The reader narrows the SELECT to relevant kinds, but if a stray row makes it through the
     // classifier must still ignore it.
-    expect(
-      classifier.classifyEvent(row({ kind: "heartbeat", factState: "ACTIVE_EVIDENCE" })),
-    ).toBeNull();
-    expect(
-      classifier.classifyEvent(row({ kind: "anomaly_observed", factState: "KNOWN_WAIT" })),
-    ).toBeNull();
+    expect(classifier.classifyEvent(row({ kind: "heartbeat" }))).toBeNull();
+    expect(classifier.classifyEvent(row({ kind: "anomaly_observed" }))).toBeNull();
   });
 
   // -- pending decisions ---------------------------------------------------------------------
@@ -322,7 +267,6 @@ describe("attention classifier", () => {
         received_at: minutesAgo(20),
         raw_message: "should we split this PR?",
         status: "pending",
-        factState: "KNOWN_WAIT",
       },
       NOW,
       THRESHOLDS,
@@ -343,7 +287,6 @@ describe("attention classifier", () => {
           received_at: minutesAgo(5),
           raw_message: "?",
           status: "pending",
-          factState: "KNOWN_WAIT",
         },
         NOW,
         THRESHOLDS,
@@ -354,12 +297,12 @@ describe("attention classifier", () => {
   // -- the pending_decision TTL ladder (min / max / drop) ------------------------------------
 
   test("pending decision TTL: below min produces no event", () => {
-    expect(classifier.classifyPending(pending(5, "KNOWN_WAIT"), NOW, LADDER)).toBeNull();
+    expect(classifier.classifyPending(pending(5), NOW, LADDER)).toBeNull();
   });
 
   test("pending decision TTL: min to max is urgent", () => {
     // 60 min >= 15 (min) but well below 1440 (max).
-    const event = classifier.classifyPending(pending(60, "EXPLICIT_BLOCK"), NOW, LADDER);
+    const event = classifier.classifyPending(pending(60), NOW, LADDER);
 
     expect(event).not.toBeNull();
     expect(event?.kind).toBe("pending_decision");
@@ -368,7 +311,7 @@ describe("attention classifier", () => {
 
   test("pending decision TTL: max to drop is demoted to normal", () => {
     // 1500 min (25h) > 1440 (max) but < 10080 (drop).
-    const event = classifier.classifyPending(pending(1500, "NO_ACTIVITY_EVIDENCE"), NOW, LADDER);
+    const event = classifier.classifyPending(pending(1500), NOW, LADDER);
 
     expect(event).not.toBeNull();
     expect(event?.kind).toBe("pending_decision");
@@ -378,11 +321,7 @@ describe("attention classifier", () => {
   test("pending decision TTL: above drop is suppressed for notify", () => {
     // The classifier surfaces the row so a triage listing can show it; the dispatcher is what
     // skips routing it to notify.
-    const event = classifier.classifyPending(
-      pending(11000, "OBSERVATION_UNAVAILABLE"),
-      NOW,
-      LADDER,
-    );
+    const event = classifier.classifyPending(pending(11000), NOW, LADDER);
 
     expect(event).not.toBeNull();
     expect(event?.kind).toBe("pending_decision");
@@ -395,7 +334,7 @@ describe("attention classifier", () => {
   test("pending decision demotion respects a notify map override", () => {
     // Ops can pin `urgent` on a long-lived event class via config; the TTL ladder should not
     // silently override that intent.
-    const event = classifier.classifyPending(pending(1500, "KNOWN_WAIT"), NOW, {
+    const event = classifier.classifyPending(pending(1500), NOW, {
       ...LADDER,
       notifyMap: { pending_decision: "urgent" },
     });
@@ -405,11 +344,11 @@ describe("attention classifier", () => {
   });
 
   test("user reply TTL: below min produces no event", () => {
-    expect(classifier.classifyPending(userReplied(5, "KNOWN_WAIT"), NOW, LADDER)).toBeNull();
+    expect(classifier.classifyPending(userReplied(5), NOW, LADDER)).toBeNull();
   });
 
   test("user reply TTL: min to max is urgent", () => {
-    const event = classifier.classifyPending(userReplied(60, "EXPLICIT_BLOCK"), NOW, LADDER);
+    const event = classifier.classifyPending(userReplied(60), NOW, LADDER);
 
     expect(event).not.toBeNull();
     expect(event?.kind).toBe("user_reply_not_forwarded");
@@ -417,7 +356,7 @@ describe("attention classifier", () => {
   });
 
   test("user reply TTL: max to drop is demoted to normal", () => {
-    const event = classifier.classifyPending(userReplied(1500, "ACTIVE_EVIDENCE"), NOW, LADDER);
+    const event = classifier.classifyPending(userReplied(1500), NOW, LADDER);
 
     expect(event).not.toBeNull();
     expect(event?.kind).toBe("user_reply_not_forwarded");
@@ -425,7 +364,7 @@ describe("attention classifier", () => {
   });
 
   test("user reply TTL: above drop is suppressed for notify", () => {
-    const event = classifier.classifyPending(userReplied(11000, "TERMINAL"), NOW, LADDER);
+    const event = classifier.classifyPending(userReplied(11000), NOW, LADDER);
 
     expect(event).not.toBeNull();
     expect(event?.kind).toBe("user_reply_not_forwarded");
@@ -437,11 +376,7 @@ describe("attention classifier", () => {
     // Even if `status` lingers at `escalated` and `user_replied_at` is old, an explicit
     // `resolution_kind == "to_worker"` marker means the gap closed.
     expect(
-      classifier.classifyPending(
-        userReplied(60, "TERMINAL", { resolution_kind: "to_worker" }),
-        NOW,
-        LADDER,
-      ),
+      classifier.classifyPending(userReplied(60, { resolution_kind: "to_worker" }), NOW, LADDER),
     ).toBeNull();
   });
 
@@ -449,7 +384,7 @@ describe("attention classifier", () => {
     // Only `to_worker` indicates the relay actually completed; any other value (or a missing
     // field) leaves the gap open.
     const event = classifier.classifyPending(
-      userReplied(60, "NO_ACTIVITY_EVIDENCE", { resolution_kind: "answered" }),
+      userReplied(60, { resolution_kind: "answered" }),
       NOW,
       LADDER,
     );
@@ -466,7 +401,6 @@ describe("attention classifier", () => {
         raw_message: "?",
         status: "escalated",
         user_replied_at: minutesAgo(20),
-        factState: "EXPLICIT_BLOCK",
       },
       NOW,
       THRESHOLDS,
@@ -487,7 +421,6 @@ describe("attention classifier", () => {
           raw_message: "?",
           status: "escalated",
           user_replied_at: minutesAgo(5),
-          factState: "EXPLICIT_BLOCK",
         },
         NOW,
         THRESHOLDS,
@@ -504,7 +437,6 @@ describe("attention classifier", () => {
           raw_message: "?",
           status: "resolved",
           resolution_kind: "to_worker",
-          factState: "TERMINAL",
         },
         NOW,
         THRESHOLDS,
@@ -514,12 +446,11 @@ describe("attention classifier", () => {
 
   test("classifyAll combines its inputs", () => {
     const events = [
-      row({ id: 10, kind: "worker_completed", payload: { task_id: "x" }, factState: "TERMINAL" }),
+      row({ id: 10, kind: "worker_completed", payload: { task_id: "x" } }),
       row({
         id: 11,
         kind: "ci_completed",
         payload: { status: "failed", pr: 1 },
-        factState: "ACTIVE_EVIDENCE",
       }),
     ];
     const pendingEntries = [
@@ -528,7 +459,6 @@ describe("attention classifier", () => {
         received_at: minutesAgo(30),
         raw_message: "?",
         status: "pending",
-        factState: "KNOWN_WAIT" as const,
       },
     ];
 
@@ -546,7 +476,6 @@ describe("attention classifier", () => {
       row({
         kind: "ci_completed",
         payload: { status: "failed", pr: 99, task_id: "x" },
-        factState: "TERMINAL",
       }),
     );
 
@@ -564,7 +493,6 @@ describe("attention classifier", () => {
         actor: null,
         kind: "worker_completed",
         payload: {},
-        factState: "TERMINAL",
       }),
     ).toBeNull();
   });
@@ -576,7 +504,6 @@ describe("attention classifier", () => {
           received_at: "2026-05-12T10:00:00Z",
           raw_message: "?",
           status: "pending",
-          factState: "KNOWN_WAIT",
         },
         NOW,
         THRESHOLDS,
@@ -588,7 +515,7 @@ describe("attention classifier", () => {
 
   test("a notify map override reaches the emitted event", () => {
     const event = classifier.classifyEvent(
-      row({ kind: "worker_completed", payload: { task_id: "t" }, factState: "TERMINAL" }),
+      row({ kind: "worker_completed", payload: { task_id: "t" } }),
       { notifyMap: { worker_completed: "urgent" } },
     );
 
@@ -603,7 +530,6 @@ describe("attention classifier", () => {
         received_at: minutesAgo(30),
         raw_message: "?",
         status: "pending",
-        factState: "KNOWN_WAIT",
       },
       NOW,
       { ...THRESHOLDS, notifyMap: { pending_decision: "normal" } },
@@ -619,7 +545,6 @@ describe("attention classifier", () => {
       row({
         kind: "ci_completed",
         payload: { status: "failed", pr: 1 },
-        factState: "OBSERVATION_UNAVAILABLE",
       }),
       { notifyMap: { ci_failed: "loud" } },
     );
@@ -638,7 +563,6 @@ describe("attention classifier", () => {
         received_at: "not-a-real-timestamp",
         raw_message: "?",
         status: "pending",
-        factState: "OBSERVATION_UNAVAILABLE",
       },
       NOW,
       THRESHOLDS,
@@ -655,7 +579,6 @@ describe("attention classifier", () => {
         task_id: "no-ts",
         raw_message: "?",
         status: "pending",
-        factState: "OBSERVATION_UNAVAILABLE",
       },
       NOW,
       THRESHOLDS,
@@ -686,7 +609,6 @@ describe("attention classifier", () => {
         row({
           kind: "notify_sent",
           payload: { kind: subkind, worker: "w1", task_id: "t1" },
-          factState: "NO_ACTIVITY_EVIDENCE",
         }),
       );
 
@@ -709,7 +631,6 @@ describe("attention classifier", () => {
       row({
         kind: "notify_sent",
         payload: { kind: "awaiting_user", task_id: "issue-28", worker: "secretary" },
-        factState: "KNOWN_WAIT",
       }),
     );
 
@@ -734,7 +655,7 @@ describe("attention classifier", () => {
   // -- duplicate_sidecar ---------------------------------------------------------------------
 
   test("duplicate_sidecar names the owner and both instances", () => {
-    const event = classifier.classifyDuplicateSidecar(dupRow({ factState: "EXPLICIT_BLOCK" }));
+    const event = classifier.classifyDuplicateSidecar(dupRow({}));
 
     expect(event.kind).toBe("duplicate_sidecar");
     expect(event.severity).toBe("urgent");
@@ -749,23 +670,15 @@ describe("attention classifier", () => {
   test("duplicate_sidecar is cooldown-gated rather than write-once", () => {
     // The source must stay out of the `state.db.events` dedup namespace, which records keys
     // forever; a live double sidecar has to keep re-alerting on the cooldown cadence.
-    expect(
-      classifier.classifyDuplicateSidecar(dupRow({ factState: "ACTIVE_EVIDENCE" })).source,
-    ).toBe("broker.queue.jsonl");
+    expect(classifier.classifyDuplicateSidecar(dupRow({})).source).toBe("broker.queue.jsonl");
   });
 
   test("the duplicate_sidecar key is per contesting pair", () => {
-    const same = classifier.classifyDuplicateSidecar(
-      dupRow({ instances: ["a", "b"], factState: "TERMINAL" }),
-    );
-    const reordered = classifier.classifyDuplicateSidecar(
-      dupRow({ instances: ["b", "a"], factState: "TERMINAL" }),
-    );
-    const otherPair = classifier.classifyDuplicateSidecar(
-      dupRow({ instances: ["a", "c"], factState: "TERMINAL" }),
-    );
+    const same = classifier.classifyDuplicateSidecar(dupRow({ instances: ["a", "b"] }));
+    const reordered = classifier.classifyDuplicateSidecar(dupRow({ instances: ["b", "a"] }));
+    const otherPair = classifier.classifyDuplicateSidecar(dupRow({ instances: ["a", "c"] }));
     const otherOwner = classifier.classifyDuplicateSidecar(
-      dupRow({ owner: "w1", instances: ["a", "b"], factState: "TERMINAL" }),
+      dupRow({ owner: "w1", instances: ["a", "b"] }),
     );
 
     expect(same.key).toBe(reordered.key);
@@ -774,9 +687,7 @@ describe("attention classifier", () => {
   });
 
   test("a duplicate_sidecar ts becomes an ISO created_at", () => {
-    const event = classifier.classifyDuplicateSidecar(
-      dupRow({ ts: 1767225600.0, factState: "OBSERVATION_UNAVAILABLE" }),
-    );
+    const event = classifier.classifyDuplicateSidecar(dupRow({ ts: 1767225600.0 }));
 
     expect(event.createdAt).toBe("2026-01-01T00:00:00Z");
   });
@@ -786,7 +697,6 @@ describe("attention classifier", () => {
     const event = classifier.classifyDuplicateSidecar({
       ts: 1.0,
       instances: "not-a-list",
-      factState: "NO_ACTIVITY_EVIDENCE",
     });
 
     expect(event.kind).toBe("duplicate_sidecar");
@@ -797,7 +707,7 @@ describe("attention classifier", () => {
   });
 
   test("a duplicate_sidecar severity override applies", () => {
-    const event = classifier.classifyDuplicateSidecar(dupRow({ factState: "KNOWN_WAIT" }), {
+    const event = classifier.classifyDuplicateSidecar(dupRow({}), {
       notifyMap: { duplicate_sidecar: "normal" },
     });
 
@@ -807,10 +717,10 @@ describe("attention classifier", () => {
   test("classifyBrokerDuplicates collapses repeats per pair", () => {
     // The store re-journals a live pair once per lease window.
     const out = classifier.classifyBrokerDuplicates([
-      dupRow({ ts: 1000.0, instances: ["a", "b"], factState: "EXPLICIT_BLOCK" }),
-      dupRow({ ts: 1030.0, instances: ["a", "b"], factState: "EXPLICIT_BLOCK" }),
-      dupRow({ ts: 1060.0, instances: ["a", "b"], factState: "EXPLICIT_BLOCK" }),
-      dupRow({ ts: 1010.0, instances: ["a", "c"], factState: "EXPLICIT_BLOCK" }),
+      dupRow({ ts: 1000.0, instances: ["a", "b"] }),
+      dupRow({ ts: 1030.0, instances: ["a", "b"] }),
+      dupRow({ ts: 1060.0, instances: ["a", "b"] }),
+      dupRow({ ts: 1010.0, instances: ["a", "c"] }),
     ]);
 
     expect(out).toHaveLength(2);
@@ -823,7 +733,7 @@ describe("attention classifier", () => {
   test("classifyAll appends broker duplicates", () => {
     const out = classifier.classifyAll([], [], NOW, {
       ...THRESHOLDS,
-      brokerDuplicates: [dupRow({ factState: "EXPLICIT_BLOCK" })],
+      brokerDuplicates: [dupRow({})],
     });
 
     expect(out.map((event) => event.kind)).toEqual(["duplicate_sidecar"]);
@@ -831,7 +741,7 @@ describe("attention classifier", () => {
 
   test("classifyAll without broker duplicates is unchanged", () => {
     const out = classifier.classifyAll(
-      [row({ id: 1, kind: "worker_completed", payload: { task_id: "x" }, factState: "TERMINAL" })],
+      [row({ id: 1, kind: "worker_completed", payload: { task_id: "x" } })],
       [],
       NOW,
       THRESHOLDS,
@@ -845,9 +755,7 @@ describe("attention classifier", () => {
   test("delivery_adopt_expired names the adoption that failed", () => {
     // Issuing the observer secret is not the handover; if this row went unclassified, a failed
     // adopt would look exactly like a successful one from outside the daemon.
-    const event = classifier.classifyDeliverySignal(
-      expiredRow({ ts: 1767225600.0, factState: "EXPLICIT_BLOCK" }),
-    );
+    const event = classifier.classifyDeliverySignal(expiredRow({ ts: 1767225600.0 }));
 
     expect(event).not.toBeNull();
     expect(event?.kind).toBe("delivery_adopt_expired");
@@ -864,12 +772,8 @@ describe("attention classifier", () => {
   test("the delivery_adopt_expired body separates restored from orphaned", () => {
     // `restored: true` means the previous session got its delivery back and only the handover was
     // lost; `restored: false` means no session is claiming the owner at all.
-    const restored = classifier.classifyDeliverySignal(
-      expiredRow({ restored: true, factState: "KNOWN_WAIT" }),
-    );
-    const orphaned = classifier.classifyDeliverySignal(
-      expiredRow({ restored: false, factState: "KNOWN_WAIT" }),
-    );
+    const restored = classifier.classifyDeliverySignal(expiredRow({ restored: true }));
+    const orphaned = classifier.classifyDeliverySignal(expiredRow({ restored: false }));
 
     expect(restored).not.toBeNull();
     expect(orphaned).not.toBeNull();
@@ -880,12 +784,8 @@ describe("attention classifier", () => {
   test("delivery_superseded keys on the instance that went mute", () => {
     // Keying on the owner alone would let the first session's cooldown swallow the report that a
     // replacement went mute too.
-    const first = classifier.classifyDeliverySignal(
-      supersededRow({ instance: "inst-a", factState: "NO_ACTIVITY_EVIDENCE" }),
-    );
-    const second = classifier.classifyDeliverySignal(
-      supersededRow({ instance: "inst-b", factState: "NO_ACTIVITY_EVIDENCE" }),
-    );
+    const first = classifier.classifyDeliverySignal(supersededRow({ instance: "inst-a" }));
+    const second = classifier.classifyDeliverySignal(supersededRow({ instance: "inst-b" }));
 
     expect(first).not.toBeNull();
     expect(second).not.toBeNull();
@@ -905,16 +805,13 @@ describe("attention classifier", () => {
         ts: 1.0,
         event: "duplicate_sidecar_detected",
         owner: "sec",
-        factState: "ACTIVE_EVIDENCE",
       }),
     ).toBeNull();
-    expect(
-      classifier.classifyDeliverySignal({ ts: 1.0, owner: "sec", factState: "ACTIVE_EVIDENCE" }),
-    ).toBeNull();
+    expect(classifier.classifyDeliverySignal({ ts: 1.0, owner: "sec" })).toBeNull();
 
     const out = classifier.classifyBrokerDeliverySignals([
-      { ts: 1.0, event: "lease_reaped", owner: "sec", factState: "ACTIVE_EVIDENCE" },
-      expiredRow({ factState: "ACTIVE_EVIDENCE" }),
+      { ts: 1.0, event: "lease_reaped", owner: "sec" },
+      expiredRow({}),
     ]);
 
     expect(out.map((event) => event.kind)).toEqual(["delivery_adopt_expired"]);
@@ -927,7 +824,6 @@ describe("attention classifier", () => {
       ts: 1.0,
       event: "delivery_adopt_expired",
       restored: false,
-      factState: "TERMINAL",
     });
 
     expect(expired).not.toBeNull();
@@ -940,7 +836,6 @@ describe("attention classifier", () => {
       ts: 1.0,
       event: "delivery_register_superseded",
       owner: "   ",
-      factState: "TERMINAL",
     });
 
     expect(superseded).not.toBeNull();
@@ -951,10 +846,10 @@ describe("attention classifier", () => {
     // Both events are one-shot, so a repeat means a daemon restart replayed a journal. Emitting
     // one event per journal line would turn that into a burst of identical pages for one mute.
     const out = classifier.classifyBrokerDeliverySignals([
-      expiredRow({ ts: 1000.0, factState: "OBSERVATION_UNAVAILABLE" }),
-      expiredRow({ ts: 1060.0, factState: "OBSERVATION_UNAVAILABLE" }),
-      expiredRow({ ts: 1030.0, factState: "OBSERVATION_UNAVAILABLE" }),
-      supersededRow({ ts: 1010.0, factState: "OBSERVATION_UNAVAILABLE" }),
+      expiredRow({ ts: 1000.0 }),
+      expiredRow({ ts: 1060.0 }),
+      expiredRow({ ts: 1030.0 }),
+      supersededRow({ ts: 1010.0 }),
     ]);
 
     expect(out).toHaveLength(2);
@@ -970,11 +865,8 @@ describe("attention classifier", () => {
     // signals in -- that gap is what left `duplicate_sidecar_detected` unconsumed for two issues.
     const out = classifier.classifyAll([], [], NOW, {
       ...THRESHOLDS,
-      brokerDuplicates: [dupRow({ factState: "EXPLICIT_BLOCK" })],
-      brokerDeliverySignals: [
-        expiredRow({ factState: "EXPLICIT_BLOCK" }),
-        supersededRow({ factState: "EXPLICIT_BLOCK" }),
-      ],
+      brokerDuplicates: [dupRow({})],
+      brokerDeliverySignals: [expiredRow({}), supersededRow({})],
     });
 
     expect(out.map((event) => event.kind)).toEqual([
@@ -987,7 +879,7 @@ describe("attention classifier", () => {
   test("classifyAll without delivery signals is unchanged", () => {
     // Callers that pre-date the new keyword keep working.
     const out = classifier.classifyAll(
-      [row({ id: 1, kind: "worker_completed", payload: { task_id: "x" }, factState: "TERMINAL" })],
+      [row({ id: 1, kind: "worker_completed", payload: { task_id: "x" } })],
       [],
       NOW,
       THRESHOLDS,
@@ -998,82 +890,10 @@ describe("attention classifier", () => {
 
   // -- target-only: the retargeted vocabulary invariant ---------------------------------------
 
-  test("target-only -- every fact-state row has a pinned expectation", () => {
-    // The retarget of the source file's strongest invariant. `PINNED_FACT_STATES` is the
-    // vocabulary-row -> expectation table; the two directions are asserted separately because a
-    // one-sided check is satisfied by shrinking whichever side is smaller.
-    //
-    // This shape is green on an empty vocabulary, which is why the ledger records the mutation
-    // probes measured against it rather than leaving the guard unfalsified.
-    for (const state of FACT_STATES) {
-      expect(
-        Object.hasOwn(PINNED_FACT_STATES, state),
-        `${state} is in the closed set but no case pins what the classifier does with it`,
-      ).toBe(true);
-    }
-    for (const pinned of Object.keys(PINNED_FACT_STATES)) {
-      expect(
-        FACT_STATES.includes(pinned as FactState),
-        `${pinned} has a pinned expectation but is not in the closed set`,
-      ).toBe(true);
-    }
-    expect(
-      FACT_STATES.length,
-      "the closed set emptied out, which would make the loop above vacuous",
-    ).toBe(6);
-  });
-
-  parametrize(
-    "target-only -- the classifier carries the fact it was given",
-    Object.entries(PINNED_FACT_STATES).map(
-      ([state, expected]) => [state, [state as FactState, expected]] as const,
-    ),
-    ([state, expected]) => {
-      // Carried, never converted: the classifier reads no meaning out of the value and writes the
-      // same one back. `toDict` is checked too, because that is the shape a downstream consumer
-      // parses and dropping the field there would be invisible to the object assertion.
-      const event = classifier.classifyEvent(
-        row({ kind: "worker_completed", payload: { task_id: "carry" }, factState: state }),
-      );
-
-      expect(event).not.toBeNull();
-      expect(event?.factState).toBe(expected);
-      expect(event?.toDict()["fact_state"]).toBe(expected);
-    },
-  );
-
-  test("target-only -- the same row under a different fact state classifies identically", () => {
-    // The assertion that no kind-to-fact-state mapping exists. If one were ever introduced -- a
-    // default, a lookup, a validation that only some kinds may carry some facts -- these two would
-    // stop agreeing on everything except the field that was varied.
-    const first = classifier.classifyEvent(
-      row({
-        kind: "notify_sent",
-        payload: { kind: "approval_blocked", task_id: "t", worker: "w" },
-        factState: "ACTIVE_EVIDENCE",
-      }),
-    );
-    const second = classifier.classifyEvent(
-      row({
-        kind: "notify_sent",
-        payload: { kind: "approval_blocked", task_id: "t", worker: "w" },
-        factState: "TERMINAL",
-      }),
-    );
-
-    expect(first).not.toBeNull();
-    expect(second).not.toBeNull();
-    const { fact_state: firstFact, ...firstRest } = first?.toDict() ?? {};
-    const { fact_state: secondFact, ...secondRest } = second?.toDict() ?? {};
-    expect(firstRest).toEqual(secondRest);
-    expect(firstFact).toBe("ACTIVE_EVIDENCE");
-    expect(secondFact).toBe("TERMINAL");
-  });
-
   test("target-only -- an attention event cannot be rewritten after construction", () => {
     // The source's dataclass is `frozen=True`, enforced at runtime; `readonly` is erased at emit,
     // so without the freeze a plain JavaScript caller could downgrade a severity in place.
-    const event = classifier.classifyDuplicateSidecar(dupRow({ factState: "EXPLICIT_BLOCK" }));
+    const event = classifier.classifyDuplicateSidecar(dupRow({}));
 
     expect(() => {
       (event as { severity: string }).severity = "normal";
@@ -1087,9 +907,7 @@ describe("attention classifier", () => {
     // `constructor` with a function and classify a heartbeat as an attention event.
     for (const inherited of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
       expect(
-        classifier.classifyEvent(
-          row({ kind: "notify_sent", payload: { kind: inherited }, factState: "KNOWN_WAIT" }),
-        ),
+        classifier.classifyEvent(row({ kind: "notify_sent", payload: { kind: inherited } })),
         `${inherited} was read off the prototype chain`,
       ).toBeNull();
     }
@@ -1107,7 +925,6 @@ describe("attention classifier", () => {
         received_at: minutesAgo(60),
         raw_message: message,
         status: "pending",
-        factState: "KNOWN_WAIT",
       },
       NOW,
       THRESHOLDS,
@@ -1126,7 +943,6 @@ describe("attention classifier", () => {
         received_at: minutesAgo(60),
         raw_message: emoji,
         status: "pending",
-        factState: "KNOWN_WAIT",
       },
       NOW,
       THRESHOLDS,
@@ -1160,7 +976,6 @@ describe("attention classifier", () => {
         received_at: "2026-05-12T11:50:00", // 10 minutes before NOW, in UTC
         raw_message: "?",
         status: "pending",
-        factState: "KNOWN_WAIT",
       },
       NOW,
       THRESHOLDS,
@@ -1178,7 +993,6 @@ describe("attention classifier", () => {
         received_at: "2026-02-30T12:00:00Z",
         raw_message: "?",
         status: "pending",
-        factState: "OBSERVATION_UNAVAILABLE",
       },
       NOW,
       THRESHOLDS,
@@ -1199,7 +1013,6 @@ describe("attention classifier", () => {
           received_at: stamp,
           raw_message: "?",
           status: "pending",
-          factState: "OBSERVATION_UNAVAILABLE",
         },
         NOW,
         THRESHOLDS,
@@ -1218,7 +1031,6 @@ describe("attention classifier", () => {
       row({
         kind: "pr_merged",
         payload: { pr: JSON.parse("1e400") as number, task_id: "t" },
-        factState: "TERMINAL",
       }),
     );
 
@@ -1231,7 +1043,6 @@ describe("attention classifier", () => {
       row({
         kind: "pr_merged",
         payload: { pr: "9".repeat(400), task_id: "t" },
-        factState: "TERMINAL",
       }),
     );
 
