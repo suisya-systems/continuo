@@ -728,6 +728,21 @@ the re-check out is that the premise is exactly the kind that could have overtur
   precisely what the outbox plus an MCP surface serve, and it is emphatically not what
   `broker/server.py` was: an HTTP daemon with bind tokens and a sidecar whose job was pushing into a
   pane. Declining it becomes easier to justify, not harder.
+- **Isolation between agent sessions has to be rebuilt, and this is the premise's real cost.**
+  Today a worker cannot reach another worker's queue, and the mechanism is crude and effective: the
+  endpoint is a per-child process pinned to one recipient by `INTERLOCK_MESSAGEBUS_RECIPIENT`, read
+  once into `EndpointConfig` (`src/messagebus/endpoint.ts:47`, `:155`), with `registry.forRecipient`
+  refusing at startup a recipient no handler serves (`:459-465`). `poll` is pinned to that recipient
+  and the module says so as a property: "a worker cannot pull another recipient's queue through this
+  surface." **A shared localhost MCP service destroys that**, because the isolating fact was one
+  process per worker with its own environment. Every connecting session reaches the same surface, and
+  nothing in the design as written tells the host which recipient a caller may `poll` or `ack`.
+  This is sharpened rather than softened by declining `broker/server.py`, whose bind tokens were one
+  answer to exactly this question. **So the premise adds a requirement it does not supply: per-session
+  authorization on the MCP surface** -- a session-bound token, or a per-session route, or an
+  equivalent -- and it must be settled with the endpoint re-point rather than after it. It is not a
+  hard problem (the host mints the session, so it can mint the token in the same step), but a shared
+  surface with no answer to "who is asking" is a worse position than the stdio child it replaces.
 - **The endpoint's *form* does change, and this is the one substantive consequence.** `endpoint.ts`
   is today a separate stdio MCP child whose lease epoch is fixed at startup from the environment. If
   the host serves MCP over localhost in-process, that child disappears, and with it the specific
@@ -1053,10 +1068,23 @@ can import continuo**, by three independent obstacles, none of them hard -- just
 | **B. Git dependency pinned by sha** | `"@suisya-systems/continuo": "github:suisya-systems/continuo#<sha>"`, no registry. | **Does not work as things stand, and the reason is concrete.** npm builds a git dependency by running its `prepare` script, and continuo has none -- `scripts` has `build`, `pretest` and `check:package` but no `prepare` or `prepack`. So the install produces a package whose `main: ./dist/index.js` points at nothing. Adding `prepare` then collides with `D-0009`'s `--ignore-scripts` install policy, which exists to keep a C++ toolchain off every platform. Choosing B means reopening `D-0009`'s blast radius to avoid superseding `D-0008`, which is the worse trade. |
 | **C. One workspace across both repositories** | An npm workspace or a monorepo move; cadenza resolves continuo from the local tree. | Cheapest to start and it defers both other decisions, which is its whole appeal and its whole problem: it works on a developer's machine and answers nothing about how the application is distributed. Reasonable as a temporary measure **if** the entry says so and names A as the destination; a bad end state, because it makes "which continuo is this running" a property of a checkout. |
 
+**A carries a prerequisite, and it is the same trap B fails on.** Superseding `D-0008` is not by
+itself enough to publish something that works. `dist/` is gitignored (`.gitignore:2`) and `npm
+publish` runs no build, because the scripts that exist are `build`, `pretest` and `check:package` and
+**there is no `prepare` or `prepack`**. So a publish from a fresh checkout ships a tarball whose
+`main` and `exports` point at files that are not in it -- byte for byte the failure B is rejected for.
+The fix is small and already in the repository: **the release path runs `npm run check:package`**,
+which builds and then checks the packed tarball with `publint --strict` and `attw`. Adding a
+`prepack` hook is the alternative; it is *not* the same as adding the `prepare` that B would need,
+because `prepare` is what npm runs when a consumer installs a git dependency and is therefore the
+one that collides with `D-0009`'s `--ignore-scripts` policy. Either way the entry that supersedes
+`D-0008` must name the build step, or the first publish reproduces the defect this section rejected
+another option for.
+
 **Recommendation: A**, with C acceptable as an explicitly temporary bridge while the first lap is
 built. Whichever is taken, the entry should record the two inherited constraints -- the native
-dependency and the Node floor -- because they become the *application's* constraints the moment
-cadenza hosts it.
+dependency and the Node floor -- because they become the *application's* constraints the moment it
+depends on continuo.
 
 **Band: continuo, plus cadenza if premise 2 holds.** Superseding `D-0008` is continuo's either way.
 Extending the import allowlist is cadenza's only if cadenza hosts the application; if it does not,
