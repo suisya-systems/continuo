@@ -239,7 +239,7 @@ control plane, asserted structurally so a leak fails the build the day it is int
 against continuo's module graph before any of the 64 cases mean anything. Continuo has the machinery
 for that already -- `import.meta.glob` package walks (D-0114) and the write-scan (D-0115).
 
-### `gate_item2` -- `candidate-lane` -- 34 cases, **28 ported, 6 deferred (2026-08-29)**
+### `gate_item2` -- `in-scope` (ratified 2026-08-29) -- **ported: 34 of 34 cases**
 
 Downstream of `session`. Every case runs a crash-and-retry through the control
 plane and asserts a durable row rather than an exit code, which is a shape that translates directly.
@@ -251,32 +251,38 @@ Belt started 2026-08-29, D-range `D-08xx` (`D-0801`). Ported to `src/control_pla
 spawn walk -- `async` end to end per D-0801, since it composes the `Promise`-returning S1 verbs
 D-0301 gave continuo's `SessionProvider`).
 
-**28 of 34 cases are translated: 26 `ported`, 2 `adapted`, 0 `not-ported`, 0 waivers**, and the
-remaining 6 are recorded `not-ported` (deferred), across all three of the source's files, one ledger
-per file (D-0019):
+The belt landed in two steps, both covered by the same 2026-08-29 human dispatch GO (via secretary)
+that started it -- the status keeps its `in-scope` spelling across both for the reason the `canary`
+and `session` sections above give: the vocabulary this document is checked against records
+**porting intent** (D-0031), and a declared, ratified follow-on completing the belt does not retract
+the decision to take it on.
+
+**Step one (PR #65): 28 of 34 cases**, 26 `ported` + 2 `adapted`, 0 waivers, across the first two of
+the source's three files. **`test_session_driver_harness.py`'s 6 cases were deferred** to a dedicated
+follow-on task rather than ported as a "ついで" of this belt: that file drives
+`tests.fault_injection.controller` / the S1 adapter `tests.fault_injection.session_driver.SessionAdapter`
+-- the fault-injection harness itself, real SIGKILL and all -- and `fault_injection` was at the time
+its own `candidate-lane` belt being ported concurrently in a sibling worktree (since ratified
+`in-scope` and ported, 98/98, PR #62). What actually blocked the 6 was narrower than "wait for that
+belt to land": `SessionAdapter`'s execution-path methods were a stub that deliberately threw (its own
+header named this as its own declared follow-on, D-0601, on the session belt landing, which had
+happened, PR #61, without the adapter itself being re-bound yet).
+
+**Step two (task `continuo-session-adapter-followon`): the remaining 6, plus `fault_injection`'s own 4
+full-profile `session-start` manifest cases**, landed together -- one `SessionAdapter` real enough for
+one is real enough for both. `SessionAdapter` is re-bound to `src/supervisor.ts` /
+`src/session/claude_cli_provider.ts` over a deterministic fake CLI (its own, not the session belt's S2
+fixture -- it needs a start/exit ledger with real pids and timestamps for `live-processes-per-session`'s
+interval-overlap computation, which the S2 fixture's spawn log does not carry). All 6 are recorded
+`adapted` (D-0801's async-everywhere change, D-0602's budget scaling, and an explicit
+`try/finally { await controller.teardown() }` in place of the source's context manager, on top of the
+translation itself).
 
 | source file | cases | ledger |
 |---|---|---|
 | `tests/gate_item2/test_orchestrator_walk.py` | 23 | `parity/gate_item2.orchestrator-walk.ledger.json` |
 | `tests/gate_item2/test_mediated_real_provider.py` | 5 | `parity/gate_item2.mediated-real-provider.ledger.json` |
 | `tests/gate_item2/test_session_driver_harness.py` | 6 | `parity/gate_item2.session-driver-harness.ledger.json` |
-
-**`test_session_driver_harness.py`'s 6 cases are deferred to a dedicated follow-on task**, ratified by
-human decision 2026-08-29 (via secretary). It drives `tests.fault_injection.controller` / the S1
-adapter `tests.fault_injection.session_driver.SessionAdapter` -- the fault-injection harness itself,
-real SIGKILL and all. `fault_injection` is its own `candidate-lane` belt below, being ported
-concurrently in a sibling worktree; what actually blocks these 6 is narrower than "wait for that belt
-to land" -- `SessionAdapter`'s execution-path methods are a stub that deliberately throws (its own
-header names this as its own declared follow-on, D-0601, on the session belt landing, which has
-happened, PR #61, without the adapter itself being re-bound yet). The follow-on task's scope is
-therefore: re-bind `SessionAdapter` to `src/supervisor.ts` / `src/session/claude_cli_provider.ts`, land
-these 6 node ids, and land `fault_injection`'s own 4 full-profile session-start manifest cases together
--- one task, since a `SessionAdapter` real enough for one is real enough for both. A faithful draft of
-all 6 cases against the current `controller.ts` / `manifest.ts` APIs is held at
-`tmp/session-driver-harness.draft.test.ts` (gitignored) on `feat/continuo-gate-item2-port`, as a
-handoff asset; see that ledger's per-entry reason for its exact provenance and the rework it expects.
-The belt stays `candidate-lane` rather than moving to `in-scope` until those 6 (plus `fault_injection`'s
-own 4) land.
 
 ### `broker` -- `retarget` -- 54 cases collected, 4 further modules not collected
 
@@ -471,8 +477,7 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29) | 1,681 |
-| `candidate-lane` | `gate_item2` | 34 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29) | 1,715 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
