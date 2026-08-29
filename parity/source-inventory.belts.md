@@ -264,7 +264,7 @@ The *technique* is worth keeping and continuo already uses it -- `test/contract/
 polices carried prose the same way -- so this is a case of the property being held natively rather
 than of it being dropped.
 
-### `gate_item11` -- `retarget` -- 64 cases
+### `gate_item11` -- `retarget` -- 64 cases -- **ported so far: 51 of 64 cases**
 
 Belt start ratified at the human gate on 2026-08-30 (D-0034), D-range `D-10xx`. `D-0504`'s testkit
 extraction is a precondition, run first as its own PR (`PR-0`). `src/index.ts`'s two re-exported
@@ -272,6 +272,18 @@ vocabularies are carried as an allowlist exception to the leak check (a subpath-
 falsifier-bearing future move, not this belt's). The thirteen `test_suite_runs_unchanged` cases are
 ported by a scoped subprocess double-run, with a spike required before the belt commits to that
 shape. The status keeps its `retarget` spelling; it moves to `in-scope` at completion.
+
+**Part 1 (task `continuo-gate-item11-p1`): 51 of 64 cases**, across `test_no_provider_detail_leaks.py`
+(35), `test_registry_availability.py` (4) and `test_substitution_scenarios.py` (12) -- 0 `ported`,
+48 `adapted`, 3 `not-ported`, 0 waivers. `test_suite_runs_unchanged.py`'s 13 cases (the double-suite-run
+measurement) are the declared follow-on named above; see D-1001.
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/gate_item11/test_no_provider_detail_leaks.py` | 35 | `parity/gate_item11.no-provider-detail-leaks.ledger.json` |
+| `tests/gate_item11/test_registry_availability.py` | 4 | `parity/gate_item11.registry-availability.ledger.json` |
+| `tests/gate_item11/test_substitution_scenarios.py` | 12 | `parity/gate_item11.substitution-scenarios.ledger.json` |
+| `tests/gate_item11/test_suite_runs_unchanged.py` | 13 | not yet started -- declared follow-on, D-1001 |
 
 The property is real and worth having: no session-backend detail may leak into the
 control plane, asserted structurally so a leak fails the build the day it is introduced. But

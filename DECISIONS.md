@@ -124,6 +124,7 @@ spaces distinct.
 | D-0901 | The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated | accepted |
 | D-0902 | A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's | accepted |
 | D-0903 | The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes | accepted |
+| D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 
 ---
 
@@ -7178,3 +7179,89 @@ amended -- the port does not get to author that mapping either way.
 **Source.** Task `continuo-attention-a1`, 2026-08-29, porting
 `tests/attention/test_classifier.py` (61 cases) from interlock `65f36c5`, under `D-0034`'s
 ratified constraints.
+
+---
+
+## D-1001 -- The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on
+
+**Context.** Gate item 11 (interlock issue `#20`, `ACCEPTANCE.md` section 1) claims that swapping
+the session backend costs the control plane nothing: no provider detail may leak into it, and the
+control-plane suite runs unmodified against either provider. `tests/gate_item11/` measures that in
+64 node ids across four files. D-0034 ratified the belt's start (2026-08-30) and allocated `D-10xx`.
+This task is the belt's first PR: the 51 cases in `test_no_provider_detail_leaks.py` (35),
+`test_registry_availability.py` (4) and `test_substitution_scenarios.py` (12). The remaining 13
+(`test_suite_runs_unchanged.py`) are a declared follow-on, Decision 3 below.
+
+**Decision 1 -- AST scanning re-derives the source's two leak predicates against continuo's module
+graph, using the shared `importedModules` primitive (D-0504).** The source's
+`_names_a_session_backend` and `_knows_a_session_backend` ask two different questions over Python's
+dotted module names: the first has no exception for the S1 contract module
+(`claude_org_runtime.session.provider`) and is used only over the control-plane package and its own
+suite; the second excludes the contract and is used only over the whole of `src/` and the whole of
+`tests/`, because `src/supervisor.ts`'s join between session and the control plane is a cost D-0009
+accepts. Both are ported as path-containment predicates (`namesASessionBackend`,
+`knowsASessionBackend` in `test/gate_item11/no-provider-detail-leaks.test.ts`) over
+`test/testkit/ast.ts`'s `importedModules`, which resolves a relative specifier to an absolute path
+rather than leaving a dotted name to compare by prefix -- the same primitive
+`test/messagebus/import-graph.test.ts`, `test/canary/structural.test.ts` and
+`test/secretary/structural.test.ts` already share (D-0504). The two directory walks the source
+parametrizes over (`src/control_plane/`'s `rglob("*.py")`, `tests/control_plane/`'s) are ported as
+listings, not hand-written lists, following the same precedent
+`test/messagebus/import-graph.test.ts` set: a `.ts` file with no `.py` analogue (`connection.ts`,
+`python_json.ts`, `python_repr.ts`, `refusals.ts`, `spike.ts` under `src/control_plane/`;
+`differential-oracle.test.ts` under `test/control_plane/`) still gets a case, declared target-only in
+`parity/gate_item11.no-provider-detail-leaks.ledger.json`; a `.py` file with no `.ts` analogue
+(`__init__.py` under `src/control_plane/`, `src/control_plane/migrations/` and
+`tests/control_plane/`) is `not-ported` there, with no coverage lost since the property is checked
+over every file each directory actually contains.
+
+**Decision 2 -- `src/index.ts`'s dual re-export is an allowlisted exception to
+`test_no_shipped_module_knows_both_a_provider_and_the_control_plane`, ratified here with its
+falsifier.** interlock's per-directory `__init__.py` package layout never produces a single module
+that re-exports both a session backend and the control plane -- the source's own version of this
+test finds nothing. continuo ships one package entry point (D-0002, `exports` restricted to `.`), so
+`src/index.ts` is the one barrel that must re-export everything: it re-exports `./control_plane/*.js`
+directly and `./session/index.js`, which itself re-exports both `LocalProcessSessionProvider` (S3)
+and `ClaudeCliSessionProvider` (S2). Measured: without an exception, `src/index.ts` is the only file
+under `src/` this scan finds, and it is a structural consequence of D-0002 rather than a leak of
+knowledge into an implementation module -- nothing in `src/index.ts` acts on a provider's state or
+composes it with control-plane logic, it only re-exports both vocabularies to the same top level.
+The exception is named explicitly in `test/gate_item11/no-provider-detail-leaks.test.ts`
+(`ALLOWED_BARRELS`) and recorded in `parity/gate_item11.no-provider-detail-leaks.ledger.json`'s entry
+for that case, rather than narrowed into the scan itself, so it stays visible to a reviewer and to a
+future case that adds a second barrel.
+
+**Falsifier.** A subpath-exports split (`./control_plane`, `./session` as two separate entry points
+under `exports`, in place of today's single `.`) that let a provider swap touch only the `./session`
+subpath -- never `src/index.ts`'s control-plane half -- would remove the structural reason for this
+exception, and the day such a split lands, this exception should be revisited rather than carried
+forward by inertia. Splitting exports is not this task's move: D-0002 is a separate, already-ratified
+decision, and nothing here proposes revisiting it.
+
+**Decision 3 -- `test_suite_runs_unchanged.py`'s 13 cases are a declared follow-on, not silently
+dropped.** The source measures item 11's exit condition operationally: run the control-plane suite
+twice, once under `-p tests.gate_item11.provider_plugin` (a live session bound before collection) and
+once without, and diff the outcomes, the collected test ids and a SHA-256 of every collected file.
+Porting that needs a scoped subprocess double-run of continuo's own suite -- spawning `vitest run`
+twice, once with an environment variable a `globalSetup` reads to bind a live provider before the
+suite starts, and comparing the two JSON reporter outputs -- which is a different shape from
+anything this belt's first three files needed, and CLAUDE.md's own belt guidance requires a spike
+before that shape is committed to. It is out of this task's scope; `parity/source-inventory.belts.md`
+records it as the belt's declared next PR, and `gate_item11` stays `retarget` (not `in-scope`) until
+that PR lands and the belt reaches 64/64.
+
+**Totals.** `parity/gate_item11.no-provider-detail-leaks.ledger.json` records 35 cases (0 `ported`,
+32 `adapted`, 3 `not-ported`, 0 waivers). `parity/gate_item11.registry-availability.ledger.json`
+records 4 (4 `ported`). `parity/gate_item11.substitution-scenarios.ledger.json` records 12 (0
+`ported`, 12 `adapted`, since every S1 verb is `Promise`-returning per D-0301) -- the six `[S2]`
+cases are `conditionally_collected`: `vitest list` omits a `skipIf`-gated case entirely where pytest
+still collects a skipped node id, gated on whether the real `claude` CLI is on `PATH` (the same
+premise `parity/gate_item2.mediated-real-provider.ledger.json`'s two capability gates document).
+
+**Falsifier (Decision 3).** If the spike for the subprocess double-run shape shows it does not scale
+or does not reproduce the source's comparison faithfully, the belt's approach to
+`test_suite_runs_unchanged.py` is what is wrong, not this task's scoping decision to defer it.
+
+**Source.** Task `continuo-gate-item11-p1`, 2026-08-29, porting
+`tests/gate_item11/test_no_provider_detail_leaks.py`, `test_registry_availability.py` and
+`test_substitution_scenarios.py` from interlock `65f36c5`, under the belt start D-0034 ratified.

@@ -142,9 +142,24 @@ const LEDGERS = [
   "parity/fault-injection.import-graph.ledger.json",
   "parity/fault-injection.manifest.ledger.json",
   "parity/fault-injection.protocol.ledger.json",
-  // lane J -- attention, sub-belt A1 (facts). The subsystem ports in three
+  // lane J -- gate_item11 (item 11's structural leak checks and registry,
+  // D-1001, D-range D-10xx). Part 1 of the belt: 51 of 64 source cases across
+  // the two structural files and the substitution-scenarios file below. The
+  // remaining 13 (test_suite_runs_unchanged.py, the double-suite-run
+  // measurement) are a declared follow-on -- see D-1001.
+  "parity/gate_item11.no-provider-detail-leaks.ledger.json",
+  "parity/gate_item11.registry-availability.ledger.json",
+  "parity/gate_item11.substitution-scenarios.ledger.json",
+  // lane K -- attention, sub-belt A1 (facts). The subsystem ports in three
   // sub-belts sharing one D-range (D-0034); A1 is `D-0901`..`D-0903`. One
   // ledger per source test file, as everywhere else.
+  //
+  // The letter is `K` and was drafted as `J`: gate_item11 above was reaching
+  // for the same one concurrently and landed on `main` first (PR #69), so this
+  // lane takes the letter that was actually free at merge time. That is the
+  // rule the session and fault_injection blocks above state, exercised again --
+  // and it is worth reading this list before picking, because assuming a letter
+  // is exactly how each of these collisions happened.
   //
   // `parity/attention.broker-journal-contract.ledger.json` is deliberately NOT
   // in this list, and this comment is where that is said rather than being left

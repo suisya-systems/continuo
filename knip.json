@@ -5,5 +5,5 @@
   "ignoreExportsUsedInFile": true,
   "tags": ["-parityonly"],
   "vitest": false,
-  "ignoreBinaries": ["bwrap"]
+  "ignoreBinaries": ["bwrap", "where"]
 }
