@@ -33,17 +33,27 @@
  *   never creates, and it **is** idempotent -- a database already at head has no
  *   pending step, so a second run applies nothing and still exits 0.
  * - `verify` is `openProductionControlPlane`, opened and immediately closed.
- *   Section 6.1 of the design names `verifyProductionDatabase` for this verb,
- *   and that function is one half of the answer: it holds a database to the
- *   production standard but deliberately does **not** ask whether the database
- *   is *behind* this build, because migrating has to skip that question.
- *   `openProductionControlPlane` is that standard plus the at-head check, which
- *   is the question an operator asks before pointing a process at a file --
- *   "will this build's startup accept it" -- and it is the existing behaviour a
- *   verb must not restate in its own terms. So `verify` refuses an absent file,
- *   a file that is not a production database, a file whose ledger disagrees with
- *   this build's steps, and a file that is behind head; and it says which by
- *   passing the migrator's own refusal message through.
+ *   The question it answers is "will this build's startup accept this database",
+ *   so it refuses an absent file, a file that is not a production database, a
+ *   file whose ledger disagrees with this build's steps, and a file that is
+ *   *behind* this build's steps -- saying which by passing the migrator's own
+ *   refusal message through.
+ *
+ *   **The last of those four is why the entry point is the opener and not
+ *   `verifyProductionDatabase`.** That function holds a database to the
+ *   production standard and deliberately stops short of asking whether the file
+ *   is behind, because that question belongs to `refuseUnlessAtHead` and
+ *   migrating has to skip it. A `verify` built on the standard alone would
+ *   therefore report a database this build cannot open as fine, which is the one
+ *   answer that makes the verb useless for the thing it exists for.
+ *   `openProductionControlPlane` is that same standard **plus** the at-head
+ *   check, and it is reached rather than reassembled here so that the verb and
+ *   the startup it stands in for cannot drift apart.
+ *
+ *   The at-head half is pinned by `test/control_plane/db-cli.test.ts`'s
+ *   `refuses a database behind this build rather than migrating it`. It is the
+ *   half that a change of entry point would drop silently: every other property
+ *   of `verify` survives such a change, and the exit code alone would not move.
  *
  * **A refusal is an operator-facing line, not a stack trace.** Every entry point
  * below raises the `ControlPlaneRefusal` family for the states these verbs exist
