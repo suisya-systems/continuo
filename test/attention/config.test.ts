@@ -519,7 +519,7 @@ describe("attention config", () => {
   });
 
   test("the placeholder allowlist is the design's six names (target-only)", () => {
-    // Nothing in A2 reads this set -- `notify.render_text` is A3's -- so without a case here the
+    // Nothing in A2 reads this list -- `notify.render_text` is A3's -- so without a case here the
     // constant could be emptied or misspelled and the whole sub-belt would stay green.
     expect([...ALLOWED_PLACEHOLDERS].sort()).toEqual([
       "kind",
@@ -529,5 +529,42 @@ describe("attention config", () => {
       "task_id",
       "worker",
     ]);
+  });
+
+  test("the placeholder allowlist cannot be mutated by any route (target-only)", () => {
+    // `Object.freeze(new Set(...))` is a no-op for the only property anyone wants from it, and the
+    // seal is what stops a reader looking further. A3's `render_text` reads this on EVERY
+    // notification, so one `delete` breaks template validation for the life of the process.
+    //
+    // Every route is exercised, including the two the repository's own `FrozenSet` class does NOT
+    // close -- `Set.prototype.add.call` and `Set.prototype.delete.call`, which reach the internal
+    // slot past an overridden mutator. A frozen array has no such slot, and this case is where
+    // that claim is checked rather than asserted in a comment.
+    const before = [...ALLOWED_PLACEHOLDERS];
+    // Asserted FIRST, and it is not a type-checker's job done twice. A probe caught this case
+    // going GREEN under the exact regression it exists to prevent: reverted to
+    // `Object.freeze(new Set(...))`, every array route below throws a `TypeError` for the wrong
+    // reason -- `push` is not a function on a `Set` -- while `.delete("pr")` would have gone
+    // straight through. The guarantee rests on this being a frozen ARRAY, so the case says so
+    // (`docs/test-translation-conventions.md` rule 10).
+    expect(Array.isArray(ALLOWED_PLACEHOLDERS)).toBe(true);
+    // The two routes that mutate a "frozen" Set, spelled here so a reversion cannot pass by
+    // having no such method: on a frozen array both are `undefined` and the call throws.
+    const asSet = ALLOWED_PLACEHOLDERS as unknown as Set<string>;
+    expect(() => asSet.delete("pr")).toThrow(TypeError);
+    expect(() => asSet.add("evil")).toThrow(TypeError);
+    const mutable = ALLOWED_PLACEHOLDERS as string[];
+    const routes: readonly (readonly [string, () => unknown])[] = [
+      ["push", () => mutable.push("evil")],
+      ["Array.prototype.push.call", () => Array.prototype.push.call(mutable, "evil")],
+      ["Array.prototype.splice.call", () => Array.prototype.splice.call(mutable, 0, 1)],
+      ["index assignment", () => (mutable[0] = "evil")],
+      ["length truncation", () => (mutable.length = 0)],
+      ["pop", () => mutable.pop()],
+    ];
+    for (const [label, mutate] of routes) {
+      expect(mutate, label).toThrow(TypeError);
+    }
+    expect([...ALLOWED_PLACEHOLDERS]).toEqual(before);
   });
 });

@@ -7414,7 +7414,25 @@ this port *disclose* that difference rather than repairing it, and that would ha
 here too -- except that the config decode two lines above had already been re-raised as
 `PyValueError` on exactly this argument, so the file answered one question two ways. That makes it
 a fourth instance of the shape above rather than a new judgement call, and consistency inside one
-function is the cheaper half to fix. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+function is the cheaper half to fix.
+
+**A PR review found a fifth instance of the same shape, in a constant rather than a function.**
+`ALLOWED_PLACEHOLDERS` was `Object.freeze(new Set(...))`, which seals an object's own properties
+while a `Set`'s contents live in an internal slot: `.delete("pr")` and `.add("evil")` both
+succeeded, measured, and A3's `render_text` reads this constant on every notification. The
+repository's own `FrozenSet` (`src/session/provider.ts`) was evaluated and **not** reused, measured
+rather than assumed -- it overrides the mutators and still lets `Set.prototype.add.call` reach the
+internal slot, which is precisely the route a parallel lane reported as a P1, and its own header
+discloses the hole. A frozen **array** has no internal slot to reach: six mutation routes including
+the prototype-call ones all throw. The weaker structure is the stronger guarantee, and
+`VALID_SOUND_MODES` one declaration below was already a frozen array standing in for a source
+`frozenset`; the whole API cost is `.includes(name)` where a `Set` would have taken `.has(name)`.
+
+**The case written to pin it was itself green under the regression it guards, on the first draft**
+-- restored to a frozen `Set`, every array route throws for the wrong reason (`push` is not a
+function there) while `.delete` goes through. It now asserts `Array.isArray` first. That is rule 10
+arriving inside the fix for a rule-9 defect, and it is worth recording because the belt's own habit
+of probing every guard is the only thing that caught it. A1 wrote both privately inside `src/attention/classifier.ts`, which was
 right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
 CPython function inside one directory is the drift shape
 `docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written

@@ -78,16 +78,40 @@ export type SoundMode = "off" | "urgent-only" | "all";
 /**
  * Placeholder allowlist from interlock's design section 6, carried unchanged.
  *
- * Anything outside this set triggers a warning and a fallback to the runtime default template --
+ * Anything outside this list triggers a warning and a fallback to the runtime default template --
  * the watcher must never crash on a misspelled template. **The enforcement is not here.** The
  * source validates placeholders in `notify.render_text` and says why in `load_config`'s own
  * docstring: validation happens once per event, not once at config-load time, and a typo must not
- * block the watcher from starting. `notify.py` is A3's, so the consumer of this set arrives with
- * that sub-belt and the set itself sits here because that is where the source keeps it.
+ * block the watcher from starting. `notify.py` is A3's, so the consumer of this list arrives with
+ * that sub-belt and the list itself sits here because that is where the source keeps it.
+ *
+ * **A frozen ARRAY, not `Object.freeze(new Set(...))`, and the difference is the whole point.**
+ * `Object.freeze` seals an object's own *properties*; a `Set`'s contents live in an internal slot,
+ * so a frozen `Set` keeps accepting `add`, `delete` and `clear`. It reads as immutability and is
+ * not, which is worse than a bare `new Set`, because the seal is exactly what stops a reader
+ * looking further. Measured on this constant: `.delete("pr")` succeeded and left five entries, and
+ * `.add("evil")` succeeded. A1's belt hit the same trap and `src/session/provider.ts` carries a
+ * `FrozenSet` class for it -- **which is not reused here, and the reason is measured rather than
+ * assumed**: that class overrides the mutators, so it refuses `f.add("evil")` and still lets
+ * `Set.prototype.add.call(f, "evil")` and `Set.prototype.delete.call(f, "pr")` straight through to
+ * the internal slot, exactly as its own header discloses. A frozen array has no internal slot to
+ * reach: `push`, `Array.prototype.push.call`, `splice` via the prototype, an index assignment and a
+ * `length` truncation all throw `TypeError`, measured, and the contents are unchanged after all
+ * five. So the weaker structure is the stronger guarantee here, and reusing the existing class
+ * would have carried the hole cadenza's own lane found as a P1.
+ *
+ * The cost is that a membership test is `.includes(name)` rather than `.has(name)`; that is the
+ * whole of the API change, and `VALID_SOUND_MODES` one declaration below is already a frozen array
+ * standing in for a source `frozenset` for its own stated reason.
  */
-export const ALLOWED_PLACEHOLDERS: ReadonlySet<string> = Object.freeze(
-  new Set(["task_id", "worker", "kind", "status", "pr", "summary"]),
-) as ReadonlySet<string>;
+export const ALLOWED_PLACEHOLDERS: readonly string[] = Object.freeze([
+  "task_id",
+  "worker",
+  "kind",
+  "status",
+  "pr",
+  "summary",
+]);
 
 /**
  * The three sound modes, in the order the refusal message prints them.
