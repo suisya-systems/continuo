@@ -239,15 +239,79 @@ inventory and nothing may be invented.
 Whatever continuo decides about them, it decides after interlock does. They are `retarget` upstream
 first.
 
-### `messagebus` -- `in-scope` (ratified 2026-08-28) -- 43 cases
+### `messagebus` -- `in-scope` (ratified 2026-08-28) -- **ported: 43 of 43 cases**
 
-Ratified into scope at the human gate; belt started 2026-08-28, D-range `D-05xx`.
+Ratified into scope at the human gate on 2026-08-28; belt started 2026-08-28 and **completed**
+2026-08-29, D-range `D-05xx` (`D-0501`..`D-0504` used).
+
+The status keeps its `in-scope` spelling for the reason the `canary` and `session` sections give:
+the vocabulary this document is checked against records **porting intent** (D-0031), and finishing a
+belt does not retract the decision to take it on.
 
 A durable-messaging belt, and the destination the five quarantined broker modules
 above are pointed at. `tests/messagebus/` drives `claude_org_runtime/messagebus/`: the bus, an
 endpoint, carried specifications, a stale-readout case, and an import-graph guard. It is small now
 and will not stay small, which is an argument for porting it early rather than late -- continuo's
 `control_plane/outbox.ts` is already the at-most-once half of the same problem.
+
+Ported to `src/messagebus/` (`bus.ts`, `endpoint.ts`, `index.ts`) -- three modules and no data file,
+which is itself the belt's headline decision.
+
+**All 43 cases are translated: 18 `ported`, 23 `adapted`, 2 `not-ported`, 0 waivers**, across five
+ledgers -- one per source file, per D-0019:
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/messagebus/test_import_graph.py` | 16 | `parity/messagebus.import-graph.ledger.json` |
+| `tests/messagebus/test_messagebus.py` | 10 | `parity/messagebus.bus.ledger.json` |
+| `tests/messagebus/test_endpoint.py` | 8 | `parity/messagebus.endpoint.ledger.json` |
+| `tests/messagebus/test_carried_specifications.py` | 7 | `parity/messagebus.carried-specifications.ledger.json` |
+| `tests/messagebus/test_stale_readout.py` | 2 | `parity/messagebus.stale-readout.ledger.json` |
+
+One further target-only case sits beside them -- a probe that writes a file naming every route
+around the import scan (a type-only import, an `export ... from`, a `require()` and a dynamic
+`import()` inside function bodies) and asserts the scan sees all four and judges all four session
+edges. The source's import-graph file has no probe; this port had to rewrite the scan in another
+language with two extra escape routes in it, so the machinery is defended in the target the way
+`canary` and `secretary` defend theirs.
+
+**The two `not-ported` cases are both parametrizations over a file that does not exist here.** The
+suite-side confinement check is parametrized over a **directory listing**, and interlock's
+`tests/messagebus/` holds eight files where continuo's `test/messagebus/` holds six: `__init__.py`
+is Python's package marker, and `conftest.py` is pytest's fixture module, whose two fixtures live in
+`_env.ts` beside the module they were built on. Neither has a TypeScript counterpart to name, and
+inventing an id for one would put a case in the ledger that asserts nothing. **No coverage is lost:**
+the listing is still a listing, so every file the directory actually holds is scanned, and a file
+added later gets a case -- and an unmapped-target failure until it gets a ledger entry too.
+
+**The belt's headline decision is D-0501: this package adds no delivery store.** interlock's own
+`bus.py` opens by defining itself as a thin facade that uses the S7 outbox API *as found*, and that
+constraint is what makes the belt small. `send` is a registry lookup then `Outbox.enqueue`; `poll` is
+`Outbox.due` filtered to one recipient, each row re-read and then `Outbox.attempt`; `ack` is a
+recipient-boundary check then `Outbox.recordAck`. Retry counting, the delivery state machine, lease
+fencing, destination dedup and ack persistence stay in `src/control_plane/outbox.ts` -- already 74
+ported cases of exactly those -- because two answers to a delivery question is how a message gets
+delivered twice or not at all. The package therefore ships no table, no migration and no DDL, and
+the import-graph walk fails on a non-TypeScript file appearing in it rather than skipping one.
+
+**The one xfail in interlock's entire 2,199-case baseline is in this belt** and is carried as one:
+`test_a_send_to_a_registered_alias_reaches_the_canonical_recipient` is a v1 invariant the new
+contract does not satisfy yet, landed failing through `test/testkit/marks.ts`'s strict `xfail` --
+the helper written for a case no belt had met until now -- with its approval and its reason in
+`parity/messagebus.carried-specifications.ledger.json`.
+
+**What item 6 asked for in CI is here as a running test.** `test/messagebus/import-graph.test.ts` is
+the static assertion that no messagebus module takes a dependency edge to a session backend, and its
+mirror -- that only the stale-readout case in this suite knows the session vocabulary, and that it
+reaches the control plane only through the suite's helpers. The stale-readout case itself drives a
+**real** stub-provider child process into both stalenesses interlock names (a session id whose child
+is gone; a `readState` that answers "could not observe") and asserts the delivery transcript is
+*equal* to the one recorded with no session backend in the process at all -- not similar, equal.
+
+**One piece of open work, recorded rather than done: D-0504.** This is the third structural AST scan
+in the repository and the third copy of `importedModules`. `test/testkit/` is frozen and a change to
+it is its own PR (`docs/test-translation-conventions.md`), so the extraction is written down as the
+right end state and deliberately left for that PR rather than smuggled into a belt.
 
 ### `scrub` -- `not-porting` (ratified 2026-08-28) -- 20 cases
 
@@ -340,7 +404,7 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `session` (**ported** 2026-08-29), `messagebus` (ratified 2026-08-28), `secretary` (**ported** 2026-08-29) | 1,583 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29) | 1,583 |
 | `candidate-lane` | `fault_injection`, `gate_item2` | 132 |
 | `retarget` | `attention`, `gate_item11`, `broker` | 312 |
 | `decision-pending` | `curator`, `migrate` | 82 |

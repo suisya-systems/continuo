@@ -1,0 +1,152 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "messagebus",
+      "collected": 43,
+      "inventory": "parity/source-inventory/messagebus.all.txt",
+      "note": "The S8 durable-messaging belt, interlock tests/messagebus, 5 files. One ledger per source file (D-0019). The belt's whole design constraint is that it adds NO delivery store: interlock's own bus.py opens by defining itself as a thin facade that uses the S7 outbox API as found, so send / recipient-filtered poll / ack / envelope / endpoint is the entire owned surface and retry counting, delivery state transitions, lease fencing, destination dedup and ack persistence all stay in src/control_plane/outbox.ts. The single xfailed case in the whole 2,199-case source baseline lives in this belt (tests/messagebus/test_carried_specifications.py's recipient-aliasing specification)."
+    },
+    "file": {
+      "path": "tests/messagebus/test_endpoint.py",
+      "collected": 8,
+      "inventory": "parity/source-inventory/messagebus.test_endpoint.txt",
+      "note": "Two layers on purpose: the in-process cases drive `Endpoint.handle` directly so every JSON-RPC branch is reachable without process management, and the last two put an actual wire under the claim. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Measured 2026-08-29 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/messagebus/ -p no:cacheprovider`: 42 passed, 1 xfailed."
+    }
+  },
+  "target": {
+    "test_file": "test/messagebus/endpoint.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`bus.send(message_id=..., recipient=..., payload=..., dedup_key=..., now_ms=..., epoch=..., run_id=...)`, `bus.poll(recipient, now_ms=..., epoch=..., clock=...)`, `bus.ack(message_id, now_ms=..., recipient=...)` -- Python keyword arguments in snake_case",
+        "to": "the same three verbs taking a single options object in camelCase: `send({messageId, recipient, payload, dedupKey, nowMs, epoch, runId})`, `poll(recipient, {nowMs, epoch, clock})`, `ack(messageId, {nowMs, recipient})`",
+        "why": "The shape `src/control_plane/outbox.ts` already established for the same arguments, so the facade and the module it fronts are called the same way. JavaScript has no keyword arguments; an options object is the repository's settled substitute, and matching the outbox matters more here than anywhere because this class exists to be a thin skin over it. Systematic and therefore not repeated per case.",
+        "affects": "every case that drives the bus"
+      },
+      {
+        "from": "`@dataclass(frozen=True) DeliveredEnvelope` with snake_case fields, and `dataclasses.asdict(envelope)` at the wire",
+        "to": "a frozen class with camelCase fields, and an explicit `envelopeToWire` in `endpoint.ts` that spells the snake_case wire keys out",
+        "why": "The TypeScript surface is camelCase like the rest of the port, but the WIRE is not the API: `message_id` is the argument name the `ack` tool's own `inputSchema` declares, and an MCP client configured against interlock already parses those keys. So the rename stops at the transport boundary, and it is written out at that boundary rather than falling out of a serializer -- a serializer would make the wire contract a side effect of a naming convention.",
+        "affects": "the envelope and the endpoint's two tool payloads"
+      },
+      {
+        "from": "`pytest.raises(ValueError)` -- Python spells both the outbox's usage errors and the bus's own recipient-boundary refusal as the one builtin",
+        "to": "`expectRefusal(..., OutboxUsageError)` for the outbox's, and `expectRefusal(..., MessageBusUsageError)` for the bus's own",
+        "why": "`docs/test-translation-conventions.md` records why `expectRefusal` asserts the class as well as the message: a refusal family whose members differ only by message stays green while the taxonomy a caller acts on is wrong. Python collapses these two into `ValueError` because that is the builtin available; keeping them collapsed here would mean an ack refused by the WRONG layer still passed the test. The outbox's own refusals keep reaching callers unchanged, which is the source's stated 'exceptions are the outbox's own' doctrine.",
+        "affects": "the two ack-refusal cases and the endpoint's tool-error case"
+      },
+      {
+        "from": "`python -m claude_org_runtime.messagebus.endpoint` as the child, reached through `PYTHONPATH`",
+        "to": "`node dist/messagebus/endpoint.js` as the child, with an `isEntryPoint()` guard in the module",
+        "why": "A TypeScript module has no `-m`, and the module a worker's MCP configuration launches is the built one. The guard is `src/cli.ts`'s, `realpathSync` on both sides for the reason recorded there: a symlinked launcher makes the URL form disagree with `process.argv[1]`.",
+        "affects": "the two end-to-end cases"
+      },
+      {
+        "from": "`json.dumps(payload, ensure_ascii=True)` for every line the server writes",
+        "to": "`pythonJsonDocumentSorted` from `src/control_plane/python_json.ts`",
+        "why": "`JSON.stringify` does not escape non-ASCII, and the endpoint's own docstring calls its framing ASCII-safe -- which is also `docs/cli-output-policy.md`'s rule for anything that can reach a cp932 console. Rather than write a fourth JSON renderer (D-0017 rule 4: one renderer), the endpoint uses the transcription the control plane already carries. It sorts object keys, which the source's call does not; JSON object key order carries no meaning and every consumer here parses rather than compares text.",
+        "affects": "every line the endpoint writes"
+      },
+      {
+        "from": "`for raw in stdin` over `sys.stdin.buffer`, decoding each line with `raw.decode('utf-8')` inside a `try`",
+        "to": "a `data`/`end` listener pair over the raw byte stream, splitting on `0x0a` and decoding each line with `new TextDecoder('utf-8', {fatal: true})`",
+        "why": "Bytes rather than a decoded stream, deliberately: Node's default decoding turns invalid UTF-8 into replacement characters, so the -32700 `line is not UTF-8` branch would become unreachable and a client that mangled its encoding would get silence. The trailing partial line is handled on `end`, as Python's iteration handles it.",
+        "affects": "the transport"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None: every collected test in this file translates one source case."
+    }
+  },
+  "totals": {
+    "source_cases": 8,
+    "ported": 5,
+    "adapted": 3,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_initialize_declares_a_tool_surface",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > initialize declares a tool surface",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_poll_then_ack_over_the_tool_surface",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > poll then ack over the tool surface",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_the_drop_first_poll_fault_loses_the_response_not_the_message",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > the drop-first-poll fault loses the response, not the message",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_a_notification_never_gets_a_response",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > a notification never gets a response",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_malformed_params_are_answered_not_fatal",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > malformed params are answered, not fatal",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": null,
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_a_refusal_surfaces_as_a_tool_error_not_a_crash",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > a refusal surfaces as a tool error, not a crash",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- a refusal comes back as a tool-level error carrying the exception's class name and message, the transport stays up, and an unknown tool is a -32602 rather than an isError. Adapted in one word: the text the source looks for is `ValueError`, because that is what its outbox raises for an ack of an undelivered message; continuo's outbox names that refusal `OutboxUsageError`, so the case asserts the class continuo actually has. The rendering itself is unchanged -- `${constructor.name}: ${message}` is the source's `f\"{type(exc).__name__}: {exc}\"`, read off the constructor rather than `error.name` because an Error subclass that does not set `name` inherits `\"Error\"` and the whole point of the text is to say which refusal this was.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_an_unregistered_recipient_refuses_to_start",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > an unregistered recipient refuses to start",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same case: a real child process on a real wire, driven over line-delimited JSON-RPC on stdio. Adapted because the child is a different thing. The source runs `python -m claude_org_runtime.messagebus.endpoint` with `PYTHONPATH` pointed at its own `src/`; there is no `-m` for a TypeScript module, and running the `.ts` source would need a loader the shipped package does not have. The child here is `node dist/messagebus/endpoint.js` -- the BUILT module, which is what a worker's MCP configuration would actually launch, and the same choice `test/measurement/cli.test.ts` makes for `dist/cli.js`. `npm run pretest` builds it and the case asserts its presence with a message that says so, rather than failing obscurely. The assertion is unchanged: exit status 2 and `no registered handler` on stderr.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_endpoint.py::test_the_acceptance_sequence_end_to_end_over_stdio",
+      "target_id": "test/messagebus/endpoint.test.ts::the worker-outbound MCP endpoint > the acceptance sequence end to end over stdio",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same case: a real child process on a real wire, driven over line-delimited JSON-RPC on stdio. Adapted because the child is a different thing. The source runs `python -m claude_org_runtime.messagebus.endpoint` with `PYTHONPATH` pointed at its own `src/`; there is no `-m` for a TypeScript module, and running the `.ts` source would need a loader the shipped package does not have. The child here is `node dist/messagebus/endpoint.js` -- the BUILT module, which is what a worker's MCP configuration would actually launch, and the same choice `test/measurement/cli.test.ts` makes for `dist/cli.js`. `npm run pretest` builds it and the case asserts its presence with a message that says so, rather than failing obscurely. A second adaptation is in the client: `process.stdout.readline()` blocks in Python, and Node's stdio is event-driven, so the test client buffers lines and hands back a promise. The source's `assert line, \"endpoint closed stdout unexpectedly\"` becomes a rejection wired to the child's `close` event -- without it a child that died would leave the read pending until the file's timeout, reporting a timeout instead of the death that caused it. Everything asserted is the source's, in the source's order, plus one addition: the child's exit status is awaited and asserted 0, because a serve loop that ends by throwing would otherwise leave every assertion above still true.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

@@ -1,0 +1,222 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "messagebus",
+      "collected": 43,
+      "inventory": "parity/source-inventory/messagebus.all.txt",
+      "note": "The S8 durable-messaging belt, interlock tests/messagebus, 5 files. One ledger per source file (D-0019). The belt's whole design constraint is that it adds NO delivery store: interlock's own bus.py opens by defining itself as a thin facade that uses the S7 outbox API as found, so send / recipient-filtered poll / ack / envelope / endpoint is the entire owned surface and retry counting, delivery state transitions, lease fencing, destination dedup and ack persistence all stay in src/control_plane/outbox.ts. The single xfailed case in the whole 2,199-case source baseline lives in this belt (tests/messagebus/test_carried_specifications.py's recipient-aliasing specification)."
+    },
+    "file": {
+      "path": "tests/messagebus/test_import_graph.py",
+      "collected": 16,
+      "inventory": "parity/source-inventory/messagebus.test_import_graph.txt",
+      "note": "interlock ACCEPTANCE.md item 6's last clause -- statically assert the MessageBus implementation has no dependency edge to the SessionProvider -- plus the suite-side vocabulary confinement that mirrors interlock's gate item 11. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. Measured 2026-08-29 against the shared read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/messagebus/ -p no:cacheprovider`: 42 passed, 1 xfailed."
+    }
+  },
+  "target": {
+    "test_file": "test/messagebus/import-graph.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "Python `ast.parse` + `ast.walk` over each `messagebus/**/*.py` and each `tests/messagebus/**/*.py`",
+        "to": "`ts.createSourceFile(..., setParentNodes=true)` + a recursive `ts.forEachChild` visitor over each `.ts` in the two directories",
+        "why": "The source prefers `ast` over a regex because the escapes that matter -- an import in a function body, one behind `TYPE_CHECKING` -- are exactly what a line-oriented pattern gets wrong. The same is true here, plus two routes a regex or a scan of built JavaScript would miss: `import type` (erased at emit) and dynamic `import()`. `typescript` is already a devDependency and `test/canary/structural.test.ts` and `test/secretary/structural.test.ts` set the precedent in this repository. THIS IS THE THIRD SUCH SCAN AND IT IS STILL NOT SHARED -- see D-0502 for why that was decided rather than overlooked.",
+        "affects": "all sixteen cases"
+      },
+      {
+        "from": "`_imported_modules`: relative imports resolved against the file's own package NAME, so `from ..session import x` cannot slip past as a top-level name; every alias in a `from` list recorded as a candidate module too",
+        "to": "`resolve(dirname(importingFile), specifier)` for relative specifiers, bare specifiers kept as written; `export ... from`, `import ... = require(...)`, dynamic `import()` and `require()` all recorded alongside `import`",
+        "why": "TypeScript has no package-dotted namespace to test a prefix against, and resolving to an absolute path asks the source's question ('does this leave the package, and what does it reach?') without one. The alias half of the source's helper has no counterpart -- a TypeScript specifier is a module path and its named bindings are not sub-modules -- so what replaces it is the extra STATEMENT forms above, each of which is a real edge in this language and none of which exists in Python.",
+        "affects": "all sixteen cases"
+      },
+      {
+        "from": "`@pytest.mark.parametrize(..., ids=lambda path: path.name)` over `sorted(root.rglob('*.py'))`",
+        "to": "`parametrize` from `test/testkit/parametrize.ts` over a recursive directory walk, with an explicit (currently empty) `NON_MODULE_FILES` allowlist and any other non-`.ts` file throwing",
+        "why": "`parametrize` takes the id explicitly and produces `name[id]`, which is what makes a target id a byte-stable function of the source id rather than of how the translator wrote a `test.each` template. The listing stays a listing, as the source's does, so a file added to either directory gets a case rather than being skipped; the explicit allowlist is `docs/test-translation-conventions.md` section 10, instance 3, where an extension-defined subject set silently stopped covering the fencing package's most security-relevant file the day it shipped as `.mjs`.",
+        "affects": "the twelve parametrized cases"
+      }
+    ],
+    "target_only_tests": {
+      "count": 1,
+      "ids": [
+        "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > target-only -- the scan sees the routes around it"
+      ],
+      "why": "The source's import-graph file has no probe case; `test/canary/structural.test.ts` and `test/secretary/structural.test.ts` do, and for the reason that applies here too -- a guard is only as good as what it would have caught, and this port had to REWRITE the scan in a different language with two extra escape routes in it. The probe defends the machinery the port wrote (a type-only import, an `export ... from`, a `require()` in a function body, a dynamic `import()` in a function body, and both dynamic-import primitives reported by name), and additionally asserts that all four session routes are JUDGED session edges -- a scan that saw them and then failed to flag them would pass every case above. It is target-only because it is about the machinery, not about a property of the source."
+    }
+  },
+  "totals": {
+    "source_cases": 16,
+    "ported": 0,
+    "adapted": 14,
+    "not_ported": 2,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_no_messagebus_module_reaches_a_session_backend[__init__.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > no messagebus module reaches a session backend[index.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `__init__.py` is Python's spelling of the module `index.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The name test is the source's `_names_a_session_backend`, name for name (`session`, `provider`, `stub_provider`, `claude_cli_provider`); a resolved path is split on both separators as well as on `.` and `:` so that its segments play the role a dotted module name's parts play. Measured: adding `import { SessionReadout } from \"../session/index.js\"` to the module turns this case red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_no_messagebus_module_reaches_a_session_backend[bus.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > no messagebus module reaches a session backend[bus.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `bus.py` is Python's spelling of the module `bus.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The name test is the source's `_names_a_session_backend`, name for name (`session`, `provider`, `stub_provider`, `claude_cli_provider`); a resolved path is split on both separators as well as on `.` and `:` so that its segments play the role a dotted module name's parts play. Measured: adding `import { SessionReadout } from \"../session/index.js\"` to the module turns this case red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_no_messagebus_module_reaches_a_session_backend[endpoint.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > no messagebus module reaches a session backend[endpoint.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `endpoint.py` is Python's spelling of the module `endpoint.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The name test is the source's `_names_a_session_backend`, name for name (`session`, `provider`, `stub_provider`, `claude_cli_provider`); a resolved path is split on both separators as well as on `.` and `:` so that its segments play the role a dotted module name's parts play. Measured: adding `import { SessionReadout } from \"../session/index.js\"` to the module turns this case red.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_the_assertion_is_not_vacuous",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > the assertion is not vacuous",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- the package must still contain its three modules and must still demonstrably import the control plane, so an empty directory, a renamed package or a scan rooted at the wrong path fails here instead of passing everything above. Adapted in the second half's mechanism: the source looks for the string `control_plane` among the recorded module-name parts, because its imports are relative and the recorded name carries the component rather than the absolute prefix. Here a relative specifier is resolved to an absolute path, so the test is containment in `src/control_plane/` -- a stronger question than a substring, and the same resolution every other case in this file uses.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[_env.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > session knowledge in this suite stays in the stale-readout case[_env.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `_env.py` is Python's spelling of the module `_env.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The allow-list of one file is the source's, re-spelled for this suite's filename (`test_stale_readout.py` -> `stale-readout.test.ts`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[test_carried_specifications.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > session knowledge in this suite stays in the stale-readout case[carried-specifications.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `test_carried_specifications.py` is Python's spelling of the module `carried-specifications.test.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The allow-list of one file is the source's, re-spelled for this suite's filename (`test_stale_readout.py` -> `stale-readout.test.ts`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[test_endpoint.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > session knowledge in this suite stays in the stale-readout case[endpoint.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `test_endpoint.py` is Python's spelling of the module `endpoint.test.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The allow-list of one file is the source's, re-spelled for this suite's filename (`test_stale_readout.py` -> `stale-readout.test.ts`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[test_import_graph.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > session knowledge in this suite stays in the stale-readout case[import-graph.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `test_import_graph.py` is Python's spelling of the module `import-graph.test.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The allow-list of one file is the source's, re-spelled for this suite's filename (`test_stale_readout.py` -> `stale-readout.test.ts`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[test_messagebus.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > session knowledge in this suite stays in the stale-readout case[messagebus.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `test_messagebus.py` is Python's spelling of the module `messagebus.test.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The allow-list of one file is the source's, re-spelled for this suite's filename (`test_stale_readout.py` -> `stale-readout.test.ts`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[test_stale_readout.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > session knowledge in this suite stays in the stale-readout case[stale-readout.test.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion, on the TypeScript syntax tree instead of Python's `ast`. The parametrization is over a DIRECTORY LISTING in both repositories, so the case ids are the files that exist: `test_stale_readout.py` is Python's spelling of the module `stale-readout.test.ts` is TypeScript's. Adapted rather than ported because the scan itself had to be rewritten and gained two subjects Python has no equivalent of -- `import type`, erased at emit and therefore invisible to any scan of the built JavaScript, and `export ... from`, which is how a barrel takes an edge to every module it re-exports. The allow-list of one file is the source's, re-spelled for this suite's filename (`test_stale_readout.py` -> `stale-readout.test.ts`).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[__init__.py]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "No target case, because the source file has no TypeScript counterpart to parametrize over and the parametrization is a directory listing rather than a hand-written list -- inventing an id for a file that does not exist would put a case in the ledger that asserts nothing. `__init__.py` is Python's package marker, a file whose whole content is the fact that the directory is a package; TypeScript has no such file and a Vitest directory needs no marker. **No coverage is lost:** the confinement this parametrization enforces is checked over EVERY file the suite directory actually contains, so the day such a file appears it is scanned and gets its own case (and its own ledger entry, or the parity check reports it unmapped). Recorded here rather than by widening the listing, because a scan that skipped a file it could not name would be the exact failure `docs/test-translation-conventions.md` section 10 is about.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_session_knowledge_in_this_suite_stays_in_the_stale_readout_case[conftest.py]",
+      "target_id": null,
+      "disposition": "not-ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "No target case, because the source file has no TypeScript counterpart to parametrize over and the parametrization is a directory listing rather than a hand-written list -- inventing an id for a file that does not exist would put a case in the ledger that asserts nothing. `conftest.py` is pytest's fixture module. Vitest has no `conftest`, so the source's two fixtures live in `_env.ts` beside the module they were built on -- which is why `_env.py`'s own case above maps and this one does not. The vocabulary split the source used the two files to express is unchanged and is what this very parametrization checks. **No coverage is lost:** the confinement this parametrization enforces is checked over EVERY file the suite directory actually contains, so the day such a file appears it is scanned and gets its own case (and its own ledger entry, or the parity check reports it unmapped). Recorded here rather than by widening the listing, because a scan that skipped a file it could not name would be the exact failure `docs/test-translation-conventions.md` section 10 is about.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_no_messagebus_module_imports_dynamically[__init__.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > no messagebus module imports dynamically[index.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- the primitives that build an edge no import statement records are banned from the package outright, rather than resolved. Adapted because the primitives are different ones: Python's are `__import__` and `importlib`, TypeScript's are `import(...)` and `require(...)`. Both are flagged as calls AND as bare identifiers, and `createRequire` with them, because `const r = require; r(\"x\")` and `createRequire(import.meta.url)` each build the same edge one step away from a call site the scan would recognise -- an evasion Python's two names cannot be written in, so this half is wider than the source's rather than narrower.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_no_messagebus_module_imports_dynamically[bus.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > no messagebus module imports dynamically[bus.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- the primitives that build an edge no import statement records are banned from the package outright, rather than resolved. Adapted because the primitives are different ones: Python's are `__import__` and `importlib`, TypeScript's are `import(...)` and `require(...)`. Both are flagged as calls AND as bare identifiers, and `createRequire` with them, because `const r = require; r(\"x\")` and `createRequire(import.meta.url)` each build the same edge one step away from a call site the scan would recognise -- an evasion Python's two names cannot be written in, so this half is wider than the source's rather than narrower.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_no_messagebus_module_imports_dynamically[endpoint.py]",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > no messagebus module imports dynamically[endpoint.ts]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- the primitives that build an edge no import statement records are banned from the package outright, rather than resolved. Adapted because the primitives are different ones: Python's are `__import__` and `importlib`, TypeScript's are `import(...)` and `require(...)`. Both are flagged as calls AND as bare identifiers, and `createRequire` with them, because `const r = require; r(\"x\")` and `createRequire(import.meta.url)` each build the same edge one step away from a call site the scan would recognise -- an evasion Python's two names cannot be written in, so this half is wider than the source's rather than narrower.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/messagebus/test_import_graph.py::test_the_stale_readout_case_does_not_import_the_control_plane",
+      "target_id": "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > the stale-readout case does not import the control plane",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same assertion -- the one session-aware file in the suite reaches the control plane only through the suite's helpers, so no single file knows both vocabularies. Adapted in the same way the not-vacuous case is: the source tests a dotted-prefix `startswith('claude_org_runtime.control_plane')`, and here a relative specifier is resolved to a path and tested for containment in `src/control_plane/`. Measured: adding `import { createControlPlane } from \"../../src/control_plane/schema.js\"` to `stale-readout.test.ts` turns this case red.",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "inherited_limitations": [
+    {
+      "behaviour": "Every case here asserts about the source tree, not about runtime behaviour, so the whole file is able to go green by losing its subject -- a package that was deleted, or one whose modules stopped being scanned, would pass most of these vacuously.",
+      "why": "The source's own limitation, and the source's own defences are carried: the file set is a directory listing rather than a hand-written list, an empty walk throws, a non-TypeScript file in either directory fails the walk rather than being skipped, and `the assertion is not vacuous` demands the package still contain its three modules and still reach the control plane. The target-only probe closes the remaining gap by proving the scan sees what it claims to see."
+    },
+    {
+      "behaviour": "The ban on dynamic imports is a ban on NAMES (`import()`, `require`, `createRequire`), so a package that genuinely needed one could not have it, and a reach built entirely out of names none of those three spell would not be seen.",
+      "why": "The source's own trade, stated in its own docstring: it refuses to pretend to resolve dynamic strings and bans the primitives instead, on the grounds that a spike delivery layer has no business importing anything it cannot name statically. The trade is kept, and the name list is widened rather than narrowed."
+    },
+    {
+      "behaviour": "`namesASessionBackend` matches the path SEGMENT `provider`, so a future `src/messagebus/provider.ts` -- a module of this package with nothing to do with sessions -- would be reported as a session edge by its own name.",
+      "why": "The source has the identical hazard for the identical reason (`\"provider\" in parts`), and it is the safe direction: the guard would refuse a name, not miss an edge. Kept rather than repaired so that the two repositories answer this question the same way; a divergence here would be a place where continuo's build is green and interlock's is not, on the one assertion item 6 asks for in CI."
+    }
+  ]
+}
