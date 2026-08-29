@@ -76,7 +76,7 @@
         "test/attention/classifier.test.ts::attention classifier > target-only -- a non-finite pr does not take the classifier down",
         "test/attention/classifier.test.ts::attention classifier > target-only -- an unknown kind falls back to the generic template"
       ],
-      "why": "Three groups. (1) The retargeted invariant: `PINNED_FACT_STATES` holds one pinned expectation per vocabulary row, the guard asserts set equality against `FACT_STATES` in both directions plus a non-emptiness check, and six parametrized cases assert the carry-through. This shape is GREEN on an empty vocabulary, so `D-0903` requires the probes below to be measured rather than assumed. (2) What the port had to write and the source carries no warrant for: the runtime freeze, the `Object.create(null)` lookups, the hand-built ISO rendering, the explicit ISO grammar, and the `int(float('inf'))` repair. (3) One branch the SOURCE leaves untested and a transcription loses silently -- the 120-character summary cut, whose ellipsis is U+2026 and whose `rstrip` runs before the ellipsis is appended.",
+      "why": "Three groups. (1) The retargeted invariant: `PINNED_FACT_STATES` holds one pinned expectation per vocabulary row, the guard asserts set equality against `FACT_STATES` in both directions plus a non-emptiness check, and six parametrized cases assert the carry-through. This shape is GREEN on an empty vocabulary, so `D-0903` requires the probes below to be measured rather than assumed. (2) What the port had to write and the source carries no warrant for: the runtime freeze, the `Object.create(null)` lookups, the hand-built ISO rendering, the explicit ISO grammar, and the `int(float('inf'))` repair. (3) One branch the SOURCE leaves untested and a transcription loses silently -- the 120-character summary cut, whose ellipsis is U+2026 and whose `rstrip` runs before the ellipsis is appended. The out-of-range-date case grew a codex round-1 P2: the ISO grammar matched two more values `fromisoformat` refuses -- a year below `datetime.MINYEAR` and an offset not strictly inside +/- 24 hours -- and both would have become ordinary timestamps old enough for the drop tier to swallow, which is the malformed-timestamp path inverted.",
       "mutation_probes": [
         {
           "probe": "remove one row from `PINNED_FACT_STATES`",
@@ -131,6 +131,16 @@
         {
           "probe": "append three dots instead of U+2026",
           "against": "target-only -- a long summary is cut with Python's ellipsis and no trailing space",
+          "measured": "red"
+        },
+        {
+          "probe": "drop the `datetime.MINYEAR` bound, so `0000-01-01T00:00:00Z` parses as a real date",
+          "against": "target-only -- an out-of-range date is malformed rather than rolled forward",
+          "measured": "red"
+        },
+        {
+          "probe": "drop the strict 24-hour UTC-offset bound, so `+24:00` parses as a real offset",
+          "against": "target-only -- an out-of-range date is malformed rather than rolled forward",
           "measured": "red"
         }
       ]

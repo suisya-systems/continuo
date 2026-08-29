@@ -1164,6 +1164,27 @@ describe("attention classifier", () => {
     expect(event?.severity, "an impossible date must read as stale, not as a real timestamp").toBe(
       "urgent",
     );
+
+    // Two more values the grammar matches and `fromisoformat` refuses, both of which would
+    // otherwise become real timestamps old enough for the drop tier to swallow: a year below
+    // `datetime.MINYEAR`, and an offset the `timezone` constructor rejects for not being strictly
+    // inside +/- 24 hours.
+    for (const stamp of ["0000-01-01T00:00:00Z", "2026-01-01T00:00:00+24:00"]) {
+      const outOfDomain = classifier.classifyPending(
+        {
+          task_id: "domain",
+          received_at: stamp,
+          raw_message: "?",
+          status: "pending",
+          factState: "OBSERVATION_UNAVAILABLE",
+        },
+        NOW,
+        THRESHOLDS,
+      );
+
+      expect(outOfDomain?.severity, `${stamp} was accepted as a real timestamp`).toBe("urgent");
+      expect(outOfDomain?.suppressed, `${stamp} fell into the drop tier`).toBe(false);
+    }
   });
 
   test("target-only -- a non-finite pr does not take the classifier down", () => {

@@ -879,8 +879,11 @@ function parseIso(text: string): Date | null {
   const zone = match[8];
   // Checked before the arithmetic, because `Date.UTC` rolls a month 13 or a day 32 FORWARD where
   // `fromisoformat` raises -- so a typo would become a real timestamp a month away rather than the
-  // malformed-timestamp path the classifier's urgent posture depends on.
+  // malformed-timestamp path the classifier's urgent posture depends on. The year bound is
+  // `datetime.MINYEAR`, which is 1: `0000-01-01` is a ValueError there and an ordinary date here,
+  // and an ordinary date two millennia old is exactly the shape the drop tier swallows.
   if (
+    year < 1 ||
     month < 1 ||
     month > 12 ||
     day < 1 ||
@@ -903,6 +906,13 @@ function parseIso(text: string): Date | null {
       Number(digits.slice(0, 2)) * 3600 +
       Number(digits.slice(2, 4)) * 60 +
       Number(digits.slice(4, 6) || "0");
+    // Python builds a `timezone` from the offset, and that constructor refuses anything not
+    // strictly inside +/- 24 hours. `+24:00` is a two-digit offset the grammar above happily
+    // matches, so without this the value would become a real timestamp a day away instead of the
+    // malformed one the urgent posture depends on.
+    if (offsetSeconds >= 24 * 3600) {
+      return null;
+    }
     ms -= sign * offsetSeconds * 1000;
   }
   const parsed = new Date(ms);
