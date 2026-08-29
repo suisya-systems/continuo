@@ -879,6 +879,14 @@ function minutesSince(isoTs: unknown, now: Date): number {
  * would first attach UTC here. Both differences change which side of a TTL threshold a row lands
  * on, and the second one changes it by the runner's timezone offset -- a green suite in one
  * region and a red one in another.
+ *
+ * **One disclosed divergence, recorded in `parity/attention.classifier.ledger.json` rather than
+ * repaired here.** A `Date` resolves to one millisecond and `datetime` to one microsecond, so the
+ * parsed microsecond field is rounded into the millisecond. A timestamp within a fraction of a
+ * millisecond of an integer-minute threshold can therefore be classified on the other side of it
+ * from the source. The fix is to return an epoch in microseconds instead of a `Date` and let
+ * `minutesSince` do the arithmetic there; the ledger entry says why it was not taken in this
+ * belt and where it belongs.
  */
 function parseIso(text: string): Date | null {
   const match =

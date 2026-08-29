@@ -190,6 +190,11 @@
     {
       "behaviour": "`classify_pending` reads `status`, `task_id` and the timestamps out of an untyped register and coerces rather than validating; an entry whose `received_at` is a number, not a string, reads as malformed and therefore urgent.",
       "why": "The source's posture, stated in its own docstring: false positives are preferable to false negatives for a relay-gap watcher. Carried unchanged, including for the shapes only the wider TypeScript type admits."
+    },
+    {
+      "behaviour": "`parseIso` builds a `Date`, whose resolution is one millisecond, and rounds the parsed microsecond field into it. A timestamp with six fractional digits therefore lands on the nearest millisecond, so an age within a fraction of a millisecond of a TTL threshold can be classified on the other side of it from the source. Concretely, with `now = 12:00:00` and `pendingDecisionMin = 15`, `received_at = 11:45:00.000001` is one microsecond too fresh for Python and emits no event, while this port rounds it down to 11:45:00.000 and emits the urgent alert; `.999999` rounds up and flips the inverse case.",
+      "why": "NOT inherited -- this one is the port's own, and it is disclosed rather than repaired. Python's `datetime` carries microseconds and JavaScript's `Date` does not, so preserving them means `parseIso` returning an epoch in microseconds rather than a `Date` and `minutesSince` doing its arithmetic there. That is a contained change (one caller) and is the fix if this is ever wanted; it was NOT made in this belt because the window's standing instruction for this review round was to record a P2 rather than start another change-and-re-review cycle, and because the divergence needs a timestamp specified to sub-millisecond precision within a fraction of a millisecond of an integer-minute threshold -- no case in either repository constructs one, and no producer of `pending_decisions.json` writes one. Found by codex self-review, round 4, on the tip integrated with origin/main.",
+      "where_a_fix_belongs": "This module, as `parseIso` returning `number` (epoch microseconds) with a `Number.isSafeInteger` guard -- 2026 is about 1.77e15 microseconds, well inside the safe range -- and `minutesSince` dividing by 60e6. A2 or A3 may take it if either touches this code first."
     }
   ],
   "entries": [
