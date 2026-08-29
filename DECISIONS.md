@@ -119,6 +119,8 @@ spaces distinct.
 | D-0602 | The fault-injection watchdogs are scaled for this port's runners, and the manifest's numbers are left alone | accepted |
 | D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
 | D-0801 | The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred | accepted |
+| D-0603 | The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types` | accepted |
+| D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
 
 ---
 
@@ -6867,3 +6869,132 @@ D-range allocation, which stays burned either way.
 
 **Source.** Ratified by the user on 2026-08-30, task `continuo-belt-ratification-2`. Decision id
 allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to use this file").
+
+---
+
+## D-0603 — The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types`
+
+**Context.** `test/fault_injection/session_driver.ts` (D-0601's second adapter, deferred until this
+task) is the first module in `test/fault_injection/` to import `src/session/`. Its
+`driverCommand()` spawns itself as a type-stripped `.ts` child process, mirroring
+`SpikeAdapter.driverCommand`'s `major < 23 ? ["--experimental-strip-types"] : []`. Under that flag
+(or under Node's unflagged default stripping on Node >=23.6, which is the same strip-only mode) the
+spawned process died immediately with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter
+property is not supported in strip-only mode`, pointing at `src/fencing/pyjson.ts`'s
+`DocumentScan` class (`constructor(private readonly src: string) {}`) -- a file
+`src/session/claude_cli_provider.ts` imports transitively. `spike_driver.ts` never reaches that far
+(it imports only `src/control_plane/`), so this class of import was never exercised through the
+driver-spawn path before.
+
+**Decision.** `SessionAdapter.driverCommand()` passes `--experimental-transform-types`
+unconditionally (it implies strip-types, so no version branch is needed): Node's fuller *transform*
+mode lowers a parameter property (and an enum, and a namespace) to plain JavaScript instead of
+refusing it outright. `SpikeAdapter.driverCommand()` is left unchanged -- it has never needed more
+than stripping and D-0601 already keeps the two adapters independent.
+
+**Falsifier.** If a future `src/` file the session adapter's import graph reaches uses a
+non-erasable TypeScript construct the transform mode itself does not lower (none is known at the
+time of this entry), the spawn would fail again with a different Node diagnostic and this decision
+would need revisiting, not merely re-measuring.
+
+**Source.** Task `continuo-session-adapter-followon`, 2026-08-29, measured on Node v22.17.0
+(within the `engines` range `>=22.14.0 <23`).
+
+---
+
+## D-0802 — D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild
+
+**Context.** D-0801 shipped `gate_item2` at 28/34, deferring `tests/gate_item2/
+test_session_driver_harness.py` (6 node ids) to a follow-on task because it drives
+`test/fault_injection/controller.ts` against a `SessionAdapter`
+(`test/fault_injection/session_driver.ts`) that was, at the time, a stub refusing every
+execution-path call (D-0601's own declared follow-on on the session belt landing). This task
+re-binds `SessionAdapter` to `src/supervisor.ts`'s `SessionOrchestrator` and
+`src/session/claude_cli_provider.ts`'s `ClaudeCliSessionProvider`, lands the 6 deferred node ids as
+`test/gate_item2/session-driver-harness.test.ts`, and -- since one real `SessionAdapter` serves both
+-- makes `test/fault_injection/`'s own 4 `full`-profile `session-start` manifest cases executable at
+the same time (`parity/fault-injection.cases.ledger.json`'s declared follow-on, closed by the same
+change).
+
+**Decision 1 -- the adapter gets its own fake CLI, not the session belt's S2 fixture.** The
+session-start cases' `live-processes-per-session` invariant needs an interval-overlap computation
+over real pids and timestamps (a start ledger line and, on a normal exit, an exit line), so the
+observer can answer "was any session id ever concurrently live under two processes" even after both
+have exited. `test/session/helpers/fake-claude.mjs` (the session belt's own fixture, `FAKE_MODE` /
+`FAKE_SPAWN_LOG` etc.) records only `{argv, cwd}` per spawn -- enough for the session belt's own 142
+cases, not enough for this one. `session_driver.ts` therefore carries its own small embedded fake
+CLI (mirroring the source's own bespoke `_FAKE_CLI`, which is likewise separate from
+`tests/session/test_claude_cli_provider.py`'s fixture), keeping the session belt's fixture
+unchanged and unrisked by a shape it was not built for.
+
+**Decision 2 -- no dedicated reaper for the destination's grandchild.** The fault belt's own
+teardown ladder (`controller.ts`'s `teardown()`) reaps role *processes*; it was never asked whether
+a role's own detached grandchildren need reaping too, and the session adapter is the first case
+where a role process spawns one on purpose (`ClaudeCliSessionProvider` spawns the fake CLI
+detached, its own session/process group -- the same shape the session belt's own mediated-provider
+tests already exercise, so a `SIGKILL` of the `sup` role process never touches it; that is the
+point, since it is what lets `recover()`'s adoption path find a live child rather than a corpse).
+Evaluated and found **not needed**: the four session-start manifest cases are single-role,
+non-combination, and never repeat `bootstrap()` within a case, so the fake CLI's own release is
+what ends the process on every path. That release is a *condition on the filesystem*, not a fixed
+sleep (a first draft used a fixed hold and a codex review round correctly flagged it: on a slow
+enough runner the child could exit before a restarted generation's `recover()` looked for it,
+making the P3 "surviving child" adoption path timing-dependent rather than reliably exercised) --
+the fake CLI polls for a stop-file's existence, and `session_driver.ts`'s `runWalk` writes that
+file in a `finally` once a generation's own walk is over, on both its success and its failure path
+(a `SIGKILL`ed generation 0 never reaches its own `finally` -- the signal tears the process down
+first, exactly like the barrier's own kill path -- so in every one of the four cases it is
+generation 1 that releases generation 0's still-living child). A bounded safety cap
+(`HOLD_SAFETY_CAP_MS`, well under `RUNNER_BUDGET_CEILING_S`) is the backstop if nothing ever writes
+the file, and `vitest`'s own worker teardown is the backstop beyond that for an aborted run, exactly
+as it already is for the session belt's own fake-CLI fixture. A dedicated harness-side reaper would
+still be solving a problem this fixture does not have; the observation is recorded here rather than
+left implicit, per the fault belt's own request to have this question actually evaluated.
+
+A second codex review round, on the merged tip, caught a related race in
+`SessionObserver.liveProcessReport()`: the stop-file release above makes the fake CLI's own normal
+exit and the observer's ledger-snapshot-then-`/proc`-check race each other, so a process that exited
+in that narrow window read as an unexplained death (`null`, "indeterminate") rather than the closed,
+ordinary interval it was. Fixed by re-reading the ledger for that specific `(uuid, pid)` immediately
+before declaring indeterminate, rather than judging a still-open ledger entry against the snapshot
+taken before the `/proc` check ran.
+
+A third round caught the remaining half of the same shape: writing the stop-file marker does not
+prove the detached child has *seen* it yet (the fake CLI polls every 20ms), and nothing was waiting
+for that observation before `runWalk` returned and the test's own `caseRoot()` cleanup could remove
+the workdir the marker lives in -- a fast case could leave the still-polling child orphaned, invisible
+to the marker it is waiting for, until `HOLD_SAFETY_CAP_MS` expired. `runWalk`'s `finally` now also
+awaits `waitForNoLiveChild` (a bounded, `/proc`-scoped poll on the workdir's own fake-CLI marker path)
+before returning, so the walk does not report done while a process this case spawned is still running.
+
+**Decision 3 -- per-case budgets route through D-0602's scaling, not literal numbers.** The source's
+`barrier_timeout_s=20.0, case_timeout_s=60.0` become `barrierTimeoutS(PROFILE)` /
+`caseTimeoutS(faultCase, PROFILE)` (`test/fault_injection/policy.ts`), exactly as
+`test/fault_injection/protocol.test.ts` and `cases.test.ts` already do -- scaled and held under
+`RUNNER_BUDGET_CEILING_S` for this port's runners, never the manifest's own numbers written as a
+literal at a new call site.
+
+**Decision 4 -- the Linux-lane skip is read from the manifest, not re-derived from
+`process.platform`.** The source's file-level `pytestmark = pytest.mark.skipif(not _LINUX, ...)`
+becomes a per-test `skipIf(laneSkipReason(...) !== null, ...)`, reusing `test/fault_injection/
+policy.ts`'s own `laneSkipReason` -- the same lane test every other manifest case in
+`cases.test.ts` already trusts, since all four session-start cases already declare `"lane":
+"linux"` in the manifest. This is a narrowing of translation effort, not a new policy: the reason
+text and the underlying platform check are unchanged.
+
+**Totals.** `gate_item2` is 34/34 ported (26 `ported` + 8 `adapted`, 0 waivers, 0 not-ported).
+`parity/gate_item2.session-driver-harness.ledger.json` records the 6 as `adapted` (D-0801's
+async-everywhere change, this entry's budget/lane/teardown adaptations, and the translation
+itself). `parity/source-inventory.belts.md` moves `gate_item2` from `candidate-lane` to `in-scope`
+(ratified 2026-08-29), the same status the D-0801 entry above already anticipated moving to once the
+deferral closed.
+
+**Falsifier.** If a future session-start case becomes a combination case (more than one target, or
+a staggered kill), Decision 2's "single-role, non-combination" premise no longer holds and the
+no-reaper conclusion needs re-evaluating against that shape specifically -- a role process being
+sigkilled while its own grandchild's parent role is a *different, still-alive* role would be a genuinely
+new hazard this task's four cases cannot exercise.
+
+**Source.** Task `continuo-session-adapter-followon`, 2026-08-29, porting
+`tests/gate_item2/test_session_driver_harness.py` from interlock `65f36c5` and re-binding
+`test/fault_injection/session_driver.ts` per D-0601's declared follow-on.

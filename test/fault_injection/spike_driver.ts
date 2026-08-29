@@ -2012,8 +2012,14 @@ class DropboxObserver implements DestinationObserver {
 /**
  * Named SQL over the spike schema. The names are the contract's and the
  * assertions are written against them; this mapping is the throwaway half.
+ *
+ * Exported (the source's leading-underscore `_INVARIANT_QUERIES` is still an
+ * ordinary module attribute in Python) so `session_driver.ts` can re-bind it
+ * unchanged, exactly as the source's `session_driver.py` imports it from this
+ * module: the session adapter's store is the same spike control-plane schema,
+ * so re-spelling the SQL there would only invite drift.
  */
-const INVARIANT_QUERIES: Readonly<Record<string, string>> = Object.freeze({
+export const INVARIANT_QUERIES: Readonly<Record<string, string>> = Object.freeze({
   // No outbox row is left in a state with no owner after recovery
   // (ACCEPTANCE.md section 2, outbox resend row). This is the outbox's own
   // query.
@@ -2750,8 +2756,14 @@ export function main(argv: readonly string[]): number {
   }
 }
 
-/** `json.dumps(..., sort_keys=True)`, so the event stream is byte-stable. */
-function stableStringify(value: unknown): string {
+/**
+ * `json.dumps(..., sort_keys=True)`, so the event stream is byte-stable.
+ *
+ * Exported so `session_driver.ts` -- the harness's other adapter/executable
+ * module -- can reuse it verbatim for its own protocol events, rather than
+ * re-deriving the same key-sorting behaviour a second time.
+ */
+export function stableStringify(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) => {
     if (item && typeof item === "object" && !Array.isArray(item)) {
       return Object.fromEntries(
