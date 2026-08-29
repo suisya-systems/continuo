@@ -476,8 +476,16 @@ of them**:
    '\xa' for object of type 'str'`. A `%c` transcription puts a literal newline in the middle of an
    operator's warning line. Only the message comparison could catch this: the class was right.
 
-Four of the five would have shipped as a silent behaviour difference in an operator-facing path.
-After the repairs, all 88 templates agree on every compared field.
+A sixth arrived on the integration tip, and it is the most instructive of them because it was
+**the port's own regression and the oracle did not catch it either**. The repair for (2) removed
+two guards in one edit when only one was wrong: an explicit fill character wins over the `0`, so
+`format("ab", "*>010")` is `"********ab"` and the port rendered `"00000000ab"`. The corpus carried
+`{pr:*^10}` and `{pr:010}` and nothing that combined them. **An oracle is only as good as the
+combinations its corpus asks about, and a repair is a new combination** -- so widening the corpus
+belongs in the same change as the repair, not in the next one that happens to think of it.
+
+Five of the six would have shipped as a silent behaviour difference in an operator-facing path.
+After the repairs, all 101 templates agree on every compared field.
 
 **A finding about the SOURCE fell out of (1).** interlock's own `except (ValueError, IndexError)`
 around `_format_with_event` has an unreachable half: that function only ever calls `format_map`, and

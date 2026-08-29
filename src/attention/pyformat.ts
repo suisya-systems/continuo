@@ -412,12 +412,21 @@ function parseRenderSpec(spec: string): RenderSpec {
     index += 1;
   }
   if (points[index] === "0") {
-    // MEASURED: `format("42", "010")` is `"4200000000"` and `format("42", "0")` is `"42"`, so a
-    // leading `0` sets the FILL and does NOT set `=` alignment here. CPython only takes the
-    // alignment branch when the type's own `default_align` is `>`, which is the numeric types'
-    // default and not `str`'s -- and `str.__format__` refuses `=` outright, so the reasoned-from-
-    // the-grammar reading made both of those specifiers a refusal instead of a render.
-    out.fill = "0";
+    // MEASURED, and measured TWICE, because the first measurement fixed one half and broke the
+    // other. `format("42", "010")` is `"4200000000"` and `format("42", "0")` is `"42"`, so a
+    // leading `0` sets the FILL and does NOT set `=` alignment for a `str`: CPython takes the
+    // alignment branch only when the type's own `default_align` is `>`, which is the numeric
+    // types' default and not this one's. Reasoning from the published grammar, which documents
+    // `0` as implying `=`, made both of those a refusal instead of a render.
+    //
+    // The `fill === ""` guard is the second half and is NOT redundant with it: an EXPLICIT fill
+    // character wins over the `0`. `format("ab", "*>010")` is `"********ab"`, not `"00000000ab"`.
+    // Removing this guard along with the alignment one -- which is what happened, in the same
+    // edit -- renders an operator's padded template in the wrong character, silently, and the
+    // corpus did not ask about the combination until it was made to.
+    if (out.fill === "") {
+      out.fill = "0";
+    }
     index += 1;
   }
   const widthStart = index;

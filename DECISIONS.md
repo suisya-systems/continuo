@@ -7865,7 +7865,21 @@ CPython on five inputs. Review had found none of them:
   '\xa' for object of type 'str'` -- where a `%c` transcription puts a literal newline in the middle
   of an operator's warning line.
 
-After the repairs, all 88 templates agree on every compared field. Four of the five would have
+A sixth arrived later, on the integration tip, and it was **this belt's own regression rather than
+a misreading of CPython**: the repair for `{pr:010}` removed two guards in one edit when only one
+of them was wrong. The alignment guard had to go; the `fill == ""` guard beside it was right,
+because an explicit fill character wins over the `0` -- `format("ab", "*>010")` is `"********ab"`.
+The corpus did not notice, because it carried `{pr:*^10}` and `{pr:010}` and no input combining the
+two. That is the oracle's own limit stated exactly: **it is only as good as the combinations the
+corpus asks about**, and a repair is a new combination. Eight of them are in the corpus now.
+
+The codex review gate found the area and not the fault -- its comment claimed `{summary:>010}`
+should pad with spaces, which CPython contradicts. Measuring the claim instead of acting on it is
+what turned up the real defect one case over, and that is the general rule this entry ends on: a
+review comment that is wrong on its own terms can still be the reason a bug is found, and it is
+only worth that if the response to it is a measurement.
+
+After the repairs, all 101 templates agree on every compared field. Five of the six would have
 shipped as a silent behaviour difference in an operator-facing path.
 
 **A finding about the source, recorded because it is easy to lose.** The first of those five means

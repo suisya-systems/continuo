@@ -966,6 +966,86 @@
       "rendered": "",
       "error": null,
       "message": null
+    },
+    {
+      "template": "{summary:>010}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "000ship it",
+      "error": null,
+      "message": null
+    },
+    {
+      "template": "{summary:*>010}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "***ship it",
+      "error": null,
+      "message": null
+    },
+    {
+      "template": "{summary:0>10}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "000ship it",
+      "error": null,
+      "message": null
+    },
+    {
+      "template": "{summary:^010}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "0ship it00",
+      "error": null,
+      "message": null
+    },
+    {
+      "template": "{summary:<010}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "ship it000",
+      "error": null,
+      "message": null
+    },
+    {
+      "template": "{summary:>0}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "ship it",
+      "error": null,
+      "message": null
+    },
+    {
+      "template": "{summary:*^010}",
+      "placeholders": [
+        "summary"
+      ],
+      "unknown": [],
+      "rendered": "*ship it**",
+      "error": null,
+      "message": null
+    },
+    {
+      "template": "{pr:x>08}",
+      "placeholders": [
+        "pr"
+      ],
+      "unknown": [],
+      "rendered": "xxxxxx42",
+      "error": null,
+      "message": null
     }
   ]
 }
