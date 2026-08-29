@@ -102,19 +102,62 @@ source does not have is what the parity check exists to catch -- and the child-l
 the second was retired structurally instead, by making every teardown await its child's exit rather
 than merely signal it.
 
-### `attention` -- `retarget` -- 194 cases
+### `attention` -- `in-scope` for A1 (**ported: 90 of 90 cases**), `retarget` for A2 and A3 -- 194 cases
 
 Belt start ratified at the human gate on 2026-08-30 (D-0034), split into three sub-belts sharing
 one D-range, `D-09xx`: A1 (facts, 90 cases), A2 (dedup and config, 44 cases) and A3 (notify and
 pipeline, 60 cases). The status keeps its `retarget` spelling here -- starting the belt is not the
 same axis as completing it (the same distinction D-0032's belts used); each sub-belt's rows move to
-`in-scope` at its own completion. `test_broker_journal_contract.py` is **not** part of these 194
-cases -- it has no node ids and sits in the `broker` section below as a collection-time skip.
+`in-scope` at its own completion. **A1 completed 2026-08-29** (`D-0901`..`D-0903` used), so its 90
+rows carry that spelling and A2's 44 and A3's 60 stay `retarget`. `test_broker_journal_contract.py`
+is **not** part of these 194 cases -- it has no node ids and sits in the `broker` section below as
+a collection-time skip.
+
+**A1 -- facts, 90 of 90 ported.** `tests/attention/test_readers.py` (29) and
+`tests/attention/test_classifier.py` (61), ported to `src/attention/` (`fact_state.ts`,
+`readers.ts`, `classifier.ts`, and the one `config.ts` constant `D-0902` records) with
+`test/attention/readers.test.ts` and `test/attention/classifier.test.ts` beside them. Note that
+`fact_state.ts` is **not** imported by `classifier.ts` and never was after `D-0906`: the vocabulary
+is adopted here (`D-0901`) on the strength of consumers that predate this belt, and the classifier
+carries no fact state at all.
+
+| source file | cases | ledger |
+|---|---|---|
+| `tests/attention/test_classifier.py` | 61 | `parity/attention.classifier.ledger.json` |
+| `tests/attention/test_readers.py` | 29 | `parity/attention.readers.ledger.json` |
+
+The decisions A1 minted are `D-0901` (the six-name vocabulary is **adopted** rather than restated
+for a lint's sake, closing what `D-0034` ratified A1 would close), `D-0902` (the one `config.ts`
+constant the classifier imports lands here; the config belt stays A2's), `D-0903` (the classifier
+carries a fact state it is **given** and derives none) and `D-0906`, which supersedes `D-0903`
+after its falsifier fired: the classifier carries no fact state, because nothing can supply one.
+`D-0903` is left in `DECISIONS.md` exactly as written and marked superseded -- an entry that named
+what would falsify it and was then falsified by that named observation is more useful intact than
+edited.
+
+**`test_broker_journal_contract.py`'s zero-entry ledger.** `D-0034` ratified that this file gets a
+standalone, metadata-only ledger recording **zero entries**, outside the parity checker's normal
+file-to-inventory linkage, so that its absence from every attention ledger is a checked-in
+statement rather than something a later reader has to decide was deliberate. It is
+`parity/attention.broker-journal-contract.ledger.json`, and it is named -- with the reason it is
+absent -- in `scripts/parity-check.mjs`'s `LEDGERS` list, in a comment beside the attention lane
+rather than as an entry, because the checker's first act on a ledger is to read the inventory file
+it points at and this file has none to point at.
 
 Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
 (mechanism)` or `rewrite`; **none** is a straight carry. `test_classifier.py` (61) carries the
-strongest invariant -- that every fact-vocabulary row has a pinned expectation -- but the mechanism
-is re-derived onto a closed fact-state set. `test_dedup.py` is called out explicitly: its two
+strongest invariant -- that every fact-vocabulary row has a pinned expectation -- and this document
+proposed re-deriving it onto the closed fact-state set. **That re-derivation was attempted and then
+abandoned; `D-0906` records why, and the sentence is corrected here rather than quietly dropped.**
+A1 first met it by making the fact a required input the classifier carried uninterpreted
+(`D-0903`), so that every ported case pinned one. A3's pipeline then found that nothing in continuo
+can produce a fact state to supply -- the observation `D-0903`'s own falsifier had named -- so the
+shape was withdrawn. With no fact carried anywhere in the subsystem, the invariant has nothing here
+to be about: it presupposes the fact, so it is not re-derivable in principle rather than merely
+hard to place. What is left is narrower and is **not** offered as an equivalent --
+`test/contract/fact-state-vocabulary.test.ts` pins that every statement of the six names agrees
+with every other and that the DDL still constrains `incident.fact_state` only for emptiness, which
+is an agreement between statements of a vocabulary rather than a pinned expectation per row. `test_dedup.py` is called out explicitly: its two
 corruption cases pin "malformed state loads as an empty `DedupState`", and the ledger rules that
 behaviour out for durable dedup state, so those two must be re-authored to assert fail-closed
 rather than ported.
@@ -503,8 +546,8 @@ continuo does not ship would assert nothing.
 
 | status | subsystems | cases |
 |---|---|---|
-| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29) | 1,715 |
-| `retarget` | `attention`, `gate_item11`, `broker` | 312 |
+| `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` A1 only (**ported** 2026-08-29) | 1,805 |
+| `retarget` | `attention` A2 and A3, `gate_item11`, `broker` | 222 |
 | `decision-pending` | `curator`, `migrate` | 82 |
 | `not-porting` (ratified 2026-08-28) | `gate_record`, `scrub`, `package_smoke` | 85 |
 | | **18** | **2,194** |
