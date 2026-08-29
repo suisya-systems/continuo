@@ -34,8 +34,6 @@
  * does not: the expected bucket is then stated by hand.
  */
 
-import { join } from "node:path";
-
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
 import { describe, expect, test } from "vitest";
@@ -68,7 +66,7 @@ import {
   WindowRefusal,
   WindowReport,
 } from "../../src/measurement/windows.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { parametrize } from "../testkit/parametrize.js";
 
@@ -97,11 +95,20 @@ const ABSOLUTE_CLASS = "session_no_evidence";
 // helpers
 // --------------------------------------------------------------------------
 
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Building it once per file and handing each case its own copy removes the
+ * migrations this file used to run once per case (D-0119, carrying out D-0118's
+ * approach on the remaining measurement files).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
 /** The source's `db` fixture, as a per-test call (rule 8). */
 function productionDb(): string {
-  const path = join(caseRoot("windows"), "production.sqlite3");
-  createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+  return productionTemplate.copyInto(caseRoot("windows"));
 }
 
 /**
