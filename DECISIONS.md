@@ -23,8 +23,10 @@ spaces distinct.
   in the index table above and never over an ID. `D-0019`..`D-0099` is the control-plane belt and
   the shared band for cross-belt decisions taken at the window, `D-01xx` the measurement belt,
   `D-02xx` the fencing and settings belt, `D-03xx` the session belt, `D-04xx` the canary belt,
-  `D-05xx` the messagebus belt (the last three allocated by D-0032), and `D-07xx` the
-  secretary belt (allocated by D-0701). The ranges are an allocation,
+  `D-05xx` the messagebus belt (the last three allocated by D-0032), `D-07xx` the
+  secretary belt (allocated by D-0701), `D-09xx` the attention belt -- shared across its three
+  sub-belts A1 (facts), A2 (dedup and config) and A3 (notify and pipeline) -- and `D-10xx` the
+  gate_item11 belt (both allocated by D-0034). The ranges are an allocation,
   not a meaning: nothing about an entry follows from which range it is in.
 
 ## Index
@@ -64,6 +66,7 @@ spaces distinct.
 | D-0031 | The source inventory is complete and unconditional; porting intent is recorded separately | accepted |
 | D-0032 | Three not-porting proposals are ratified, and three belts start with D-ranges allocated | accepted |
 | D-0033 | A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test | accepted |
+| D-0034 | The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -6770,6 +6773,86 @@ weather -- a matrix that has genuinely got slower -- the watchdog still fires an
 case, which is what design section 9 asks of it. If the scale is ever suspected of hiding growth,
 the measurement to redo is the one above: run the belt on a healthy runner and compare against the
 unscaled number.
+
+---
+
+## D-0034 -- The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named
+
+**Context.** `parity/source-inventory.belts.md` held both subsystems at `retarget`: `attention`
+(194 cases, none a straight carry) and `gate_item11` (64 cases across four files, two of which --
+`test_no_provider_detail_leaks.py` and `test_suite_runs_unchanged.py` -- need re-derivation against
+continuo's module graph rather than Python imports). D-0031's gate applies here exactly as it did at
+D-0032 -- a `retarget` status proposes nothing until a human confirms it, and starting a belt is a
+separate act from allocating it a D-range.
+
+**Decision.** The human gate was passed on 2026-08-30, for two belts and several design proposals
+made within them, recorded together because they were ratified in one pass.
+
+1. **The `attention` belt starts, split into three sub-belts sharing one D-range.** A1 (facts, 90
+   cases), A2 (dedup and config, 44 cases) and A3 (notify and pipeline, 60 cases) all move from
+   `retarget` toward completion under `D-09xx`, allocated once and shared across the three so that
+   cross-sub-belt cross-references never leave the range. `test_broker_journal_contract.py` is not
+   part of the 194: it is a `broker`-belt file with no node ids (see the `broker` section of
+   `source-inventory.belts.md`), and it is named here only because the two subsystems sit next to
+   each other in that document and are not to be confused.
+2. **Four design points within the attention belt are ratified, not left to the implementing
+   sub-belt to decide:**
+   - The six-name fact vocabulary is promoted **beyond** D-0302's "restatement for the oracle's
+     sake, not an adoption": A1's own work will carry a new `D-` entry, in the range this belt
+     allocates, that supersedes D-0302's limitation and adopts the vocabulary as more than a lint
+     oracle. This entry does not itself allocate that id or write that entry -- it ratifies that A1
+     is the belt that does, ahead of any other belt reaching for the same six names.
+   - The mapping from the source's eighteen `kind` values to the six fact states is **not
+     invented** by this port: every ported case is required to give its fact state explicitly, so
+     no continuo-authored kind-to-state table exists for a belt case to silently depend on.
+   - The dedup subsystem's inherited defect -- malformed state loading as an empty `DedupState`
+     (the same defect `source-inventory.belts.md` flagged when this belt was still `retarget`) --
+     is repaired **fail-closed now**, inside A2. Rebuilding the corrupted state instead of refusing
+     it is a different, larger repair and cannot land in A2 for the same reason D-0405 gives for its
+     one deferred repair: it is named here as declined-for-now rather than silently out of scope,
+     and the belt that eventually takes it on is not yet chosen -- naming one before A2 exists would
+     be inventing a commitment this gate was not asked to make.
+   - The belt's parity ledgers follow D-0208's notation for a translated case whose mechanism
+     changes while the property it asserts is preserved: that case is recorded `adapted`, with the
+     divergence stated in the ledger, never folded silently into `ported`. D-0019's ledger
+     vocabulary is otherwise unchanged -- `not-ported` and waivers remain available for cases this
+     belt declines outright. `test_broker_journal_contract` is not a case at all -- it has no node
+     ids and is not part of the source-inventory manifest's file registration -- so it gets a
+     standalone, metadata-only ledger recording **zero entries** when the belt starts, outside the
+     parity checker's normal file-to-inventory linkage: an explicit, checked-in "this file
+     contributes nothing" rather than the file's total absence from every attention ledger being
+     mistaken for an oversight, with the reason cross-referenced to `source-inventory.belts.md`
+     rather than restated in the ledger. The DDL's lack of a constraint on `incident.fact_state` is
+     carried as-is -- it is a property of the schema this port inherits, not a defect this belt
+     repairs. The notify backend stays `stdout`, carried unchanged from the source rather than
+     generalised to a pluggable backend.
+3. **The `gate_item11` belt starts, under `D-10xx`.** `D-0504`'s testkit extraction is a
+   precondition, run first as its own PR (`PR-0`), because both
+   `test_no_provider_detail_leaks.py` and `test_suite_runs_unchanged.py` need the frozen testkit to
+   already exist rather than growing a second copy of it. `src/index.ts`'s two re-exported
+   vocabularies are carried as an allowlist exception to the leak check -- a named exception with a
+   falsifier, not a silent gap -- reserving a subpath-exports split as a future, separately-decided
+   move. The thirteen `test_suite_runs_unchanged` cases are ported by a scoped subprocess
+   double-run rather than by re-deriving interlock's own suite-identity check, and a spike proves
+   the double-run shape works before the belt commits to it.
+
+**This is the gate D-0031 defined, exercised again -- not a supersession of D-0032.** D-0032
+ratified three subsystems at the 2026-08-28 gate; this entry ratifies two more at the 2026-08-30
+gate, under the same document and the same three-layer boundary. Statuses not named here remain
+proposals.
+
+**Falsifier.** The A1/A2/A3 split is expected to cite across itself -- that is the reason `D-09xx`
+is allocated once rather than three times -- so cross-citation is not what would falsify the
+sharing. What would is a collision: two sub-belts minting decisions that land on the same id because
+neither sub-belt's author could see the other's in-flight entry. If that happens, the shared-range
+allocation is what is wrong, and a future entry splits `D-09xx` into per-sub-belt slices. If the
+fail-closed dedup repair is found to lose data a caller needed, the deferred rebuild belt is what
+was missing, not evidence against fail-closed itself. If the gate_item11 double-run spike shows the
+subprocess shape does not scale to thirteen cases, the belt's approach is what is wrong, not the
+D-range allocation, which stays burned either way.
+
+**Source.** Ratified by the user on 2026-08-30, task `continuo-belt-ratification-2`. Decision id
+allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to use this file").
 
 ---
 

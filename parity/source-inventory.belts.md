@@ -104,6 +104,13 @@ than merely signal it.
 
 ### `attention` -- `retarget` -- 194 cases
 
+Belt start ratified at the human gate on 2026-08-30 (D-0034), split into three sub-belts sharing
+one D-range, `D-09xx`: A1 (facts, 90 cases), A2 (dedup and config, 44 cases) and A3 (notify and
+pipeline, 60 cases). The status keeps its `retarget` spelling here -- starting the belt is not the
+same axis as completing it (the same distinction D-0032's belts used); each sub-belt's rows move to
+`in-scope` at its own completion. `test_broker_journal_contract.py` is **not** part of these 194
+cases -- it has no node ids and sits in the `broker` section below as a collection-time skip.
+
 Every file here is classed in `PORTING_LEDGER.md` as either `carry (invariant) / rewrite
 (mechanism)` or `rewrite`; **none** is a straight carry. `test_classifier.py` (61) carries the
 strongest invariant -- that every fact-vocabulary row has a pinned expectation -- but the mechanism
@@ -231,6 +238,13 @@ polices carried prose the same way -- so this is a case of the property being he
 than of it being dropped.
 
 ### `gate_item11` -- `retarget` -- 64 cases
+
+Belt start ratified at the human gate on 2026-08-30 (D-0034), D-range `D-10xx`. `D-0504`'s testkit
+extraction is a precondition, run first as its own PR (`PR-0`). `src/index.ts`'s two re-exported
+vocabularies are carried as an allowlist exception to the leak check (a subpath-exports split is a
+falsifier-bearing future move, not this belt's). The thirteen `test_suite_runs_unchanged` cases are
+ported by a scoped subprocess double-run, with a spike required before the belt commits to that
+shape. The status keeps its `retarget` spelling; it moves to `in-scope` at completion.
 
 The property is real and worth having: no session-backend detail may leak into the
 control plane, asserted structurally so a leak fails the build the day it is introduced. But
@@ -500,5 +514,7 @@ decision gets made by nobody.
 D-ranges are allocated per belt (`DECISIONS.md`, the index table's note). The 2026-08-28
 ratification (D-0032) allocated `D-03xx` to `session`, `D-04xx` to `canary` and `D-05xx` to
 `messagebus`; `D-0601` allocated `D-06xx` to `fault_injection`, `D-0701` `D-07xx` to `secretary`
-and `D-0801` `D-08xx` to `gate_item2`. No range is allocated to any belt still proposed here; that
-allocation is part of the same human gate as the statuses.
+and `D-0801` `D-08xx` to `gate_item2`. The 2026-08-30 ratification (D-0034) allocated `D-09xx` to
+`attention` -- shared across its three sub-belts A1, A2 and A3 rather than split further -- and
+`D-10xx` to `gate_item11`. No range is allocated to any belt still proposed here; that allocation
+is part of the same human gate as the statuses.
