@@ -8,6 +8,7 @@ import {
   IdentityUnconfirmed,
   LoserTerminated,
   OrchestrationRefused,
+  ProviderStartFailed,
   SessionOrchestrator,
 } from "../../src/supervisor.js";
 import { caseRoot } from "../testkit/cases.js";
@@ -15,6 +16,8 @@ import {
   activeRows,
   Clock,
   expectAsyncRefusal,
+  gateMoments,
+  identityIncident,
   makeControlPlane,
   makeOrchestrator,
   makeUuids,
@@ -627,5 +630,184 @@ describe("the U32 shape, mediated; orphans; refusal durability", () => {
     const recorded = refusals(cp);
     expect(recorded.length, "a refused admission left no durable record").toBeGreaterThan(0);
     expect(recorded.every((row) => Boolean(row.refusal_reason))).toBe(true);
+  });
+});
+
+// --------------------------------------------------------------------------
+// an identity incident refuses the same way whoever detects it (continuo #92)
+// --------------------------------------------------------------------------
+
+/**
+ * The race continuo #92 measured, forced both ways instead of run twice.
+ *
+ * A mismatched identity has two legitimate detection points: the readout the
+ * provider takes immediately after the spawn (which the verb then answers
+ * with), and the read-back poll `#awaitIdentity` runs afterwards. With a real
+ * child, which of them sees it first is event-loop scheduling against process
+ * startup -- a contended runner shifts the odds, which is how a documentation
+ * pull request went red. Nothing here is left to that: the scripted provider
+ * is told exactly when to produce the incident, so each case exercises one
+ * detection point and only that one.
+ *
+ * What every case asserts is that the *caller-visible class* does not move:
+ * `IdentityUnconfirmed`, never `ProviderStartFailed` (D-0047). These are
+ * target-only -- interlock's suite has no case for either forced path, and
+ * this is the assertion its `test_a_reported_identity_that_disagrees_is_never_confirmed`
+ * was only accidentally making.
+ */
+describe("an identity incident refuses the same way whoever detects it (target-only)", () => {
+  /**
+   * A binding already at `spawned` for a session the provider knows: the row
+   * a crash leaves behind after the write-ahead mark and a spawn that
+   * happened. `recover()` from here goes through `resume`, which is the verb
+   * the start-only fix would have left racing.
+   */
+  function spawnedBinding(
+    cp: SqliteDatabase,
+    clock: Clock,
+    provider: ScriptedProvider,
+    uuids: () => string,
+  ): string {
+    const lease = acquire(cp, {
+      resource: RESOURCE,
+      holder: "sup-1",
+      nowMs: clock.nowMs(),
+      ttlMs: TTL_MS,
+    });
+    const sessionId = uuids();
+    sessionBinding.prepareBinding(cp, lease, {
+      sessionId,
+      runId: RUN_ID,
+      provider: "scripted",
+      nowMs: clock.nowMs(),
+    });
+    sessionBinding.markSpawned(cp, lease, { sessionId, runId: RUN_ID, nowMs: clock.nowMs() });
+    provider.plant(sessionId); // the spawn did happen; the child is out there
+    clock.advancePastExpiry();
+    return sessionId;
+  }
+
+  test("start: detected by the post-spawn readout, inside the verb's own answer", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // Detection point 1, forced: the child's event beat the readout the
+    // provider takes immediately after spawning, so `start` itself answers
+    // with the incident and `#awaitIdentity` is never reached.
+    provider.onStart = (request) => identityIncident(request.sessionId);
+
+    const refusal = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace).start(),
+      IdentityUnconfirmed,
+    );
+
+    expect(provider.readStateCalls, "the poll ran; this case must not reach it").toBe(0);
+    expect(refusal.lastAnswer).toBeInstanceOf(Failure);
+    expect((refusal.lastAnswer as Failure).kind).toBe(FailureKind.IDENTITY_INCIDENT);
+    // Through the fence, not around it: the refusal is preceded by a gate
+    // write that a stale claimant would have failed.
+    expect(gateMoments(cp)).toContain("identity-incident-start");
+    const rows = activeRows(cp);
+    expect(rows).toHaveLength(1);
+    expect([rows[0]?.[1], rows[0]?.[2]]).toEqual(["spawned", "unobserved"]);
+  });
+
+  test("start: detected only by the read-back poll", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // Detection point 2, forced: the spawn's own readout saw nothing (the
+    // ordinary answer), and the child's contradicting event lands during the
+    // poll instead.
+    provider.onReadState = (sessionId) => identityIncident(sessionId);
+
+    const refusal = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace).start(),
+      IdentityUnconfirmed,
+    );
+
+    // Terminal, not polled to exhaustion: one read-back settled it, where
+    // `readbackAttempts` is 3.
+    expect(provider.readStateCalls).toBe(1);
+    expect((refusal.lastAnswer as Failure).kind).toBe(FailureKind.IDENTITY_INCIDENT);
+    expect(gateMoments(cp)).toContain("identity-incident-readback");
+    const rows = activeRows(cp);
+    expect(rows).toHaveLength(1);
+    expect([rows[0]?.[1], rows[0]?.[2]]).toEqual(["spawned", "unobserved"]);
+  });
+
+  test("resume: detected inside the verb's own answer", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const sessionId = spawnedBinding(cp, clock, provider, uuids);
+    provider.onResume = (id) => identityIncident(id);
+
+    const refusal = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-2").recover(),
+      IdentityUnconfirmed,
+    );
+
+    expect(provider.resumeCalls).toEqual([sessionId]);
+    expect((refusal.lastAnswer as Failure).kind).toBe(FailureKind.IDENTITY_INCIDENT);
+    expect(gateMoments(cp)).toContain("identity-incident-resume");
+    expect(activeRows(cp)).toEqual([[sessionId, "spawned", "unobserved"]]);
+  });
+
+  test("resume: detected only by the read-back poll", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const sessionId = spawnedBinding(cp, clock, provider, uuids);
+    // Call 0 is `recover`'s own probe ("does the provider know this
+    // session?") and must answer normally, or the walk never reaches the
+    // resume this case is about. The incident lands on the poll that follows.
+    provider.onReadState = (id, call) => (call === 0 ? undefined : identityIncident(id));
+
+    const refusal = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-2").recover(),
+      IdentityUnconfirmed,
+    );
+
+    expect(provider.resumeCalls).toEqual([sessionId]);
+    expect(provider.readStateCalls, "the probe, then one conclusive poll").toBe(2);
+    expect((refusal.lastAnswer as Failure).kind).toBe(FailureKind.IDENTITY_INCIDENT);
+    expect(gateMoments(cp)).toContain("identity-incident-readback");
+    expect(activeRows(cp)).toEqual([[sessionId, "spawned", "unobserved"]]);
+  });
+
+  test("a start that genuinely failed to start is still ProviderStartFailed", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // The regression guard the unification must not break: only the identity
+    // kind is redirected. `UNINTERPRETABLE_RESPONSE` still covers garbage
+    // output and unreadable capture files, and those are not identity
+    // conflicts -- which is exactly why the discriminator had to be a kind of
+    // its own rather than a match on `detail`'s prose.
+    provider.onStart = () =>
+      new Failure(
+        FailureKind.UNINTERPRETABLE_RESPONSE,
+        "identity incident: the prose alone must not decide this",
+      );
+
+    await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace).start(),
+      ProviderStartFailed,
+    );
+  });
+
+  test("a stale claimant is refused as a stale writer, not as an identity refusal", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // The precedence the new path must not bypass: the fenced gate runs
+    // before the identity refusal is raised, so a claimant whose lease was
+    // taken over while the provider was answering leaves as a refused stale
+    // writer with its child handled -- never as a quiet IdentityUnconfirmed.
+    // Forced on the *poll* path deliberately: the start walk already fences
+    // between the verb and its interpretation, so a takeover during `onStart`
+    // would be caught by that older gate and prove nothing about this one.
+    // Here the only gate between the incident and the throw is the new
+    // path's own.
+    provider.onReadState = (sessionId) => {
+      takeOver(cp, clock, "sup-b");
+      return identityIncident(sessionId);
+    };
+
+    const caught = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start(),
+      LoserTerminated,
+    );
+    expect(provider.stopCalls).toContain(caught.sessionId);
+    expect(refusals(cp).length).toBeGreaterThan(0);
   });
 });

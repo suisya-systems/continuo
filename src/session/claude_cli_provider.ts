@@ -846,6 +846,18 @@ interface BrokenRecord {
  */
 interface Uninterpretable {
   readonly kind: "uninterpretable";
+  /**
+   * The {@link FailureKind} the verbs that owe a typed failure must raise.
+   *
+   * Carried on the value rather than chosen at each conversion site, because
+   * the *reason* is known where the outcome is built and nowhere else: by the
+   * time `readState` or `#spawn` turns one of these into a `Failure`, all it
+   * has left is prose. Every site that used to hard-code
+   * `UNINTERPRETABLE_RESPONSE` now reads this instead, so an identity incident
+   * keeps its narrower kind through whichever verb happens to observe it
+   * first (continuo D-0047).
+   */
+  readonly failureKind: FailureKind;
   readonly detail: string;
   readonly providerDetail: Readonly<Record<string, unknown>>;
 }
@@ -863,7 +875,33 @@ function uninterpretable(
   detail: string,
   providerDetail: Readonly<Record<string, unknown>> = {},
 ): Uninterpretable {
-  return { kind: "uninterpretable", detail, providerDetail };
+  return {
+    kind: "uninterpretable",
+    failureKind: FailureKind.UNINTERPRETABLE_RESPONSE,
+    detail,
+    providerDetail,
+  };
+}
+
+/**
+ * The same value, carrying the identity-incident kind instead.
+ *
+ * Two call sites and one prefix between them: the branch that *detects* a
+ * disagreeing identity and the branch that answers from the persisted
+ * incident. They exist as one helper so the two cannot drift into different
+ * kinds -- which is the whole point, since which of them runs is a race
+ * against the child (continuo D-0047).
+ */
+function identityIncident(
+  detail: string,
+  providerDetail: Readonly<Record<string, unknown>> = {},
+): Uninterpretable {
+  return {
+    kind: "uninterpretable",
+    failureKind: FailureKind.IDENTITY_INCIDENT,
+    detail,
+    providerDetail,
+  };
 }
 
 /** The complete stream-json lines a child has written, and the last bad one. */
@@ -1409,11 +1447,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       }
       const outcome = await this.#readout(session);
       if (isUninterpretable(outcome)) {
-        return new Failure(
-          FailureKind.UNINTERPRETABLE_RESPONSE,
-          outcome.detail,
-          outcome.providerDetail,
-        );
+        return new Failure(outcome.failureKind, outcome.detail, outcome.providerDetail);
       }
       return new Ok(outcome);
     });
@@ -1448,11 +1482,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       }
       const outcome = await this.#readout(session);
       if (isUninterpretable(outcome)) {
-        return new Failure(
-          FailureKind.UNINTERPRETABLE_RESPONSE,
-          outcome.detail,
-          outcome.providerDetail,
-        );
+        return new Failure(outcome.failureKind, outcome.detail, outcome.providerDetail);
       }
       return new Ok(outcome);
     });
@@ -1498,7 +1528,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       }
       if (session.record.incident !== null) {
         return new Failure(
-          FailureKind.UNINTERPRETABLE_RESPONSE,
+          FailureKind.IDENTITY_INCIDENT,
           `identity incident: ${session.record.incident}`,
           { session_id: sessionId, expected: session.record.claude_session_uuid },
         );
@@ -1515,11 +1545,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         // by spawning a second writer next to it.
         const adopted = await this.#readout(session);
         if (isUninterpretable(adopted)) {
-          return new Failure(
-            FailureKind.UNINTERPRETABLE_RESPONSE,
-            adopted.detail,
-            adopted.providerDetail,
-          );
+          return new Failure(adopted.failureKind, adopted.detail, adopted.providerDetail);
         }
         return new Ok(adopted);
       }
@@ -1534,7 +1560,11 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       const finished = await this.#readout(session);
       if (isUninterpretable(finished)) {
         return new Failure(
-          FailureKind.UNINTERPRETABLE_RESPONSE,
+          // The prefix is this site's own, but the kind stays the readout's:
+          // a finished generation that contradicted the committed identity is
+          // an identity incident whether the caller reaches it through
+          // `readState` or through the resume that refuses to bury it.
+          finished.failureKind,
           `refusing to resume session ${pyRepr(sessionId)}: its finished ` +
             `generation cannot be reconciled first -- ${finished.detail}`,
           finished.providerDetail,
@@ -1744,11 +1774,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     // reason: the child has almost certainly written nothing yet.
     const outcome = await this.#readout(session);
     if (isUninterpretable(outcome)) {
-      return new Failure(
-        FailureKind.UNINTERPRETABLE_RESPONSE,
-        outcome.detail,
-        outcome.providerDetail,
-      );
+      return new Failure(outcome.failureKind, outcome.detail, outcome.providerDetail);
     }
     return new Ok(outcome);
   }
@@ -2166,7 +2192,12 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       // call detects it is a race against the child -- a slow machine can put
       // the whole detection inside `start()`'s own readout -- and the evidence
       // must not depend on winning it.
-      return uninterpretable(`identity incident: ${record.incident}`, {
+      //
+      // The *kind* is part of that evidence, which is why both branches go
+      // through `identityIncident`: continuo #92 measured the race deciding
+      // which exception class the orchestrator raised, because this branch and
+      // the detecting branch below were only alike in their prose (D-0047).
+      return identityIncident(`identity incident: ${record.incident}`, {
         session_id: record.session_id,
         expected: record.claude_session_uuid,
       });
@@ -2206,7 +2237,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           "process reporting another's -- is the U27 failure shape; " +
           "this session is impounded, not warned about.";
         this.#recordIncident(session, incident);
-        return uninterpretable(`identity incident: ${incident}`, {
+        return identityIncident(`identity incident: ${incident}`, {
           ...baseDetail,
           expected: record.claude_session_uuid,
           reported,

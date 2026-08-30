@@ -25,14 +25,21 @@
   "target": {
     "test_file": "test/gate_item2/orchestrator-walk.test.ts",
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "why": "None. Every collected test in this file is a translation of a source case."
+      "count": 6,
+      "ids": [
+        "test/gate_item2/orchestrator-walk.test.ts::an identity incident refuses the same way whoever detects it (target-only) > start: detected by the post-spawn readout, inside the verb's own answer",
+        "test/gate_item2/orchestrator-walk.test.ts::an identity incident refuses the same way whoever detects it (target-only) > start: detected only by the read-back poll",
+        "test/gate_item2/orchestrator-walk.test.ts::an identity incident refuses the same way whoever detects it (target-only) > resume: detected inside the verb's own answer",
+        "test/gate_item2/orchestrator-walk.test.ts::an identity incident refuses the same way whoever detects it (target-only) > resume: detected only by the read-back poll",
+        "test/gate_item2/orchestrator-walk.test.ts::an identity incident refuses the same way whoever detects it (target-only) > a start that genuinely failed to start is still ProviderStartFailed",
+        "test/gate_item2/orchestrator-walk.test.ts::an identity incident refuses the same way whoever detects it (target-only) > a stale claimant is refused as a stale writer, not as an identity refusal"
+      ],
+      "why": "Six cases, none counted as ported coverage, all six added by continuo#92 and required by D-0047. A mismatched identity has two legitimate detection points -- the readout the provider takes immediately after the spawn, which the verb then answers with, and the read-back poll `#awaitIdentity` runs afterwards -- and with a real child which of them fires first is event-loop scheduling against process startup. interlock's suite has no case for either forced path; its `test_a_reported_identity_that_disagrees_is_never_confirmed` asserts one refusal class and gets whichever path the machine happened to run, which is how a continuo pull request touching no code went red on a contended Windows runner. The first four force one detection point each, across both verbs that share `#spawn` (`start` and `resume`), and assert the caller-visible class does not move. The fifth is the regression guard that the redirect is not over-broad: a `Failure` whose `detail` says `identity incident` but whose kind is `UNINTERPRETABLE_RESPONSE` is still `ProviderStartFailed`, which is what makes the discriminator a kind rather than a string match. The sixth pins the ordering the new path must not bypass -- the fenced post-spawn gate runs before the identity refusal is raised, so a claimant that lost its lease leaves as `LoserTerminated` with its child handled."
     },
     "systematic_mappings": [
       {
         "from": "`SessionOrchestrator.start()` / `.recover()` are ordinary blocking Python calls; the five `SessionProvider` verbs they drive are synchronous in the source.",
-        "to": "`SessionOrchestrator.start()` / `.recover()` are `async` and every call site in this file `await`s them.",
+        "to": "`SessionOrchestrator.start()` / `.recover()` are `async` and every call site in this file `await's them.",
         "why": "D-0301 made continuo's `SessionProvider` verbs `Promise`-returning (Node has no synchronous way to wait for a child to exit), so `src/supervisor.ts` (D-0801) is `async` end to end. This is a calling-convention change with no effect on what any case asserts -- every value compared, every row read, every exception type is the source's -- so it is recorded once here rather than argued per case, and no case is marked `adapted` for it alone (consistent with how the session belt's own ledgers treat the same D-0301 change).",
         "affects": "every case in this file"
       },

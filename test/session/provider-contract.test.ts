@@ -1098,7 +1098,13 @@ test("the closed vocabularies cannot be extended at runtime (target-only)", () =
 
   // The consequence, spelled out: a minted kind is what `Failure` would have
   // accepted, so the vocabulary stays closed where it is actually read.
-  expect(FailureKind.members.length).toBe(6);
+  //
+  // Seven since continuo D-0047 added `IDENTITY_INCIDENT`, where interlock's
+  // enum has six. The count is here to show the mints above changed nothing,
+  // not to pin the vocabulary's size -- its sibling case above is written so a
+  // seventh member "must expand the axis, not fail this case", and this line
+  // moves with a declared addition rather than forbidding one.
+  expect(FailureKind.members.length).toBe(7);
 });
 
 test("ContractViolation and SpawnRefused are not catchable as one thing (target-only)", () => {

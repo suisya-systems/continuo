@@ -792,7 +792,17 @@ test("test_a_wrong_identity_read_back_is_an_incident", async () => {
   const result = await provider.readState("sess-1");
   expect(result).toBeInstanceOf(Failure);
   const refusal = refusalOf(result);
-  expect(refusal.kind).toBe(FailureKind.UNINTERPRETABLE_RESPONSE);
+  // **Deliberate divergence from the source assertion** (continuo D-0047,
+  // recorded in `parity/session.claude-cli-provider.ledger.json`). The source
+  // asserts `FailureKind.UNINTERPRETABLE_RESPONSE` here because in interlock
+  // that is the only kind an identity incident can carry. continuo #92
+  // measured what that costs: the orchestrator could not tell an impounded
+  // identity from a child that wrote a broken line, so the refusal class its
+  // caller saw depended on which detection path won a race against the child.
+  // continuo answers that with a kind of its own, so this case now asserts the
+  // narrower kind the same fact carries here. Nothing is weakened -- both
+  // spellings pin exactly one member of a closed vocabulary.
+  expect(refusal.kind).toBe(FailureKind.IDENTITY_INCIDENT);
   expect(refusal.detail).toContain("identity incident");
   expect(refusal.providerDetail["expected"]).toBe(claudeSessionUuid("sess-1"));
 });

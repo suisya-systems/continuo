@@ -73,6 +73,7 @@ spaces distinct.
 | D-0044 | Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives | accepted |
 | D-0045 | `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs | accepted |
 | D-0046 | `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run | accepted |
+| D-0047 | An identity incident gets its own `FailureKind`, and every path refuses it as `IdentityUnconfirmed` | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -8639,3 +8640,103 @@ was forgotten.
 continuo#75, A3). Decision id from the `D-09xx` range `D-0034` allocated to the attention belt; taken
 as the next free id after A1's `D-0901`..`D-0903`/`D-0906` and A2's `D-0904`..`D-0905`, and ahead of
 A3's `D-0951`..`D-0952`, since this decision is not owned by a single sub-belt.
+
+---
+
+## D-0047 -- An identity incident gets its own `FailureKind`, and every path refuses it as `IdentityUnconfirmed`
+
+**Context.** A child that reports a session id other than the one committed before its spawn is the
+U27 failure shape, and `ClaudeCliSessionProvider` impounds the session over it. The mismatch has two
+legitimate detection points: the readout the provider takes **immediately after spawning**
+(`#spawn`, whose answer `start` and `resume` both return), and the read-back poll
+`SessionOrchestrator.#awaitIdentity` runs afterwards. Which one fires first is event-loop scheduling
+against process startup.
+
+Before this decision the caller saw a *different exception class* depending on which won:
+`#unwrap` turned the verb's `Failure` into `ProviderStartFailed`, while `#awaitIdentity` -- which
+treated only `Ok` as conclusive -- polled to exhaustion and raised `IdentityUnconfirmed`. The
+provider's own comment already said this must not happen ("which call detects it is a race against
+the child ... and the evidence must not depend on winning it"), but it said it about the *persisted
+incident*, not about the class. continuo#92 was filed when the race went the other way on a
+contended `windows-latest` runner and turned a pull request whose entire diff was 80 lines of this
+file red.
+
+The naive repair -- translate `UNINTERPRETABLE_RESPONSE` at the `start` verb into
+`IdentityUnconfirmed` -- is wrong, and an independent review said so before this was taken:
+that kind also carries a line that is not JSON, a `result` event naming no outcome, and a capture
+file that cannot be read, so splitting on it would classify broken output as an identity conflict.
+Matching the `detail` prose instead would promote a message to an internal protocol.
+
+**Decision.** Three parts, in this order, because the first is what makes the others honest.
+
+1. **A typed discriminator.** `FailureKind` gains a seventh member, `IDENTITY_INCIDENT`
+   (`identity-incident`), emitted from every place an identity incident is built: `#readout`'s
+   persisted-incident branch, `#readout`'s live mismatch scan, and `resume`'s own record-incident
+   guard. `Uninterpretable` carries the kind so each verb forwards what the readout decided rather
+   than hard-coding one. Sites that are **not** incidents keep `UNINTERPRETABLE_RESPONSE`, including
+   the two "finished without any event naming a session identity" branches -- those are *never read
+   back*, not *positively contradicted*.
+2. **One refusal class, both verbs.** `#unwrap` raises `IdentityUnconfirmed` for
+   `IDENTITY_INCIDENT` and `ProviderStartFailed` for everything else, so a start that genuinely
+   failed to start is unchanged. `#awaitIdentity` treats an incident as terminal instead of polling
+   a decided outcome to exhaustion. `start` and `resume` share `#spawn`, so both are covered; fixing
+   only `start` would have left the same nondeterminism one verb over.
+3. **One helper, and it goes through the fence.** Both roads run through
+   `#refuseIdentityConfirmation`, which calls `#validateAfterSpawn` **before** it raises. The
+   stale-writer precedence is therefore preserved exactly: a claimant that lost its lease while the
+   provider was answering leaves as `LoserTerminated` with its child handled, never as a quiet
+   identity refusal. The gate row's `moment` records which road was taken, so nothing is lost that a
+   reader of the `action` table wanted.
+
+`IdentityUnconfirmed`'s documentation is widened to the two meanings it now carries: never
+positively read back, and positively contradicted.
+
+**Rejected alternative: accept both classes and widen what callers treat as this refusal.** That
+records an ambiguity as intended behaviour without anyone deciding it is. It would also make this
+declared port's case weaker than its source's, which the parity rules do not permit without
+recording it -- and the thing being weakened is the only assertion in the file that says which
+refusal a caller gets.
+
+**Rejected alternative: remove the post-spawn readout so path (a) cannot exist.** Returning success
+from `start` after a terminal safety fact has been learned *and persisted* would conceal a known
+incident, and contradicts the documented invariant that every later answer about an impounded
+session keeps failing. Whether that readout should exist at all is a separate question (continuo#92
+leaves it open); it is not settled here.
+
+**Consequences.** `FailureKind` has seven members where interlock's has six. This is a deliberate
+divergence under D-0023 (interlock is frozen; the belt touching the code repairs it here) and is
+recorded in `parity/session.claude-cli-provider.ledger.json`'s `divergences` and in
+`parity/session.provider-contract.ledger.json`'s. Two assertions move with it: the ported
+`test_a_wrong_identity_read_back_is_an_incident` now asserts the narrower kind and its ledger entry
+becomes `adapted` (neither weaker nor stronger -- both spellings pin exactly one member of a closed
+vocabulary), and the target-only `FailureKind.members.length` count goes 6 -> 7. The vocabulary's
+other target-only case needed no change: it was written to state a relative order rather than the
+whole list, deliberately, "so a seventh member must expand the axis, not fail this case" -- the
+repository had already decided that adding a member is a thing that may happen.
+
+Seven target-only cases land with it, and they are the point of the change rather than its
+paperwork: six in `test/gate_item2/orchestrator-walk.test.ts` force one detection point each across
+both verbs (and pin the `ProviderStartFailed` guard and the stale-writer precedence), and one in
+`test/gate_item2/mediated-real-provider.test.ts` takes the resume half over the real provider with
+the race *removed* -- the incident is already persisted, so there is no child left to lose a race
+to. Both mutations were measured: disabling `#unwrap`'s branch reddens the two verb-detected cases,
+and disabling `#awaitIdentity`'s reddens the two poll cases. **A green run is not the evidence
+here** -- D-1003 already ruled that out for this cell -- the forced cases are.
+
+**Falsifier.** If a caller appears that must tell `ProviderStartFailed` and `IdentityUnconfirmed`
+apart *for an identity incident specifically* -- retry logic that treats a failed spawn differently
+from an impounded identity, an operator surface that renders them separately, a log classifier that
+splits on the class -- then this unification destroyed a distinction that was worth building and
+needs a successor entry. The premise it was taken on, and the thing to re-measure: today neither
+class name appears anywhere outside `src/index.ts`'s re-exports and the tests, so no caller depends
+on the accidental distinction and the migration cost is nil. Separately, if `IDENTITY_INCIDENT` ever
+starts being emitted for something that is not a committed-versus-reported mismatch, the
+discriminator has stopped discriminating and part 1 has failed on its own terms.
+
+**Source.** Human gate, 2026-08-31, task `continuo-identity-refusal-unify`, on continuo#92
+(including its "Independent review" and "Revised criteria" sections), against interlock `65f36c5`
+(`src/claude_org_runtime/session/provider.py`, `session/claude_cli_provider.py`,
+`supervisor/session_orchestrator.py`). Decision id allocated by the window in the shared band
+(`D-0019`..`D-0099`): the change straddles the session belt (`FailureKind` in
+`src/session/provider.ts`) and the gate_item2 belt (`src/supervisor.ts`), and the adoption itself
+was taken at the window rather than inside either belt's work.
