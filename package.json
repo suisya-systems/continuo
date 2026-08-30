@@ -50,7 +50,7 @@
     "parity": "node scripts/parity-check.mjs",
     "inventory": "node scripts/source-inventory-check.mjs",
     "pretest": "npm run build",
-    "test": "vitest run",
+    "test": "node scripts/run-suite.mjs",
     "test:watch": "vitest",
     "verify": "npm run lint && npm run knip && npm run typecheck && npm run smoke:native && npm run test && npm run parity && npm run inventory"
   },
