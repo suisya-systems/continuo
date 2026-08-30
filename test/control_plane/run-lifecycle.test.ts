@@ -79,6 +79,7 @@ import {
   readRun,
   runLeaseResource,
   TERMINAL_RUN_STATUSES,
+  UnknownRunRefused,
 } from "../../src/control_plane/run_lifecycle.js";
 import { caseRoot, databasePath, suiteTemplate, writeStep } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
@@ -314,7 +315,7 @@ describe("the transition goes through the protected-write gate", () => {
     expect(actions(cp, "run-a")).toEqual([]);
   });
 
-  test("a run that does not exist is a missed write, not a created one", () => {
+  test("a run that does not exist is named as such, not created and not merely missed", () => {
     const cp = cpFixture();
     const lease = acquireRunLease(cp, {
       runId: "run-absent",
@@ -322,6 +323,9 @@ describe("the transition goes through the protected-write gate", () => {
       nowMs: T0,
       ttlMs: TTL_MS,
     });
+    // Told apart from "somebody else already advanced it", which is the other
+    // way a fenced write matches no row. Collapsing the two would leave an
+    // operator unable to tell a resolution mistake from a lost race.
     expectRefusal(
       () =>
         advanceRunStatus(cp, lease, {
@@ -330,9 +334,45 @@ describe("the transition goes through the protected-write gate", () => {
           to: "running",
           nowMs: T0 + 1,
         }),
-      ProtectedWriteMissed,
+      UnknownRunRefused,
+      /there is no run 'run-absent' to transition/,
     );
     expect(readRun(cp, "run-absent")).toBeUndefined();
+  });
+
+  test("a stale token on an absent run is still a typed refusal, not a foreign key error", () => {
+    // The case that makes the existence question worth asking before the write
+    // rather than leaving it to the statement. `protectedWrite` records a stale
+    // writer as an `action` row, and `action.run_id` references `run(run_id)`
+    // -- so for a run that is not there the refusal insert dies with
+    // SQLITE_CONSTRAINT_FOREIGNKEY, the refusal rolls back, and a raw SQLite
+    // error surfaces in place of StaleWriterRefused. That is exactly the
+    // rejection ACCEPTANCE.md section 2 forbids being dropped, dropped at the
+    // one moment a writer was in fact rejected.
+    const cp = cpFixture();
+    const stale = acquireRunLease(cp, {
+      runId: "run-absent",
+      holder: HOLDER,
+      nowMs: T0,
+      ttlMs: TTL_MS,
+    });
+    const afterExpiry = T0 + TTL_MS + 1;
+    acquireRunLease(cp, {
+      runId: "run-absent",
+      holder: "secretary-2",
+      nowMs: afterExpiry,
+      ttlMs: TTL_MS,
+    });
+    expectRefusal(
+      () =>
+        advanceRunStatus(cp, stale, {
+          runId: "run-absent",
+          from: "created",
+          to: "running",
+          nowMs: afterExpiry + 1,
+        }),
+      UnknownRunRefused,
+    );
   });
 });
 
@@ -415,6 +455,19 @@ describe("the gate cannot be walked around", () => {
     // the anomaly the rule names, and this is what surfaces it.
     const offenders = sourceFiles().filter((path) =>
       /\bUPDATE\s+run\b|\bINSERT\s+INTO\s+run\b/i.test(readFileSync(path, "utf8")),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  test("no module under src deletes a run", () => {
+    // What `UnknownRunRefused` leans on: the existence question is asked
+    // before the write, so a run deleted between the two would put the
+    // foreign-key failure back. There is no such window in this build because
+    // there is no deletion path -- asserted rather than assumed, since `run`
+    // has no `rows_are_never_deleted` trigger the way `outbox` does, and this
+    // is the only thing saying so.
+    const offenders = sourceFiles().filter((path) =>
+      /\bDELETE\s+FROM\s+run\b/i.test(readFileSync(path, "utf8")),
     );
     expect(offenders).toEqual([]);
   });

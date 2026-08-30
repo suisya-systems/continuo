@@ -369,6 +369,7 @@ export {
   RunTransitionRefused,
   readRun,
   runLeaseResource,
+  UnknownRunRefused,
 } from "./control_plane/run_lifecycle.js";
 export {
   type ControlPlaneState,

@@ -232,6 +232,43 @@ export class RunTransitionRefused extends Error {
   }
 }
 
+/**
+ * There is no such run to transition.
+ *
+ * **Why this is a read before the write, when the fence deliberately is not.**
+ * `ACCEPTANCE.md` section 2 rules out check-then-write for the *lease*,
+ * because the lease can expire between the check and the write and the check
+ * would then be a lie. Row existence is a different question, and leaving it
+ * to the statement produces a worse answer than asking it:
+ *
+ * - With a live token, an absent run and a run that has merely moved on both
+ *   collapse into {@link ProtectedWriteMissed} -- "the WHERE matched nothing"
+ *   -- and an operator cannot tell "somebody else advanced this run" from
+ *   "this run identifier is wrong".
+ * - With a *stale* token it is worse than ambiguous. `protectedWrite` records
+ *   the refusal as an `action` row, and `action.run_id` is a foreign key to
+ *   `run`. For an absent run that insert fails with
+ *   `SQLITE_CONSTRAINT_FOREIGNKEY`, which rolls the refusal back and raises a
+ *   raw SQLite error in place of {@link StaleWriterRefused} -- so the one
+ *   thing section 2 says must never happen to a rejection (being silently
+ *   dropped) happens exactly when the writer was rejected.
+ *
+ * The residual race -- a run deleted between this read and the write -- is
+ * not reachable in this build: nothing under `src/` deletes a run row, and
+ * the suite asserts it structurally alongside the no-raw-writes check. If a
+ * deletion path is ever added, this refusal is where it has to be reconsidered.
+ */
+export class UnknownRunRefused extends Error {
+  readonly runId: string;
+
+  constructor(message: string, options: { readonly runId: string }) {
+    super(message);
+    this.name = "UnknownRunRefused";
+    this.runId = options.runId;
+    Object.setPrototypeOf(this, UnknownRunRefused.prototype);
+  }
+}
+
 // --------------------------------------------------------------------------
 // reading a run back
 // --------------------------------------------------------------------------
@@ -328,10 +365,12 @@ export const ADVANCE_RUN_STATUS_EFFECT = "advance_run_status";
  * @throws {RunLifecycleUsageError} a status outside the vocabulary, or a
  *   malformed run id.
  * @throws {RunTransitionRefused} the step is not one `run.status` may take.
+ * @throws {UnknownRunRefused} there is no such run -- see that class for why
+ *   this one question is asked before the write rather than left to it.
  * @throws {StaleWriterRefused} the token was not live; the refusal is an
  *   `action` row in status `refused` before this is raised.
- * @throws {ProtectedWriteMissed} the token was live and no run matched
- *   `(runId, from)` -- an absent run, or one that has already moved.
+ * @throws {ProtectedWriteMissed} the token was live and the run had already
+ *   moved off `from`.
  */
 export function advanceRunStatus(
   connection: SqliteDatabase,
@@ -349,6 +388,7 @@ export function advanceRunStatus(
   requireStatus("from", from);
   requireStatus("to", to);
   requireAdmissibleStep(from, to);
+  requireRunExists(connection, runId);
 
   const statement = fencedUpdate("run", {
     set: {
@@ -376,6 +416,23 @@ export function advanceRunStatus(
 function requireRunId(runId: unknown): void {
   if (typeof runId !== "string" || runId === "") {
     throw new RunLifecycleUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
+  }
+}
+
+/**
+ * The one existence question this module asks before writing. See
+ * {@link UnknownRunRefused} for why it is asked here and not left to the
+ * statement, and why that is not the check-then-write the fence rules out.
+ */
+function requireRunExists(connection: SqliteDatabase, runId: string): void {
+  if (readRun(connection, runId) === undefined) {
+    throw new UnknownRunRefused(
+      `there is no run ${pythonRepr(runId)} to transition. A run is created before it is advanced, ` +
+        "and creation is not this module's (production-schema.md section 4.2 assigns it no fence " +
+        "at all); an identifier naming no run is a resolution mistake, which is the class of fault " +
+        "section 7.1 records as having written a foreign PR's metadata onto a run row in v1",
+      { runId },
+    );
   }
 }
 
