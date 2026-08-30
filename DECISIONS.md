@@ -134,6 +134,7 @@ spaces distinct.
 | D-0904 | Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home | accepted |
 | D-0905 | `isinstance(value, int)` is a question about the config DOCUMENT; the dataclass's own defaults become one exported record | accepted |
 | D-0906 | D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed | accepted |
+| D-0907 | The attention subsystem's `src/index.ts` surface: nothing is re-exported, and the CLI is the intended surface | accepted |
 | D-0951 | A refused dedup ledger stops the attention CLI at exit 2 and leaves the file untouched | accepted |
 | D-0952 | The operator's template goes through a transcribed CPython, checked by a differential oracle rather than by review | accepted |
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
@@ -8559,3 +8560,82 @@ test migration.
 **Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on
 `docs/design/minimal-operating-loop.md` section 6.2, against `docs/production-schema.md` sections
 4.2 and 7.1. Decision id allocated by the window in the shared band (`D-0019`..`D-0099`).
+
+---
+
+## D-0907 -- The attention subsystem's `src/index.ts` surface: nothing is re-exported, and the CLI is the intended surface
+
+**Context.** `package.json` restricts `exports` to a single entry point, `.` (`D-0002`), so any name
+not re-exported from `src/index.ts` is unreachable to an installed consumer -- there is no subpath
+around the barrel. The attention subsystem (A1's `classifier`/`readers`/`fact_state`, A2's
+`config`/`dedup`/`pytime`, A3's `notify`/`pyformat`/`cli` helpers) currently re-exports nothing:
+`grep -c attention src/index.ts` is `0`. continuo#76 asked whether that gap is an oversight three
+belts left unresolved or a considered answer, because under `D-0002` adding one name to the barrel
+*is* adding it to the public API, and interlock -- a package with no such single-entry-point
+constraint -- never had to answer this question. continuo#76 surfaced from review of continuo#75
+(A3), which is why that issue is the trigger even though the decision spans all three sub-belts and
+is not an A3-only concern: A3 exporting its own names alone would leave the subsystem inconsistent,
+and exporting all of them would let one belt decide the public surface of the other two.
+
+The subsystem's actual product surface today is the CLI, `continuo attention scan|watch`
+(`src/cli.ts`), which is fully wired and fully functional with zero barrel exports. Nothing
+programmatic currently calls into `src/attention/*` from outside the subsystem, so there is no
+functional pressure forcing an answer either way -- continuo#76 named this correctly as a
+product/API-surface judgment call, not a technical necessity, and referred it to the human gate.
+
+**Decision.** Option 1 from continuo#76: **export nothing.** `src/index.ts` is left unchanged --
+`grep -c attention src/index.ts` stays `0` -- and the CLI is recorded here as the attention
+subsystem's intended external surface, not as a placeholder for a barrel export that has simply not
+been written yet.
+
+Reasons, in the order that mattered at the gate:
+
+- **The CLI already is the complete, working external surface.** It needs no barrel entry to
+  function, so adding one buys no capability that does not already exist; it only adds a promise.
+- **Publication is decided but not yet live, which makes this the cheapest possible moment to say
+  "not yet."** `D-0045` supersedes `D-0008` and commits continuo to publishing `@suisya-systems/
+  continuo` -- but `package.json` is still `"private": true` at `"version": "0.0.0"`, and the
+  package 404s on the npm registry (checked at the secretary, 2026-08-31). Nothing has installed
+  this package as a dependency yet. A name added to the barrel today is trivial to add later and a
+  breaking change to remove after the first publish; the asymmetry favors waiting for a consumer
+  that asks for it, not pre-committing on its behalf.
+- **`exports` being restricted to `.` (`D-0002`) makes the barrel the entire public API, not a
+  convenience re-export.** Six modules existing under `src/attention/` is not, by itself, a reason
+  to publish them -- that reasoning would publish everything eventually and make the barrel a mirror
+  of the source tree rather than a considered surface.
+
+**Consequences.** No code changes: `src/index.ts` is untouched, and no contract test is added, since
+continuo#76's acceptance criteria only requires pinning the exported names when the chosen shape is
+non-trivial (options 2 or 3) -- option 1 has no shape to pin beyond the `grep -c` count already
+checked by continuo#76 itself. If a future belt wants to export part of the subsystem, that is a new
+decision in this same `D-09xx` range, not a re-litigation of this one: this entry answers "as of
+2026-08-31, with the CLI as the only consumer," not "forever."
+
+**Rejected alternative (continuo#76's option 2): export a small deliberate surface** (candidates
+named in the issue: `Severity` and `DEFAULT_NOTIFY` from `src/attention/config.ts`, and/or the
+fact-state vocabulary type from `src/attention/fact_state.ts`). Rejected for now because nothing
+consumes these programmatically yet, and choosing which names are "small enough" to publish ahead of
+any consumer asking for them is exactly the kind of compatibility promise the still-unpublished
+state of the package (D-0045/D-0008) makes premature to lock in.
+
+**Rejected alternative (continuo#76's option 3): export the subsystem broadly**, matching how
+`control_plane` and `session` are treated in `src/index.ts`. Rejected because `control_plane` and
+`session` are re-exported broadly precisely because other in-repo and external code composes them
+(`D-1001`'s dual re-export); nothing does that for attention, so matching the precedent would publish
+six modules on the strength of the precedent alone rather than on any need it serves.
+
+**Falsifier.** If a real consumer -- in this repository or an external one, once the package is
+actually published -- needs an attention module programmatically and the CLI cannot serve that need
+(for example, embedding the classifier or the notify formatter in another tool's process rather than
+shelling out), this decision is wrong and should be revisited by adding the specific names that
+consumer needs, following continuo#76's option 2 shape rather than reopening option 3's broad
+question. Absent such a consumer, the silence recorded here is deliberate, not a gap: a future belt
+finding `grep -c attention src/index.ts` at `0` should read this entry, not assume the barrel entry
+was forgotten.
+
+**Status.** accepted
+
+**Source.** Human gate, 2026-08-31, on continuo#76 (which itself surfaced from review of
+continuo#75, A3). Decision id from the `D-09xx` range `D-0034` allocated to the attention belt; taken
+as the next free id after A1's `D-0901`..`D-0903`/`D-0906` and A2's `D-0904`..`D-0905`, and ahead of
+A3's `D-0951`..`D-0952`, since this decision is not owned by a single sub-belt.
