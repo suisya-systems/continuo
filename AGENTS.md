@@ -112,8 +112,9 @@ Two rules the suite will not let you forget, but which are easy to trip on first
 byte continuo writes to stdout or stderr is ASCII** (`D-0006`,
 [`docs/cli-output-policy.md`](./docs/cli-output-policy.md)): `test/contract/ascii-output-policy.test.ts`
 fails on any non-ASCII codepoint anywhere in `src/`, `scripts/` or `test/`, on every platform, so
-one em dash in a comment turns the suite red — the consequence it guards against, a cp932
-`UnicodeEncodeError`, is only reachable on the Windows cell. And **Node must be 22.14+ or 24**
+one em dash in a comment turns the suite red. The crash it guards against — a cp932
+`UnicodeEncodeError` on `--help` — is invisible to any test suite and appears only on a real Windows
+console, which is why the rule is enforced on the source text rather than on what gets printed. And **Node must be 22.14+ or 24**
 (`D-0003`); prose files are exempt from the ASCII rule, source files are not.
 
 ## 4. Files that are records, not code
@@ -130,8 +131,12 @@ one em dash in a comment turns the suite red — the consequence it guards again
 - **`DECISIONS.md`** entries — append. The only edit a standing entry takes is the supersession
   line described in §2.
 
-Never edit any of these to make a check pass. If a check is red against a record, either the code is
-wrong or the record needs a decision — both are reportable, neither is a silent edit.
+Recording your own work in these files is the job — a ported case is not done until its ledger entry
+and the totals reconcile. What is forbidden is editing a record so a check goes green *without* the
+change the check is asking for: re-basing a baseline, relabelling a disposition, or trimming an
+inventory. If a check is red and the honest entry cannot be written, that is a report, not an edit
+(`docs/test-translation-conventions.md` §0: "When a mapping is impossible, that is a report, not a
+decision").
 
 ## 5. Reading an issue
 
