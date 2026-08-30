@@ -15,9 +15,10 @@ npm run verify     # all of the above, in that order
 `npm test` runs `scripts/run-suite.mjs`, which on every platform but Windows is `vitest run` and
 nothing else: a single non-watch pass that exits non-zero on any failure. On Windows it runs the
 suite in two passes -- see [Windows runs the child-process tests
-apart](#windows-runs-the-child-process-tests-apart). Either way a filtered run
-(`npm test -- test/messagebus`) goes straight to vitest, because a filter is a request for a named
-subset and the split would quietly reinterpret it. Use `npm run test:watch` while working.
+apart](#windows-runs-the-child-process-tests-apart). Any argument at all (`npm test --
+test/messagebus`, `npm test -- --reporter=json`) turns the split off and says so on stderr: the two
+passes cannot honour a filter or a single report file without lying about one of them, and CI passes
+no arguments. Use `npm run test:watch` while working.
 
 ## The suite is the specification
 

@@ -15,7 +15,9 @@
  *
  * Linux is left exactly as it was. `npm test` there still runs `vitest run`
  * with the arguments it was given and nothing else; the ubuntu cells fail
- * about 0.5% of the time and have no contention problem to solve.
+ * about 0.5% of the time and have no contention problem to solve. So does a run
+ * given any argument at all, on Windows too, loudly -- see the note where that
+ * is decided.
  *
  * Why two passes rather than a `projects` split
  * ---------------------------------------------
@@ -102,19 +104,24 @@ const SPAWNING_TESTS = [
 ];
 
 /**
- * Test files that name `child_process` without starting one, each with the
+ * Test files that reach `child_process` without starting one, each with the
  * reason it is not in `SPAWNING_TESTS`.
  *
- * The guard below reads every test file and demands that one naming
- * `child_process` appear in one of these two lists. A test that starts spawning
- * children therefore has to say so here, rather than joining the parallel pass
- * silently and putting back the contention this file exists to remove.
+ * The guard below follows every test file's imports *within `test/`* and demands
+ * that one which reaches the name `child_process` -- in its own text or a
+ * helper's -- appear in one of these two lists. A test that starts spawning
+ * children, directly or through a helper that already does, therefore has to say
+ * so here rather than joining the parallel pass silently and putting back the
+ * contention this file exists to remove.
+ *
+ * The walk stops at `test/`'s edge. Following it into `src/` would classify by
+ * what a module *could* do rather than what a case does: `src/control_plane/lease.ts`
+ * names a spawn that most of its callers never reach, and the closure through it
+ * covers a third of the suite. The files here that do spawn through `src/` --
+ * the session providers and `gate_item2` -- are in `SPAWNING_TESTS` on the
+ * measurement described above, which is the evidence a closure cannot give.
  */
-const NAMES_CHILD_PROCESS_WITHOUT_SPAWNING = new Map([
-  [
-    "test/attention/notify.test.ts",
-    "the notifier's `spawnSync` is a seam; every case patches it (test/testkit/seams.ts)",
-  ],
+const REACHES_CHILD_PROCESS_WITHOUT_SPAWNING = new Map([
   [
     "test/secretary/structural.test.ts",
     "`execSync`/`execFileSync`/`spawnSync` appear as the names of a banned call, in string " +
@@ -124,6 +131,11 @@ const NAMES_CHILD_PROCESS_WITHOUT_SPAWNING = new Map([
     "test/control_plane/lease.test.ts",
     "reads its own source text to assert on it; the spawn in src/control_plane/lease.ts is " +
       "not reached by any case here",
+  ],
+  [
+    "test/fault_injection/manifest.test.ts",
+    "takes three pure string helpers from controller.ts (case titles, a repro line); no case " +
+      "here starts a run",
   ],
 ]);
 
@@ -156,11 +168,70 @@ function allTestFiles() {
 }
 
 /**
+ * Every relative import a file under `test/` makes, resolved to a file under
+ * `test/` and nothing else.
+ *
+ * Textual rather than a syntax tree, deliberately: this runs before every
+ * Windows suite run, and the one parser available here is the TypeScript 7
+ * compiler, which would mean spawning a child process to decide which tests
+ * spawn child processes. The cost of the imprecision is bounded in the safe
+ * direction -- a specifier this misses can only move a file into the pass that
+ * is already the default, and the classification it feeds is a demand for an
+ * answer in this file, not an automatic verdict.
+ */
+function localImports(file, inTree) {
+  const specifiers = /(?:from|import|require)\s*\(?\s*["']([^"']+)["']/g;
+  const found = new Set();
+  for (const match of inTree.get(file).matchAll(specifiers)) {
+    const specifier = match[1];
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const base = resolve(join(REPO_ROOT, file), "..", specifier);
+    // `.js` in the specifier, `.ts` on disk: the convention this tree is written
+    // in. The bare and index forms cover the `.mjs` helpers and any directory.
+    const candidates = [
+      base,
+      base.replace(/\.js$/, ".ts"),
+      base.replace(/\.js$/, ".mts"),
+      `${base}.ts`,
+      join(base, "index.ts"),
+    ];
+    for (const candidate of candidates) {
+      const key = relative(REPO_ROOT, candidate).split("\\").join("/");
+      if (inTree.has(key)) {
+        found.add(key);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/** Every file under `test/` that could hold code, by repo-relative path. */
+function testTreeSources() {
+  const sources = new Map();
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir).sort()) {
+      const path = join(dir, entry);
+      if (statSync(path).isDirectory()) {
+        walk(path);
+      } else if (/\.(ts|mts|mjs|js)$/.test(entry)) {
+        sources.set(relative(REPO_ROOT, path).split("\\").join("/"), readFileSync(path, "utf8"));
+      }
+    }
+  };
+  walk(TEST_ROOT);
+  return sources;
+}
+
+/**
  * Refuse to run a split whose two halves are not the whole suite.
  *
  * Every failure mode here is silent otherwise: a renamed file drops out of the
  * serial list and back into the parallel pass, and a new test that spawns
- * children joins the parallel pass with nothing to notice it.
+ * children -- itself or through a helper that already does -- joins the parallel
+ * pass with nothing to notice it.
  */
 function checkPartition(files) {
   const present = new Set(files);
@@ -172,16 +243,42 @@ function checkPartition(files) {
       );
     }
   }
+
+  const sources = testTreeSources();
+  const reaches = new Map();
+  const walk = (file, seen) => {
+    const known = reaches.get(file);
+    if (known !== undefined) {
+      return known;
+    }
+    if (seen.has(file)) {
+      return false;
+    }
+    seen.add(file);
+    let found = sources.get(file).includes("child_process");
+    if (!found) {
+      for (const imported of localImports(file, sources)) {
+        if (walk(imported, seen)) {
+          found = true;
+          break;
+        }
+      }
+    }
+    seen.delete(file);
+    reaches.set(file, found);
+    return found;
+  };
+
   const serial = new Set(SPAWNING_TESTS);
   for (const file of files) {
-    if (serial.has(file) || NAMES_CHILD_PROCESS_WITHOUT_SPAWNING.has(file)) {
+    if (serial.has(file) || REACHES_CHILD_PROCESS_WITHOUT_SPAWNING.has(file)) {
       continue;
     }
-    if (readFileSync(join(REPO_ROOT, file), "utf8").includes("child_process")) {
+    if (walk(file, new Set())) {
       fail(
-        `${file} names child_process but is not classified in scripts/run-suite.mjs. Add it to ` +
-          "SPAWNING_TESTS if it starts a child process, or to " +
-          "NAMES_CHILD_PROCESS_WITHOUT_SPAWNING with the reason it does not.",
+        `${file} reaches child_process, itself or through a helper, but is not classified in ` +
+          "scripts/run-suite.mjs. Add it to SPAWNING_TESTS if it starts a child process, or to " +
+          "REACHES_CHILD_PROCESS_WITHOUT_SPAWNING with the reason it does not.",
       );
     }
   }
@@ -233,29 +330,38 @@ function reportedFiles(path) {
 
 const forwarded = process.argv.slice(2);
 
-// A filtered run -- `npm test -- test/messagebus` -- is a person asking for a
-// subset by name, and the split would silently reinterpret that as the whole
-// suite. Hand those straight to vitest.
-const filtered = forwarded.some((arg) => !arg.startsWith("-"));
+if (!shouldSerialize()) {
+  process.exit(runVitest(forwarded));
+}
 
-if (filtered || !shouldSerialize()) {
+// An argument means a person asking for something other than "the suite": a
+// filter (`npm test -- test/messagebus`), a reporter, a bail. The split cannot
+// honour those and stay honest -- a filter would be reinterpreted as the whole
+// suite, a `--reporter=json --outputFile=report.json` would be written twice and
+// the second write would leave a green report holding half the suite -- and it
+// is not the runner's place to guess which. So it steps aside, and says so: a
+// person who asked for a subset can see they got one pass, and CI, which passes
+// nothing, never takes this branch.
+if (forwarded.length > 0) {
+  process.stderr.write(
+    "run-suite: arguments given, so the suite runs in one pass and the child-process tests are " +
+      "NOT serialized. Drop the arguments, or run each pass by hand, to get the Windows split.\n",
+  );
   process.exit(runVitest(forwarded));
 }
 
 const files = allTestFiles();
 checkPartition(files);
 
-// The caller's own reporter wins: `npm test -- --reporter=json` must keep
-// meaning what it did, so the coverage check below is skipped rather than
-// fighting over `--outputFile`.
-const callerReports = forwarded.some(
-  (arg) => arg.startsWith("--reporter") || arg.startsWith("--outputFile"),
-);
-const reportDir = callerReports ? undefined : mkdtempSync(join(tmpdir(), "continuo-run-suite-"));
-const reportFlags = (name) =>
-  reportDir === undefined
-    ? []
-    : ["--reporter=default", "--reporter=json", `--outputFile.json=${join(reportDir, name)}`];
+// Each pass also writes a JSON report, so that the two can be checked to cover
+// the suite between them. `--reporter=default` is passed alongside because
+// naming a reporter replaces the default one rather than adding to it.
+const reportDir = mkdtempSync(join(tmpdir(), "continuo-run-suite-"));
+const reportFlags = (name) => [
+  "--reporter=default",
+  "--reporter=json",
+  `--outputFile.json=${join(reportDir, name)}`,
+];
 
 const workers = serialWorkers();
 process.stderr.write(
@@ -266,7 +372,6 @@ process.stderr.write(
 // The parallel pass first: it is the cheap one, so a breakage that is not about
 // contention surfaces before the slow half has been paid for.
 const parallelStatus = runVitest([
-  ...forwarded,
   ...reportFlags("parallel.json"),
   ...SPAWNING_TESTS.flatMap((file) => ["--exclude", file]),
 ]);
@@ -275,27 +380,20 @@ if (parallelStatus !== 0) {
 }
 
 const serialArgs = workers === 1 ? ["--no-file-parallelism"] : [`--maxWorkers=${workers}`];
-const serialStatus = runVitest([
-  ...forwarded,
-  ...reportFlags("serial.json"),
-  ...serialArgs,
-  ...SPAWNING_TESTS,
-]);
+const serialStatus = runVitest([...reportFlags("serial.json"), ...serialArgs, ...SPAWNING_TESTS]);
 if (serialStatus !== 0) {
   process.exit(serialStatus);
 }
 
-if (reportDir !== undefined) {
-  const ran = new Set([
-    ...reportedFiles(join(reportDir, "parallel.json")),
-    ...reportedFiles(join(reportDir, "serial.json")),
-  ]);
-  const missed = files.filter((file) => !ran.has(file));
-  if (missed.length > 0) {
-    fail(
-      `${missed.length} test file(s) ran in neither pass: ${missed.join(", ")}. ` +
-        "Two green passes that between them skipped a file are not a green suite.",
-    );
-  }
-  process.stderr.write(`run-suite: both passes green, ${ran.size} test files accounted for\n`);
+const ran = new Set([
+  ...reportedFiles(join(reportDir, "parallel.json")),
+  ...reportedFiles(join(reportDir, "serial.json")),
+]);
+const missed = files.filter((file) => !ran.has(file));
+if (missed.length > 0) {
+  fail(
+    `${missed.length} test file(s) ran in neither pass: ${missed.join(", ")}. ` +
+      "Two green passes that between them skipped a file are not a green suite.",
+  );
 }
+process.stderr.write(`run-suite: both passes green, ${ran.size} test files accounted for\n`);
