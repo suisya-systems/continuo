@@ -108,9 +108,13 @@ introduces or modifies a check, show it catching what it claims to catch — an 
 in the suite, or the observed-red evidence in the PR body. Existing work does both; see `#87`'s
 scan that asserts it comes back non-empty over a file that really does violate the rule.
 
-Two platform rules that only fail in CI: **output is ASCII-only** (`D-0006`,
-[`docs/cli-output-policy.md`](./docs/cli-output-policy.md)) — Windows is a required cell precisely
-because that is where a cp932 console observes it; and **Node must be 22.14+ or 24** (`D-0003`).
+Two rules the suite will not let you forget, but which are easy to trip on first contact. **Every
+byte continuo writes to stdout or stderr is ASCII** (`D-0006`,
+[`docs/cli-output-policy.md`](./docs/cli-output-policy.md)): `test/contract/ascii-output-policy.test.ts`
+fails on any non-ASCII codepoint anywhere in `src/`, `scripts/` or `test/`, on every platform, so
+one em dash in a comment turns the suite red — the consequence it guards against, a cp932
+`UnicodeEncodeError`, is only reachable on the Windows cell. And **Node must be 22.14+ or 24**
+(`D-0003`); prose files are exempt from the ASCII rule, source files are not.
 
 ## 4. Files that are records, not code
 
@@ -123,7 +127,8 @@ because that is where a cp932 console observes it; and **Node must be 22.14+ or 
   non-empty line is read as a node id: no comments, no notes, no blank lines. It is deliberately
   larger than what continuo has agreed to port — being listed is evidence a case exists, not a
   commitment to port it (`parity/source-inventory.belts.md`).
-- **`DECISIONS.md`** entries — append, never rewrite (§2).
+- **`DECISIONS.md`** entries — append. The only edit a standing entry takes is the supersession
+  line described in §2.
 
 Never edit any of these to make a check pass. If a check is red against a record, either the code is
 wrong or the record needs a decision — both are reportable, neither is a silent edit.
