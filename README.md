@@ -65,6 +65,7 @@ built at Node-API 10, which Node provides only from v22.14.0 onward
 | [`docs/sqlite-value-contract.md`](./docs/sqlite-value-contract.md) | How SQLite values appear in JavaScript, and two silent hazards |
 | [`docs/cli-output-policy.md`](./docs/cli-output-policy.md) | ASCII-only output, and why Windows is a required CI cell |
 | [`docs/design/minimal-operating-loop.md`](./docs/design/minimal-operating-loop.md) | What the successor stack must still build to run one task end to end (propose-only) |
+| [`AGENTS.md`](./AGENTS.md) | How work is done here: decisions, verification, records, issue and PR conventions |
 
 ## License
 
