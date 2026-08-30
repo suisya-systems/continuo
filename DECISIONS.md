@@ -23,8 +23,10 @@ spaces distinct.
   in the index table above and never over an ID. `D-0019`..`D-0099` is the control-plane belt and
   the shared band for cross-belt decisions taken at the window, `D-01xx` the measurement belt,
   `D-02xx` the fencing and settings belt, `D-03xx` the session belt, `D-04xx` the canary belt,
-  `D-05xx` the messagebus belt (the last three allocated by D-0032), and `D-07xx` the
-  secretary belt (allocated by D-0701). The ranges are an allocation,
+  `D-05xx` the messagebus belt (the last three allocated by D-0032), `D-07xx` the
+  secretary belt (allocated by D-0701), `D-09xx` the attention belt -- shared across its three
+  sub-belts A1 (facts), A2 (dedup and config) and A3 (notify and pipeline) -- and `D-10xx` the
+  gate_item11 belt (both allocated by D-0034). The ranges are an allocation,
   not a meaning: nothing about an entry follows from which range it is in.
 
 ## Index
@@ -38,7 +40,7 @@ spaces distinct.
 | D-0005 | The double-green rule, and where it is enforced | accepted |
 | D-0006 | ASCII-only for anything continuo prints | accepted |
 | D-0007 | The SQLite value-representation contract | accepted |
-| D-0008 | The package is `private` until publication is decided | accepted |
+| D-0008 | The package is `private` until publication is decided | superseded by D-0045 |
 | D-0009 | Install with `--ignore-scripts`; the prebuilt binary is the artifact | accepted |
 | D-0010 | Biome is the linter and formatter | accepted |
 | D-0011 | Package-quality tooling: publint, attw, knip, Dependabot, editor pins | accepted |
@@ -63,14 +65,14 @@ spaces distinct.
 | D-0030 | One parser for the whole CLI: the argparse transcription wins, and the purpose-built parser's cases are re-pointed onto it | accepted |
 | D-0031 | The source inventory is complete and unconditional; porting intent is recorded separately | accepted |
 | D-0032 | Three not-porting proposals are ratified, and three belts start with D-ranges allocated | accepted |
-| D-0401 | The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store | accepted |
-| D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
-| D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
-| D-0404 | The ledger DDL is a shipped data file, and the belt asserts it reached `dist/` | accepted |
-| D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
-| D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
-| D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
-| D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
+| D-0033 | A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test | accepted |
+| D-0034 | The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named | accepted |
+| D-0035 | `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending` | accepted |
+| D-0036 | interlock is a frozen source, not a decision-maker: every question continuo has open is settled at continuo's own human gate | accepted |
+| D-0043 | `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire | accepted |
+| D-0044 | Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives | accepted |
+| D-0045 | `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs | accepted |
+| D-0046 | `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run | accepted |
 | D-0100 | The read-only capability is an open flag, not a `mode=ro` URI | accepted |
 | D-0101 | Module-private names a source case reaches are exported and marked `@internal` | accepted |
 | D-0102 | The read-only error classifier keeps only the result-code branch | accepted |
@@ -90,6 +92,7 @@ spaces distinct.
 | D-0116 | The statement trace names its issuer from the V8 call site, and folds the two languages' spellings | accepted |
 | D-0117 | The catalogue's no-copy property is read off the syntax, because JavaScript has no string identity | accepted |
 | D-0118 | The last two measurement files convert whole, and the copy is verified by the testkit rather than by an opener | accepted |
+| D-0119 | The remaining six measurement files convert whole, closing out the belt's per-case control-plane creation | accepted |
 | D-0200 | CPython's `fnmatch`, `shlex` and path semantics are transcribed, and pinned by a differential vector | accepted |
 | D-0201 | Wire-format keys stay verbatim; in-memory identifiers are camelCase | accepted |
 | D-0203 | A `~user` path in a sandbox rule is refused, not passed through | accepted |
@@ -106,6 +109,36 @@ spaces distinct.
 | D-0214 | `sandbox doctor` and the readback complete the settings subsystem, and the argparse surface grows two actions rather than one helper | accepted |
 | D-0215 | A truthy non-mapping `sandbox.filesystem` is refused, not coerced to the empty mapping | accepted |
 | D-0216 | `_is_inside_root` compares normcased paths, so Windows path identity is not a sandbox escape | accepted |
+| D-0301 | The five session verbs are `Promise`-returning, serialised per instance, and the capability probe stays synchronous | accepted |
+| D-0302 | The watcher's closed fact-state set is restated here, so the S1 vocabulary lint has an oracle in this repository | accepted |
+| D-0401 | The canary routing ledger gets its own opener, and `recursive_triggers` is part of the store | accepted |
+| D-0402 | An already-routed run is recognised by result code and a re-read, never by message text | accepted |
+| D-0403 | The structural belt keeps its subject when the tree changes language | accepted |
+| D-0404 | The ledger DDL is a shipped data file, and the belt asserts it reached `dist/` | accepted |
+| D-0405 | The `INSERT OR REPLACE` bypass is real, and repairing it is its own change | accepted |
+| D-0406 | With the replacement guard in place, an already-routed run is a trigger refusal confirmed by a re-read | accepted |
+| D-0407 | The routing point reads its INTEGER columns 64-bit wide | accepted |
+| D-0501 | The messagebus package owns `send`, `poll` and `ack`, and nothing the outbox already owns | accepted |
+| D-0502 | The MCP wire keeps interlock's snake_case keys and env names; the endpoint is launched as the built module by path | accepted |
+| D-0503 | The facade's own caller bug gets a class the outbox does not share | accepted |
+| D-0504 | The third AST scan stays in its belt; the frozen testkit is not changed by this PR | accepted |
+| D-0601 | The fault-injection belt takes `D-06xx`, its own `test/fault_injection/` directory, and two adapter classes | accepted |
+| D-0602 | The fault-injection watchdogs are scaled for this port's runners, and the manifest's numbers are left alone | accepted |
+| D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
+| D-0801 | The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred | accepted |
+| D-0603 | The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types` | accepted |
+| D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
+| D-0901 | The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated | accepted |
+| D-0902 | A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's | accepted |
+| D-0903 | The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes | superseded by D-0906 |
+| D-0904 | Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home | accepted |
+| D-0905 | `isinstance(value, int)` is a question about the config DOCUMENT; the dataclass's own defaults become one exported record | accepted |
+| D-0906 | D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed | accepted |
+| D-0951 | A refused dedup ledger stops the attention CLI at exit 2 and leaves the file untouched | accepted |
+| D-0952 | The operator's template goes through a transcribed CPython, checked by a differential oracle rather than by review | accepted |
+| D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
+| D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
+| D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
 
 ---
 
@@ -446,7 +479,7 @@ accidental `npm publish` is then one command away).
 no release automation reads it. The `files` and `exports` fields are nonetheless maintained from the
 start, so the eventual first publish is a decision rather than a packaging project.
 
-**Status.** accepted
+**Status.** superseded by `D-0045`
 
 **Source.** interlock#74 refinement comment; Codex design review 2026-08-22, Nit.
 
@@ -5983,6 +6016,146 @@ four sites together; it is not this entry's to make unilaterally.
 the round trip` writes 2**53+1 through a foreign connection and asserts the value comes back
 identical; with `safeIntegers` removed it reads 9007199254740992 and the case goes red naming the
 loss.
+## D-0301 — The five session verbs are `Promise`-returning, serialised per instance, and the capability probe stays synchronous
+
+**Context.** The `session` belt (D-0032) ports interlock's `tests/session/` -- 142 node ids over
+`claude_org_runtime/session/`. The source is written against Python's blocking process API and uses
+it as a load-bearing guarantee, not as a convenience. `stop()` runs a `SIGTERM` -> `Popen.wait(
+timeout)` -> `SIGKILL` -> `wait(timeout)` ladder; a pid that cannot be recorded triggers an
+immediate group `SIGKILL` followed by a bounded wait; an orphan whose supervisor died is chased
+through two `time.monotonic()` deadlines polling at `time.sleep(0.05)`; and a group sweep after
+exit does the same again. Nothing in that is decoration -- `test_a_child_that_outlives_the_
+emergency_kill_is_not_abandoned`, `test_stop_reaps_a_group_member_that_outlived_the_leader` and
+their neighbours assert the ladder's *outcomes*.
+
+Node's `ChildProcess` is asynchronous, so the shape of the port is a decision that has to be taken
+before the first case is typed: retrofitting it through 142 cases is the belt's largest re-work
+risk. The question was raised as the Blocker of the pre-belt design review.
+
+**The measurement that settles it.** A child's exit status in Node is held by libuv and released
+only on a loop turn. Spawn a child that exits at t=200ms, then block the loop to t=1500ms and poll
+(Node v22.17.0, Linux 6.18.33.2 WSL2):
+
+```
+t= 300ms  exitCode=null  signalCode=null  kill(pid,0)=true  /proc/<pid>/stat state=Z
+t= 600ms  ... identical
+t= 900ms  ... identical
+t=1200ms  ... identical
+after 5000 microtask turns (await Promise.resolve())   exitCode=null
+after one macrotask turn (setTimeout(0))               exitCode=7, /proc state ENOENT
+```
+
+So an in-process **synchronous** `stop()` ladder has three candidate waits and all three are wrong:
+busy-waiting `child.exitCode` never observes an exit, so every stop escalates to `SIGKILL` and then
+reports `TIMED_OUT` after `2 x stop_timeout`, on every stop; busy-waiting `kill(pid, 0)` sees the
+unreaped zombie as alive forever, identically; and busy-waiting `/proc/<pid>/stat != "Z"` terminates
+correctly but never yields a return code, because reaping is libuv's -- which permanently destroys
+the `exited-<returncode>` state word for a child of ours.
+
+The second half of the measurement is what rules out the reflex fix: microtask asynchrony buys
+nothing. `await Promise.resolve()` 5000 times leaves `exitCode` at `null`; one `setTimeout(0)`
+releases it. Making the verbs `async` is necessary but not sufficient -- a *macrotask* yield is
+required before any read of a child's exit state.
+
+**Decision.** Four parts, taken together because each of the last three is a defect the first one
+ships without it.
+
+1. **The five D-0009 verbs are `Promise`-returning.** `start`, `listSessions`, `readState`, `stop`
+   and `resume` return `Promise<ProviderResult<...>>`, in the abstract base and in both providers.
+   `start` stays concrete and final on the base -- `requireSpawnable()` then
+   `this.startSession(request)` -- so the four contract cases that pin the gate's identity
+   (`test_a_subclass_cannot_override_the_gate_away[start]`, `[require_spawnable]` and the two mixin
+   variants) still resolve `start` to the base's own function. `startSession` remains the only
+   `_`-prefixed hook, so `test_exactly_the_five_d0009_verbs_and_no_sixth` and
+   `VERB_IMPLEMENTATION_HOOKS` are unchanged.
+
+   The asynchrony is imposed **from below and on the shared contract**, not chosen per provider:
+   `stop` needs a wait in *both* providers, and Node reports a spawn failure asynchronously where
+   Python's `Popen` raises `OSError` synchronously (measured: `spawn("/no/such/binary")` returns
+   with `pid === undefined` and fires `'error'` on a later turn), which is the classification
+   `test_a_child_that_cannot_be_spawned_is_a_failure` and its neighbours assert.
+
+2. **The capability probe stays synchronous.** `probeCapabilities`, `requireSpawnable`,
+   `checkSpawnPrecondition`, `registerWorkspaceObserver`, `evaluateWorkspaceTransition` and every
+   value constructor are synchronous. This is not a concession to tidiness: `subprocess.run(...,
+   timeout=)` has an **exact** analogue in `spawnSync`, measured to match on both branches the
+   source distinguishes -- a missing executable returns `{status: null, error.code: "ENOENT",
+   error.errno: -2}` synchronously (Python's `except OSError`), and a timeout returns
+   `{status: null, signal: "SIGKILL", error.code: "ETIMEDOUT"}` with the child already killed
+   (Python's `TimeoutExpired`), provided `killSignal: "SIGKILL"` is passed, because Node's default
+   is `SIGTERM` where `subprocess.run` sends `kill()`.
+
+   Keeping the probe synchronous is what lets
+   `test_require_spawnable_is_the_contracts_own_gate_not_each_implementations` port unchanged, and
+   it keeps the observer fan-out sequential, so
+   `test_every_observer_is_asked_even_after_a_veto`'s ordering assertion keeps its teeth with no
+   "sequential await, never `Promise.all`" caveat attached to it.
+
+3. **The five verbs are serialised per provider instance.** Each public verb body runs inside a
+   per-instance exclusion queue. In Python, `read_state` **cannot** run while `stop` is mid-ladder
+   -- one thread -- so the source gets mutual exclusion from its language for free. Without the
+   queue, a `readState` could interleave at any `await` inside `stop` and observe a half-finished
+   ladder: record replaced, incident recorded, exit not yet confirmed, the in-memory session map
+   already mutated. That is a state **no source case can construct and none forbids**, so nothing
+   in the ported suite would catch it -- which is precisely why it is decided here rather than left
+   to be discovered. No verb calls another verb in either provider, so the queue cannot deadlock.
+
+4. **Every read of a child's exit state is preceded by one macrotask yield.** The runtime adapter
+   exposes it as `settleExits()`, implemented with a real macrotask and never with
+   `await Promise.resolve()`, per the measurement above. Six cases take a readout immediately after
+   a state change; without the yield they are flaky in the "the child has exited but `exitCode` is
+   still `null`" direction, which under the shuffled double-green order (D-0005) is the worst
+   available failure shape.
+
+The asynchronous surface is confined to one internal runtime adapter (the design review's Major),
+and within it **exactly four members are asynchronous** -- `spawn`, `waitForExit`, `sleep` and
+`settleExits` -- because those are exactly the sites that wait on an already-running child.
+Everything else the adapter carries is synchronous in Node as it is in Python: `spawnSync` for the
+probe, `performance.now()` for the monotonic clock, `process.kill(-pgid, sig)` for group signalling,
+and `readFileSync` for `/proc` and for every durable record write.
+
+**The rejected alternative, and what it actually costs.** "Keep the verbs synchronous by moving the
+supervisor into a separate process" is not a variation on this decision; §0's measurement means it
+is the *only* way to have synchronous verbs at all, and it is worse on the belt's own subject.
+
+- With a **fresh supervisor per call**, every session is permanently an orphan, because the child is
+  re-parented when the supervisor exits. `session.process` is then always absent, which makes at
+  least eight cases unportable outright -- among them
+  `test_exit_zero_is_not_taken_as_evidence_of_success` (asserts `returncode == 0`),
+  `test_the_stderr_only_refusal_is_captured_and_surfaced` (waits for `exited-1`), and the two stub
+  cases that assert the **identity of the in-process stdin pipe object**, which cannot cross a
+  process boundary. It also makes `test_a_live_orphan_is_adopted_not_resumed_around` vacuous: under
+  it, everything is an orphan, so the case stops discriminating the path it was written to
+  discriminate. And it is expensive in exactly the place D-0029 forbids relief: one `node -e 0`
+  start measures 17.5ms here, and the suite's `_wait_for_state` helper polls every 20ms for up to
+  10s, so a single case can spend ~8.8s in process startup alone before doing any work.
+- With a **long-lived supervisor daemon**, the return code and the pipe survive, at the price of
+  inventing a daemon, a wire protocol, a blocking pipe read and a cross-process re-raise of
+  `SpawnRefused` -- none of which any source case covers. It is also self-defeating: interlock's
+  whole record-discovery and orphan-adoption machinery exists *because* no supervisor survives, and
+  a daemon puts a second live process on the state root, which is the shape this subsystem was
+  written to prevent.
+
+**Falsifier.** *Primary, and re-runnable:* a synchronous in-process way to read a child's exit
+status appears in Node. Concretely -- if the measurement above ever shows `child.exitCode` updating
+while the event loop is blocked, this decision's premise is gone, the ladder can be transcribed
+literally, and the queue, `settleExits()` and the whole asynchronous surface become indirection to
+delete. *Against part 3:* a source case that depends on a verb being re-entered while another is in
+flight. None of the 142 does, so the queue carries a target-only liveness case; if that case can be
+deleted with no source case turning red, the queue was never load-bearing and this entry
+over-reached. *Against part 4:* if, with `settleExits()` in place, the cases that read a readout
+straight after a state change are still flaky, then the own-child return code is not reproducible in
+process at all, and `exited-<returncode>` needs a decision of its own rather than being a
+consequence of this one.
+
+**Source.** Task `continuo-session-port`, 2026-08-28, against interlock `65f36c5`. The blocking-site
+census is `claude_org_runtime/session/claude_cli_provider.py` (four `Popen.wait(timeout=)` calls,
+three `time.sleep(0.05)` deadline loops, one `subprocess.run(timeout=)` probe) and
+`stub_provider.py`; `provider.py` has no blocking site at all and inherits asynchrony only through
+`start()`. Every measurement quoted here was reproduced on the porting host on Node v22.17.0,
+Linux 6.18.33.2-microsoft-standard-WSL2. The question was raised as the Blocker of the pre-belt
+design review; the recommendation there was Promise-ification, and parts 2, 3 and 4 are this belt's
+additions to it. Decision id from the `D-03xx` range allocated to this belt by D-0032.
 
 ---
 
@@ -6072,5 +6245,2317 @@ receipt would then be a promise of a receipt, and item 8 would need re-arguing, 
 
 **Source.** Belt dispatched 2026-08-29, task `continuo-secretary-port`, Refs #37. The range
 allocation follows the gate D-0032 exercised for `session`, `canary` and `messagebus`.
+## D-0302 — The watcher's closed fact-state set is restated here, so the S1 vocabulary lint has an oracle in this repository
+
+**Context.** interlock's `tests/session/test_provider_contract.py` carries a lint over the *source
+text* of the provider interface: none of the watcher's fact-state names may appear anywhere in it,
+token or prose, comments and docstrings included. Writing `observation unavailable` into a docstring
+maps the interface onto the fact-state set as surely as importing the constant would, and the whole
+point of `SessionReadout` is that a provider's own lifecycle word is carried **uninterpreted** --
+conversion belongs to the detector layer.
+
+The case does not hard-code the vocabulary. It reads it out of interlock's `DECISIONS.md`, splitting
+on the `## D-0005 —` heading and collecting every `- \`NAME\`` bullet in that entry's body, and it
+fails loudly on an implausible parse rather than silently checking nothing. That indirection is the
+substance of the case, not plumbing: interlock's D-0005 says a seventh state may be added only by a
+new `D-` entry, so reading the set from the file makes the lint widen automatically on the day such
+an entry lands, where a copied list would go stale and keep passing.
+
+**A mechanical port of that parse reads the wrong entry.** `D-0005` in *this* repository is the
+double-green rule. A port that split continuo's `DECISIONS.md` on `## D-0005 —` would find an entry
+with no such bullets, and the source's own `>= 6` guard would fire -- which is the guard working, but
+it does not give the ported case an oracle.
+
+Two alternatives were rejected before this one. **Copying the six names into the test file** loses
+exactly the property the source built the indirection for. **Vendoring interlock's `DECISIONS.md`**
+into this repository puts a second copy of another project's decision record under version control
+here, to be kept in agreement by hand.
+
+**Decision.** The closed set is restated in this file, and the ported lint reads it from here, by the
+same parse the source uses. The set, carried from interlock D-0005 unchanged:
+
+- `ACTIVE_EVIDENCE`
+- `KNOWN_WAIT`
+- `EXPLICIT_BLOCK`
+- `NO_ACTIVITY_EVIDENCE`
+- `OBSERVATION_UNAVAILABLE`
+- `TERMINAL`
+
+This is a **restatement for the oracle's sake, not an adoption**. Continuo has no watcher and this
+entry does not give it one; what is decided here is that these six names are the vocabulary the
+session interface's prose must stay clear of. The procedural half of interlock's D-0005 is carried
+with the list and is what makes the indirection worth keeping: a seventh name is added by a new `D-`
+entry in this file, never by editing a list inside a test, and on the day one lands the lint widens
+without anyone remembering to widen it.
+
+The parse is deliberately the source's, character for character -- split on the heading, collect
+`^- \`[A-Z][A-Z_]+\`$` from the body, refuse a parse of fewer than six. Reproducing it rather than
+writing a friendlier one keeps a single failure mode: if this entry is ever reformatted so the
+bullets stop matching, the case goes red here for the same reason it would go red there.
+
+**Falsifier.** If interlock adds a seventh fact state and this list is not updated, the ported lint
+passes while the source's fails -- the copied-list failure this entry claims to avoid, arriving one
+level up. That is the cost of restating rather than reading interlock's own file, and it is accepted
+because the alternative is a vendored copy of that file with the same exposure and more surface. The
+observation that would show the trade was wrong is a divergence found by anything other than this
+sentence: if a reviewer ever discovers the two lists disagree, the restatement needs a mechanical
+check against interlock at the pinned revision, in the shape of `test/contract/carried-documents.
+test.ts`.
+
+**Source.** Task `continuo-session-port`, 2026-08-28, porting
+`tests/session/test_provider_contract.py::test_no_fact_state_vocabulary_appears_anywhere_in_s1` from
+interlock `65f36c5`. The six names and the "a seventh requires a new `D-` entry" rule are interlock
+D-0005, quoted from that revision. Decision id from the `D-03xx` range allocated to this belt by
+D-0032.
 
 ---
+
+## D-0033 -- A suite template is built in the file's `beforeAll`, so a shared cost is not charged to an arbitrary test
+
+**Context.** D-0025 made an expensive, identical fixture a per-**file** artifact copied per case,
+because migrating a control plane costs about 87.5ms and copying one about 0.97ms. What it did not
+settle was *when* the build runs, and the helper it produced built lazily -- inside whichever case
+called `copyInto` first.
+
+That places a **file-level** cost inside an **arbitrary test**, where a per-test timeout measures
+it. Under `sequence.shuffle.tests` (D-0005) the case that pays is a function of the seed, so a slow
+machine produces a red that names an innocent case, and names a different one at each seed.
+
+This is not a hypothesis. On a `windows-latest, node 24` cell,
+`test/control_plane/lease.test.ts` failed at `a backward skewed renewal shortens rather than
+extends` after **66,325ms** against the 60,000ms cap, while the same commit at that cell's other
+seed was green. The case cannot take 66 seconds by its own logic: it is one fixture, three SQLite
+calls and two assertions, with no timer, no sleep and no loop. Reproduced on a fast Linux box, at
+the failing seed that case runs in **237ms** against 33-43ms for its neighbours, and at the passing
+seed a *different* case holds that slot at **135ms**. It is the build, and which case carries it is
+the seed's choice.
+
+D-0029 is the same subject one step earlier. It ruled that the CI cap is not the fix for this file
+being slow on Windows, and converted its fixtures onto the template. What it did not reach is that
+the template's own build is still timed as though it were a test.
+
+**Decision.** `suiteTemplate` registers a `beforeAll` at the point it is called -- which is the test
+file's top level, since `suiteRoot` already refuses a call from inside a test or a `describe` -- and
+builds there. The cost is then attributed to the file, measured against `hookTimeout`, and paid in
+the same place at every seed. Measured after the change, at both of that cell's seeds, the outlier
+is gone and `lease.test.ts`'s spread is flat at 66-85ms.
+
+**Failure semantics are deliberately unchanged.** The build runs through a memoising helper that
+never throws: the outcome is captured and rethrown from `copyInto`. So a `build` that throws is
+still reported by the case that asked for a copy, and a file whose selected tests never copy is
+still not failed by a build it never needed. The rejected alternative -- letting `beforeAll` throw
+directly -- would fail every test in the file, including the ones that never wanted the template,
+which is worse than what D-0025 shipped rather than better.
+
+**The trade, stated rather than buried.** D-0025's laziness bought something real: a file whose
+selected tests never copy pays nothing. That is now given up. It shows up under `-t` filtering and
+`.only`, and never in a full run, because every file that takes a template copies from it. A
+bounded cost on a developer convenience path is accepted in exchange for removing a seed-dependent
+red on the slowest CI cell, because the second costs a person's attention and spends it on the
+wrong case.
+
+This amends D-0025's mechanism and supersedes nothing: the decision that an expensive identical
+fixture is built once per file and copied per case is unchanged, and is what makes this entry's
+subject exist at all.
+
+**Falsifier.** If a file appears whose selected tests genuinely may not copy in a *full* run --
+a template taken behind a capability probe, say, where the guarded cases are the only consumers --
+then the build is being paid for nothing on every host that lacks the capability, and laziness was
+the right default after all. The narrower repair would then be a template that builds on first use
+but is *warmed* by an explicit call, rather than one that always builds. Equally: if a red is ever
+seen naming `hookTimeout` on a template build, the cost has not been removed, only relocated, and
+the file needs D-0029's answer -- a cheaper fixture -- rather than this one.
+
+**Source.** Task `continuo-session-port`, 2026-08-29, from a CI failure on PR #59 that was
+triaged to this helper rather than to the branch under review. Timings measured on the porting host
+(Node v22.17.0, Linux 6.18.33.2-microsoft-standard-WSL2) and on the `windows-latest, node 24` cell
+of run 33203831023. `test/testkit/` is frozen and a change to it is its own PR merged before the
+belts that need it rebase onto it (`docs/test-translation-conventions.md`); this decision and that
+PR are the same change. Decision id allocated by the window in the shared band
+(`D-0019`..`D-0099`).
+
+---
+
+## D-0501 -- The messagebus package owns `send`, `poll` and `ack`, and nothing the outbox already owns
+
+**Context.** The messagebus belt ports interlock `tests/messagebus/` at `65f36c5` -- 43 node ids over
+five files, S8's worker-outbound bus, its MCP endpoint, the carried v1 delivery specifications, a
+stale-readout case and an import-graph guard.
+
+Every one of those cases is about *delivery*, and continuo already has a delivery module:
+`src/control_plane/outbox.ts`, 74 ported source cases of resend, ack, dedup and fencing. The obvious
+way to make a "message bus" is to give it a `message` table, a delivery state machine and a retry
+loop of its own, and the result would be **two answers to every delivery question** -- two retry
+counts, two definitions of "settled", two fences -- with nothing in the build able to say which is
+authoritative. Two answers to a delivery question is how a message gets delivered twice, or not at
+all.
+
+interlock decided this before continuo met it, and put the decision in the first paragraph of its
+own `bus.py`: *the existing outbox API is used as found, not modified* (its Issue `#19` scope note),
+so that the fault-injection evidence S7 accumulated keeps describing the path this bus actually
+takes.
+
+**Decision.** `src/messagebus/` is a **facade**. Its entire owned surface is:
+
+- `send` -- a registry lookup, then `Outbox.enqueue` unchanged;
+- `poll` -- `Outbox.due`, filtered to one recipient, each row re-read and then `Outbox.attempt`;
+- `ack` -- a recipient-boundary check, then `Outbox.recordAck` unchanged;
+- `DeliveredEnvelope` -- the presentation record `poll` returns;
+- `endpoint.ts` -- the JSON-RPC transport that exposes `poll` and `ack`.
+
+**Everything else is the outbox's and is not re-implemented here.** Retry counting, the
+pending/delivered/acked transition, lease fencing and refusal recording, destination-level
+idempotency, and ack persistence all stay in `src/control_plane/outbox.ts`. This package adds **no
+table, no migration and no DDL**: `src/messagebus/` contains three `.ts` files and no data file, and
+`import-graph.test.ts`'s walk fails on a non-TypeScript file appearing there rather than skipping it.
+Refusals raised by the outbox propagate through the facade unwrapped, so a fence refusal reaches the
+caller as the outbox's own class and message.
+
+The one place the facade has judgement of its own is `poll`'s skip of a message settled since the
+`due()` snapshot, and it is a **skip, not a state change**: the row is left exactly as the outbox
+left it.
+
+**Alternatives.**
+
+- **A messagebus-owned delivery table (rejected).** It is what the name suggests and what a reader
+  expects, and it would have made the belt self-contained. It also duplicates a subsystem with 74
+  ported cases behind it, and the duplicate would be the one with no fault-injection evidence.
+- **Wrapping the outbox's refusals in messagebus classes (rejected).** It reads tidier at the
+  boundary and it hides the fence: a caller that catches a `MessageBusError` cannot tell a stale
+  lease from a malformed argument, and the stale lease is the one it must not retry.
+
+**Falsifier.** If a delivery property is ever needed that the outbox genuinely cannot express -- a
+per-recipient visibility timeout, say, or a priority order -- then the facade has to either grow
+state or push the feature down into S7, and this entry stops being a complete description. The
+repair is the second: interlock's scope note is about not *modifying* the outbox API during the
+spike, not about never extending it. The observation that would show the trade was wrong is a
+`src/messagebus/` module that finds itself reading or writing an `outbox`, `action` or `lease` row
+directly; there are none today, and `MessageBus` reaches SQLite only through an `Outbox` instance it
+constructs.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29, porting `tests/messagebus/` from interlock
+`65f36c5`. The constraint is interlock's own, quoted from `bus.py` at that revision, and was
+restated as the belt's headline design constraint at the window. Decision id from the `D-05xx` range
+allocated to this belt by D-0032.
+
+---
+
+## D-0502 -- The MCP wire keeps interlock's snake_case keys and env names; the endpoint is launched as the built module by path
+
+**Context.** The endpoint is not library API. It is a **process** a worker's MCP configuration
+launches, speaking line-delimited JSON-RPC on stdio. Three things about it are contracts with
+something outside this repository, and each has an in-repository convention pulling the other way:
+
+- the tool payload keys (`message_id`, `dedup_key`, `retry_count`, `receipt_ref`, ...) against the
+  port's camelCase;
+- the environment variables (`INTERLOCK_MESSAGEBUS_DB` and its five siblings) against the package's
+  own name;
+- how the child is started, where the source's `python -m claude_org_runtime.messagebus.endpoint`
+  has no TypeScript spelling at all.
+
+**Decision.**
+
+1. **The wire keeps the source's snake_case keys, and the rename stops at the transport boundary.**
+   `DeliveredEnvelope` is camelCase like everything else in `src/`; `endpoint.ts` carries an explicit
+   `envelopeToWire` that spells the wire keys out. `message_id` is the argument name the `ack` tool's
+   own `inputSchema` declares, so it is part of a published tool contract rather than a naming
+   preference -- and it is written out at the boundary rather than produced by a serializer, because
+   a serializer would make a wire contract a side effect of a naming convention.
+
+2. **The environment variables keep the `INTERLOCK_MESSAGEBUS_` prefix**, for the same reason
+   `STATE_FILE_ENV` in `src/session/stub_provider.ts` keeps `INTERLOCK_STUB_STATE_FILE`: the name is
+   read by a configuration file this repository does not own, and renaming it buys nothing and
+   breaks a worker's MCP config on the day of the rename.
+
+3. **The child is `node dist/messagebus/endpoint.js`** -- the built module, which is what an MCP
+   configuration would actually launch -- guarded by the `isEntryPoint()` shape `src/cli.ts` already
+   uses (`realpathSync` on both sides, because a symlinked launcher makes the URL form disagree with
+   `process.argv[1]`). The two end-to-end cases assert `dist/messagebus/endpoint.js` exists, with a
+   message naming `npm run pretest`, so a missing build is a legible red rather than a spawn failure.
+   `test/measurement/cli.test.ts` makes the same choice for `dist/cli.js`.
+
+4. **Every line the endpoint writes goes through `pythonJsonDocumentSorted`**, not
+   `JSON.stringify`. The source emits `ensure_ascii=True` and D-0006 requires ASCII for anything
+   continuo prints; rather than write a fourth JSON renderer (D-0017 rule 4: one renderer), the
+   endpoint uses the transcription `src/control_plane/python_json.ts` already carries. It sorts
+   object keys where the source's call does not, which carries no meaning in JSON and no consumer
+   here compares response text.
+
+**Falsifier.** If continuo ever publishes its own MCP server naming and the `INTERLOCK_` prefix
+becomes actively misleading to an operator reading their own config, point 2 should be revisited --
+with a deprecation window that reads both names, not a rename. If `dist/` stops being the thing a
+consumer runs (a bundler, a single-file build), point 3's path moves with it, and the two cases that
+name it are where that shows up.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29, porting
+`tests/messagebus/test_endpoint.py` from interlock `65f36c5`.
+
+---
+
+## D-0503 -- The facade's own caller bug gets a class the outbox does not share
+
+**Context.** Python spells both the outbox's usage errors and the bus's cross-recipient ack refusal
+as the one builtin, `ValueError`, because that is the builtin available. Two source cases assert
+`pytest.raises(ValueError)` against refusals raised by **different layers**:
+`test_an_ack_for_a_never_polled_message_is_refused` (the outbox's) and
+`test_an_ack_from_the_wrong_recipient_is_refused` (the facade's).
+
+A literal translation would assert one class for both, and `docs/test-translation-conventions.md`
+already records why that is dangerous: a refusal family whose members differ only by message stays
+green while the taxonomy a caller acts on is wrong, which is why `expectRefusal` asserts the class as
+well as the text.
+
+**Decision.** `MessageBusUsageError` exists and is thrown **only** by code in `src/messagebus/`. It
+is used for exactly one thing: an ack naming a recipient the message is not addressed to. The
+outbox's `OutboxUsageError`, `HandlerRejected`, `HumanGateRequired` and `StaleWriterRefused` keep
+reaching callers unchanged through the facade, which is D-0501's "exceptions are the outbox's own"
+in its concrete form. The two ack cases therefore now pin **which layer refused**, which the source's
+assertions could not.
+
+This is a **narrowing, not a widening**: nothing that was refused before is accepted, and nothing
+that was accepted is refused. What changed is what a caller can distinguish.
+
+**Falsifier.** If a second facade-level refusal appears whose caller should handle it differently
+from the recipient-boundary one, `MessageBusUsageError` becomes a family and this entry needs a
+successor naming the members. If the endpoint's tool-error text is ever depended on by a client
+matching the literal word `ValueError`, this decision has a cost it does not have today -- the text
+renders `constructor.name`, so the class name is what a client sees.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29, porting
+`tests/messagebus/test_carried_specifications.py` and `tests/messagebus/test_messagebus.py` from
+interlock `65f36c5`.
+
+---
+
+## D-0504 -- The third AST scan stays in its belt; the frozen testkit is not changed by this PR
+
+**Context.** `test/messagebus/import-graph.test.ts` is the **third** structural scan in this
+repository, after `test/canary/structural.test.ts` and `test/secretary/structural.test.ts`. All
+three parse `src/**` with the TypeScript compiler API and walk it, and all three carry a near-identical
+`importedModules` helper. Three copies of a helper is the point at which duplication normally gets
+factored out, and the belt's brief raised exactly that.
+
+Two facts pull against it. First, `docs/test-translation-conventions.md` freezes `test/testkit/`: a
+change to it **is its own PR, merged before the belts that need it rebase onto it** -- the rule
+D-0033 was landed under. Second, the three scans ask **different questions**. canary and secretary
+ask *"does this package import anything outside an allowlist?"*; messagebus asks *"does any import,
+anywhere, name a session backend?"*, plus a ban on dynamic-import primitives that neither of the
+others has. Only `importedModules` is genuinely common; `calledNames`, `referencedIdentifiers` and
+`exportedNames` have no messagebus use, and `namesASessionBackend` has no canary or secretary use.
+
+**Decision.** The scan stays local to `test/messagebus/`, and `test/testkit/` is **not touched by
+this belt**. The duplication is recorded here rather than left to be rediscovered at the fourth
+instance.
+
+The shared extraction remains the right end state, and this entry says what it should be when it
+happens: a `test/testkit/ast.ts` exporting `importedModules` alone -- the one helper all three
+already agree on, and the one whose subtleties (`import type` seen because it is erased at emit,
+`export ... from` counted as an edge, relative specifiers resolved to absolute paths, dynamic
+`import()` and `require()` reached inside function bodies) are what a fourth hand-written copy would
+get wrong. Its own contract test would be target-only, as the rest of the testkit's are. The
+question each belt asks *about* the resulting set stays in that belt, because it is that belt's
+subject and not a helper.
+
+**Why not now:** doing it here would put a frozen-testkit change inside a belt PR, against the rule,
+and would make this belt's merge depend on a second PR landing first -- in an environment where two
+other lanes are appending to `DECISIONS.md`, `belts.md` and `scripts/parity-check.mjs` concurrently
+and the worker cannot force-push. The cost of waiting is one more copy of one function; the cost of
+not waiting is a cross-cutting change to the file every belt's tests import, merged under a belt's
+review rather than its own.
+
+**Falsifier.** If a fourth structural scan is written before the extraction happens, the trade has
+gone wrong: at four copies the odds that they have silently drifted -- one of them missing
+`export ... from`, say, which is a real dependency edge -- are high enough that a divergence is more
+likely than not, and the extraction should be done first. The observation that would show it
+*already* wrong is any disagreement between the three existing `importedModules` bodies about which
+node kinds are edges; they were compared at this belt's writing and agree.
+
+**Carried out** (2026-08-29, task `continuo-testkit-ast`). Done ahead of the falsifier rather than
+in response to it firing: the `gate_item11` belt was about to add a fourth AST-scanning structural
+test, which would have made a fourth hand-written copy of `importedModules` and let the falsifier's
+condition come due, so the extraction was made before that fourth copy was written rather than
+after. `test/testkit/ast.ts` now exports `importedModules` alone --
+the one helper the three files already agreed on -- and `test/canary/structural.test.ts`,
+`test/secretary/structural.test.ts` and `test/messagebus/import-graph.test.ts` were rewritten to
+import it rather than carry their own copy. `calledNames`, `referencedIdentifiers`, `exportedNames`
+and `namesASessionBackend` stay local to the belts that use them, as this entry anticipated. The
+extraction's own contract test is target-only, in `test/testkit/testkit.contract.test.ts`
+("importedModules sees every route a static import list would miss"), alongside the testkit's other
+target-only contracts. The three original scans' behaviour is unchanged: a mutation probe that
+temporarily added a forbidden import to `src/canary/index.ts`, `src/secretary/index.ts` and
+`src/messagebus/bus.ts` in turn confirmed all three structural tests still turn red for the same
+reason they did before the extraction, then the probe was reverted.
+
+**Source.** Task `continuo-messagebus-port`, 2026-08-29. The freeze rule is
+`docs/test-translation-conventions.md` and D-0033's own closing paragraph.
+
+---
+
+## D-0801 -- The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred
+
+**Context.** `tests/gate_item2/` (interlock `65f36c5`) is 34 cases across three files, downstream of
+the session belt (`D-0301`/`D-0302`, ported PR #61): every case runs a crash-and-retry shape
+*through* the control plane and asserts a durable row, never an exit code. Porting it needs two new
+modules with no continuo counterpart yet -- `claude_org_runtime.control_plane.session_binding`
+(the staged session<->run binding, `prepared` -> `spawned` -> `identity_confirmed`) and
+`claude_org_runtime.supervisor.SessionOrchestrator` (the lease-before-spawn walk that composes the
+binding, the lease and the S1 provider verbs) -- ported here to `src/control_plane/session_binding.ts`
+and `src/supervisor.ts`.
+
+**Decision 1: the `D-08xx` band is reserved for this belt**, per D-0019's per-source-file ledger
+convention and D-0032's D-range allocation.
+
+**Decision 2: `SessionOrchestrator.start()` and `.recover()` are `async`, and every private helper
+downstream of a provider verb call is `async` with them.** The source drives five ordinary blocking
+calls; D-0301 already made continuo's `SessionProvider` verbs (`start`, `listSessions`, `readState`,
+`stop`, `resume`) `Promise`-returning, because Node has no synchronous way to wait for a child to
+exit. `SessionOrchestrator` calls all four of the non-list verbs, so the async-ness D-0301 introduced
+at the leaf necessarily reaches this join layer -- there is no way to write a `SessionOrchestrator`
+over continuo's `SessionProvider` that stays synchronous. This is a calling-convention change with no
+effect on what any case asserts: every value compared, every row read and every exception raised is
+the source's. `pytest.raises(SomeError, match=...)` becomes `expectAsyncRefusal`, this belt's local
+async twin of `test/testkit/errors.ts`'s `expectRefusal` (kept local to `test/gate_item2/helpers.ts`
+rather than added to the shared testkit while `fault_injection` and `messagebus` are mid-flight
+against shared files).
+
+One further consequence, specific to `#refuseAndTerminate` (the port of `_refuse_and_terminate`): the
+source holds SQLite's write lock across its `provider.stop(session_id)` call inside one
+`BEGIN IMMEDIATE` transaction, using the lock itself to serialise the loser's stop-or-stand-down
+decision against a winner's concurrent `confirm_identity`. `better-sqlite3` is synchronous and has no
+async API to hold a transaction open across an `await`, so the port's transaction still opens before
+the read-only check-and-decide and is rolled back (never committed -- the block only ever reads)
+around the same `await this.#provider.stop(sessionId)`, in the same order the source's `try/finally`
+does. Node's single-threaded event loop means nothing else can touch this same connection object
+during that `await` unless another already-running task does, and nothing in this belt's tests does;
+this is stated as the residual rather than assumed away, in the same spirit as gate item 2's own
+statement that the admission-to-spawn window "cannot be closed from here" (`ACCEPTANCE.md` section 2).
+
+**Decision 3: `test_session_driver_harness.py` (6 of the 34 node ids) is deferred to a dedicated
+follow-on task, not ported in this change.** That file drives
+`tests.fault_injection.controller.Controller` / `execute_case` / `assert_invariants` against a
+`SESSION_ADAPTER` from `tests/fault_injection/session_driver.py` -- the fault-injection harness
+itself, real SIGKILL and all. `fault_injection` is its own `candidate-lane` belt
+(`parity/source-inventory.belts.md`) and is being ported concurrently in a sibling worktree (PR #62);
+porting the harness here as a "ついで" would duplicate that lane's work and risk disagreeing with it.
+`parity/gate_item2.orchestrator-walk.ledger.json` (23 cases) and
+`parity/gate_item2.mediated-real-provider.ledger.json` (5 cases) land in this change -- both are
+downstream only of the already-ported session belt and are fully in-memory or real-subprocess-but-
+no-fault-injection. `test/gate_item2/mediated-real-provider.test.ts` reuses `test/session/helpers/`
+(`fakeCli`, `spawnLog`, `stopSessionsAtTeardown`, `spawned`) built for the session belt's own
+`claude-cli-provider.test.ts`, rather than re-deriving the fake CLI fixture.
+
+Investigating the blocker turned up a narrower fact than "wait for `fault_injection` to land":
+`SessionAdapter`'s execution-path methods (`bootstrap`, `spawn`, `roleArguments`, `observer`,
+`invariantQueries`, `queryParameters`, `effectKeys`, `holderOf`) are a deliberate stub that throws
+`ContractViolation` on every call -- `fault_injection`'s own header on that file already names this as
+its own declared follow-on (D-0601) on the session belt landing, and the session belt has landed
+(PR #61) without the adapter itself yet being re-bound to it. So `fault_injection` landing on `main`
+does not, by itself, unblock these 6 node ids. Ratified by human decision 2026-08-29 (via secretary,
+option "(a')"): this belt ships as 28/34 in its own PR, and re-binding `SessionAdapter` to
+`src/supervisor.ts` / `src/session/claude_cli_provider.ts` -- landing these 6 node ids together with
+`fault_injection`'s own 4 full-profile session-start manifest cases, since one real `SessionAdapter`
+serves both -- is dispatched as a separate follow-on task. `parity/gate_item2.session-driver-harness.
+ledger.json` records the 6 as `not-ported` with the reason above; a faithful draft of all 6 against the
+current `controller.ts` / `manifest.ts` APIs (`feat/continuo-fault-injection-port` at HEAD `16a9c2c`
+when drafted) is held at `tmp/session-driver-harness.draft.test.ts` (gitignored, this task's own
+branch) as a handoff asset for the follow-on worker, expected to need rework once the adapter is real.
+
+**Falsifier.** If a future belt needs `SessionOrchestrator` to expose a synchronous entry point (a
+CLI driving it directly, say), the async-everywhere decision above is the wrong default there and
+that caller needs its own adapter -- this decision is about the join layer over an async provider
+contract, not a claim that every caller wants a promise. If `fault_injection`'s session-driver adapter
+lands with a shape `test_session_driver_harness.py`'s cases cannot be ported against directly (its own
+`SESSION_ADAPTER` assumes a three-role delivery loop the full battery needs but this file's four cases
+do not), the remaining 6 node ids need a follow-up ledger and belt update rather than silent inclusion
+in either lane's totals.
+
+**Source.** Task `continuo-gate-item2-port`, 2026-08-29, porting `tests/gate_item2/` from interlock
+`65f36c5`. Decision id from the `D-08xx` range this entry allocates.
+
+---
+
+## D-0601 — The fault-injection belt takes `D-06xx`, its own `test/fault_injection/` directory, and two adapter classes
+
+**Context.** `parity/source-inventory.belts.md` classed `fault_injection` (98 cases) as
+`candidate-lane` and left three questions open in writing: which `D-` range the belt gets, whether
+the cases merge into `test/contract/` or take a directory of their own, and what it means to run a
+"conformance battery with one adapter in it". This entry answers all three before any code lands,
+because each one is load-bearing on how the other 97 cases are written.
+
+**Decision 1 -- the band is `D-06xx`.** The index note in this file allocates `D-0019`..`D-0099` to
+the control plane and the window, `D-01xx` measurement, `D-02xx` fencing and settings, `D-03xx`
+session, `D-04xx` canary, `D-05xx` messagebus (the last three by D-0032). `D-06xx` is the next free
+range and is reserved here for the fault-injection belt. As the index note already says, the range
+is an allocation and not a meaning: nothing about an entry follows from which range it is in. The
+point is only that concurrent lanes appending at once conflict in the index table and never over an
+ID.
+
+**Decision 2 -- the cases get `test/fault_injection/`, not `test/contract/`.** `belts.md` floated
+the merge on the grounds that continuo "already has the same instinct in `test/contract/`". The
+instinct is the same; the shape is not. `test/contract/` holds assertions *about* continuo's
+modules. This belt ports an independent acceptance system: it has a wire protocol
+(`contract.ts`), a spawn/barrier/kill/restart engine (`controller.ts`), a frozen case matrix and
+its generator (`manifest.ts`, `manifest.json`), a conformance battery (`conformance.ts`), a
+collection-time policy layer for lanes, profiles and budgets (`policy.ts`), and role drivers that
+run as **real child processes**. Merging six such modules into a directory of ordinary contract
+tests would bury the seam that `test_import_graph.py` exists to police -- the rule that exactly one
+module may import the implementation under test -- in a directory where every file imports
+implementations by design. Interlock keeps the harness in `tests/fault_injection/` for the same
+reason, and the belt keeps that boundary.
+
+**Decision 3 -- the adapters are two classes, and only one of them is a battery subject.** The
+source's `ADAPTERS` tuple in `test_conformance.py` has one member and its docstring says the others
+join "when I-12 and I-14 land". Read carelessly, "a conformance battery with one adapter" sounds
+like a comparison test with nothing to compare against. It is not a comparison test. It is a
+**qualification exam**: `conformance.ts` asserts the contract itself -- every checkpoint reachable
+and blocking, the barrier round-trip, a real SIGKILL leaving a readable database, an idempotent
+restart, an injected clock, identical traces under one seed, the CLI surface, and that no invariant
+query is vacuous -- so an adapter that has not passed it cannot contribute matrix results. One
+subject is a complete exam; a second subject adds coverage of the *next* adapter, not of the exam.
+
+So the belt names the two roles explicitly rather than leaving them implied by a tuple:
+
+- a **`FullFaultAdapter`** is a battery subject. It implements the whole `Adapter` surface and the
+  conformance battery runs against every one the build ships. Today that is exactly one, the spike
+  driver over `src/control_plane`.
+- a **`CaseAdapter`** is the narrower thing a manifest case's `adapter` field may name. It is
+  resolved from a registry at collection time and needs only what the cases routed to it use.
+
+The distinction is structural, not documentary: the registry refuses to be empty, and every
+`adapter` name a manifest case declares must resolve in it, so a case routed to an adapter nobody
+registered fails at collection rather than as a spawn failure in CI. That is the same rule the
+source states for its own manifest validation ("an unknown adapter must refuse at collection, never
+surface as a spawn failure") raised to cover the registry as well as the name.
+
+**What this belt does *not* claim.** The manifest carries 59 cases, of which 55 route to the spike
+adapter and 4 to the session adapter (`session-start`, gate item 2's four injection points). The
+session driver stands on a `SessionOrchestrator` and a C2 provider that continuo has not ported --
+`src/session/` does not exist at this revision. Those four cases are therefore declared in the
+ledger as a **follow-on dependency**, not as passing coverage, and this belt's completion claim is
+"the acceptance harness is ported and the spike adapter passes the battery", never "98 cases at
+parity". The two are different sentences and the ledger keeps them apart.
+
+**Falsifier.** If `test/fault_injection/` is later merged into `test/contract/` without the import
+seam surviving, `test/fault_injection/import-graph.test.ts` goes red naming the module that
+reached the implementation. If a second full adapter is added without passing the battery,
+`test/fault_injection/conformance.test.ts` collects it and fails. If the adapter registry is
+emptied, its own structural case fails rather than the matrix silently collecting nothing.
+
+---
+
+## D-0602 — The fault-injection watchdogs are scaled for this port's runners, and the manifest's numbers are left alone
+
+**Context.** `manifest.json` carries interlock's CI budgets: a `fast` profile with a 15s per-case
+watchdog and a 10s per-barrier one. Those numbers are calibrated on interlock's runners. On PR #62
+they met continuo's, and two cases failed on the `windows-latest` / node 22 cell:
+
+    CaseTimeout: disp__attempt__after_effect_before_record__sigkill outran its 15s budget
+    CaseTimeout: disp__lease-acquire__lease-acquired__clock-fwd outran its 15s budget
+
+**The stack is the whole diagnosis.** Both failed at the *identical* site --
+`Controller.checkDeadline` -> `Controller.spawn` -> `executeCase` at the FIRST spawn, the one
+immediately after `bootstrap()`. Neither case had started a role process. Creating the schema alone
+had consumed the entire budget. The same suite was green on windows/node 24 and on all four ubuntu
+cells, and both cases pass everywhere else, so nothing distinguishes them except which machine they
+happened to run on.
+
+That is a phenomenon this repository has already measured and already written down. From
+`vitest.config.ts`, for one test on one commit in one workflow:
+
+    linux-latest              28ms
+    windows-latest (healthy) 321ms
+    windows-latest (slow)  13,556ms
+
+a 42x spread between two Windows runners with no code between them, on work that is exactly what a
+case does -- the control plane runs `synchronous = FULL` (interlock D-0012), so every commit fsyncs,
+and a case creates, migrates and re-reads a database several times.
+
+**Two hypotheses were measured and discarded before this one.** The port spawns a child per role and
+type-strips `src/control_plane` on each spawn, so per-spawn cost was the obvious suspect: measured at
+**210ms median** (n=5, linux/node 22), and `NODE_COMPILE_CACHE` moved it not at all (208ms vs 210ms).
+Spawn count was the second: the two failures were assumed to be the multi-spawn cases until the stack
+showed both dying before *any* spawn. Neither survived contact with the evidence, and both are
+recorded here because a reader's first instinct will be the same as mine was.
+
+**Decision.** The budgets are scaled **where they are used**, by this port, and the manifest keeps
+interlock's numbers:
+
+- `PORT_BUDGET_SCALE = 3` applied to the per-case, combination and per-barrier budgets;
+- held under `RUNNER_BUDGET_CEILING_S = 50`, because Vitest's own `testTimeout` is 60s and the two
+  failures are not equivalent. The harness's `CaseTimeout` names the case, carries the `S9-REPRO`
+  line and runs the teardown ladder; the runner's says a test took too long and leaves the role
+  processes to a teardown that never ran. Keeping the harness strictly faster preserves the
+  attributable failure design section 8.2 asks for.
+
+**What is NOT changed, and why.** `manifest.json`'s profile numbers stay exactly as interlock wrote
+them. A ported case -- `the profiles carry the budgets the watchdogs enforce` -- asserts them
+literally, and editing them would make this port's evidence disagree with its source over a fact
+about interlock's CI rather than about continuo's. The source's own docstring says these are
+"harness engineering parameters, not acceptance thresholds", revisable by an ordinary diff; this
+entry takes that at its word while leaving the recorded values alone.
+
+**One place this is stricter than the source, stated plainly.** The `full` profile's combination
+budget is 60s, which already equals the runner's timeout, so a 60s harness budget could never fire
+first. The ceiling holds it at 50s. That is a tighter number than interlock's on that one cell, and
+it buys a better failure rather than a weaker one.
+
+**Why not simply raise the runner's timeout.** `testTimeout` lives in `vitest.config.ts`, which every
+lane shares; a belt does not get to widen the whole suite's tolerance to fix its own cell.
+
+**Falsifier.** If a case's runtime grows past the scaled budget for a reason that is not runner
+weather -- a matrix that has genuinely got slower -- the watchdog still fires and still names the
+case, which is what design section 9 asks of it. If the scale is ever suspected of hiding growth,
+the measurement to redo is the one above: run the belt on a healthy runner and compare against the
+unscaled number.
+
+---
+
+## D-0034 -- The attention belt and the gate_item11 belt both start, and design proposals ratified within them are named
+
+**Context.** `parity/source-inventory.belts.md` held both subsystems at `retarget`: `attention`
+(194 cases, none a straight carry) and `gate_item11` (64 cases across four files, two of which --
+`test_no_provider_detail_leaks.py` and `test_suite_runs_unchanged.py` -- need re-derivation against
+continuo's module graph rather than Python imports). D-0031's gate applies here exactly as it did at
+D-0032 -- a `retarget` status proposes nothing until a human confirms it, and starting a belt is a
+separate act from allocating it a D-range.
+
+**Decision.** The human gate was passed on 2026-08-30, for two belts and several design proposals
+made within them, recorded together because they were ratified in one pass.
+
+1. **The `attention` belt starts, split into three sub-belts sharing one D-range.** A1 (facts, 90
+   cases), A2 (dedup and config, 44 cases) and A3 (notify and pipeline, 60 cases) all move from
+   `retarget` toward completion under `D-09xx`, allocated once and shared across the three so that
+   cross-sub-belt cross-references never leave the range. `test_broker_journal_contract.py` is not
+   part of the 194: it is a `broker`-belt file with no node ids (see the `broker` section of
+   `source-inventory.belts.md`), and it is named here only because the two subsystems sit next to
+   each other in that document and are not to be confused.
+2. **Four design points within the attention belt are ratified, not left to the implementing
+   sub-belt to decide:**
+   - The six-name fact vocabulary is promoted **beyond** D-0302's "restatement for the oracle's
+     sake, not an adoption": A1's own work will carry a new `D-` entry, in the range this belt
+     allocates, that supersedes D-0302's limitation and adopts the vocabulary as more than a lint
+     oracle. This entry does not itself allocate that id or write that entry -- it ratifies that A1
+     is the belt that does, ahead of any other belt reaching for the same six names.
+   - The mapping from the source's eighteen `kind` values to the six fact states is **not
+     invented** by this port: every ported case is required to give its fact state explicitly, so
+     no continuo-authored kind-to-state table exists for a belt case to silently depend on.
+   - The dedup subsystem's inherited defect -- malformed state loading as an empty `DedupState`
+     (the same defect `source-inventory.belts.md` flagged when this belt was still `retarget`) --
+     is repaired **fail-closed now**, inside A2. Rebuilding the corrupted state instead of refusing
+     it is a different, larger repair and cannot land in A2 for the same reason D-0405 gives for its
+     one deferred repair: it is named here as declined-for-now rather than silently out of scope,
+     and the belt that eventually takes it on is not yet chosen -- naming one before A2 exists would
+     be inventing a commitment this gate was not asked to make.
+   - The belt's parity ledgers follow D-0208's notation for a translated case whose mechanism
+     changes while the property it asserts is preserved: that case is recorded `adapted`, with the
+     divergence stated in the ledger, never folded silently into `ported`. D-0019's ledger
+     vocabulary is otherwise unchanged -- `not-ported` and waivers remain available for cases this
+     belt declines outright. `test_broker_journal_contract` is not a case at all -- it has no node
+     ids and is not part of the source-inventory manifest's file registration -- so it gets a
+     standalone, metadata-only ledger recording **zero entries** when the belt starts, outside the
+     parity checker's normal file-to-inventory linkage: an explicit, checked-in "this file
+     contributes nothing" rather than the file's total absence from every attention ledger being
+     mistaken for an oversight, with the reason cross-referenced to `source-inventory.belts.md`
+     rather than restated in the ledger. The DDL's lack of a constraint on `incident.fact_state` is
+     carried as-is -- it is a property of the schema this port inherits, not a defect this belt
+     repairs. The notify backend stays `stdout`, carried unchanged from the source rather than
+     generalised to a pluggable backend.
+3. **The `gate_item11` belt starts, under `D-10xx`.** `D-0504`'s testkit extraction is a
+   precondition, run first as its own PR (`PR-0`), because both
+   `test_no_provider_detail_leaks.py` and `test_suite_runs_unchanged.py` need the frozen testkit to
+   already exist rather than growing a second copy of it. `src/index.ts`'s two re-exported
+   vocabularies are carried as an allowlist exception to the leak check -- a named exception with a
+   falsifier, not a silent gap -- reserving a subpath-exports split as a future, separately-decided
+   move. The thirteen `test_suite_runs_unchanged` cases are ported by a scoped subprocess
+   double-run rather than by re-deriving interlock's own suite-identity check, and a spike proves
+   the double-run shape works before the belt commits to it.
+
+**This is the gate D-0031 defined, exercised again -- not a supersession of D-0032.** D-0032
+ratified three subsystems at the 2026-08-28 gate; this entry ratifies two more at the 2026-08-30
+gate, under the same document and the same three-layer boundary. Statuses not named here remain
+proposals.
+
+**Falsifier.** The A1/A2/A3 split is expected to cite across itself -- that is the reason `D-09xx`
+is allocated once rather than three times -- so cross-citation is not what would falsify the
+sharing. What would is a collision: two sub-belts minting decisions that land on the same id because
+neither sub-belt's author could see the other's in-flight entry. If that happens, the shared-range
+allocation is what is wrong, and a future entry splits `D-09xx` into per-sub-belt slices. If the
+fail-closed dedup repair is found to lose data a caller needed, the deferred rebuild belt is what
+was missing, not evidence against fail-closed itself. If the gate_item11 double-run spike shows the
+subprocess shape does not scale to thirteen cases, the belt's approach is what is wrong, not the
+D-range allocation, which stays burned either way.
+
+**Source.** Ratified by the user on 2026-08-30, task `continuo-belt-ratification-2`. Decision id
+allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to use this file").
+
+---
+
+## D-0035 -- `curator` is ratified `not-porting`; `migrate` is reviewed and stays `decision-pending`
+
+**Context.** `parity/source-inventory.belts.md` held both `curator` (71 cases) and `migrate` (11
+cases) at `decision-pending`: whether continuo carries either surface at all was undecided upstream,
+and porting either would have settled that by implication rather than by an explicit answer. D-0031
+requires a human gate before either status moves.
+
+**Decision.** The human gate was passed on 2026-08-29, for two subsystems, recorded together
+because they were reviewed in one pass (continuo#77).
+
+1. **`curator` moves from `decision-pending` to `not-porting`.** The promotion gate's premise is
+   that a filesystem write into a live skill directory *is* the promotion, which is a claim about
+   running Claude Code sessions. continuo is a safety-substrate library, not the operator of those
+   sessions, so it does not own that surface, and the tests have no subject here. The existing note
+   that `test_promotion_gate.py` would be high-value *if* the answer had been yes is kept, unedited,
+   as the reason a future reversal would be cheap to act on. The effective porting target moves from
+   `2,194 - 85 = 2,109` (D-0032's count) to `2,194 - 156 = 2,038`, `156 = 85 + 71`.
+2. **`migrate` stays `decision-pending`, reviewed rather than left unexamined.** `tests/test_migrate.py`
+   checks v1-to-v2 key normalisation against a migration/comparison bridge that exists in neither
+   repository; deciding to port it would not produce anything to port it against. The status is
+   unchanged, but `source-inventory.belts.md` now records that this was reviewed at the human gate on
+   2026-08-29 and deliberately left pending, so a later reader does not mistake it for an unexamined
+   entry.
+
+**Falsifier.** For `curator`: if continuo, or a layer built on it, grows a surface that promotes
+skills by writing into a live skill directory, the subject exists and this decision is superseded,
+not edited -- `suisya-systems/cadenza#9`'s agentic-layer direction is a live candidate, not a
+theoretical one. For `migrate`: the trigger for revisiting is the run-boundary cutover bridge
+actually being designed; the `jsonschema`-equivalent dependency question comes with it and does not
+need answering before then.
+
+**Source.** Ratified by the user on 2026-08-29, task `continuo-decision-pending-ratification`,
+continuo#77. Decision id allocated by the window in the shared band (`D-0019`..`D-0099`, see "How to
+use this file").
+
+---
+
+## D-0603 — The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types`
+
+**Context.** `test/fault_injection/session_driver.ts` (D-0601's second adapter, deferred until this
+task) is the first module in `test/fault_injection/` to import `src/session/`. Its
+`driverCommand()` spawns itself as a type-stripped `.ts` child process, mirroring
+`SpikeAdapter.driverCommand`'s `major < 23 ? ["--experimental-strip-types"] : []`. Under that flag
+(or under Node's unflagged default stripping on Node >=23.6, which is the same strip-only mode) the
+spawned process died immediately with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter
+property is not supported in strip-only mode`, pointing at `src/fencing/pyjson.ts`'s
+`DocumentScan` class (`constructor(private readonly src: string) {}`) -- a file
+`src/session/claude_cli_provider.ts` imports transitively. `spike_driver.ts` never reaches that far
+(it imports only `src/control_plane/`), so this class of import was never exercised through the
+driver-spawn path before.
+
+**Decision.** `SessionAdapter.driverCommand()` passes `--experimental-transform-types`
+unconditionally (it implies strip-types, so no version branch is needed): Node's fuller *transform*
+mode lowers a parameter property (and an enum, and a namespace) to plain JavaScript instead of
+refusing it outright. `SpikeAdapter.driverCommand()` is left unchanged -- it has never needed more
+than stripping and D-0601 already keeps the two adapters independent.
+
+**Falsifier.** If a future `src/` file the session adapter's import graph reaches uses a
+non-erasable TypeScript construct the transform mode itself does not lower (none is known at the
+time of this entry), the spawn would fail again with a different Node diagnostic and this decision
+would need revisiting, not merely re-measuring.
+
+**Source.** Task `continuo-session-adapter-followon`, 2026-08-29, measured on Node v22.17.0
+(within the `engines` range `>=22.14.0 <23`).
+
+---
+
+## D-0802 — D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild
+
+**Context.** D-0801 shipped `gate_item2` at 28/34, deferring `tests/gate_item2/
+test_session_driver_harness.py` (6 node ids) to a follow-on task because it drives
+`test/fault_injection/controller.ts` against a `SessionAdapter`
+(`test/fault_injection/session_driver.ts`) that was, at the time, a stub refusing every
+execution-path call (D-0601's own declared follow-on on the session belt landing). This task
+re-binds `SessionAdapter` to `src/supervisor.ts`'s `SessionOrchestrator` and
+`src/session/claude_cli_provider.ts`'s `ClaudeCliSessionProvider`, lands the 6 deferred node ids as
+`test/gate_item2/session-driver-harness.test.ts`, and -- since one real `SessionAdapter` serves both
+-- makes `test/fault_injection/`'s own 4 `full`-profile `session-start` manifest cases executable at
+the same time (`parity/fault-injection.cases.ledger.json`'s declared follow-on, closed by the same
+change).
+
+**Decision 1 -- the adapter gets its own fake CLI, not the session belt's S2 fixture.** The
+session-start cases' `live-processes-per-session` invariant needs an interval-overlap computation
+over real pids and timestamps (a start ledger line and, on a normal exit, an exit line), so the
+observer can answer "was any session id ever concurrently live under two processes" even after both
+have exited. `test/session/helpers/fake-claude.mjs` (the session belt's own fixture, `FAKE_MODE` /
+`FAKE_SPAWN_LOG` etc.) records only `{argv, cwd}` per spawn -- enough for the session belt's own 142
+cases, not enough for this one. `session_driver.ts` therefore carries its own small embedded fake
+CLI (mirroring the source's own bespoke `_FAKE_CLI`, which is likewise separate from
+`tests/session/test_claude_cli_provider.py`'s fixture), keeping the session belt's fixture
+unchanged and unrisked by a shape it was not built for.
+
+**Decision 2 -- no dedicated reaper for the destination's grandchild.** The fault belt's own
+teardown ladder (`controller.ts`'s `teardown()`) reaps role *processes*; it was never asked whether
+a role's own detached grandchildren need reaping too, and the session adapter is the first case
+where a role process spawns one on purpose (`ClaudeCliSessionProvider` spawns the fake CLI
+detached, its own session/process group -- the same shape the session belt's own mediated-provider
+tests already exercise, so a `SIGKILL` of the `sup` role process never touches it; that is the
+point, since it is what lets `recover()`'s adoption path find a live child rather than a corpse).
+Evaluated and found **not needed**: the four session-start manifest cases are single-role,
+non-combination, and never repeat `bootstrap()` within a case, so the fake CLI's own release is
+what ends the process on every path. That release is a *condition on the filesystem*, not a fixed
+sleep (a first draft used a fixed hold and a codex review round correctly flagged it: on a slow
+enough runner the child could exit before a restarted generation's `recover()` looked for it,
+making the P3 "surviving child" adoption path timing-dependent rather than reliably exercised) --
+the fake CLI polls for a stop-file's existence, and `session_driver.ts`'s `runWalk` writes that
+file in a `finally` once a generation's own walk is over, on both its success and its failure path
+(a `SIGKILL`ed generation 0 never reaches its own `finally` -- the signal tears the process down
+first, exactly like the barrier's own kill path -- so in every one of the four cases it is
+generation 1 that releases generation 0's still-living child). A bounded safety cap
+(`HOLD_SAFETY_CAP_MS`, well under `RUNNER_BUDGET_CEILING_S`) is the backstop if nothing ever writes
+the file, and `vitest`'s own worker teardown is the backstop beyond that for an aborted run, exactly
+as it already is for the session belt's own fake-CLI fixture. A dedicated harness-side reaper would
+still be solving a problem this fixture does not have; the observation is recorded here rather than
+left implicit, per the fault belt's own request to have this question actually evaluated.
+
+A second codex review round, on the merged tip, caught a related race in
+`SessionObserver.liveProcessReport()`: the stop-file release above makes the fake CLI's own normal
+exit and the observer's ledger-snapshot-then-`/proc`-check race each other, so a process that exited
+in that narrow window read as an unexplained death (`null`, "indeterminate") rather than the closed,
+ordinary interval it was. Fixed by re-reading the ledger for that specific `(uuid, pid)` immediately
+before declaring indeterminate, rather than judging a still-open ledger entry against the snapshot
+taken before the `/proc` check ran.
+
+A third round caught the remaining half of the same shape: writing the stop-file marker does not
+prove the detached child has *seen* it yet (the fake CLI polls every 20ms), and nothing was waiting
+for that observation before `runWalk` returned and the test's own `caseRoot()` cleanup could remove
+the workdir the marker lives in -- a fast case could leave the still-polling child orphaned, invisible
+to the marker it is waiting for, until `HOLD_SAFETY_CAP_MS` expired. `runWalk`'s `finally` now also
+awaits `waitForNoLiveChild` (a bounded, `/proc`-scoped poll on the workdir's own fake-CLI marker path)
+before returning, so the walk does not report done while a process this case spawned is still running.
+
+**Decision 3 -- per-case budgets route through D-0602's scaling, not literal numbers.** The source's
+`barrier_timeout_s=20.0, case_timeout_s=60.0` become `barrierTimeoutS(PROFILE)` /
+`caseTimeoutS(faultCase, PROFILE)` (`test/fault_injection/policy.ts`), exactly as
+`test/fault_injection/protocol.test.ts` and `cases.test.ts` already do -- scaled and held under
+`RUNNER_BUDGET_CEILING_S` for this port's runners, never the manifest's own numbers written as a
+literal at a new call site.
+
+**Decision 4 -- the Linux-lane skip is read from the manifest, not re-derived from
+`process.platform`.** The source's file-level `pytestmark = pytest.mark.skipif(not _LINUX, ...)`
+becomes a per-test `skipIf(laneSkipReason(...) !== null, ...)`, reusing `test/fault_injection/
+policy.ts`'s own `laneSkipReason` -- the same lane test every other manifest case in
+`cases.test.ts` already trusts, since all four session-start cases already declare `"lane":
+"linux"` in the manifest. This is a narrowing of translation effort, not a new policy: the reason
+text and the underlying platform check are unchanged.
+
+**Totals.** `gate_item2` is 34/34 ported (26 `ported` + 8 `adapted`, 0 waivers, 0 not-ported).
+`parity/gate_item2.session-driver-harness.ledger.json` records the 6 as `adapted` (D-0801's
+async-everywhere change, this entry's budget/lane/teardown adaptations, and the translation
+itself). `parity/source-inventory.belts.md` moves `gate_item2` from `candidate-lane` to `in-scope`
+(ratified 2026-08-29), the same status the D-0801 entry above already anticipated moving to once the
+deferral closed.
+
+**Falsifier.** If a future session-start case becomes a combination case (more than one target, or
+a staggered kill), Decision 2's "single-role, non-combination" premise no longer holds and the
+no-reaper conclusion needs re-evaluating against that shape specifically -- a role process being
+sigkilled while its own grandchild's parent role is a *different, still-alive* role would be a genuinely
+new hazard this task's four cases cannot exercise.
+
+**Source.** Task `continuo-session-adapter-followon`, 2026-08-29, porting
+`tests/gate_item2/test_session_driver_harness.py` from interlock `65f36c5` and re-binding
+`test/fault_injection/session_driver.ts` per D-0601's declared follow-on.
+
+---
+
+## D-0901 -- The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated
+
+**Context.** `D-0302` wrote the six watcher fact states into this repository and was explicit about
+how far that went: "a restatement for the oracle's sake, not an adoption. Continuo has no watcher
+and this entry does not give it one." The names existed here so that the ported S1 prose lint had
+something to read; nothing in `src/` was entitled to treat them as its own vocabulary. Two places
+nevertheless carried the list already -- `src/measurement/fixtures.ts`, which refuses a seventh
+value on a fixture label, and `test/fault_injection/contract.ts`, which validates against it -- and
+each had its own local reason, which is exactly the shape a vocabulary drifts apart in.
+
+`D-0034` ratified, at the 2026-08-30 human gate, that A1 would be the belt that closes this: "A1's
+own work will carry a new `D-` entry, in the range this belt allocates, that supersedes D-0302's
+limitation and adopts the vocabulary as more than a lint oracle." This is that entry, and it is the
+first in the `D-09xx` range D-0034 allocated to the attention belt.
+
+**Decision.** The closed set is the vocabulary continuo's **detector layer** uses. It is stated in
+`src/attention/fact_state.ts` as a union type, a frozen list and a refusal, and nowhere in that
+module is there a predicate, a semantics, or a mapping from anything to a fact state -- interlock
+`Q-0012` is open and a port does not answer an upstream question by shipping an implementation of
+it. The set, unchanged from `D-0302` and from interlock `D-0005`:
+
+- `ACTIVE_EVIDENCE`
+- `KNOWN_WAIT`
+- `EXPLICIT_BLOCK`
+- `NO_ACTIVITY_EVIDENCE`
+- `OBSERVATION_UNAVAILABLE`
+- `TERMINAL`
+
+The procedural half is carried with the names, as it was at `D-0302` and at interlock `D-0005`: a
+seventh state is added by a new `D-` entry in this file, never by editing a list inside a module or
+a test.
+
+**`D-0302` is superseded in its limitation and left textually untouched.** Not out of tidiness:
+`test/session/provider-contract.test.ts` locates the closed set by splitting `DECISIONS.md` on the
+literal heading `## D-0302 \u2014`, and that indirection is the substance of the ported case rather
+than plumbing. Amending the entry risks the parse; rewriting the lint to read this entry instead
+would change a ported case to suit a decision made after it. So both entries carry the list, which
+is a drift risk this belt creates and therefore has to close --
+`test/contract/fact-state-vocabulary.test.ts` asserts that `D-0901`, `D-0302`,
+`src/attention/fact_state.ts`, `src/measurement/fixtures.ts` and
+`test/fault_injection/contract.ts` all state the same six names in the same order, and that the two
+`src/` copies are frozen rather than merely typed `readonly`. The harness copy is closed by `as
+const` alone -- a compile-time claim that is erased at emit -- and strengthening it would be an
+edit to a landed belt's file, which `D-0504` established belongs in its own PR rather than in
+whichever belt happens to notice. The contract test therefore **records** that difference with an
+assertion rather than repairing it, so that the day someone freezes it the record goes red and is
+updated deliberately.
+
+**The DDL is the sixth party and agrees by carrying no constraint at all.** `incident.fact_state`
+is unconstrained text in both `src/control_plane/spike_schema.sql` and
+`src/control_plane/migrations/0001_initial.sql`, because a `CHECK` duplicating the closed set would
+turn a `D-` entry that extends it into a migration of a schema that promises none. `D-0034`
+ratified that this belt carries that as-is rather than repairing it, so the contract test asserts
+the **absence**: the only `CHECK` mentioning the column is `length(fact_state) > 0`, and no fact
+state is named inside the table. `test/control_plane/spike-schema.test.ts` keeps its behavioural
+pin (an unknown fact state inserts successfully) and is not touched.
+
+**Falsifier.** `D-0302`'s own falsifier still stands and is inherited rather than retired: if
+interlock adds a seventh fact state and neither entry here is updated, both this repository's lists
+pass while the source's fails. What would falsify *this* entry specifically is a consumer that
+needs to know what a state means -- if a belt reaches for a predicate over the set and cannot
+proceed without one, the adoption was made a step too early and `Q-0012` had to be answered
+upstream first. The contract test is the observation for the drift risk this entry creates: if it
+ever goes red because two lists disagree, the two-entry arrangement is what was wrong, not the
+adoption.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29, porting `tests/attention/test_readers.py`
+and `tests/attention/test_classifier.py` from interlock `65f36c5`. Decision id from the `D-09xx`
+range allocated to the attention belt by `D-0034`, and the first id A1 mints in it.
+
+---
+
+## D-0902 -- A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's
+
+**Context.** `D-0034` split the attention belt into A1 (facts, 90 cases), A2 (dedup and config, 44
+cases) and A3 (notify and pipeline, 60 cases). The split is by *test file*, and the source's module
+graph does not respect it: `classifier.py` -- A1's subject -- imports `DEFAULT_NOTIFY` from
+`config.py`, which is A2's. A1 cannot resolve a severity without it, and A2 cannot start until A1
+has landed the classifier those cases run against.
+
+Three options were weighed. **Waiting for A2** inverts the dependency the source has and would
+leave A1's 61 classifier cases unportable. **Moving the constant into `classifier.ts`** makes the
+port's module graph differ from the source's for a scheduling reason, and A2 would then have to
+move it back, which is a diff whose only content is undoing this one. **Landing the file with only
+what A1 needs** keeps the graph the source's and leaves A2 an ordinary addition.
+
+**Decision.** `src/attention/config.ts` exists and holds exactly two names: `Severity` and
+`DEFAULT_NOTIFY`, both carried from the source unchanged. `AttentionConfig`, the loader, `Template`,
+the placeholder allowlist and the sound modes are **not** here and are A2's to add;
+`tests/attention/test_config.py`'s 34 cases are untouched by this belt and are not in any ledger it
+writes. The file's own header says so, so the next reader of it does not have to reconstruct the
+split from two decision entries.
+
+`DEFAULT_NOTIFY` is built with `Object.create(null)` and read with `Object.hasOwn`, per
+`docs/test-translation-conventions.md` rule 9: the attention kind is a caller-supplied string used
+as a map key, Python's `dict` has no inherited keys, and an object literal carries
+`Object.prototype`. A target-only case pins that a notify map keyed by `toString` overrides nothing.
+
+**This was put to the window rather than decided in the belt.** The scope boundary between A1 and
+A2 is a ratified one, and a worker narrowing or widening it on its own authority is the failure
+mode `D-0031`'s gate exists to prevent. The window's answer, on 2026-08-29, was that a minimum seam
+inside a ratified three-way split is an implementation detail it can settle, on two conditions --
+that the ledger and a `D-` entry record the boundary, and that the file itself carries a line for
+A2's brief. Both are met.
+
+**Falsifier.** If A2 finds that `DEFAULT_NOTIFY` cannot be completed in place -- that the loader
+needs it to be a different shape, say, or that the config belt's own cases pin a construction this
+file forecloses -- then landing it early was wrong and the constant should have travelled with its
+belt. The observation is A2 having to *change* this file rather than *extend* it.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29. Boundary confirmed by the window in the same
+task before implementation began.
+
+---
+
+## D-0903 -- The classifier carries a fact state it is given and derives none; the retargeted invariant is a guard with measured probes
+
+**Context.** `parity/source-inventory.belts.md` classes every `attention` file as `carry
+(invariant) / rewrite (mechanism)` and names `test_classifier.py`'s invariant as the strongest in
+the subsystem: *every row of the fact vocabulary has a pinned expectation*. In the source, the
+vocabulary being pinned is its own eighteen-value classification table -- the `notify_sent`
+subtypes and the per-kind severity defaults. Continuo has neither a watcher nor that table's
+purpose, and `D-0034` ratified that the port re-derives the invariant onto the closed fact-state
+set instead, while **not** inventing the mapping from the source's eighteen `kind` values to the
+six states: "every ported case is required to give its fact state explicitly, so no
+continuo-authored kind-to-state table exists for a belt case to silently depend on."
+
+That leaves the shape of the port to decide, and there are only two ways a fact state can reach an
+`AttentionEvent`: the classifier derives it, or the caller supplies it. Deriving it is the
+forbidden table under another name -- a `switch`, a default, or a lookup are the same object.
+
+**Decision 1 -- the fact is an input, required, and carried uninterpreted.** Every row
+`src/attention/classifier.ts` accepts carries a `factState`, and the event it produces carries that
+same value back. Nothing in the module reads it, branches on it, or validates it against the row's
+kind. This is the posture `D-0021` and `D-0302` already give `SessionReadout`, where a provider's
+own lifecycle word is carried without conversion because conversion belongs to the detector layer;
+the classifier is downstream of that layer, so the fact arrives already decided.
+
+The field is **required and has no default**. An optional field needs a fallback, and the only
+fallback available is a function of the row -- which is the table again, with one row. Requiring it
+makes a caller who has not decided a compile error instead of a silent guess.
+
+**Decision 2 -- the retargeted invariant is a guard whose falsification is measured, not assumed.**
+`test/attention/classifier.test.ts` holds `PINNED_FACT_STATES`, one pinned expectation per
+vocabulary row, and asserts set equality against `FACT_STATES` in both directions. Its keys are the
+vocabulary and its values are what the classifier must do with each; it is not a mapping *to* a
+fact state and nothing in the belt reads it as one. The fact states named by the 61 ported cases
+are deliberately rotated across cases of the same kind, so no reader can extract a kind-to-state
+table from the pattern, and a target-only case asserts the absence directly: the same row under two
+different fact states classifies identically in every field but the one that was varied.
+
+A "for every row of the vocabulary" check is **green on an empty vocabulary**, which is precisely
+the shape that rots into a guard nobody has seen fail. So the belt follows the secretary belt's
+seven-probe precedent and records each probe measured red in
+`parity/attention.classifier.ledger.json`, rather than shipping an unfalsified guard with a
+confident comment on it.
+
+**Rejected alternative: parametrising the carry-through over `FACT_STATES` directly.** It is
+shorter and it covers all six automatically, and that is the problem -- a table derived from the
+vocabulary agrees with the vocabulary by construction and can never disagree with it, so the guard
+would assert nothing about whether anybody had actually pinned anything. The literals are written
+out for the same reason `D-0302` refused to copy a list into a test: the check has to be able to
+fail.
+
+**Falsifier.** If a later belt -- A3's pipeline, most likely -- finds that no caller is in a
+position to supply a fact state, then the fact does not belong on the classifier's input at all and
+this shape is wrong; the observation would be A3 having to invent a value to pass, which is the
+forbidden mapping arriving one layer up. Conversely, if `Q-0012` is settled upstream and a genuine
+kind-to-state derivation is published, this entry is superseded by one that adopts it rather than
+amended -- the port does not get to author that mapping either way.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29, porting
+`tests/attention/test_classifier.py` (61 cases) from interlock `65f36c5`, under `D-0034`'s
+ratified constraints.
+
+---
+
+## D-1001 -- The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on
+
+**Context.** Gate item 11 (interlock issue `#20`, `ACCEPTANCE.md` section 1) claims that swapping
+the session backend costs the control plane nothing: no provider detail may leak into it, and the
+control-plane suite runs unmodified against either provider. `tests/gate_item11/` measures that in
+64 node ids across four files. D-0034 ratified the belt's start (2026-08-30) and allocated `D-10xx`.
+This task is the belt's first PR: the 51 cases in `test_no_provider_detail_leaks.py` (35),
+`test_registry_availability.py` (4) and `test_substitution_scenarios.py` (12). The remaining 13
+(`test_suite_runs_unchanged.py`) are a declared follow-on, Decision 3 below.
+
+**Decision 1 -- AST scanning re-derives the source's two leak predicates against continuo's module
+graph, using the shared `importedModules` primitive (D-0504).** The source's
+`_names_a_session_backend` and `_knows_a_session_backend` ask two different questions over Python's
+dotted module names: the first has no exception for the S1 contract module
+(`claude_org_runtime.session.provider`) and is used only over the control-plane package and its own
+suite; the second excludes the contract and is used only over the whole of `src/` and the whole of
+`tests/`, because `src/supervisor.ts`'s join between session and the control plane is a cost D-0009
+accepts. Both are ported as path-containment predicates (`namesASessionBackend`,
+`knowsASessionBackend` in `test/gate_item11/no-provider-detail-leaks.test.ts`) over
+`test/testkit/ast.ts`'s `importedModules`, which resolves a relative specifier to an absolute path
+rather than leaving a dotted name to compare by prefix -- the same primitive
+`test/messagebus/import-graph.test.ts`, `test/canary/structural.test.ts` and
+`test/secretary/structural.test.ts` already share (D-0504). The two directory walks the source
+parametrizes over (`src/control_plane/`'s `rglob("*.py")`, `tests/control_plane/`'s) are ported as
+listings, not hand-written lists, following the same precedent
+`test/messagebus/import-graph.test.ts` set: a `.ts` file with no `.py` analogue (`connection.ts`,
+`python_json.ts`, `python_repr.ts`, `refusals.ts`, `spike.ts` under `src/control_plane/`;
+`differential-oracle.test.ts` under `test/control_plane/`) still gets a case, declared target-only in
+`parity/gate_item11.no-provider-detail-leaks.ledger.json`; a `.py` file with no `.ts` analogue
+(`__init__.py` under `src/control_plane/`, `src/control_plane/migrations/` and
+`tests/control_plane/`) is `not-ported` there, with no coverage lost since the property is checked
+over every file each directory actually contains.
+
+**Decision 2 -- `src/index.ts`'s dual re-export is an allowlisted exception to
+`test_no_shipped_module_knows_both_a_provider_and_the_control_plane`, ratified here with its
+falsifier.** interlock's per-directory `__init__.py` package layout never produces a single module
+that re-exports both a session backend and the control plane -- the source's own version of this
+test finds nothing. continuo ships one package entry point (D-0002, `exports` restricted to `.`), so
+`src/index.ts` is the one barrel that must re-export everything: it re-exports `./control_plane/*.js`
+directly and `./session/index.js`, which itself re-exports both `LocalProcessSessionProvider` (S3)
+and `ClaudeCliSessionProvider` (S2). Measured: without an exception, `src/index.ts` is the only file
+under `src/` this scan finds, and it is a structural consequence of D-0002 rather than a leak of
+knowledge into an implementation module -- nothing in `src/index.ts` acts on a provider's state or
+composes it with control-plane logic, it only re-exports both vocabularies to the same top level.
+The exception is named explicitly in `test/gate_item11/no-provider-detail-leaks.test.ts`
+(`ALLOWED_BARRELS`) and recorded in `parity/gate_item11.no-provider-detail-leaks.ledger.json`'s entry
+for that case, rather than narrowed into the scan itself, so it stays visible to a reviewer and to a
+future case that adds a second barrel.
+
+**Falsifier.** A subpath-exports split (`./control_plane`, `./session` as two separate entry points
+under `exports`, in place of today's single `.`) that let a provider swap touch only the `./session`
+subpath -- never `src/index.ts`'s control-plane half -- would remove the structural reason for this
+exception, and the day such a split lands, this exception should be revisited rather than carried
+forward by inertia. Splitting exports is not this task's move: D-0002 is a separate, already-ratified
+decision, and nothing here proposes revisiting it.
+
+**Decision 3 -- `test_suite_runs_unchanged.py`'s 13 cases are a declared follow-on, not silently
+dropped.** The source measures item 11's exit condition operationally: run the control-plane suite
+twice, once under `-p tests.gate_item11.provider_plugin` (a live session bound before collection) and
+once without, and diff the outcomes, the collected test ids and a SHA-256 of every collected file.
+Porting that needs a scoped subprocess double-run of continuo's own suite -- spawning `vitest run`
+twice, once with an environment variable a `globalSetup` reads to bind a live provider before the
+suite starts, and comparing the two JSON reporter outputs -- which is a different shape from
+anything this belt's first three files needed, and CLAUDE.md's own belt guidance requires a spike
+before that shape is committed to. It is out of this task's scope; `parity/source-inventory.belts.md`
+records it as the belt's declared next PR, and `gate_item11` stays `retarget` (not `in-scope`) until
+that PR lands and the belt reaches 64/64.
+
+**Totals.** `parity/gate_item11.no-provider-detail-leaks.ledger.json` records 35 cases (0 `ported`,
+32 `adapted`, 3 `not-ported`, 0 waivers). `parity/gate_item11.registry-availability.ledger.json`
+records 4 (4 `ported`). `parity/gate_item11.substitution-scenarios.ledger.json` records 12 (0
+`ported`, 12 `adapted`, since every S1 verb is `Promise`-returning per D-0301) -- the six `[S2]`
+cases are `conditionally_collected`: `vitest list` omits a `skipIf`-gated case entirely where pytest
+still collects a skipped node id, gated on whether the real `claude` CLI is on `PATH` (the same
+premise `parity/gate_item2.mediated-real-provider.ledger.json`'s two capability gates document).
+
+**Falsifier (Decision 3).** If the spike for the subprocess double-run shape shows it does not scale
+or does not reproduce the source's comparison faithfully, the belt's approach to
+`test_suite_runs_unchanged.py` is what is wrong, not this task's scoping decision to defer it.
+
+**Source.** Task `continuo-gate-item11-p1`, 2026-08-29, porting
+`tests/gate_item11/test_no_provider_detail_leaks.py`, `test_registry_availability.py` and
+`test_substitution_scenarios.py` from interlock `65f36c5`, under the belt start D-0034 ratified.
+---
+
+## D-0119 -- The remaining six measurement files convert whole, closing out the belt's per-case control-plane creation
+
+**Context.** D-0118 converted `provenance.test.ts` and `latency.test.ts`, the two heaviest files, and
+left `cohort.test.ts` and `render.test.ts` already on the template from earlier PRs -- four of the
+belt's ten files. Six still built a production control plane per case: `ac9.test.ts` (40 call
+sites), `canary.test.ts` (28), `windows.test.ts` (24), `reader.test.ts` (23),
+`false-termination.test.ts` (20) and `shadow.test.ts` (17), 152 in total. This task's brief estimated
+all ten files as unconverted; the survey above (call sites counted from each file's own
+`productionDb(` occurrences, cross-checked against the pre-task tree at `8ff9124`) found four already
+done, and the window narrowed the task to the remaining six before any conversion work started.
+
+**Decision.** All six files convert, and every one of their 152 fixture call sites converts -- there
+are no exclusions, judged the same way D-0118 judged its two:
+
+- **Nothing here has creation as its subject.** Each file contains exactly one
+  `createProductionControlPlane` call, in its own fixture (`ac9.test.ts` additionally parameterises
+  the copy's filename, which `suiteTemplate.copyInto`'s `as` argument already carries, the same shape
+  `provenance.test.ts` kept in D-0118).
+- **Nothing here asserts what an opener would verify against a constant.** None of the six files
+  compare a stamp or fingerprint to a hardcoded value; where a digest is taken (`reader.test.ts`,
+  `canary.test.ts`) it is compared against a digest of the same file taken earlier in the same case,
+  which a template copy satisfies identically to a per-case build.
+- **`patchSeam` never precedes the fixture in a way that matters.** `canary.test.ts` and
+  `reader.test.ts` each call `patchSeam` on `readerSeams` (`openReadOnly`, `proveReadOnly`) --
+  never on `schemaSeams` or `migratorSeams`, the two seams a converted template's lazy build could
+  run through. This is now moot regardless of call order: `suiteTemplate` registers its build in the
+  file's own `beforeAll`, which runs before every case's body, so no per-case seam patch can reach the
+  build in the first place.
+- **Nothing here needs a database that does not exist yet.** None of the six files contains an
+  `existsSync`, an `unlinkSync`, or an assertion about a file's absence.
+
+**Measurement.** Per-fixture cost on this Linux box, N=30: **85.93ms** to create a production control
+plane against **0.60ms** to copy one -- consistent with D-0118's 42.5ms/0.68ms figure on the same
+methodology (the difference in the create figure is machine variance between tasks, not a regression;
+the copy figure is stable). Running the six files together, `tests`-phase wall clock (vitest's own
+reported segment, three runs each side, this box, both states rebuilt from `dist/` before each run):
+before **40.08s / 50.58s / 51.51s**, after **16.67s / 27.11s / 31.64s** -- roughly halved despite this
+box's shared-runner noise (the paired `Duration` figures move the same direction: 13.79-19.28s before
+against 11.16-17.83s after). As in D-0118 and D-0029, the Linux figures understate the point: what
+each converted call site removes is one `fsync`, and Windows CI cells pay for those specifically.
+
+Verified the way D-0118 was: `npm run typecheck`, the full suite (`npm test`, 78 files / 2423 passed +
+2 expected-fail + 1 skipped, unchanged from before this branch), `npm run parity` (2425 target tests
+collected, matching the pre-existing ledger) and `npm run inventory` (2194 node ids across 77 files,
+matching the suite baseline at `65f36c5`) all pass against the converted tree. No case's assertions,
+node ids, or ledger totals changed; only the six files' `productionDb` fixtures did.
+
+**Alternatives.**
+
+- **Convert only the files the brief named as highest call-site count first, deferring the rest
+  (rejected).** Nothing in D-0118's exclusion analysis distinguishes any of the six files from the
+  four already converted; deferring any of them would leave that file's per-case `fsync` cost on
+  Windows CI for no reason tied to risk or size.
+- **Raise the per-test timeout for `ac9.test.ts`'s bounded-figure case instead (rejected, D-0029's
+  position kept).** The brief for this task explicitly forbids raising the cap; this decision reports
+  whether the conversion resolves that file's known Windows flake as an observation, not as the fix.
+
+**Consequences.**
+
+- Case counts are unchanged file by file. No ledger changed; only how each file's `productionDb`
+  fixture is built.
+- This closes the measurement belt's own per-case control-plane creation: after this task, no file
+  under `test/measurement/` builds a production control plane inside a case body rather than in a
+  file-scoped `suiteTemplate`.
+- The known Windows-only 60s timeout on `ac9.test.ts`'s bounded-figure case (noted in this task's
+  brief) could not be reproduced or disproved from this Linux box; the fixture-cost mechanism it was
+  attributed to is now removed from that file, and whether the flake is actually gone is left for the
+  next Windows CI run to show rather than claimed here.
+
+**Falsifier.** A case in any of the six files that comes to need a database which does not exist yet,
+that asserts a stamp against a constant rather than against the file it was handed, or that patches a
+`schemaSeams` or `migratorSeams` entry before taking its fixture -- the two records the template's
+lazy build runs through. Any of the three puts that case back on `createProductionControlPlane`, the
+way D-0118's are.
+
+**Status.** accepted
+
+**Source.** Task `continuo-measurement-suite-template`, 2026-08-29, closing out the measurement belt's
+suiteTemplate migration D-0118 started. Measured on Node 22.17.0, better-sqlite3 13.0.3, vitest
+4.1.11. Decision id allocated in the measurement belt's own `D-01xx` band (see "How to use this
+file"), the next free id after D-0118.
+
+---
+
+## D-1002 -- The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional
+
+**Context.** D-1001's Decision 3 deferred `tests/gate_item11/test_suite_runs_unchanged.py`'s 13
+cases -- the operational half of item 11's claim, run the control-plane suite twice (once with a
+live session bound before collection, once without) and diff the outcomes, the collected ids and a
+digest of every collected file -- pending a spike into whether continuo's own suite runner supports
+the same shape. This task is that spike plus the port.
+
+**Decision 1 -- the spike confirms the shape and finds it needs no pytest-plugin analogue: vitest's
+own `--reporter=json` already carries what `outcome_recorder.py` had to be written to collect.**
+Measured directly (`node_modules/.bin/vitest run <file> --reporter=json --outputFile=<path>`,
+vitest 4.1.11): the JSON reporter's `testResults[]` gives, per file, a `status` (`"passed"` /
+`"failed"`) and a `name` (the file's own path, usable for both a digest and an outcome key), and per
+test inside it an `assertionResults[].status`. Two further measurements this decision rests on:
+
+- **Hook failures are distinguishable from test failures without a custom reporter.** A `beforeAll`
+  throw sets every contained test's `status` to `"skipped"` and the *file's* `status` to `"failed"`;
+  an `afterAll` throw leaves every contained test `"passed"` and only the file `"failed"`. That is
+  enough to tell "a test started passing only because its fixture stopped running" (source's own
+  worry, `test_every_test_reaches_the_same_verdict_either_way`'s docstring) from "the suite's own
+  results are unchanged but teardown broke" -- not the same setup/call/teardown vocabulary pytest's
+  plugin recorded, but a strictly comparable pair (`{test, file}` per id) for the same purpose. See
+  `test/gate_item11/support/run.ts`'s own module doc.
+- **A `globalSetup` module that throws aborts the run, but the JSON reporter still writes a report**
+  (`{success: false, testResults: []}`), unlike pytest where a failed `pytest_configure` leaves no
+  report file at all. `support/run.ts` checks `testResults.length > 0` (via the `outcomes` map
+  built from it) rather than the source's `report.exists()`, which is the direct translation of the
+  same fail-closed intent (D-0010): a provider that could not qualify must not produce a
+  measurement that looks like anything ran.
+
+Consequence: `outcome_recorder.py` has no port. `test/gate_item11/support/run.ts` reads vitest's
+JSON reporter output directly and builds the outcome/artifact maps `suite-runs-unchanged.test.ts`
+compares, which is a re-derivation against continuo's own test runner rather than a line-for-line
+port of a pytest plugin whose whole reason to exist was that pytest did not expose this by default.
+
+**Decision 2 -- the "provider fixture" is a `globalSetup` module read by a dedicated vitest config
+(`support/suite-runs-unchanged.config.ts`), not a flag on the main config.** Vitest has no
+per-invocation plugin flag analogous to pytest's `-p`, so the source's `argv += ["-p",
+"tests.gate_item11.provider_plugin"]` (present only for the bound run) has no direct target. The
+config file's `globalSetup` entry is always present; what varies between the two runs is whether
+`support/provider-plugin.ts`'s `globalSetup` finds `CONTINUO_ITEM11_PROVIDER` in the subprocess
+environment `support/run.ts` builds -- absent, it returns immediately and is inert, the same
+"harmless when unset" contract the source's own `outcome_recorder.py` documents for `REPORT_ENV`.
+Measured (nested-vitest spike): a `vitest run` subprocess spawned from inside a running vitest
+worker works cleanly with no environment-variable interference once `VITEST`/`VITEST_POOL_ID`/
+`VITEST_WORKER_ID` are not force-inherited by accident, and `test/control_plane`'s 605 cases run in
+~7s either way -- three such runs (unbound, `[S3]` bound, `[S2]` bound) comfortably inside a single
+outer test's budget, which is why `CASE_TIMEOUT_MS` is generous (900s) rather than tuned to the
+measured figure: the same asymmetry `vitest.config.ts`'s own `testTimeout` comment gives for a slow
+CI cell. The config is spawned via `node <repo>/node_modules/vitest/vitest.mjs run --config <path>`
+(`process.execPath` plus the package's own `bin` target) rather than `node_modules/.bin/vitest`, so
+the subprocess launch does not depend on a POSIX shebang shim continuo's own Windows cell lacks.
+
+The double-run's own config deliberately does not reuse `vitest.config.ts`: that file's
+`resolveSeed()` throws under CI without `CONTINUO_TEST_SEED` (D-0005), which has nothing to do with
+item 11, and this measurement compares *outcomes and artifact digests*, not order-sensitivity --
+the main config's own job, D-0005's double-green rule already covers it. `support/suite-runs-
+unchanged.config.ts` runs in collection order, no shuffle.
+
+**Decision 3 -- `driveOnce` (the source's `drive_once`) is added to `test/gate_item11/
+substitution.ts` rather than to a new file.** Part 1 (D-1001) did not need it, since nothing in the
+51 cases it ported drove a full lease-to-outbox round trip to *qualify* a provider before a
+measurement -- that is `provider_plugin.py`'s job alone in the source, and its TypeScript home is
+the module already documented as "the one file in this fixture package that turns a provider's own
+words into a `session` row", which `driveOnce` also does, just as a precondition rather than as an
+assertion. Async because every `SessionProvider` verb it calls is `Promise`-returning (D-0301); the
+sqlite operations inside it stay synchronous, as `bindSession` already was.
+
+**Decision 4 (continuo#70) -- `test_substitution_scenarios.py`'s (and its port's) never calling
+`registry.disqualified()` is the source's own design, not a gap this belt should close.** Verified
+directly against interlock at `65f36c5`: `grep -n disqualified tests/gate_item11/
+test_substitution_scenarios.py` returns nothing -- the source's own `entry` fixture skips on
+`unavailable()` only, never calls `disqualified()`. The only source call site is
+`provider_plugin.py`'s `bind()`, now ported as `support/provider-plugin.ts`'s `globalSetup` in this
+task. The reason is the shape of what each file measures: `test_substitution_scenarios.py` exercises
+the control-plane binding path itself, case by case, so a session whose readout would disqualify it
+is exactly a case worth having (the binding logic still has to translate whatever state a provider
+reports, disqualifying or not -- `sessionRow`'s `OBSERVATION_WORD` mapping has no third case for
+"disqualified"). `test_suite_runs_unchanged.py` instead spends an entire double-suite-run measuring
+against one bound session, and `disqualified()` is the fail-closed gate (D-0010) that stops it from
+spending that cost on a backend already known to be broken, *before* either subprocess starts.
+Nothing here changes; `test/gate_item11/substitution-scenarios.test.ts` is unmodified by this task.
+
+**Totals.** `parity/gate_item11.suite-runs-unchanged.ledger.json` records 13 (0 `ported`, 13
+`adapted`, 0 `not-ported`, 0 waivers) -- all `adapted`, since every case reads `support/run.ts`'s
+`{test, file}` outcome pair or the `globalSetup`-printed stdout rather than pytest's own per-phase
+dict, per Decision 1. The six `[S2]` cases are `conditionally_collected`, the same premise
+`parity/gate_item11.substitution-scenarios.ledger.json`'s six declarations and
+`parity/gate_item2.mediated-real-provider.ledger.json`'s two capability gates already document.
+`parity/source-inventory.belts.md` moves `gate_item11` from `retarget` to `in-scope` (ratified
+2026-08-30, D-0034; completed 2026-08-29), the belt's own precedent from D-1001's text. The belt is
+now 64/64.
+
+**Falsifier.** If a future continuo test runner migration removes `--reporter=json` or `globalSetup`
+support, or changes either's semantics around hook-failure status or an aborted run's report
+contents, `support/run.ts` and `support/provider-plugin.ts` need re-verification against the new
+runner before this measurement can be trusted again -- this decision rests on vitest 4.1.11's
+measured behaviour, not on a documented contract either module promises to keep.
+
+**Source.** Task `continuo-gate-item11-p2`, 2026-08-29, porting
+`tests/gate_item11/test_suite_runs_unchanged.py` from interlock `65f36c5`, completing the belt D-0034
+started and D-1001 began, per the spike-first approach that task's brief required.
+
+---
+
+## D-0904 -- Dedup state fails closed: an absent namespace is empty, a present but unusable one is a refusal; the belt's `datetime` transcriptions get one home
+
+**Context.** `PORTING_LEDGER.md`'s row for `attention/dedup.py` carries the two dedup namespaces --
+record-once for `events`, cooldown-gated for `pending` -- and rules **out** the module's corruption
+handling in the same breath: "a broken state file recovers as empty" was safe while this was an
+advisory notification ledger, and once dedup state is durable and authoritative an empty ledger says
+nothing has been notified, so every already-handled event is free to fire again. That is the
+resume-without-double-execution violation `D-0001` exists to prevent. `parity/source-inventory.
+belts.md` names the two source cases that pin the defect, and `D-0034` ratified the repair as
+**fail-closed, inside A2**, with rebuilding the state from durable records named as declined-for-now
+rather than silently out of scope. `D-0023` supplies the rest of the procedure: the case that pinned
+an inherited behaviour is inverted in the change that repairs it, and the divergence stays reachable
+from the parity ledger.
+
+What none of that settles is **where the new line falls**, and the source has four silent recovery
+paths, not two. This entry is that boundary.
+
+**Decision 1 -- an ABSENT namespace is empty; a PRESENT but unusable one is a refusal.** The line is
+between "no state was written" and "state was written and cannot be trusted", and it is drawn once
+for the file and for each namespace inside it:
+
+- a **missing file** loads as an empty `DedupState`, unchanged from the source. Nothing has ever
+  been notified, and creating one is the legitimate next step. `test_load_missing_returns_empty`
+  ports straight.
+- a **missing `events` or `pending` key** is an empty namespace, unchanged from the source, for the
+  same reason one level down. `test_load_partial_shape` ports straight, and it is the case that
+  fixes this half of the line.
+- everything else refuses with `DedupStateRefused`: an unreadable file, a blank one, text that is
+  not JSON, a top level that is not an object, a namespace that is present and is not an object, and
+  an entry whose value is not a string. The last two are the repaired defect at a narrower scope --
+  the source substitutes `{}` for the first and silently drops the entry for the second, and a
+  dropped entry is one already-notified key forgotten, which is exactly the effect the repair
+  exists to prevent.
+
+**An undecodable byte is on the refusing side too, and the first draft of this decision got it
+wrong.** The draft read the file with Node's `utf8` mode and recorded that an undecodable file
+reaches a refusal either way, at the JSON parse -- Python raises `UnicodeDecodeError` there, which
+is a `ValueError` and escapes its own `except OSError`, so the source CRASHES rather than
+recovering. That reasoning holds only when the bad byte breaks the syntax. A bad byte **inside a
+JSON string** leaves the document valid: Node substitutes U+FFFD, the parse succeeds, and the state
+loads carrying a dedup key that is not the key that was written -- an already-notified event free to
+fire again, arriving through the reader this repair exists to harden. The file is read as bytes and
+decoded with a fatal `TextDecoder`. Found by the codex review gate on the finished belt, which is
+where the claim's own falsifier finally got exercised.
+
+**A blank file is on the refusing side, and that is the one call here that is not forced.** The
+source returns empty state for it without even a warning, so it could be read as a third flavour of
+"nothing was written". It is not: `saveState` writes through a fully-written temporary file and a
+rename, so it never produces a blank one, and a blank file at that path is therefore a truncation
+from outside -- the same class of event as a half-written document, arriving with no content to say
+so.
+
+**`DedupStateRefused` is its own family, not `src/control_plane/refusals.ts`'s.** That file
+documents itself as *the control plane's* refusals and its class identity is load-bearing across the
+two modules that share it, so a `catch` written about a database must not begin catching an
+attention state file. The cost is one more small class; the alternative couples two subsystems
+`D-0009` separates, for the sake of a message.
+
+**Decision 2 -- the belt's `datetime` transcriptions live in `src/attention/pytime.ts`, not
+privately inside whichever module needed one first.** `dedup.py` and `classifier.py` both round-trip
+an ISO-8601 timestamp through `datetime`, and both depend on CPython's exact answers rather than on
+the platform's:
+
+- `datetime.fromisoformat` accepts a **narrower** grammar than `Date.parse`, which takes shapes it
+  rejects (`"05/12/2026 11:59:00"`, `"May 12 2026"`) and rolls an impossible date forward
+  (`2026-02-30`) where `fromisoformat` raises -- and reads a naive `"2026-05-12T11:59:00"` as
+  **local** time where the source attaches UTC.
+- `datetime.isoformat` prints **no** fractional part when the microsecond field is zero and **six**
+  digits when it is not, where `Date#toISOString` always prints three.
+
+Every one of those differences turns a garbled or old stored timestamp into a recent one, or changes
+the bytes of a durable file.
+
+**The grammar is measured, not recalled, and the first transcription was too narrow.** A2 inherited
+A1's regex -- extended calendar dates, a `T` or space separator -- and the codex review gate
+observed that `fromisoformat` on CPython 3.12 takes considerably more than that: basic format
+(`20260512`, `115900`), ISO week dates (`2026-W20-2`, `2026W202`, `2026-W20`), an hour-only or
+hour-and-minute time, **any** single character as the date/time separator, a two-digit-hour offset,
+a sub-second offset, and a fractional second **truncated** rather than rounded at six digits. Every
+form left out is a stored timestamp the port would read as garbled while the source read it as
+real -- an extra notification where the source applies the cooldown, which is the safe direction and
+still not parity. The grammar was re-derived by running 68 inputs through `datetime.fromisoformat`
+on CPython 3.12.3 (the interpreter interlock's suite runs on at `65f36c5`) and against `parseIso`;
+all 68 now agree, and 26 of them are pinned in a target-only case. The measurement also caught a
+defect the reviewer had not named: a sub-second offset whose fraction was being stripped put the
+instant a whole **second** away, not a microsecond.
+
+**A second review round found four more, and the set grew to 90 inputs.** An ISO week can resolve
+*outside* `datetime`'s own year range (`9999-W52-7` is "year 10000 is out of range"), and letting it
+through was the one divergence here in the dangerous direction -- a garbled stored value read as a
+**future** instant, which suppresses a notification rather than letting it through. `Date.UTC`'s
+two-digit-year remapping had been undone for calendar dates and not for the week resolver, which is
+rule 11's own shape: a repair applied at one entry point and not at its sibling. A UTC offset whose
+hour, minute and second are all zero discards its fraction in CPython, so `+00:00:00.5` is plain UTC
+while `+00:00:02.25` is 2.25 seconds. And the date/time separator is one character to Python, which
+indexes a `str` by code point, and two UTF-16 units here when it is astral. All 90 inputs now agree,
+and each of the four carries its own probe.
+
+**A third round found two more, and one of them was introduced by the first round's own fix.** The
+fractional second attaches to the end of whatever precision was written -- `11.5` is 11:00:00.500000
+and `11:59.5` is 11:59:00.500000, and an abbreviated offset takes one too -- where the grammar
+allowed it only after a seconds field; the set is now 100 inputs and all 100 agree. And the fatal
+`TextDecoder` that closed the U+FFFD hole **strips a leading BOM by default**, where the
+`readFileSync(path, "utf8")` it replaced did not and Python's `utf-8` codec does not either
+(stripping is `utf-8-sig`'s job). CPython's `json.loads` refuses a BOM outright, so the repair had
+quietly moved a file the source rejects onto the accepting side of a repair whose whole point is to
+refuse. That is rule 11's own warning arriving inside the belt that cites it, and the decode now
+reads `{ fatal: true, ignoreBOM: true }` -- in **both** loaders, which is the other half of the same
+round: `loadConfig` had been left on the loose decode for two rounds after `loadState` was hardened,
+so an undecodable byte inside a template body would have loaded altered.
+
+**A fourth round found one defect in each file, and each is a previous decision reaching a case it
+had not considered.** A UTC offset can carry a valid boundary timestamp out of `datetime`'s own
+domain -- `9999-12-31T23:59:59-23:59` parses and then raises `OverflowError` on the source's
+`astimezone(timezone.utc)`, which `_parse_iso`'s `except ValueError` does not catch, so **interlock
+crashes there**. This belt's second inherited-defect repair under `D-0023`, and the repaired answer
+is the `null` every other unusable value already gets: the safe direction, since the year-10000
+`Date` the port produced beforehand reads as a *future* instant and suppresses the notification. And
+the `PyValueError` wrapper the third round put around the config decode had been wrapped around the
+**read** as well, so a directory or a permission denial was reported as malformed configuration --
+the source keeps `OSError` and `UnicodeDecodeError` apart and lets each propagate as itself, so the
+read moved outside the try. The differential set is 104 inputs: 102 comparable ones agree and the
+two CPython raises `OverflowError` on are recorded as repaired, classified separately by the
+generator so a crash can never be scored as a match.
+
+**A fifth round found the same lesson a third time: two callers holding two spellings of one
+domain.** `pyIsoUtc` tested the rendered string, which admits year 0000 where `datetime.MINYEAR` is
+1; `shouldNotify` tested only for `NaN`, which admits `new Date("-000001-01-01T00:00:00Z")` -- a
+valid `Date` whose subtraction from a 2026 timestamp gives a *negative* age, reading as "well inside
+the cooldown" and suppressing the notification exactly as silently as `NaN` did. Both approximations
+were wrong in the same direction, and both were written a round apart, so they now share one
+exported predicate (`isRepresentableInstant`) that a single probe falsifies for both callers at
+once. Three of this belt's nine post-review defects have this one shape -- a rule applied at one of
+two call sites -- which is `D-0024`'s finding restated and is the thing worth carrying out of this
+belt.
+
+**A round on the integrated tip closed the other half of the third round's own decision.**
+`json.JSONDecodeError` is a `ValueError` in Python and `load_config` lets it propagate; `JSON.parse`
+raises a `SyntaxError`, which a caller catching this loader's refusals would miss. Other belts in
+this port *disclose* that difference rather than repairing it, and that would have been defensible
+here too -- except that the config decode two lines above had already been re-raised as
+`PyValueError` on exactly this argument, so the file answered one question two ways. That makes it
+a fourth instance of the shape above rather than a new judgement call, and consistency inside one
+function is the cheaper half to fix.
+
+**A PR review found a fifth instance of the same shape, in a constant rather than a function.**
+`ALLOWED_PLACEHOLDERS` was `Object.freeze(new Set(...))`, which seals an object's own properties
+while a `Set`'s contents live in an internal slot: `.delete("pr")` and `.add("evil")` both
+succeeded, measured, and A3's `render_text` reads this constant on every notification. The
+repository's own `FrozenSet` (`src/session/provider.ts`) was evaluated and **not** reused, measured
+rather than assumed -- it overrides the mutators and still lets `Set.prototype.add.call` reach the
+internal slot, which is precisely the route a parallel lane reported as a P1, and its own header
+discloses the hole. A frozen **array** has no internal slot to reach: six mutation routes including
+the prototype-call ones all throw. The weaker structure is the stronger guarantee, and
+`VALID_SOUND_MODES` one declaration below was already a frozen array standing in for a source
+`frozenset`; the whole API cost is `.includes(name)` where a `Set` would have taken `.has(name)`.
+
+**The case written to pin it was itself green under the regression it guards, on the first draft**
+-- restored to a frozen `Set`, every array route throws for the wrong reason (`push` is not a
+function there) while `.delete` goes through. It now asserts `Array.isArray` first. That is rule 10
+arriving inside the fix for a rule-9 defect, and it is worth recording because the belt's own habit
+of probing every guard is the only thing that caught it.
+
+**The same review found the grammar's last gap, and it was a gap in what the oracle was pointed
+at.** `parseIso` ports `_parse_iso`, whose first line is `if s.endswith("Z"): s = s[:-1] +
+"+00:00"` -- not redundant with `fromisoformat`'s native `Z`, because on a **date-only** value the
+rewrite is what makes `2026-05-12Z` midnight, where a parser knowing `Z` only as a time-zone suffix
+consumes it as the separator and refuses the empty time. Four such forms were `null` here and are
+midnight UTC to the source. The differential oracle had been comparing against bare
+`fromisoformat` rather than against the wrapper, which is why five rounds of measurement did not
+find it: **an oracle is only as good as the function it is pointed at**, and that is the sharper
+form of this belt's own lesson about measuring rather than reasoning. It now models `_parse_iso`,
+114 comparable inputs agree, and the `Z` arm was removed from the offset grammar because nothing
+reaching it can still carry one -- dead code there could mask a bug in the rewrite, and the probe
+confirms two *ported* cases now depend on it. A1 wrote both privately inside `src/attention/classifier.ts`, which was
+right for a sub-belt with one consumer; A2 is the second consumer, and two private copies of one
+CPython function inside one directory is the drift shape
+`docs/test-translation-conventions.md` rule 11 names -- the copies agree on the day they are written
+and nothing goes red on the day they stop. So the transcriptions get one home in the belt's own
+directory, beside the two modules that need them.
+
+**Rejected alternative: importing them from `classifier.ts`.** It is a smaller diff and it puts
+`fromisoformat` behind a name that has nothing to do with it; a module that transcribes CPython is
+not a detail of the module that first called it.
+
+**Decision 3 -- the rule-9 exposures are guarded rather than disclosed.** Two values this runtime
+admits and CPython excludes reach this module, and each is guarded and pinned by a target-only case
+rather than left in the ledger as a known limitation, because both fail in the direction that loses
+an alarm silently. The dedup key is caller-supplied and Python's `dict` has no inherited keys, so
+both namespaces are built with `Object.create(null)` and read with `Object.hasOwn` -- otherwise a
+task named `constructor` reads as already notified forever. `cooldown_sec` is `int` in the source,
+so `NaN` and the infinities are excluded there; here a `NaN` cooldown makes every comparison false
+and suppresses every pending notification for the life of the process, so it is refused. The **clock**
+argument carries the same exposure and was missed in the first pass, found by the codex review gate:
+`new Date(NaN).getTime()` is `NaN`, so `shouldNotify` answered false for every key at every age while
+`recordNotified` already refused the same value through `pyIsoUtc`. Both paths refuse it now. The
+`parity/attention.dedup.ledger.json` entry for each records the mutation that was measured red.
+
+**One inherited limitation is carried rather than repaired**, and it is A1's disclosure rather than
+a new one: a `Date` resolves to one millisecond and a `datetime` to one microsecond, so a stored
+timestamp within a fraction of a millisecond of a cooldown boundary can be judged on the other side
+of it from the source. Repairing it means carrying an epoch in microseconds through every consumer
+of `parseIso` instead of a `Date`, which is a change to the belt's shared vocabulary rather than to
+one module. The write side has no such limitation: `pyIsoUtc` renders the six digits the source
+renders.
+
+**Falsifier (Decision 1).** The line is drawn on the claim that an absent namespace cannot be the
+residue of a lost one. If a writer is ever added that can produce a document with one namespace
+missing -- a partial write, a migration, a hand-edited file that a tool then re-saves -- then
+"absent means empty" stops being a statement about state that was never written and becomes the
+defect again under a narrower name, and `test_load_partial_shape`'s reading is what would have to
+move. The observation is a second writer of this file appearing anywhere in the port.
+
+**Falsifier (Decision 2).** If A3 or a later belt needs a `datetime` answer these two functions
+cannot give -- a `strftime`, a timezone database, an aware/naive distinction the port has so far had
+no use for -- then a two-function module was the wrong shape and the belt needs the fuller
+transcription that `src/fencing/pysemantics.ts` is for the string primitives. The observation is a
+third consumer arriving with a requirement rather than a call site.
+
+**Falsifier (Decision 3).** `D-0034` already states the one for the repair as a whole: if
+fail-closed is found to lose data a caller needed, the deferred rebuild belt is what was missing,
+not evidence against fail-closed. What would falsify this decision specifically is an operator
+finding a refusal where the source recovered, on a file this port itself wrote -- which would mean
+the refusing side of Decision 1 had caught a shape `saveState` can actually produce.
+
+**Source.** Task `continuo-attention-a2`, 2026-08-29, porting `tests/attention/test_dedup.py`
+(10 cases) from interlock `65f36c5`, under `D-0034`'s ratified constraints. Decision id from the
+`D-09xx` range `D-0034` allocated to the attention belt, and the first id A2 mints in it -- A1 used
+`D-0901`..`D-0903`.
+
+---
+
+## D-0905 -- `isinstance(value, int)` is a question about the config DOCUMENT; the dataclass's own defaults become one exported record
+
+**Context.** `tests/attention/test_config.py`'s 34 cases are the second half of A2, and the loader
+under them is close to a straight translation: the same knobs, the same refusal messages, the same
+backward-compat auto-scale. Two things in it are not translatable as written, and both are the
+shape `docs/test-translation-conventions.md` rule 9 warns about -- the obvious TypeScript is the
+*right* TypeScript, and the ported suite cannot fail on either, because the values that break them
+are values Python's types excluded.
+
+**Decision 1 -- the integer check asks what the DOCUMENT wrote, not what the value is.** Python's
+`json.loads` produces an `int` only for a literal with no `.`, `e` or `E`, so `1.0`, `1e2` and
+`-0.0` are `float`s and `isinstance(value, int)` refuses all three. Every one of them is an ordinary
+integer to `Number.isInteger`. So `loadConfig` parses with `pyJsonLoads` -- which records the
+spelling the source text used -- and asks `pyTypeNameOf`, which answers `int` or `float` per the
+document. That is the same question the source asks and it produces the same answer; it also
+produces the message, because the refusal prints `type(value).__name__`, which is `float` for a
+value that is integral here.
+
+**Why this is not a `Number.isInteger` guard with a note.** The failure is silent and in the
+accepting direction: `cooldown_sec: 1e2` is refused by interlock and would have loaded here, so the
+port would be *wider* than the specification it exists to reproduce, with nothing red. The
+transcription already exists in this repository (`src/fencing/pyjson.ts`,
+`src/fencing/pysemantics.ts`) and is already shared by `src/settings/` and `src/session/`, so the
+cost is an import rather than a new module.
+
+**One divergence in the same area is guarded, and the first draft of this entry argued the
+opposite.** That draft said a knob above 2**53 should be *disclosed* rather than refused: Python's
+`int` is arbitrary-precision and loads it exactly, this runtime rounds it, refusing would make the
+port narrower than its source, and nothing observable followed because all ten knobs are thresholds
+compared against an age. **The loader's own backward-compat auto-scale falsifies the last clause**,
+which the codex review gate found: the auto-scale computes `floor + 1` and then `max + 1`, and past
+2**53 each of those expressions *is* its own input, so `{"pending_decision_min":
+9007199254740992}` produced a ladder with `max == min` and was refused by the constructor with a
+message about `max <= min` -- a refusal naming the wrong knob, for a value interlock accepts. The
+choice was therefore never between refusing and accepting; it was between refusing where the value
+is read and refusing three steps later with a misleading message.
+
+`loadConfig` refuses a value above `MAX_SAFE_INTEGER - 2`, two below the limit because **two**
+successive increments have to stay exact, and the target-only case pins both halves: the refusal,
+and that the largest admitted value still auto-scales to a strictly increasing ladder. This is
+narrower than interlock for an input interlock handles, it is recorded as such here and in
+`parity/attention.config.ledger.json`, and the smallest refused value is some 285 million years in
+minutes.
+
+**Decision 2 -- the dataclass's own defaults become one exported record, read by both the
+constructor and the loader.** `load_config` reads four defaults back out of
+`AttentionConfig.__dataclass_fields__` to decide whether a legacy document's TTL ladder needs
+auto-scaling. A dataclass carries its defaults at runtime and a TypeScript class does not, so the
+choice is between naming them twice and naming them once: `ATTENTION_CONFIG_DEFAULTS` is the once.
+Two copies would reintroduce exactly the drift `__dataclass_fields__` was avoiding, in the place
+where the two disagreeing means a legacy config either fails to load or is scaled against a
+threshold nobody uses -- and no ported case would notice, because every one of them supplies its own
+values.
+
+**Decision 3 -- the maps keyed by an attention kind are `dict`s, and the presence tests over the
+document are own-key tests.** `notify` and `templates` are keyed by a kind the operator's own file
+supplies, so both are built with `Object.create(null)`; `DEFAULT_NOTIFY` already was, under
+`D-0902`, so all three severity and template maps in the module now agree. `__proto__` earns its own
+target-only case because it fails in the opposite direction from `constructor`: assigning it on an
+object literal sets the prototype and stores nothing, so the one kind the operator configured is
+silently absent while every other kind in the same document loads fine. The loader's own presence
+tests over the raw document use `Object.hasOwn` rather than `in` for the same reason, and the ledger
+says plainly that this half is defensive rather than measured -- none of the fourteen top-level JSON
+keys collides with an `Object.prototype` member.
+
+**`D-0902`'s falsifier is answered: A2 extended this file rather than changing it.** `Severity` and
+`DEFAULT_NOTIFY` are byte-identical to what A1 landed, construction and freeze included. The one
+edit above them is the module header, which A1 wrote to describe an A1-shaped file and which now
+describes the finished one; the ledger records that explicitly, because "A2 changed A1's file" is
+the observation `D-0902` asks a reviewer to look for and a header rewrite is not it.
+
+**Falsifier (Decision 1).** If `pyJsonLoads`'s spelling record is ever found not to survive a path
+this loader takes -- a nested container rebuilt rather than carried, which `src/fencing/pyjson.ts`'s
+own header names as a standing obligation on every rebuild site -- then the check silently falls
+back to classifying by value and the float case goes green for the wrong reason. That is what the
+target-only case measures, and it is why it carries five literals rather than one.
+
+**Falsifier (Decision 2).** If a consumer ever needs a default that is not a constant -- one derived
+from another field, or from the environment -- then a frozen record is the wrong shape and the
+defaults belong behind a function. Nothing in interlock's dataclass has such a field today.
+
+**Source.** Task `continuo-attention-a2`, 2026-08-29, porting `tests/attention/test_config.py`
+(34 cases) from interlock `65f36c5`, under `D-0034`'s ratified constraints and `D-0902`'s boundary.
+Decision id from the `D-09xx` range `D-0034` allocated to the attention belt; `D-0901`..`D-0903` are
+A1's and `D-0904` is A2's first.
+
+---
+
+## D-0906 -- D-0903 is falsified as written: the classifier carries no fact state, and the retargeted invariant is withdrawn rather than re-homed
+
+**Context.** `D-0903` decided that `src/attention/classifier.ts` takes the watcher's fact state as a
+**required input** and carries it onto the event uninterpreted. The reasoning was that a fact can
+only reach an event two ways -- the classifier derives it, or the caller supplies it -- and that
+deriving it is the kind-to-state table `D-0034` forbids this port from inventing. Supplying it put
+the decision back where it was made.
+
+That entry carried a falsifier, and the falsifier fired:
+
+> If a later belt -- A3's pipeline, most likely -- finds that no caller is in a position to supply a
+> fact state, then the fact does not belong on the classifier's input at all and this shape is
+> wrong; the observation would be A3 having to invent a value to pass, which is the forbidden
+> mapping arriving one layer up.
+
+**A3 reported exactly that observation.** Porting `tests/attention/test_cli.py`, it found nothing in
+continuo's attention pipeline able to produce a fact state to hand the classifier: the CLI reads
+`events`, `pending_decisions.json` and the broker journal, and none of them carries one. A caller
+there could only have invented a value -- and inventing one per row shape is the same table
+`D-0034` forbids, one layer up, which is the sentence above almost word for word.
+
+**Decision.** `D-0903`'s shape is withdrawn. `src/attention/classifier.ts` names no fact state
+anywhere: the input types carry none, `AttentionEvent` has no `factState`, and `to_dict()` emits no
+`fact_state`. The 61 ported cases become plain translations of their source, which is what they
+were always asserting -- none of them ever asserted anything **about** a fact state, they only had
+to supply one.
+
+`D-0034`'s ratified constraint is satisfied more simply than before, and the distinction is worth
+stating because the entry's literal wording no longer holds. That wording -- "every ported case is
+required to give its fact state explicitly" -- was a **means**, and its stated **end** was that "no
+continuo-authored kind-to-state table exists for a belt case to silently depend on". A module that
+carries no fact at all cannot hold such a table, so the end is met without the means. Reading the
+ratified text that way is not this belt's call to make alone, which is why it went to the human gate
+and is recorded here as the answer that came back rather than as an inference.
+
+**The retargeted invariant is withdrawn, not re-homed, and this is the part that costs something.**
+`parity/source-inventory.belts.md` proposed that `test_classifier.py`'s strongest invariant -- every
+row of the fact vocabulary has a pinned expectation -- be re-derived onto the closed fact-state set.
+With the fact gone from this subsystem there is nothing in the classifier for that invariant to be
+about: it presupposes a fact the port does not carry, so it is not re-derivable here in principle
+rather than merely inconvenient to place. It is **abandoned**, and the belts document says so in
+those words instead of quietly dropping the sentence.
+
+What remains is narrower and is not offered as an equivalent. `test/contract/fact-state-vocabulary.
+test.ts` pins that every place stating the six names states the same six in the same order, and that
+the DDL still constrains `incident.fact_state` only for emptiness. That is an agreement between
+statements of a vocabulary; it is **not** "every row has a pinned expectation", and conflating the
+two would be describing coverage this port does not have -- the exact failure the ledger exists to
+prevent.
+
+**What survives.** `D-0901` stands: the six-name vocabulary is still adopted, and
+`src/attention/fact_state.ts` still holds it. That adoption never rested on the classifier -- it is
+justified by three consumers that predate this belt (`src/measurement/fixtures.ts`'s seventh-value
+refusal, `test/fault_injection/contract.ts`'s vocabulary check, and the DDL's deliberate absence of
+a constraint) and by `D-0034`'s ratification that A1 would be the belt to make it. `D-0902` also
+stands; it is about a config constant and is untouched by this.
+
+**`D-0903` is superseded, not amended.** The entry stays in this file exactly as written, marked
+superseded in the index, for the same reason `D-0901` left `D-0302` alone: an entry that recorded a
+decision and named what would falsify it, and was then falsified by that named observation, is more
+useful intact than edited. The eight target-only cases that went with the shape were measured red
+against five distinct mutations while it stood, and
+`parity/attention.classifier.ledger.json` keeps that record under
+`withdrawn_by_D_0906` -- evidence that the shape was load-bearing while it existed, not decoration.
+
+**Falsifier.** If continuo later grows a detector layer that does produce fact states, this entry is
+the one that was premature and the shape `D-0903` described is what should return -- the observation
+would be a caller with a real fact and nowhere to put it. Note that this is not symmetric with what
+happened here: `D-0903` was withdrawn because nothing could supply a value, and it would return
+because something can, so the two readings cannot both be right at the same time.
+
+**Source.** Task `continuo-attention-a1`, 2026-08-29, on the A3 lane's report against
+`tests/attention/test_cli.py`. Decision id allocated by the window in the `D-09xx` range that
+`D-0034` gave the attention belt (`D-0904`/`D-0905` are A2's). Ratified at the human gate before
+this belt made the change.
+
+---
+
+## D-1003 -- `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting
+
+**Context.** PR #73 (D-1002) failed `double-green (windows-latest, node 24)` in CI (run
+`33242488019`, job `99074077395`) after merging `main` forward twice (through `attention` A1's PR
+#71 and the `measurement` suite-template migration PR #72, the latter specifically to rule out that
+this was `measurement`'s own already-known Windows slowness). The failure's own signature ruled out
+a simple "make the Windows cell faster" fix.
+
+**Diagnosis.** Three things read from the job's own annotations, not inferred:
+
+1. **Not a job-level timeout.** The job completed in 15m44s, inside every configured limit; nothing
+   here is GitHub Actions' own workflow timeout firing.
+2. **A file with nothing to do with this belt blew its own budget.** `test/fault_injection/policy.ts`
+   raised `ContractViolation: the fast profile spent 447s in this fault-injection file, over its
+   240s suite budget (design 9)`, alongside a `BarrierTimeout` inside the same file's controller.
+   Nothing in `test/fault_injection/` was touched by this task's diff. D-0602 already tuned that
+   budget for this port's runners; this run blew through it by nearly 2x with unrelated code.
+3. **This belt's own double-run failed too, the same way a subprocess timeout looks.**
+   `support/run.ts`'s `the unbound run wrote no report; vitest exited 1` fired with **empty**
+   `stdout` and `stderr`. A vitest crash ordinarily writes something to one of the two; a `spawnSync`
+   `timeout` (`support/run.ts`'s `RUN_TIMEOUT_MS`, 300s) instead kills the child with `SIGTERM`,
+   leaves `status` `null`, and `run()`'s `completed.status ?? 1` reports that as plain exit code 1
+   with whatever was captured before the kill -- empty, if the kill lands early. The `[S3]` failures
+   in the same job show partial `stdout` (the `globalSetup` header lines) before the same failure,
+   consistent with a slow run reaching its own internal deadline rather than crashing outright.
+
+Both symptoms point the same direction: `suite-runs-unchanged.test.ts` spawns up to two full
+subprocess re-runs of the entire `test/control_plane` suite (14 files, 605 cases, `synchronous =
+FULL` fsync on every commit) *while the outer suite's own parallel worker pool is still running*,
+including `fault_injection`'s own real-child-process, timing-sensitive tests. On a two-vCPU Windows
+runner that is already the slowest cell in the matrix (D-0029's own finding), that is enough
+concurrent CPU/IO demand to starve an unrelated file past its tuned budget and to push this belt's
+own nested runs past their own internal timeout. `ubuntu-latest` (both Node versions) passed in
+~2.5 minutes each in the same run -- the contention is a Windows-runner-resource fact, not a defect
+in the measurement's logic.
+
+**Decision.** `suite-runs-unchanged.test.ts` gates every case (not only `[S2]`'s existing
+`claude`-CLI-availability gate) on `process.platform === "win32"`, the same `skipIf` shape as
+`[S2]`'s: a platform capability gate, recorded as `conditionally_collected` in
+`parity/gate_item11.suite-runs-unchanged.ledger.json` (seven more entries, `[S3]` and unbound,
+alongside the six `[S2]` entries D-1002 already recorded) rather than a silent narrowing. Applied
+**alongside**, not instead of, `support/suite-runs-unchanged.config.ts`'s nested `fileParallelism:
+false`: serialising the nested run's own 14 files is free and can only lengthen that run's own wall
+time, never widen what it measures, but nothing about it was measured sufficient alone against a
+runner already saturated by the outer suite's own pool, and CI is the only place that contention is
+reproducible at all -- so both land together rather than staging a second, unverifiable round.
+
+**Why this is not a coverage gap the belt is silently accepting.** Item 11's property -- no provider
+detail leaks into the control plane; the control-plane suite runs unmodified against either provider
+-- is a fact about this repository's source and runtime behaviour, not about the operating system
+running it: nothing in `src/session/`, `src/control_plane/`, or this belt's own fixtures branches on
+`process.platform`. Two things already cover Windows without this file's help:
+`no-provider-detail-leaks.test.ts`'s static AST scan runs on every OS unmodified (it reads import
+graphs, not processes), and `test/control_plane`'s own 605 cases run -- and must pass -- on Windows
+every time as part of the ordinary suite, which is already evidence the suite itself is
+Windows-compatible. What the skip gives up is narrower than either: literal re-confirmation, via
+*this specific subprocess double-run*, that swapping providers costs nothing *on Windows
+specifically*, as opposed to on Linux where the same code already ran the same way.
+
+**Relationship to D-0029.** D-0029 rejected raising a timeout cap and rejected "re-run CI and hope"
+in favour of reducing the *real* per-case cost (the spike-schema template), on the position that "the
+cap is not the fix". This decision does not raise any cap, and does not touch `fault_injection`'s
+budget or any other belt's -- both stay exactly as D-0602 tuned them. The reason this decision is a
+platform skip rather than a D-0029-style cost reduction is that D-0029 had a general cost-reduction
+move available (a cheaper fixture achieving the identical assertions) and this measurement does not:
+its entire premise (D-1002) is running the *real*, unmodified `test/control_plane` suite as a real
+subprocess twice, which is not a cost a testkit trick can remove without ceasing to measure what item
+11 asks for. `fileParallelism: false` is the cost reduction available here, and it is applied; what
+remains is a cost this measurement cannot shed further without narrowing its own scope (rejected --
+see D-1002's own totals) and that a two-vCPU Windows runner cannot currently absorb alongside the
+rest of the suite.
+
+**Falsifier.** If a future change removes the resource pressure this decision responds to --
+`fault_injection`'s own suite budget or watchdogs are re-tuned for a larger CI runner (out of this
+belt's hands, D-0602), a Windows runner with more cores becomes the CI default, or
+`test/control_plane` itself gets substantially cheaper to run twice (the `measurement` belt's own
+143x suite-template speedup, landed the same day as this decision in PR #72, is exactly the kind of
+change that could someday make this moot for a different subsystem) -- this skip should be revisited
+and the Windows gate lifted if a re-measurement shows the contention is gone. It should not be lifted
+on the strength of one green re-run alone; D-0029 already recorded why that is not evidence on this
+cell.
+
+**Source.** Task `continuo-gate-item11-p2`, 2026-08-29, responding to PR #73's CI failure (run
+`33242488019`) after D-1002 landed; the option (skip on Windows, keep full scope on Ubuntu) was
+presented with two alternatives and their trade-offs, and selected at the human gate via the
+secretary.
+
+---
+
+## D-0951 -- A refused dedup ledger stops the attention CLI at exit 2 and leaves the file untouched
+
+**Context.** A2's `D-0904` made `attention/dedup.py`'s reader fail closed: a state file that is
+present and unusable is a `DedupStateRefused`, not an empty `DedupState`, because an empty ledger
+says nothing has ever been notified and therefore frees every already-handled event to fire again --
+the resume-without-double-execution violation `D-0001` exists to prevent. `D-0034` ratified that
+repair and `D-0023` supplies the procedure for it: the source case that pinned the inherited
+behaviour is inverted in the change that repairs it.
+
+What `D-0904` deliberately did not settle is what the **caller** does with the refusal, and A3 owns
+the only caller there is. `tests/attention/test_cli.py::test_scan_recovers_from_broken_dedup_state`
+is the case that pins the source's answer -- `attention scan` returns 0 and the corrupt file is
+silently replaced with an empty one -- so a decision had to be made here rather than inherited.
+
+**Decision.** `attention scan` and `attention watch` report the refusal on stderr and exit **2**,
+and **write nothing**. In particular the refused file is left byte for byte as it was found.
+
+Three parts, each with its own reason:
+
+- **Exit 2, not 1 and not 0.** Two is what `_load_cfg_or_exit` already exits with for a config it
+  cannot read, and the two failures are the same kind of failure: an input this command was pointed
+  at cannot be used. A distinct code would be a distinction the operator has to look up, and there
+  is nothing behind it.
+- **The refusal is caught, not left to escape.** In Python a `SystemExit` escaping `main` is what
+  sets the process's exit status; the interpreter's own top level does that. Node has no such top
+  level, so a `DedupStateRefused` allowed to propagate would reach the operator as an unhandled
+  error with a stack trace, and the message naming the file would be buried above it. `src/cli.ts`'s
+  `main` therefore turns an escaping `ArgparseExit` -- this port's `SystemExit` stand-in -- into its
+  code, which is CPython's behaviour rather than an invention. A target-only case measures it.
+- **Nothing is written.** This is the half a silent recovery destroys, and it is not merely the
+  negation of the source's behaviour. An operator can still look at the file that was refused; and
+  no later run can mistake a rewritten empty ledger for a ledger that was always empty, which is
+  precisely the confusion that makes the inherited defect dangerous rather than merely untidy.
+
+**`watch` stops too, rather than polling on.** A loop that re-read the same unusable file every ten
+seconds would print the same refusal forever and notify nothing, which is a worse operator surface
+than stopping and is not more available: the watcher cannot do its job without a ledger it can
+trust.
+
+**Rejected alternative: refuse the ledger but keep scanning with an empty in-memory state, writing
+nothing.** It looks strictly safer -- no double execution is recorded, no file is damaged -- and it
+is not: every already-notified event would be re-notified on every poll, which is the alert storm
+the dedup ledger exists to prevent, and the operator would be told about it only on stderr, once,
+under a wall of notifications.
+
+**Falsifier.** If an operator turns out to need `scan` to keep running past a refused ledger -- say
+a deployment where the ledger lives on a filesystem that is briefly unreadable and the notifications
+matter more than the duplicates -- then the flat refusal is wrong and the answer is a flag that says
+so explicitly, not a default that decides it for them. The observation would be a real deployment
+asking for it; nothing in either suite does.
+
+**Source.** Task `continuo-attention-a3`, 2026-08-29, porting `tests/attention/test_cli.py` (26
+cases) from interlock `65f36c5`. Decision id from `D-0951`, the start of the stretch of `D-09xx`
+the window allocated to sub-belt A3 so that three concurrent sub-belts could not collide on an id.
+
+---
+
+## D-0952 -- The operator's template goes through a transcribed CPython, checked by a differential oracle rather than by review
+
+**Context.** `notify.render_text` is the one place in the attention subsystem that formats a string
+**the operator wrote**. It reads `attention.json`'s `templates`, asks which placeholders the
+template names, checks them against the design's section 6 allowlist, and renders. Three CPython
+functions are load-bearing in that sentence: `string.Formatter().parse` decides which names a
+template references, `str.format_map` renders it, and `str.__format__` applies each format spec.
+
+The port could have substituted a regular expression over `\{(\w+)\}`. What that costs is not
+hypothetical, and it falls on the operator in both directions: a parser that misses
+`{summary!r:>10}`'s name hands the allowlist the wrong set and lets a template reach a field the
+design forbids, and one that reads `{{pr}}` as a reference to `pr` renders `42` where CPython
+renders the literal text `{pr}`. On the rendering side, a transcription that refuses a template
+CPython renders replaces the operator's own text with the English default -- silently, since the
+whole contract of this path is that a bad template must not crash the watcher -- and one that
+renders a template CPython refuses is the crash that contract exists to prevent.
+
+**Decision 1 -- the three functions are transcribed, in `src/attention/pyformat.ts`.** Not
+approximated, and not narrowed to what this belt's own cases happen to write. `formatValue`
+implements `str.__format__` and no other type's, because `_format_with_event` builds its mapping out
+of six strings and nothing else; a number reaching it is a caller error rather than a case to guess
+at, and it is refused rather than run through a near-miss of the numeric mini-language.
+
+`classifier.ts`'s private `formatMap` is deliberately **not** replaced by this one. It formats a
+closed set of templates the port itself ships, and a private substitution is the right size for a
+closed set; consolidating the two is an edit to a landed belt's file, which `D-0504` established
+belongs in its own PR. It is named here so the second copy is a recorded choice rather than
+something a later reader has to decide was an oversight.
+
+**Decision 2 -- the transcription is checked against CPython, not against review.** A differential
+oracle in the shape `D-0200`'s `fnmatch`/`shlex` vector established: a committed corpus
+(`parity/oracle/pyformat-corpus.json`), a Python half (`scripts/oracle/dump_pyformat.py`) run by
+hand and its output committed (`parity/oracle/pyformat-vector.json`), and a comparison
+(`test/attention/pyformat-oracle.test.ts`) that rebuilds the same corpus and asserts agreement on
+every field -- placeholder set, unknown set, rendering, exception class, and exception message text.
+
+**This is a decision because the measurement changed the answer, five times.** The transcription was
+written from CPython's own source -- `Objects/stringlib/unicode_format.h` and
+`Python/formatter_unicode.c` -- rather than guessed at, and its first draft still disagreed with
+CPython on five inputs. Review had found none of them:
+
+- `{}` and `{0}` raise `ValueError("Format string contains positional fields")`, not `IndexError`.
+  `format_map` passes **no** positional argument tuple, and `get_field_object` tests for that before
+  it tests any index.
+- `{pr:010}` **renders**, as `4200000000`. A leading `0` sets the fill character and takes the `=`
+  alignment branch only when the type's own `default_align` is `>`, which is the numeric types'
+  default and not `str`'s. The draft, reading the grammar, made it a refusal.
+- `{pr:0}` renders `42`, for the same reason and with the same wrong first answer.
+- `{pr:{}}` follows from the first.
+- an unprintable presentation type is **escaped** in the refusal message -- `Unknown format code
+  '\xa' for object of type 'str'` -- where a `%c` transcription puts a literal newline in the middle
+  of an operator's warning line.
+
+A sixth arrived later, on the integration tip, and it was **this belt's own regression rather than
+a misreading of CPython**: the repair for `{pr:010}` removed two guards in one edit when only one
+of them was wrong. The alignment guard had to go; the `fill == ""` guard beside it was right,
+because an explicit fill character wins over the `0` -- `format("ab", "*>010")` is `"********ab"`.
+The corpus did not notice, because it carried `{pr:*^10}` and `{pr:010}` and no input combining the
+two. That is the oracle's own limit stated exactly: **it is only as good as the combinations the
+corpus asks about**, and a repair is a new combination. Eight of them are in the corpus now.
+
+The codex review gate found the area and not the fault -- its comment claimed `{summary:>010}`
+should pad with spaces, which CPython contradicts. Measuring the claim instead of acting on it is
+what turned up the real defect one case over, and that is the general rule this entry ends on: a
+review comment that is wrong on its own terms can still be the reason a bug is found, and it is
+only worth that if the response to it is a measurement.
+
+After the repairs, all 101 templates agree on every compared field. Five of the six would have
+shipped as a silent behaviour difference in an operator-facing path.
+
+**A finding about the source, recorded because it is easy to lose.** The first of those five means
+the source's own `except (ValueError, IndexError)` around `_format_with_event` has an
+**unreachable** half: that function only ever calls `format_map`, and `format_map` raises
+`ValueError` for every positional field, so no template can produce the `IndexError` the catch
+names. The port catches the class that can arrive and says why, rather than declaring a stand-in
+class nothing can raise. Nothing about the port's behaviour differs from the source's here; the
+observation is about interlock.
+
+**Rejected alternative: compare only the exception class, not its message.** It is the cheaper
+vector and it would have passed the fifth divergence, because the class was right and only the text
+was wrong -- and that text is what an operator reads on stderr when their template is refused.
+
+**Falsifier.** If the corpus turns out to be the thing under review rather than the transcription --
+if a divergence is found by some other means in a shape the corpus does not cover -- then the corpus
+is too narrow and the answer is to widen it in the change that found the gap. The vector's own
+not-vacuous cases guard the degenerate version of that: a corpus that only rendered, or only
+refused, would let half the transcription be wrong with the oracle green.
+
+**Source.** Task `continuo-attention-a3`, 2026-08-29, porting `tests/attention/test_notify.py` (34
+cases) from interlock `65f36c5`.
+---
+
+## D-0036 -- interlock is a frozen source, not a decision-maker: every question continuo has open is settled at continuo's own human gate
+
+**Context.** `D-0023` established one consequence of interlock being frozen -- an inherited defect is
+repaired here, because no upstream repair is coming. The premise is broader than the consequence
+`D-0023` drew from it, and the rest of the repository had not caught up. Documents written earlier
+still described interlock as an active party: a subsystem's status was "undecided upstream", an
+inherited `Q-` number "stays open" in a tense that implies someone is working on it, and
+`source-inventory.belts.md`'s `broker` section said in terms that "whatever continuo decides about
+them, it decides after interlock does. They are `retarget` upstream first."
+
+That is not a wording problem. On 2026-08-30 the window read those sentences and reported continuo's
+remaining `broker` work to the owner as **blocked on upstream `Q-0023`**, which is not a state that
+exists: `Q-0023` is a question interlock recorded and never answered, in a repository that is now
+frozen. A reader -- human or agent -- who takes "pending upstream" at face value concludes that
+waiting is the correct behaviour, and waiting is unbounded here. The text produced the mistake, so
+the text is what gets fixed.
+
+**Decision.** interlock is the **frozen source** of this port -- not archived: on GitHub
+`isArchived` is `false`, the last push was 2026-08-21 UTC, and 8 issues are still open there. What
+makes it frozen is not its repository state but its trajectory: development moved to this TypeScript
+port, and `interlock#63` has sat unanswered since it was raised, with no sign anyone upstream is
+going to act on it. It supplies test cases, prior design reasoning, and `PORTING_LEDGER.md`
+classifications, and it is cited as the design lineage of record. It supplies **no decisions and no
+answers**. Concretely:
+
+1. **No continuo status, belt, or document is ever "blocked upstream" or "pending upstream".** There
+   is no upstream process left to be pending on. Where such a phrase appears it is wrong, not merely
+   imprecise, and it is rewritten rather than annotated.
+2. **An interlock `Q-` number names a question interlock left unanswered.** It is not a request in
+   flight and no answer is in transit. The reference stays -- it is the record of what the question
+   asked and where it came from, and that is worth keeping -- but its status is stated as
+   *unanswered*, never as *open pending upstream*.
+3. **If continuo needs one of those questions answered, continuo answers it**, at this repository's
+   human gate, as a `D-` entry, on continuo's own terms. Declining to answer stays a legitimate
+   position: this decision does not force `Q-0005`, `Q-0011` or `Q-0023` to be settled now. What it
+   forbids is recording the decline as *waiting*.
+4. **The human gate this file already relies on (`D-0031`, `D-0032`, `D-0034`, `D-0035`) is the only
+   decision-making body over continuo.** `decision-pending` means undecided *here*.
+
+**Consequences.**
+
+- `parity/source-inventory.belts.md` loses the "retarget upstream first" sentence in the `broker`
+  section and states instead what actually has to be decided about the 54 collected cases and the 5
+  uncollected modules, and who decides it. The problem statement is kept in full; only the
+  instruction to wait is removed.
+- The `retarget` and `decision-pending` definitions in the same document's status vocabulary are
+  re-worded to locate the decision here.
+- `docs/measurement-harness.md`, `docs/production-schema.md`, `docs/canary-routing-rehearsal.md`,
+  `docs/secretary-intake-boundary.md`, `docs/lease-fencing.md` and
+  `docs/test-translation-conventions.md` say "unanswered" where they said "open" or "settled
+  upstream", with one framing sentence per known-holes list; `docs/per-role-fencing.md` says the
+  hook-runtime question is one continuo answers rather than one with an expected answer. `README.md`
+  states the same thing about interlock in its design-lineage section.
+- **Entries already in this file are not rewritten**, per this file's own rule that an ID is never
+  rewritten. `D-0035`'s "undecided upstream", `D-0901`'s "had to be answered upstream first", and
+  similar phrasings in earlier entries stay as written and are read through this entry: they record
+  what was believed when they were taken, and the authority they describe is now here.
+- `parity/attention.broker-journal-contract.ledger.json`'s `where_the_status_lives` said the broker
+  is "`retarget` upstream first" and that continuo decides after interlock does. It is the status
+  pointer a reader reaches the uncollected `test_broker_journal_contract.py` through, so it
+  recreated the same wait from a second entrance; it now says what the belts document says.
+- **The `where_a_fix_belongs: "upstream"` fields already in the parity ledgers are not rewritten in
+  this sweep**, and `docs/test-translation-conventions.md` says how to read them instead. Each is
+  one of two different things -- a repair `D-0023` sends to the next belt that touches the
+  behaviour, or a fix that is structurally impossible here (it needs a v1 store, an interlock
+  module, or a decision this port has no standing to take) -- and telling them apart is a judgement
+  per entry against that entry's `note`. A blanket rewrite would assert repairs continuo cannot
+  make. The per-entry pass is proposed as its own change, at the human gate, and is named here so it
+  is not mistaken for something this decision already did.
+- Nothing about the port's *evidence* rules changes. The five uncollected broker modules still have
+  no node ids and nothing may be invented for them (`D-0031`); that is a constraint on evidence, and
+  this entry does not license filling it in from judgement.
+
+**Rejected alternative: leave the text and record the correction as an operating rule** (a memory, a
+window convention, a line in a runbook). Rejected because the failure mode is a *reader* forming a
+false belief from the document in front of them. Every new agent and every new reader starts from
+the text; a convention held somewhere else is not in the path. The owner's instruction on 2026-08-30
+was explicit that the text producing the misreading has to go, or the problem recurs indefinitely.
+
+**Rejected alternative: delete the interlock `Q-` references entirely.** Rejected because they carry
+real information -- what was asked, why it was not answered, and what a continuo answer would have
+to cover. Deleting them would trade one wrong reading ("someone will answer this") for another
+("nobody ever noticed this"). The reference is kept and its status is corrected.
+
+**Falsifier.** If interlock is un-frozen and someone resumes answering its open questions, the
+premise returns and this entry should be revisited -- as should `D-0023`, which rests on the same
+fact. Short of that: if a later reader is found treating a continuo `decision-pending` or `retarget`
+status as an external blocker despite this sweep, the rewrite did not reach the text they read, and
+the answer is to find that text rather than to restate the rule.
+
+**Source.** Task `continuo-upstream-authority-sweep`, 2026-08-30. Prompted by the window reporting
+`broker` as blocked on upstream `Q-0023` on the same date, and the owner's correction that the
+misleading text -- not the misreading -- is the thing to remove.
+
+---
+
+## D-0043 -- `migrate` is ratified `not-porting`: the belt's subject is gone on both sides, and the fired revisiting trigger is replaced by one that can still fire
+
+**Context.** `D-0035` left `migrate` (11 cases, `tests/test_migrate.py`) at `decision-pending` with
+one explicit revisiting trigger: "the run-boundary cutover bridge actually being designed". That
+trigger has since fired. `docs/design/minimal-operating-loop.md` section 5.2 is that design, and it
+reviewed the belt against both sides of the port. So the status is not deferrable as it stands: a
+`decision-pending` whose only trigger has already fired is a status nothing can move.
+
+The status question was put to the human gate with that review as its evidence.
+
+**Decision.** `migrate` moves from `decision-pending` to `not-porting`. The grounds are that the
+belt's subject evaporated on both sides, not that porting it is expensive:
+
+1. **The belt's subject is ja v1 *file* artefacts.** `interlock
+   src/claude_org_runtime/migrate/v1_to_v2.py:1` states it: migrate `.state/` artefacts from the v1
+   (claude-org-ja) layout to v2. There are two branches -- journal JSONL and org-state markdown --
+   and the assertions are about key normalisation (`worker` -> `task_id`, `dir` -> `worker_dir`,
+   `pane` -> `pane_id`/`pane_name`) and markdown column augmentation.
+2. **Both inputs are gone or reshaped on the live ja side.** `ja tools/journal_append.py:9-18`
+   records `.state/journal.jsonl` as decommissioned with the `events` table as the sole write
+   target, and no such file exists in ja today. ja's live registry header is
+   `| Task ID | Pattern | Directory | Project | Status |`, which matches none of the three lowercase
+   keys `_augment_header` switches on, so that branch is a copy-through no-op against live ja state.
+3. **The successor's cutover is specified as *no* state conversion**, in three independent places in
+   this repository: `src/control_plane/spike.ts:5-8`, `src/control_plane/migrator.ts:584-592`, and
+   `src/canary/routing.ts:23-30` ("There is no other rollback code path -- no migration hook, no
+   state converter"). Routing at the run boundary is the design; converting in-flight state is not.
+4. **The dependency question `D-0035` deferred is small and already answered by the frozen tree.**
+   The `jsonschema`-equivalent question gates 2 of the 11 cases, and both already skip in
+   interlock's own frozen tree; a further three reach modules interlock deleted and skip
+   unconditionally.
+
+**Falsifier.** The replacement for `D-0035`'s fired trigger, stated so that it can still fire and so
+that it can be evaluated without opening another repository's issue tracker: **if a cutover is ever
+specified that must convert in-flight state rather than route at the run boundary, or if a v1 shadow
+episode adapter is built that reads ja's file artefacts rather than ja's `events` table, then the
+subject exists here and this decision is superseded** -- not edited. The second disjunct is the live
+one: `V1Reference` (`src/measurement/shadow.ts:603-682`) has no producer in `src/`, and
+`--v1-shadow-run-ids` supplies a different type (`V1ShadowInput`, a cohort exclusion), so an adapter
+is outstanding work near this belt. It is outstanding as an *episode-level* adapter over ja's
+`events` table; only a file-reading one would restore this belt's subject.
+
+**Consequences.**
+
+- `D-0035` is **not rewritten**. Its ID and `accepted` status stand, and this file's rules make
+  partial supersession unavailable, so its clause 2 (`migrate` stays `decision-pending`) and its
+  `migrate` falsifier are read through this entry: they record the status as it was on 2026-08-29,
+  and the status now lives here. The same motion `D-0044` makes for clause 1.
+- `parity/source-inventory.belts.md` has to move the `migrate` section and the roll-up table from
+  `decision-pending` to `not-porting`, which takes the ratified `not-porting` total from 156 to 167
+  cases and the effective porting target from `2,194 - 156 = 2,038` to `2,194 - 167 = 2,027`. The
+  inventory itself stays at 2,194: the evidence set is unconditional and does not shrink with the
+  decision. **That edit is not made by this entry** -- this task writes `DECISIONS.md` only -- and
+  is a declared follow-on.
+- **No code changes.** Nothing in `src/` or `test/` is added, deleted, or re-pointed.
+- **Do not conflate this belt with a `continuo migrate` CLI verb.** The CLI mount over
+  `createProductionControlPlane` / `migrateControlPlane` / `verifyProductionDatabase` (proposed as
+  `continuo db create|migrate|verify` in `docs/design/minimal-operating-loop.md` section 6.1) shares
+  only the word. Ratifying this belt neither authorises nor blocks that mount.
+
+**Rejected alternative: keep `decision-pending` on a new trigger.** Re-arming on a condition the same
+evidence rules out produces a status nothing can falsify, which is the defect being repaired here,
+one iteration later.
+
+**Rejected alternative: port it as a rewrite against the shadow adapter.** Every assertion in the
+belt is about journal key names or markdown column augmentation, none of which survives a move to
+episode-level correlation. It would port approximately zero assertions while counting a belt as
+ported, which is parity accounting that lies.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on the review in
+`docs/design/minimal-operating-loop.md` section 5.2. Decision id allocated by the window in the
+shared band (`D-0019`..`D-0099`, see "How to use this file").
+
+**Why this batch (`D-0043`..`D-0046`) skips `D-0037`..`D-0042`.** The next free numbers would have
+shadowed interlock decisions that continuo documents still cite unqualified -- `D-0037` and `D-0039`
+in `docs/time-base-policy.md` and `docs/production-schema.md` are interlock's, and a reader
+following one of those numbers into this file would have landed on a real but unrelated entry.
+Starting above interlock's highest ID (`D-0042`) removes that class of collision for every later
+entry too. The gap means nothing else: a range is an allocation, and an ID is permanent whether or
+not its neighbours are ever used. The unqualified citations themselves are repaired in the same
+change, per this file's rule that an interlock decision is cited as `interlock D-00NN`.
+
+---
+
+## D-0044 -- Errata for `D-0035`'s `curator` clause: the withdrawal condition is restated without a foreign repository, and the premise is narrowed to the claim that survives
+
+**Context.** `D-0035` clause 1 ratified `curator` (71 cases) as `not-porting`. The status is right
+and is not in question here: nothing on the lap writes skill material. `grep -rn skills src/`
+returns five hits and every one is a denial or a comment -- `src/fencing/roles.json:92-93` denies
+`Write(**/.claude/skills/**)` and `Edit(**/.claude/skills/**)` for the curator role, `:100` adds
+`denyWrite`, and the remaining two are prose in `role_configs_schema.json`. There is no promotion
+gate, candidate digest, or path-audit module anywhere in `src/`.
+
+Two things about the *entry* are wrong, and one of them is a fact about the record itself. This is
+the motion `D-0036` set the precedent for: an entry that stands, with a separate entry saying how it
+is to be read.
+
+**Decision.** `curator` stays `not-porting`. `D-0035` keeps its ID and its `accepted` status and is
+not edited. This entry is the errata, and it has three parts.
+
+1. **The withdrawal condition is restated without naming another repository.** Read `D-0035`'s
+   `curator` falsifier as: *if continuo, or any layer built on it, grows a surface that writes into
+   a live skill directory, the subject exists here and the decision is superseded.* The continuo
+   half of that condition is checkable in this repository; the layer half is checkable in whatever
+   layer is built on continuo, which is a surface this project is party to rather than an issue in
+   a repository it only reads. Neither half sends a reader to a foreign issue tracker for a status,
+   which is what the withdrawn clause did. That clause -- the one pointing at
+   `suisya-systems/cadenza#9` -- is withdrawn, per part 2.
+2. **`cadenza#9` is not what `D-0035` says it is, and was not when the entry was written.**
+   `D-0035` cites it as an "agentic-layer direction" and "a live candidate, not a theoretical one".
+   cadenza#9 is a **G2 delegation-contract freeze marker**. It carries no agent-layer, skill, or
+   promotion content; `grep -rniE "skill|agent"` over cadenza's `src/` returns zero; and the issue
+   body has never been edited since it was created on 2026-08-29T03:38Z, which *precedes*
+   `D-0035`'s ratification on the same day. So the clause was unsupported when written, not merely
+   stale. It has already misled once: this task's own brief reproduced the confusion.
+3. **The premise sentence is narrower than `D-0035` states it.** `D-0035` grounds the decision on
+   "continuo is a safety-substrate library, not the operator of those sessions". Shipped code
+   contradicts the second half: `src/session/claude_cli_provider.ts:1-8` declares itself the
+   provider "over Interlock-supervised `claude -p`" and spawns with `-p` at `:1307` and `:1566`. The
+   claim that survives, and the only one the decision needs, is: **continuo does not own the
+   skill-promotion surface** -- verified by the absence of any writer and any gate module.
+
+**Consequences.**
+
+- The 71 cases stay declined; the `not-porting` totals and the effective porting target are
+  unchanged by this entry. `test_promotion_gate.py`'s recorded value if the answer had been yes
+  stays as `D-0035` wrote it -- it is the reason a future reversal would be cheap to act on.
+- **The belts-document half is already done and is not re-proposed here.** The `curator` section of
+  `parity/source-inventory.belts.md` already carries a self-contained falsifier that names no other
+  repository, in the shape part 1 restates. This entry exists because that file does not rewrite
+  `DECISIONS.md` entries, so without it a reader who finds the belts document's condition and then
+  `D-0035`'s has two different withdrawal conditions for one decision.
+- Only `DECISIONS.md` is touched. No code, no belt status, no parity ledger changes.
+
+**Falsifier.** Part 1 is superseded by the event it names -- a live skill-directory writer -- which
+supersedes `D-0035` with it. Part 2 is falsified by the record: if cadenza#9 is shown to have
+carried agent-layer or skill-promotion content at the time `D-0035` was ratified, the first erratum
+is wrong and the original clause was merely stale rather than unsupported. Part 3 is falsified if a
+skill-promotion writer or gate module appears in `src/`, which is part 1's condition in its
+continuo-local form -- the narrower claim is the one that fails first, and it fails here.
+
+**Rejected alternative: leave `D-0035` alone at zero cost.** The dead pointer stays in the file a
+reader is sent to for decisions, and it has already produced one confusion; and the two-conditions
+problem above is worse than a single wrong condition was.
+
+**Rejected alternative: reopen `curator` because the premise sentence is wrong.** That reads a
+premise as if it were a falsifier, and would reopen 71 cases against a surface that does not exist.
+
+**Rejected alternative: edit `D-0035` in place.** This file's rules make an ID permanent and its text
+unrewritten, and they do not offer partial supersession -- `D-0035` covers two subsystems and only
+one of them is being read differently here.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on the review in
+`docs/design/minimal-operating-loop.md` section 5.3. Decision id allocated by the window in the
+shared band (`D-0019`..`D-0099`).
+
+---
+
+## D-0045 -- `@suisya-systems/continuo` is published: `D-0008` is superseded, and the release path must build before it packs
+
+**Context.** `D-0008` made the package `private` "until publication is decided", and said so in a
+form that anticipated this entry: "the `files` and `exports` fields are nonetheless maintained from
+the start, so the eventual first publish is a decision rather than a packaging project". That is
+verified -- `exports`, `files` and `bin` are all present, and `check:package` already runs
+`publint --strict` and `attw` against the packed tarball.
+
+The host application that runs the lap needs to import continuo, and today nothing can: `"private":
+true` at `0.0.0` refuses `npm publish` by `D-0008`'s own terms. The decision is which shape the
+dependency takes, and it survives whether the application is hosted in cadenza or in a package of
+its own -- only the identity of the importer changes.
+
+**Decision.** Publish `@suisya-systems/continuo` to the registry and let consumers take it as an
+ordinary npm dependency. `D-0008` is **superseded by this entry**, which is the path `D-0008` was
+written to make deliberate rather than to prevent. It is also the only option under which the
+version a consumer builds against is a stated fact rather than a property of somebody's checkout,
+which starts to matter the moment two repositories ship one application.
+
+**Two constraints are inherited, and they become the consuming application's constraints the moment
+it depends on continuo.** They are recorded here because they are not visible from the dependency
+line:
+
+1. **A native runtime dependency.** `better-sqlite3` (plus its types), under `D-0009`'s policy of
+   installing with `--ignore-scripts` and treating the prebuilt binary as the artifact. A consumer
+   that installs continuo without that policy is back in the `node-gyp` territory `D-0009` exists to
+   keep off every platform.
+2. **A Node floor.** `engines.node` is `>=22.14.0 <23 || >=24.0.0 <25` (`D-0003`): floor 22.14.0,
+   and odd majors excluded. The consumer inherits the whole range, not just the floor.
+
+**The release path must have a build step, and this entry does not ship without naming it.**
+Superseding `D-0008` is not by itself enough to publish something that works. `dist/` is gitignored
+(`.gitignore:2`), `npm publish` runs no build of its own, and `scripts` has `build`, `pretest` and
+`check:package` but **no `prepare` and no `prepack`**. A publish from a fresh checkout therefore
+ships a tarball whose `main` and `exports` point at files that are not in it. The fix is small and
+already in the repository, and it is one of exactly two:
+
+- **the release path runs `npm run check:package`** -- which builds, then checks the packed tarball
+  with `publint --strict` and `attw` -- before it publishes; or
+- **a `prepack` hook is added**, which npm runs on the publishing side.
+
+`prepack` is deliberately **not** `prepare`: `prepare` is what npm runs when a *consumer* installs a
+git dependency, and adding it would collide with `D-0009`'s `--ignore-scripts` install policy.
+`prepack` runs where the tarball is built, so it does not reopen that blast radius.
+
+**Consequences.**
+
+- `package.json` drops `"private": true` and takes a real `version`; `npm publish` stops refusing.
+- Whichever build step above is chosen has to exist **before** the first publish, or the first
+  publish reproduces byte for byte the defect option B was rejected for.
+- **This entry changes no files other than `DECISIONS.md`.** Lifting `private`, setting the version,
+  and wiring the release path are a separate change; this is the decision that authorises them.
+- Any import allowlist on the consuming side (cadenza's `ALLOWED_EXTERNALS_BY_LAYER`, if cadenza
+  hosts the application) is extended binding by binding on that side. `FORBIDDEN_PACKAGES` there
+  blocks `interlock` and `claude-org-runtime`; continuo is neither, so there is nothing to resolve,
+  only an allowlist to widen -- and that is the consumer's change, not this one.
+
+**Rejected alternative: a git dependency pinned by sha.** npm builds a git dependency by running its
+`prepare` script, and continuo has none, so the install produces a package whose
+`main: ./dist/index.js` points at nothing. Adding `prepare` to fix that collides with `D-0009`'s
+`--ignore-scripts` policy -- it reopens `D-0009`'s blast radius to avoid superseding `D-0008`, which
+is the worse trade.
+
+**Rejected alternative: one workspace across both repositories.** Cheapest to start, and it defers
+both other decisions, which is its whole appeal and its whole problem: it works on a developer's
+machine and answers nothing about how the application is distributed. Acceptable only as an
+explicitly temporary bridge while the first lap is built, and only if it names publication as the
+destination -- as a permanent shape it makes "which continuo is this running" a property of a
+checkout.
+
+**Falsifier.** If a published tarball is found whose `main` or `exports` do not resolve inside the
+package, the build step named above was not in the release path and the prerequisite half of this
+decision was not met -- the repair is the release path, not the decision. Separately: if the
+application turns out to ship as a single tree that never resolves continuo from a registry, the
+dependency shape this entry chose is answering a question that stopped existing, and it should be
+revisited rather than maintained.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on the option table in
+`docs/design/minimal-operating-loop.md` section 6.4 (option A). Decision id allocated by the window
+in the shared band (`D-0019`..`D-0099`).
+
+---
+
+## D-0046 -- `run.status` has exactly one in-place writer; lap 1's consumer role is played by the admission command, and the lease is scoped to the run
+
+**Context.** Nothing in `src/` creates a run or advances one: the run-lifecycle writer is unbuilt,
+and `registerConsumer` appears only at its definition and in the barrel, so the consumer half of the
+close is unbuilt too. What has to be settled before either is written is **who owns the
+transition**, because the production schema deliberately splits it. `docs/production-schema.md`
+section 4.2 states that `run.status` is exclusively one writer's, and that an observer of a merge
+does **not** move a run to `completed`: it appends `pr_merged` and a *consumer* of that event makes
+the transition. Section 7.1 records what the collapse of those two roles cost in v1 -- a
+repo-resolution mistake wrote a foreign PR's metadata onto a run row, and the tool exited `ok`.
+
+The lap has no CI watcher, so the split has no second party by default. Left unstated, the shape
+that gets written is the collapse, for the ordinary reason that it is one function shorter.
+
+**Decision.**
+
+1. **`run.status` has exactly one in-place writer.** One code path performs the transition; no other
+   path may write the column. A write to `run.status` reaching the row from anywhere else is an
+   **anomaly**, not an alternative route -- it is treated as a fault to be surfaced, not as a
+   supported call site to be documented.
+2. **For lap 1, the admission command plays the consumer's part.** The event is appended by whatever
+   observes the fact, and the admission command consumes it and makes the transition. The collapse
+   -- the observer transitioning the run directly -- is **not** taken, even though lap 1 has no
+   watcher to justify keeping the roles apart. The split is not bureaucracy: it is the control that
+   was missing when v1 wrote another repository's PR metadata onto a run row.
+3. **The lease is scoped to the run.** The resource name is per run identifier, so two runs never
+   contend and one run has a single claimant. Kinds are composed against that resource by
+   `effect_kind(resource, effect)` and read back with `resourceOfKind`
+   (`src/control_plane/lease.ts`), which is what ties an `action` row's `writer_epoch` to the lease
+   that allocated it.
+4. **The first implementation step is bounded, and the DDL trigger is deliberately left undecided.**
+   Step one is (a) a run-lifecycle module whose writes go through the existing protected-write gate
+   -- `fencedUpdate` and `protectedWrite` in `src/control_plane/lease.ts`, where `run` already holds
+   a seat in `PROTECTED_TABLES` -- and (b) a `writer_epoch` column on the `run` table, which is the
+   column that gate stamps. **A DDL trigger that refuses a status transition made without a live
+   lease is not introduced in this step.** Such a trigger is `BEFORE UPDATE OF status ON run` and
+   nothing wider: `docs/production-schema.md` section 4.2's writer table fences `run.status` with
+   the run lease epoch and assigns *no* fence to `run` creation, so an insert must stay
+   lease-free. The trigger is the mechanism that would make rule 1 enforced rather than observed,
+   and it is a *separate* decision: introducing it now fails every existing test that advances a
+   `run` row's status without holding a lease (28 such sites at the time of this decision).
+
+**Consequences.**
+
+- The `run` table gains `writer_epoch`. The events layer already speaks the column
+  (`src/control_plane/events.ts`), and the existing `run_status_is_forward_only` trigger
+  (`src/control_plane/migrations/0001_initial.sql`) is unaffected: it constrains the *direction* of
+  a transition, this decision constrains *who* may make one.
+- **Rule 1 is, at step one, a convention plus a gate that the single writer opts into.** Nothing
+  stops a second writer that does not go through the module until the trigger question is answered.
+  That is stated here rather than glossed, so the guarantee is not read as stronger than it is.
+- Answering the trigger question means either migrating those 28 status-advancing sites onto
+  lease-holding helpers or deciding the trigger is not worth its test cost. Neither is decided
+  here. Whichever way it goes, run *creation* stays unfenced, per the writer table above.
+- **Implementation is out of scope for this entry.** No module, column, migration, or test is added
+  by it; only `DECISIONS.md` changes.
+
+**Falsifier.** If a legitimate operation is found that must advance two runs in one transaction, the
+run-scoped lease is the wrong granularity and rule 3 is superseded. If a `run.status` write is
+observed reaching the table outside the lifecycle module and nothing detects it, then step one's
+bounded shape is not a control at all and the trigger question has to be answered rather than
+deferred. And if the consumer indirection in rule 2 is found to have no reader on the lap -- no
+event that any party other than the admission command appends -- then the split is being paid for
+without buying the separation it exists for, and the collapse should be reconsidered explicitly
+rather than drifted into.
+
+**Rejected alternative: collapse the roles for lap 1 and split them when a watcher arrives.**
+Cheapest now, and it is exactly the shape v1 shipped. The cost of the collapse was not that it was
+hard to undo; it was that a resolution mistake had nothing between it and the run row. Lap 1 has
+fewer parties, not fewer mistakes.
+
+**Rejected alternative: introduce the live-lease trigger with the module, in one step.** It is the
+stronger guarantee and it is where this should end up, but it converts 28 existing status-advancing
+test sites into failures in the same change that introduces the writer, which buries the writer's own review under a
+test migration.
+
+**Source.** Human gate, 2026-08-30, task `continuo-decisions-batch-1`, on
+`docs/design/minimal-operating-loop.md` section 6.2, against `docs/production-schema.md` sections
+4.2 and 7.1. Decision id allocated by the window in the shared band (`D-0019`..`D-0099`).

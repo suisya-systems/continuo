@@ -1,0 +1,293 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "fault_injection",
+      "collected": 98,
+      "inventory": "parity/source-inventory/fault_injection.all.txt",
+      "note": "The S9/I-11 fault-injection harness, interlock tests/fault_injection/, 5 test files plus the durable modules they drive (contract, controller, manifest + frozen manifest.json, conformance) and two adapters. One ledger per source file. The subsystem is an acceptance HARNESS rather than a product module: there is no claude_org_runtime/fault_injection/, and the port therefore lands in a directory of its own (test/fault_injection/) rather than in src/ -- see DECISIONS.md D-0601, which also records why it is not merged into test/contract/."
+    },
+    "file": {
+      "path": "tests/fault_injection/test_cases.py",
+      "collected": 22,
+      "inventory": "parity/source-inventory/fault_injection.test_cases.txt",
+      "note": "The cases themselves: every manifest entry the active profile selects, executed and asserted by name, plus the rule that nothing is ever excluded for a reason other than a lane. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. It was taken under the DEFAULT profile (S9_PROFILE unset, so `fast`), which is why the 98 ids contain 21 manifest cases and not all 59 the frozen matrix holds -- the other 38 are `full`-only and are not collected by a default run. That distinction is load-bearing for this belt's completion claim and is spelled out in the cases ledger."
+    }
+  },
+  "target": {
+    "test_file": "test/fault_injection/cases.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "`@pytest.mark.parametrize('case', _CASES, ids=[case['case_id'] ...])`",
+        "to": "an explicit `for` loop emitting `test(`run one manifest case[${caseId}]`)`",
+        "why": "The id shape is testkit/parametrize's exactly, but the body needs the TEST CONTEXT, which that helper's signature does not pass -- and the context is what a runtime skip requires. Written out rather than by widening a shared helper two other lanes are using concurrently.",
+        "affects": "all 21 case entries"
+      },
+      {
+        "from": "`pytest.skip(reason)` INSIDE the test body",
+        "to": "`context.skip(reason)` inside the test body",
+        "why": "A runtime skip, not a collection-time one, and the distinction is design section 8.1's: every profile case must be a test ITEM on every OS so that 'did not run here' is readable off the report instead of looking like 'passed'. A collection-time skip would remove the id from `vitest list` on a host that cannot run its lane. Note this is also why the parity check's skip sweep does not fire here: `context.skip` is not one of the constructs it counts, and correctly so -- the item runs and reports, it is not disabled.",
+        "affects": "all 21 case entries"
+      },
+      {
+        "from": "`with Controller(...) as controller:` plus `except Exception` re-raising a CaseFailure chained from the original",
+        "to": "`try { try { ... } catch { throw new CaseFailure(..., { cause: error }) } } finally { await controller.teardown() }`",
+        "why": "Both of the source's properties are kept. Teardown is unconditional (the `finally`, which is what the `with` gave for free). And a failure is wrapped in a NEW error carrying the reproduction line, with the original as `cause`, rather than the original's type re-instantiated from a string -- the source's own reason being that several harness errors have structured constructors and rebuilding one from a message replaces the real failure with a failure about reporting it. The guard that avoids double-wrapping an error that already carries the line is kept too.",
+        "affects": "all 21 case entries"
+      },
+      {
+        "from": "`conftest._suite_budget`: an autouse session fixture plus a `pytest_runtest_logreport` hook that accumulates the duration of every test whose node id starts with `tests/fault_injection`, and fails once at session teardown if the total exceeds the profile's `suite_timeout_s`",
+        "to": "`policy.installSuiteBudget(profile)`, called by each of the belt's five test files, charging that FILE's wall time against the same `suite_timeout_s`",
+        "why": "A REAL NARROWING, recorded rather than glossed. Vitest runs each test file in its own worker (`isolate: true`), so there is no in-process place the five files can be summed; a disk side channel keyed across workers would be racy and stale-prone, which is a worse trade inside a harness whose whole point is determinism, and aggregating properly needs a custom reporter in `vitest.config.ts` -- shared by every lane and not one belt's to change. What the port catches is what the budget exists for: one file's runtime growing without bound turns the gate red with the budget named. What it misses is the belt's TOTAL creeping past the budget while no single file does. Wall time rather than summed per-test durations additionally charges imports and hooks, so it is marginally stricter than the source, never looser. Raised by the review gate on this change, which found the budget was read from the manifest and never enforced at all; the watchdog was then measured firing against a deliberately impossible budget, because a check nobody has seen fail is indistinguishable from one that cannot.",
+        "affects": "the whole belt (installed in all five files)"
+      },
+      {
+        "from": "the profile's `per_case_timeout_s` / `combination_case_timeout_s` / `barrier_timeout_s` used as written",
+        "to": "the same manifest values, scaled by `PORT_BUDGET_SCALE = 3` at the point they are used and held under `RUNNER_BUDGET_CEILING_S = 50` (DECISIONS.md D-0602)",
+        "why": "interlock's budgets are calibrated on interlock's runners. On PR #62 two cases failed `CaseTimeout` on the windows/node22 cell at the IDENTICAL site -- the first `spawn`, immediately after `bootstrap()` -- so creating the schema alone had consumed the whole 15s budget before either case started a role process. The same suite was green on windows/node24 and all four ubuntu cells, and both cases pass everywhere else. This repository's own `vitest.config.ts` already records the phenomenon from a measured CI run: 28ms on linux, 321ms on a healthy windows runner and 13,556ms on a slow one, same commit, no code between them, on exactly this fsync-heavy work. Two other hypotheses were measured and discarded first -- per-spawn cost (210ms median, and `NODE_COMPILE_CACHE` changed nothing) and spawn count (the stack shows both cases died before any spawn). THE MANIFEST'S NUMBERS ARE UNCHANGED: they are interlock's, the ported case `the profiles carry the budgets the watchdogs enforce` asserts them literally, and editing them would make this port's evidence disagree with its source. The ceiling exists because Vitest's testTimeout is 60s and the harness must fail first -- its CaseTimeout names the case, carries the repro line and runs teardown, where the runner's does none of those.",
+        "affects": "every manifest case"
+      }
+    ],
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    }
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "RESOLVED (2026-08-29, follow-on task `continuo-session-adapter-followon`). THE FOLLOW-ON THIS BELT DECLARED RATHER THAN DISCOVERED. The frozen matrix holds 59 cases; the 21 above are the ones the DEFAULT (`fast`) profile selects, which is the profile the source inventory was collected under. The other 38 are `full`-only. Of those, FOUR route to the `session` adapter -- gate item 2's `session-start` injection points. At this belt's own landing (PR #62) they could not run: the walk they inject into stands on a `SessionOrchestrator` and a C2 provider, and `src/session/` did not exist yet (the session belt was a separate, concurrent lane). `test/fault_injection/session_driver.ts` was therefore a registered `CaseAdapter` that REFUSED LOUDLY when driven, naming the missing dependency, rather than a stub that would let those four cases run and report something about a walk that never happened. That refusal stub is now replaced: `SessionAdapter` is re-bound to `src/supervisor.ts`'s `SessionOrchestrator` and `src/session/claude_cli_provider.ts`'s `ClaudeCliSessionProvider` over a deterministic fake CLI, and the four cases pass under `S9_PROFILE=full` (`npm run verify`'s default `test` step still runs the `fast` profile only, so they are not in that number -- see the next entry, which the same reasoning now also covers for the session adapter's four cases).",
+      "why": "Stated precisely because the two numbers are easy to conflate and the completion claim depends on keeping them apart. This belt's node-id set is the 98 in parity/source-inventory/fault_injection.*.txt, and NONE of the four session cases is in it -- verified against the manifest: the 21 collected manifest-case ids are exactly the 21 `fast`-profile case ids, and every case with `adapter: \"session\"` is `full`-only. So the belt was 98 of 98 on its own evidence set at PR #62, independent of whether the four `full`-profile session cases could run. They now can (verified `S9_PROFILE=full npx vitest run test/fault_injection/`, all cases including the four session-start ones green), which is a strictly additive fact and changes no number this ledger already recorded. The corresponding gate_item2 deferral (D-0801, `parity/gate_item2.session-driver-harness.ledger.json`) is closed by the same follow-on task."
+    },
+    {
+      "behaviour": "The 34 remaining `full`-only cases that route to the SPIKE adapter (combination kills, staggered sequences, the second role of each paired row) are ported in the sense that the manifest, the controller dispatch and the assertions for every one of them exist and are exercised -- but they are not collected by a default run, so they are not measured green here.",
+      "why": "The source has exactly the same property: its inventory is a default-profile collection too, so those cases are outside the 98 for interlock as well. Running them is `S9_PROFILE=full`, which is the source's own nightly/gate lane and not its PR lane. Recorded so nobody reads '98/98 green' as 'the whole 59-case matrix has been run'."
+    },
+    {
+      "behaviour": "The `incident-replay` cases do not exercise a path distinguishable from the `incident-repeat` ones. `opObserve` re-reads the persisted packet's `fact_state` on every repeat after the first and assigns it to `raised` -- but the persisted value was itself written from the `factState` computed once before the loop, so it is always the same value. Deleting the replay branch entirely would produce identical rows and identical assertions.",
+      "why": "INHERITED AND UNCHANGED. interlock's `spike_driver.op_observe` is the same code with the same property: `raised = fact_state`, then `if replay and repeat:` re-reads a row whose `fact_state` came from `fact_state`. So the replay cases prove that a replayed packet is collapsed under the case's declared rule -- which IS the ACCEPTANCE.md section 2 claim ('a replayed packet must not be a way around dedup') -- but they do not prove the replay READ a different packet than a repeat would have. Making the two paths differ means changing what the driver does and therefore what the cases assert, which is a change to interlock's evidence rather than a translation of it (rule 0). Raised as [P2] by the review gate and flagged to the window as upstream work."
+    },
+    {
+      "behaviour": "`assertIncidentCollapse` groups incident rows by whatever `dedup_key` the driver wrote and checks each group's shape; it never compares that key to the `incident_params.dedup_key` the case declared. A driver that ignored the manifest and composed its own non-empty key would still pass.",
+      "why": "INHERITED AND UNCHANGED. interlock's `_assert_incident_collapse` does exactly this -- `by_key.setdefault(str(row['dedup_key']), ...)` for grouping and `if not row.get('dedup_key')` for the only key assertion, which is a non-emptiness check. The gap is real and is worth naming, because the dedup key is case data precisely so the driver cannot answer Q-0002's 'what composes a dedup key' by inertia -- and this assertion is the one place that could catch it doing so. Adding the comparison would be a STRICTER translation than the source's, which rule 0 forbids; it belongs beside the faithful case as a target-only one, or upstream. Raised as [P2] by the review gate and flagged to the window."
+    },
+    {
+      "behaviour": "A claimant process inherits the CASE's behaviours as well as its own. `spawnClaimant` passes the claimant's behaviours as extra arguments, but `spawn` has already emitted the case's behaviours via `adapter.roleArguments(...)`, and `--behaviour` accumulates rather than replacing. Concretely: the `resumed-writer-race` case declares `behaviours: [\"stale-writer\"]` at case level and none for its claimant, yet the claimant is spawned WITH `stale-writer`. If the takeover were unexpectedly refused, that claimant would carry on with a fabricated lease instead of surfacing the failure.",
+      "why": "INHERITED AND UNCHANGED, and worth flagging upstream because the SOURCE'S OWN DOCSTRING contradicts its code. interlock's `spawn_claimant` says '`armed` and `behaviours` are the claimant's own, and deliberately not the case's' and gives the reason -- a claimant that inherited the case's behaviours 'would apply them to the incumbent too ... inverting the case'. But its `spawn` extends the command with `role_arguments(...)` first and the claimant's extras second, and `--behaviour` is an argparse `action='append'`, so they ACCUMULATE. The `--holder` override in the same list does work, because a single-valued option is last-wins; `--behaviour` is not. The port reproduces this exactly. Making the claimant's list replace rather than extend would change which behaviours a real case injects and therefore what it exercises -- a change to interlock's evidence rather than a translation of it (rule 0). Raised as [P2] by the review gate on the rebased tip and flagged to the window as upstream work; the fix is interlock's to make, and it is the kind that needs its cases re-measured rather than re-read."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__attempt__before_durable_write__sigkill]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__attempt__before_durable_write__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. Gate item 4: a real SIGKILL inside the named window, then a restart that must recover what the kill left mid-flight. The at-kill effect count is read BETWEEN the kill and the restart, which is the only moment the window is distinguishable -- afterwards recovery has re-attempted and every window looks alike."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__attempt__after_record_before_effect__sigkill]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__attempt__after_record_before_effect__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. Gate item 4: a real SIGKILL inside the named window, then a restart that must recover what the kill left mid-flight. The at-kill effect count is read BETWEEN the kill and the restart, which is the only moment the window is distinguishable -- afterwards recovery has re-attempted and every window looks alike."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__attempt__after_effect_before_record__sigkill]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__attempt__after_effect_before_record__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. Gate item 4: a real SIGKILL inside the named window, then a restart that must recover what the kill left mid-flight. The at-kill effect count is read BETWEEN the kill and the restart, which is the only moment the window is distinguishable -- afterwards recovery has re-attempted and every window looks alike."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__attempt__delivered_before_ack__sigkill]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__attempt__delivered_before_ack__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. Gate item 4: a real SIGKILL inside the named window, then a restart that must recover what the kill left mid-flight. The at-kill effect count is read BETWEEN the kill and the restart, which is the only moment the window is distinguishable -- afterwards recovery has re-attempted and every window looks alike."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sup__lease-acquire__lease-acquired__clock-back]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sup__lease-acquire__lease-acquired__clock-back]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The backward-skew row: a renewal whose new expiry would land at or before its own acquisition is refused outright rather than silently clamped, and the recorded ClockSkewRefused is the observable. The lease may never be extended past what the acquisition itself bought."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__lease-acquire__lease-acquired__clock-fwd]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__lease-acquire__lease-acquired__clock-fwd]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The forward-skew row: a claimant whose clock has crossed the holder's expiry takes the resource over while the holder is frozen at its barrier. Per-role offsets, never a global shift; the host clock is untouched."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__lease-acquire__lease-acquired__sigstop-expire]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__lease-acquire__lease-acquired__sigstop-expire]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The pause/takeover/return row, and the case whose determinism argument is checked rather than asserted: the release is issued while the holder is still stopped and the holder must make no progress on it, so the ordering is a sequence and not a scheduling accident."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__attempt__before_durable_write__drop-delivery]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__attempt__before_durable_write__drop-delivery]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The delivery is dropped at the destination and the resend is what the case asserts -- deterministic, because the attempt index is counted rather than timed, and it is the destination refusing rather than an exception injected into our own path."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sec__attempt__after_record_before_effect__dup-delivery]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sec__attempt__after_record_before_effect__dup-delivery]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. Two messages under one dedup key, with a restart between the arrivals, so the duplicate lands in a destination that has already seen the key. Exactly one effect."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sup__attempt__delivered_before_ack__lost-ack]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sup__attempt__delivered_before_ack__lost-ack]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. A lost ack causes a resend (safe), never a lost message."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__lease-renew__before_durable_write__sigkill-expire]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__lease-renew__before_durable_write__sigkill-expire]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The lease holder is killed without releasing, a claimant takes the resource over, and the restarted holder comes back to find the lease gone and is refused at acquire -- with the refusal durably recorded."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__lease-acquire__lease-acquired__writer-race]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__lease-acquire__lease-acquired__writer-race]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. Two writers race for one state item. They cannot both be live, and that is the finding: the racer is refused at the resource boundary, and it carries on with a token the row rejects so its writes are refused AT THE FENCE and the history can finally show whether an interleaving is possible."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__enqueue__before_durable_write__resumed-writer-race]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__enqueue__before_durable_write__resumed-writer-race]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. A write attempted concurrently from a resumed process and its replacement. The replacement is held at its own barrier, still alive and still holding, while the resumed process comes back and writes."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__attempt__delivered_before_ack__recipient-unavailable]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__attempt__delivered_before_ack__recipient-unavailable]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The recipient is held unavailable across several attempts, with the refusal budget read from the destination's own append-only attempt log so it survives the restart instead of refusing the first N attempts of every generation forever."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__ack__before_durable_write__dup-ack]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__ack__before_durable_write__dup-ack]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The same ack recorded twice while the row is still acked-once. The control plane shows exactly one acked state; the evidence the second ack HAPPENED is the ignored-ack row, without which the case would pass on a driver that stopped issuing it."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sup__ack__before_durable_write__re-ack]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sup__ack__before_durable_write__re-ack]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. An ack issued against a row already in its terminal state. Same observable, same ignored-ack evidence."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[disp__attempt__delivered_before_ack__late-ack]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[disp__attempt__delivered_before_ack__late-ack]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The sender dies after delivery and before the ack is recorded; the ack lands only in the generation that comes back, and changes nothing."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sup__observe__observed__incident-repeat__increment-in-place-in]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sup__observe__observed__incident-repeat__increment-in-place-in]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. The same incident condition raised repeatedly within a window, collapsed under the rule THE CASE DECLARES -- Q-0002 is open, so the driver implements both rules and is told which to apply."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sup__observe__observed__incident-replay__increment-in-place-in]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sup__observe__observed__incident-replay__increment-in-place-in]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. A persisted incident packet read back out of SQLite and submitted again. A replayed packet must not be a way around dedup, so it follows the same declared rule a repeat follows."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sup__observe__observed__observation-outage__unreadable]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sup__observe__observed__observation-outage__unreadable]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. interlock D-0006: a read that FAILS and a read that RETURNS NOTHING are different facts about the world, classified as different fact states, and neither is an anomaly. The case asks for the escalation it must not get, so 'no recommendation was produced' counts a row a broken driver would have written."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_manifest_case[sup__observe__observed__observation-outage__silent]",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > run one manifest case[sup__observe__observed__observation-outage__silent]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Executed end to end against the real spike adapter: a real child process per role, a real barrier, a real signal where the case injects one, and every invariant the case DECLARES asserted by name through controller.assertInvariants. Adapted, not ported, because the controller is async here (Node has no blocking read on a child's pipe from the parent side) and because the case's teardown moves from the source's `with` block to a `finally`; the case body otherwise makes the same three calls the source makes -- lane check, executeCase, assertInvariants -- and wraps a failure in the same reproduction line. MEASURED green. interlock D-0006: a read that FAILS and a read that RETURNS NOTHING are different facts about the world, classified as different fact states, and neither is an anomaly. The case asks for the escalation it must not get, so 'no recommendation was produced' counts a row a broken driver would have written."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_cases.py::test_what_this_os_does_not_run_is_enumerable",
+      "target_id": "test/fault_injection/cases.test.ts::the manifest cases > what this OS does not run is enumerable",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "totals": {
+    "source_cases": 22,
+    "ported": 1,
+    "adapted": 21,
+    "not_ported": 0,
+    "waivers": 0
+  }
+}

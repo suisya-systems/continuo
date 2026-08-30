@@ -1,0 +1,105 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item2",
+      "collected": 34,
+      "inventory": "parity/source-inventory/gate_item2.all.txt",
+      "note": "See parity/gate_item2.orchestrator-walk.ledger.json for the subsystem-level note. This ledger is the third of the subsystem's three files and, as of this change, the last of the three to land -- the six node ids here were held back at D-0801 as a declared follow-on and are ported now that the fault-injection belt's SessionAdapter (test/fault_injection/session_driver.ts) is re-bound to src/supervisor.ts and src/session/claude_cli_provider.ts. gate_item2 is 34/34 ported as of this ledger."
+    },
+    "file": {
+      "path": "tests/gate_item2/test_session_driver_harness.py",
+      "collected": 6,
+      "inventory": "parity/source-inventory/gate_item2.test_session_driver_harness.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 6 pass there (re-run 2026-08-29 against the read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item2/ -p no:cacheprovider`: 34 passed, of which 6 are this file's). Skipped entirely at pytest collection time on non-Linux hosts via `pytestmark = pytest.mark.skipif(not _LINUX, ...)`; the port skips per-case instead, at collection time, via `laneSkipReason` reading the manifest's own `\"lane\": \"linux\"` on each of the four session-start cases (see the approved_non_running entry below)."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item2/session-driver-harness.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every source node id maps to exactly one target test."
+    },
+    "approved_non_running": [
+      {
+        "file": "test/gate_item2/session-driver-harness.test.ts",
+        "constructs": {
+          "skipIf": 3
+        },
+        "reason": "Three call sites (the 'four injection points' test, the per-case loop over the four anchor cases, and the 'two runs' determinism test), all gated on the same condition: `laneSkipReason(SESSION_CASES[0])`, which reads the manifest's own `\"lane\": \"linux\"` declaration on each session-start case -- the same lane test/fault_injection/cases.test.ts already trusts for every other manifest case, and the same reason the source's file-level `pytestmark = pytest.mark.skipif(not _LINUX, ...)` gives (a real SIGKILL and a /proc scan). Evaluated once at module load (collection time), exactly as pytest evaluates a skipif condition, never inferred from the platform name alone (rule 4 of docs/test-translation-conventions.md)."
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 6,
+    "ported": 0,
+    "adapted": 6,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_the_manifest_carries_all_four_injection_points",
+      "target_id": "test/gate_item2/session-driver-harness.test.ts::the session driver harness > the manifest carries all four injection points",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "1:1 in shape: filters the manifest's cases to the session adapter's and asserts the four checkpoint names, sorted. Adapted rather than a literal port because the manifest is read via continuo's `loadManifest()`/`FaultCase` typing rather than a dict comprehension, and the assertion compares two sorted arrays (`toEqual`) rather than Python's set equality -- the four names are known-distinct so the two are equivalent here.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__before_durable_write__sigkill]",
+      "target_id": "test/gate_item2/session-driver-harness.test.ts::the session driver harness > each anchor is reachable, killed and recovered[sup__session-start__before_durable_write__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same shape as the source's parametrized case: `new Controller({...})` / `executeCase` / `assertInvariants` against `SESSION_ADAPTER`, then asserts generations `{0, 1}` and that generation 0's trace announced a checkpoint or sync event. Adapted for D-0801's async-everywhere change (`executeCase`/`assertInvariants` are awaited, not called), for D-0602's budget scaling (`barrierTimeoutS(PROFILE)`/`caseTimeoutS(faultCase, PROFILE)` replace the source's literal `barrier_timeout_s=20.0, case_timeout_s=60.0` -- scaled-and-ceilinged for this port's runners, never the manifest's own numbers), and for teardown, which is an explicit `try/finally { await controller.teardown() }` where the source uses `with Controller(...) as controller:`.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__after_record_before_effect__sigkill]",
+      "target_id": "test/gate_item2/session-driver-harness.test.ts::the session driver harness > each anchor is reachable, killed and recovered[sup__session-start__after_record_before_effect__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same shape and same adaptations as the before_durable_write entry above (one parametrized case of the same loop).",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__after_effect_before_record__sigkill]",
+      "target_id": "test/gate_item2/session-driver-harness.test.ts::the session driver harness > each anchor is reachable, killed and recovered[sup__session-start__after_effect_before_record__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same shape and same adaptations as the before_durable_write entry above (one parametrized case of the same loop). This is the effect-bearing anchor: the fake CLI's own start/exit ledger (test/fault_injection/session_driver.ts's SessionObserver) is what proves the kill landed after the spawn, exactly as the source's SESSION_DRIVER_SPAWN_LOG does.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_each_anchor_is_reachable_killed_and_recovered[sup__session-start__identity-readback-committed__sigkill]",
+      "target_id": "test/gate_item2/session-driver-harness.test.ts::the session driver harness > each anchor is reachable, killed and recovered[sup__session-start__identity-readback-committed__sigkill]",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same shape and same adaptations as the before_durable_write entry above (one parametrized case of the same loop). This anchor is a sync point (SYNC_IDENTITY_READBACK_COMMITTED), not a checkpoint, exactly as the source maps it.",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_session_driver_harness.py::test_two_runs_of_one_case_produce_identical_traces",
+      "target_id": "test/gate_item2/session-driver-harness.test.ts::the session driver harness > two runs of one case produce identical traces",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "reason": "Same shape: runs the first session case twice, in two fresh workdirs, and asserts the two protocol traces are equal. Adapted for the same async/budget/teardown reasons as the anchor cases above. Determinism holds under the port for the same reason it holds in the source: every `now_ms` in a trace comes from the injected virtual clock (test/fault_injection/spike_driver.ts's `Clock`, reused unchanged by the session adapter), never from a wall clock, so the real-time waits the session adapter's provider readback and destination-ledger polls do (IO pacing against a real subprocess) never reach a trace field.",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

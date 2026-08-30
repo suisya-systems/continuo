@@ -60,7 +60,7 @@ import {
   requireQueryOnly,
   theErrorSaysTheDatabaseIsReadOnly,
 } from "../../src/measurement/reader.js";
-import { caseRoot, sidecars, writeStep } from "../testkit/cases.js";
+import { caseRoot, sidecars, suiteTemplate, writeStep } from "../testkit/cases.js";
 import { expectRefusal, expectSqliteError } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -101,11 +101,20 @@ function expectReadOnlyRefusal(action: () => unknown): void {
 // isolation contract exists to keep out.
 // --------------------------------------------------------------------------
 
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Building it once per file and handing each case its own copy removes the
+ * migrations this file used to run once per case (D-0119, carrying out D-0118's
+ * approach on the remaining measurement files).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
 /** A real database migrated to head with the real ledger, then let go of. */
 function productionDb(root: string): string {
-  const path = join(root, "production.sqlite3");
-  createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+  return productionTemplate.copyInto(root);
 }
 
 /** A two-step scratch ledger, so "behind" and "ahead" can both be built. */

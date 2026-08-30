@@ -94,10 +94,110 @@ const LEDGERS = [
   "parity/canary.synthetic-v1.ledger.json",
   "parity/canary.structural.ledger.json",
   "parity/canary.rehearsal.ledger.json",
+  // lane E -- session. Lettered `E` rather than `D` because the canary belt
+  // above took `D` first: the three belts started together and appended here
+  // concurrently, and a shared letter would make two blocks read as one.
+  "parity/session.provider-contract.ledger.json",
+  "parity/session.stub-provider.ledger.json",
+  "parity/session.claude-cli-provider.ledger.json",
   // lane F -- secretary (gate item 8's rehearsal). Two files, and the smallest
   // belt in the inventory; the D-range is `D-07xx` (D-0701).
   "parity/secretary.behaviour.ledger.json",
   "parity/secretary.structural.ledger.json",
+  // lane G -- messagebus (S8: the worker-outbound bus, its MCP endpoint, and
+  // item 6's static no-session-edge assertion). Five files; the D-range is
+  // `D-05xx`. Every ledger here is prefixed `messagebus.`, and there is
+  // deliberately no bare `messagebus.ledger.json` -- the belt has no single
+  // file that would earn the unqualified name.
+  "parity/messagebus.bus.ledger.json",
+  "parity/messagebus.carried-specifications.ledger.json",
+  "parity/messagebus.endpoint.ledger.json",
+  "parity/messagebus.import-graph.ledger.json",
+  "parity/messagebus.stale-readout.ledger.json",
+  // lane H -- gate_item2 (issue #18's crash-and-retry proof). Downstream of
+  // the session belt above; the D-range is `D-08xx` (D-0801). Lettered `H`
+  // rather than `G`: `messagebus` and this lane were both appended as the
+  // next free letter concurrently and `messagebus` landed on `main` first
+  // (PR #63), so this lane takes the letter that was actually free at merge
+  // time rather than the one it was drafted under. All three source files
+  // are ledgered: the third, test_session_driver_harness.py, is entirely
+  // `not-ported` (deferred to a follow-on task -- see D-0801 and that
+  // ledger's per-entry reason).
+  "parity/gate_item2.orchestrator-walk.ledger.json",
+  "parity/gate_item2.mediated-real-provider.ledger.json",
+  "parity/gate_item2.session-driver-harness.ledger.json",
+  // lane I -- fault_injection (the S9/I-11 acceptance harness). The letter is
+  // simply the next free one, and it has moved three times: this belt first
+  // reached for `E` while the session belt was reaching for the same letter
+  // concurrently, then `G` once secretary had taken `F`, and now `I` because
+  // messagebus and gate_item2 both landed ahead of it. The rule the session
+  // block states is what settles each collision -- the belt that lands second
+  // moves rather than sharing a letter -- and it is worth reading the list
+  // before picking, because assuming a letter is exactly how the first
+  // collision happened. One ledger per source test file, as everywhere else;
+  // the belt's own directory is test/fault_injection/ rather than
+  // test/contract/ (DECISIONS.md D-0601).
+  "parity/fault-injection.cases.ledger.json",
+  "parity/fault-injection.conformance.ledger.json",
+  "parity/fault-injection.import-graph.ledger.json",
+  "parity/fault-injection.manifest.ledger.json",
+  "parity/fault-injection.protocol.ledger.json",
+  // lane J -- gate_item11 (item 11's structural leak checks, registry and
+  // double-suite-run measurement, D-1001/D-1002, D-range D-10xx). Part 1: 51
+  // of 64 source cases across the two structural files and the
+  // substitution-scenarios file. Part 2 (D-1002) lands the remaining 13
+  // (test_suite_runs_unchanged.py), completing the belt at 64/64.
+  "parity/gate_item11.no-provider-detail-leaks.ledger.json",
+  "parity/gate_item11.registry-availability.ledger.json",
+  "parity/gate_item11.substitution-scenarios.ledger.json",
+  "parity/gate_item11.suite-runs-unchanged.ledger.json",
+  // lane K -- attention. The subsystem ports in three sub-belts sharing one
+  // D-range (D-0034): A1 (facts, 90 cases, `D-0901`..`D-0903`), A2 (dedup and
+  // config, 44, `D-0904`..`D-0905`) and A3 (notify and pipeline, 60). One
+  // ledger per source test file, as everywhere else, and the sub-belts share
+  // one lane block rather than taking a letter each -- they are one subsystem
+  // and one D-range, and three blocks would invite the letter collision the
+  // comment below describes.
+  //
+  // The letter is `K` and was drafted as `J`: gate_item11 above was reaching
+  // for the same one concurrently and landed on `main` first (PR #69), so this
+  // lane takes the letter that was actually free at merge time. That is the
+  // rule the session and fault_injection blocks above state, exercised again --
+  // and it is worth reading this list before picking, because assuming a letter
+  // is exactly how each of these collisions happened.
+  //
+  // `parity/attention.broker-journal-contract.ledger.json` is deliberately NOT
+  // in this list, and this comment is where that is said rather than being left
+  // for a reader to infer from its absence. `tests/attention/
+  // test_broker_journal_contract.py` is quarantined upstream by a module-level
+  // `pytest.importorskip`, so pytest collects no node id from it and it has no
+  // inventory file -- and the first thing the loop below does with a ledger is
+  // read the inventory its `source.file.inventory` names. D-0034 ratified that
+  // the file still gets a standalone, metadata-only ledger recording ZERO
+  // entries, outside this checker's file-to-inventory linkage, so that its
+  // absence from every attention ledger is a checked-in statement rather than
+  // something a later reader has to decide was an oversight. That file explains
+  // itself and points back here.
+  "parity/attention.classifier.ledger.json",
+  "parity/attention.readers.ledger.json",
+  "parity/attention.dedup.ledger.json",
+  "parity/attention.config.ledger.json",
+  // Sub-belt A3 (notify and pipeline), in the same block for the reason the
+  // header above gives. A3 mints from `D-0951` rather than from `D-0906`, and
+  // the gap is deliberate: the window allocated the three sub-belts disjoint
+  // stretches of D-09xx so that three concurrent lanes could not collide on an
+  // id.
+  //
+  // `parity/attention.notify.ledger.json` also declares the three
+  // `test/attention/pyformat-oracle.test.ts` ids as target-only. That is a file
+  // this list does not name and does not need to: a ledger's `test_file` is
+  // where the CHECKER looks for unclaimed tests, and the oracle file has no
+  // source cases to claim. It is declared from the notify ledger because
+  // `src/attention/pyformat.ts` is that file's subject, and it follows the
+  // precedent `parity/fencing.battery-coverage.ledger.json` set when it declared
+  // `test/fencing/fnmatch-shlex-oracle.test.ts`'s ids the same way.
+  "parity/attention.notify.ledger.json",
+  "parity/attention.cli.ledger.json",
 ];
 
 /**

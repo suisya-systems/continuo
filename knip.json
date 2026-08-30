@@ -1,9 +1,17 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["src/index.ts", "src/cli.ts", "scripts/*.mjs", "test/**/*.test.ts", "vitest.config.ts"],
+  "entry": [
+    "src/index.ts",
+    "src/cli.ts",
+    "scripts/*.mjs",
+    "test/**/*.test.ts",
+    "vitest.config.ts",
+    "test/gate_item11/support/suite-runs-unchanged.config.ts",
+    "test/gate_item11/support/provider-plugin.ts"
+  ],
   "project": ["src/**/*.ts", "scripts/**/*.mjs", "test/**/*.ts"],
   "ignoreExportsUsedInFile": true,
   "tags": ["-parityonly"],
   "vitest": false,
-  "ignoreBinaries": ["bwrap"]
+  "ignoreBinaries": ["bwrap", "where"]
 }

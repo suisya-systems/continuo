@@ -1,0 +1,245 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "fault_injection",
+      "collected": 98,
+      "inventory": "parity/source-inventory/fault_injection.all.txt",
+      "note": "The S9/I-11 fault-injection harness, interlock tests/fault_injection/, 5 test files plus the durable modules they drive (contract, controller, manifest + frozen manifest.json, conformance) and two adapters. One ledger per source file. The subsystem is an acceptance HARNESS rather than a product module: there is no claude_org_runtime/fault_injection/, and the port therefore lands in a directory of its own (test/fault_injection/) rather than in src/ -- see DECISIONS.md D-0601, which also records why it is not merged into test/contract/."
+    },
+    "file": {
+      "path": "tests/fault_injection/test_protocol.py",
+      "collected": 13,
+      "inventory": "parity/source-inventory/fault_injection.test_protocol.txt",
+      "note": "The two-phase barrier protocol and the process hygiene around it -- the portable-lane tests, which run on every OS because a barrier that only works on Linux is a harness that only works on Linux. The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order. It was taken under the DEFAULT profile (S9_PROFILE unset, so `fast`), which is why the 98 ids contain 21 manifest cases and not all 59 the frozen matrix holds -- the other 38 are `full`-only and are not collected by a default run. That distinction is load-bearing for this belt's completion claim and is spelled out in the cases ledger."
+    }
+  },
+  "target": {
+    "test_file": "test/fault_injection/protocol.test.ts",
+    "systematic_mappings": [
+      {
+        "from": "a synchronous controller: a reader thread fills a queue and the case blocks on `queue.get(timeout=...)`",
+        "to": "an async controller: the child's stdout is split on newlines by a `data` handler into a pending list with queued waiters, and every waiting method is `async`",
+        "why": "Node has no blocking read on a child process's pipe from the parent side. The ordering property the design rests on is unchanged -- the barrier is what sequences the run, not the timing -- and every wait is still bounded by the same host-monotonic deadline, so a barrier that is never reached is still an attributable failure rather than a wedged job.",
+        "affects": "cases 5-8 and 10-12"
+      },
+      {
+        "from": "the driver's blocking `control.readline()` inside the barrier hook",
+        "to": "a blocking `fs.readSync` on the inherited control fd in the driver child",
+        "why": "This is the half that must NOT become a poll: the design's claim is that the process freezes mid-window holding whatever the operation script left open, and a spin loop would be a different program. Measured on Node 22.17.0 before the port was written: a 700ms hold consumed 0 EAGAIN retries, so the read genuinely blocks. The EAGAIN arm is kept anyway so a pipe left non-blocking by a future caller degrades to a poll instead of crashing.",
+        "affects": "every case that reaches a barrier"
+      },
+      {
+        "from": "`with Controller(...) as controller:`",
+        "to": "`try { ... } finally { await controller.teardown(); }`",
+        "why": "TypeScript has no context manager. The `finally` is what keeps teardown unconditional (design 8.2) on the pass, fail and error paths alike, which is the property case 10 exists to assert.",
+        "affects": "every case that spawns a process"
+      },
+      {
+        "from": "`pytest.raises(X, match=...)`",
+        "to": "`expectRefusal(fn, X, match)` from test/testkit/errors.ts, or `rejects.toBeInstanceOf` / `rejects.toThrow` at the async sites",
+        "why": "The testkit helper keeps both halves pytest asserts -- the class and a regex SEARCH over the message -- one of which a bare `toThrow` silently drops.",
+        "affects": "cases 2, 3, 4, 8, 12"
+      },
+      {
+        "from": "`@pytest.mark.skipif(not _POSIX, reason=...)`",
+        "to": "`skipIf(!POSIX, reason)` from test/testkit/marks.ts",
+        "why": "Keeps the reason with the result and keeps the mark distinct from `test.todo`. Declared in `approved_non_running` with an exact count, and in `conditionally_collected` because `vitest list` omits a skipped test where pytest collects one.",
+        "affects": "cases 9, 11, 12"
+      },
+      {
+        "from": "`status = process.popen.wait(timeout=...)` followed by `process.reaped = True`",
+        "to": "an `await roleProcess.waitForExit(...)` that is followed by an explicit `exited` check, throwing `ProcessWaitTimeout` when the child has not exited",
+        "why": "A CONTROL-FLOW DIFFERENCE THAT LOOKED LIKE A LINE-FOR-LINE TRANSLATION. Python's `Popen.wait(timeout=...)` RAISES `TimeoutExpired`, so in the source the next line -- `process.reaped = True` -- is simply not reached when the wait times out, and the still-live child stays eligible for the teardown ladder. The port's wait returns instead of throwing, so the unconditional `reaped = true` beneath it marked a possibly-live child as reaped; teardown's `reaped` fast path then skipped signalling it, and on a host where the exit-status assertion is disabled the case could continue while that child went on mutating its database. Restored by asserting the exit actually happened. The TEARDOWN path keeps the source's unconditional `reaped = True` (its own `except Exception: pass` around the wait says that is last-resort, deliberate). Raised by the review gate on the rebased tip.",
+        "affects": "every case that kills or runs a role to completion"
+      },
+      {
+        "from": "`try: stdin.write(...); stdin.flush() except (BrokenPipeError, ValueError): pass`",
+        "to": "the same synchronous guard, PLUS a per-write callback and a stream `error` listener that record the failure on the process and swallow it",
+        "why": "ANOTHER LANGUAGE DIFFERENCE HIDING UNDER A LINE-FOR-LINE TRANSLATION. Python's `write`/`flush` raise `BrokenPipeError` SYNCHRONOUSLY, so the source's `try/except` really does catch the case its comment describes -- 'the driver is gone; for a kill case that is the expected shape and the caller's own exit-status assertion is the authority'. Node reports the same condition ASYNCHRONOUSLY on the stream's `error` event, which the synchronous `try/catch` cannot see -- and a stream `error` with no listener is thrown globally, taking down the Vitest worker rather than producing an attributable case failure. That inverts the harness's purpose, because a driver dying is a thing cases DELIBERATELY cause: `release()` and `setClockOffset()` can both race a kill. The error is recorded on the process (so a report can still say the pipe broke) and swallowed, which is the source's stance. Verified by killing a driver and then writing to its control pipe five times: the process survives and no exception escapes. Raised by the review gate on the rebased tip.",
+        "affects": "every case that releases a barrier or moves a clock"
+      },
+      {
+        "from": "`subprocess.Popen(...)`, which RAISES `FileNotFoundError` synchronously when the executable cannot be launched",
+        "to": "`child_process.spawn(...)`, which returns a ChildProcess either way and reports the failure asynchronously on the child's `error` event -- now listened for and converted into the protocol's own failure channel",
+        "why": "The third instance of one language difference: Python raises where Node emits. `spawn` does not throw for a missing interpreter or a bad adapter command, and an `error` event with no listener is uncaught -- which would take down the Vitest worker rather than produce the attributable failure this harness exists to produce. The listener records the error and pushes a synthetic `error` event plus end-of-stream, so the failure surfaces through the wait the caller is already sitting on, teardown still runs, and the message names the command that could not be launched. It matters most for the battery, which is where a newly added adapter's command is first exercised. Verified against an adapter whose executable does not exist: the result is a named ContractViolation and the process survives. Raised by the review gate.",
+        "affects": "every spawn, and the battery's qualification of any future adapter"
+      }
+    ],
+    "target_only_tests": {
+      "count": 2,
+      "ids": [
+        "test/fault_injection/protocol.test.ts::the arming vocabulary > target-only -- a malformed occurrence index is refused at parse, not at a timeout",
+        "test/fault_injection/protocol.test.ts::the harness's own budgets > target-only -- no controller is given a budget the runner would win"
+      ],
+      "why": "One, added by the review gate's third round. The source's `int(occurrence)` raises on anything that is not a whole number, so it has the property for free; `Number.parseInt` has neither half of it. It accepts a PREFIX, so `...:2junk` silently becomes occurrence 2 and arms a different pass through the loop than the case declared. And it returns `NaN` for `...:abc`, which slips through the constructor's `occurrence < 1` guard because every comparison with `NaN` is false -- the anchor then matches no occurrence, the barrier is never reached, and the case dies as a CI TIMEOUT. That is precisely what design section 3.1 exists to prevent ('a barrier that cannot be reached is a manifest error, not a CI timeout'), so a parse that can produce it has lost the property the eager parse is for. The case pins the refusals and, on the other side, pins that an EMPTY suffix still defaults to 1 -- the source's documented behaviour, which `ArmedAnchor.parse('lease-acquired')` depends on and which a stricter guard could have quietly taken away. A SECOND target-only case, and it is structural rather than behavioural because CI found the same defect TWICE in two different files before it was closed as a class. D-0602's rule is that the harness's watchdog must fire before the runner's: a `CaseTimeout` names the case, carries the reproduction line and runs the teardown ladder, while Vitest's `testTimeout` says a test took too long and cuts off the `finally` that would have reaped the role processes. The rule was applied to the manifest-case path (D-0602), then -- after the gate raised it as [P1] -- to `conformance.ts`, and then -- after CI failed a THIRD time, on windows/node24 with `CaseTimeout: protocol-timeout outran its 10s budget` where the case asserts `BarrierTimeout` -- to this file's own two controllers. Fixing one site per report was the wrong shape. This case scans every module in the belt and refuses a hard-coded `caseTimeoutS` at or above the ceiling, so a fourth instance is a red test here rather than a red cell twenty minutes later. Verified by falsification: reinstating the 60s literal in conformance.ts turns it red naming that file and line. A scaled expression passes, because `scaledBudgetS` caps itself."
+    },
+    "conditionally_collected": [
+      {
+        "id": "test/fault_injection/protocol.test.ts::process hygiene > every role process gets its own session and group",
+        "reason": "POSIX sessions and process groups. The source marks this `skipif(not _POSIX)`, and pytest COLLECTS a skipped test, so the id is in the inventory; `vitest list` omits one, so on the Windows job this id is absent. Declared so its absence there is an approved absence rather than a deletion. Measured passing on Linux."
+      },
+      {
+        "id": "test/fault_injection/protocol.test.ts::process hygiene > a kill is a signal and the exit status says so",
+        "reason": "SIGKILL exit status is POSIX-only; same collection asymmetry as above. Measured passing on Linux."
+      },
+      {
+        "id": "test/fault_injection/protocol.test.ts::process hygiene > a process that was not killed fails the case as a harness error",
+        "reason": "SIGKILL exit status is POSIX-only; same collection asymmetry as above. Measured passing on Linux."
+      }
+    ],
+    "approved_non_running": [
+      {
+        "file": "test/fault_injection/protocol.test.ts",
+        "constructs": {
+          "skipIf": 3
+        },
+        "reason": "The three POSIX-only cases the source itself marks `skipif(not _POSIX)`: two read a SIGKILL exit status, which Windows does not report, and one asserts POSIX sessions and process groups, which Windows does not have (the source's controller carries an explicit Job Object branch there instead). Exactly three, one per source mark; a fourth would need its own approval."
+      }
+    ]
+  },
+  "inherited_limitations": [
+    {
+      "behaviour": "Node reaps every child process automatically, so the window the source sweeps the process group in -- after the leader is dead but BEFORE it is reaped, when its pid and therefore its pgid provably cannot have been recycled -- does not exist here. There is no `waitid(WNOWAIT)` equivalent and no way to decline the reap.",
+      "why": "Implemented conservatively rather than approximated: the group is signalled only while the leader's exit has not yet been observed, and never afterwards. Signalling a possibly-recycled group is the worse of the two failures. The residual risk is a grandchild outliving its parent -- which the spike driver never creates, because it spawns nothing. The role that does spawn a grandchild is the session driver, and it does not run in this belt. Approved at the human gate for this belt. CARRY-OVER for whoever lands the session lane: if that belt actually runs the session driver, it should decide then whether a dedicated reaper is needed. A dedicated reaper was considered here and deliberately NOT adopted. REFINED after the review gate found a second place the same difference bites: `kill()` tested only `reaped` before signalling, mirroring the source line for line -- but in the SOURCE the fall-through `os.kill` is safe for a process that exited on its own, because an un-waited-for child is a zombie and a zombie's pid cannot be recycled (and `ProcessLookupError` is caught). Node reaps on exit, so 'exited but not reaped by us' is exactly the window in which the pid IS reusable. `kill`, `sigstop` and `sigcont` now all treat `exited` as `reaped`, so no signal is ever sent by pid after an exit has been observed. This is the same root difference as the group sweep above, found in a second location."
+    },
+    {
+      "behaviour": "`hardExit` in the driver uses `process.exit`, which -- unlike the source's `os._exit` -- emits Node's `exit` event before terminating.",
+      "why": "Node has no `os._exit`. What the barrier needs is that the stack does not unwind, no `finally` runs and the SQLite connection is not closed in an orderly way, and `process.exit` gives all three; this module registers no `exit` listener, so the difference is unobservable here. The exit STATUS is preserved, which matters because the controller reads it to tell a crash from a clean finish."
+    },
+    {
+      "behaviour": "`Controller._remaining` floors every wait at 0.1s: `max(0.1, min(wantS, deadline - now))`. Once a case's deadline has passed, each subsequent wait is still granted 0.1s rather than zero, so a case can overrun its budget by roughly 0.1s per remaining wait, and a role that reports completion just after the budget can still be accepted.",
+      "why": "INHERITED AND UNCHANGED, deliberately. interlock's controller.py line 386-387 is `return max(0.1, min(want_s, self._deadline - time.monotonic()))` -- byte-for-byte the same floor -- so this is the source's behaviour rather than a translation defect, and rule 0 of docs/test-translation-conventions.md forbids a stricter translation. The overrun is bounded rather than unbounded (a case makes a bounded number of waits, and each is still capped by the barrier timeout), the hang protection the design actually relies on is the per-barrier deadline, and `checkDeadline()` still throws `CaseTimeout` outright at bootstrap and at every spawn. Raised as [P2] by the review gate's third round and NOT changed here: removing the floor would make a wait that was about to succeed fail instead, which under load is a false red in a suite that runs `retry: 0` -- and this belt has already observed one load-induced timeout on this machine. Whether to tighten it is a change to interlock's own watchdog semantics and belongs to a decision, not to a translation; flagged to the window with this entry as the trail."
+    }
+  ],
+  "entries": [
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_an_armed_anchor_round_trips_through_its_wire_form",
+      "target_id": "test/fault_injection/protocol.test.ts::the arming vocabulary > an armed anchor round trips through its wire form",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "Straight port of the three assertions, with one translation decision. The source's ArmedAnchor is a frozen dataclass, so `ArmedAnchor.parse(anchor.wire()) == anchor` is a VALUE comparison for free. A TypeScript class gets reference equality instead, and an `==` translated as `toBe` would compare two distinct objects and always fail, while `toEqual` would silently stop checking the class. So ArmedAnchor carries an explicit `equals()` and the case calls it -- keeping both halves the source gets for free, and keeping the round trip a real assertion rather than a tautology about identity."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_an_anchor_outside_the_contract_is_refused",
+      "target_id": "test/fault_injection/protocol.test.ts::the arming vocabulary > an anchor outside the contract is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_the_handshake_refuses_a_version_mismatch",
+      "target_id": "test/fault_injection/protocol.test.ts::the arming vocabulary > the handshake refuses a version mismatch",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_the_handshake_refuses_a_driver_that_is_not_the_one_that_was_spawned",
+      "target_id": "test/fault_injection/protocol.test.ts::the arming vocabulary > the handshake refuses a driver that is not the one that was spawned",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_an_unarmed_checkpoint_costs_no_round_trip",
+      "target_id": "test/fault_injection/protocol.test.ts::the barrier > an unarmed checkpoint costs no round trip",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The one structural adaptation this whole belt carries: the source's controller blocks a thread on a queue while a reader thread fills it, and Node has no blocking read on a child's pipe from the parent side, so every controller method that waits is `async` and the case awaits it. Nothing about the ORDERING changes -- the barrier is still what sequences the run and the waits are still bounded by the same host-monotonic deadlines -- but every call site gains an `await`, and teardown moves from the `with` block's `__exit__` to a `finally`. The assertions themselves are the source's, unchanged: no checkpoint event and no sync event in the trace, a done event present, and at least one step naming the attempt operation -- which is what makes 'the windows a case does not name are free' a statement about work that actually happened rather than about a process that did nothing."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_an_armed_checkpoint_holds_the_process_until_it_is_released",
+      "target_id": "test/fault_injection/protocol.test.ts::the barrier > an armed checkpoint holds the process until it is released",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The one structural adaptation this whole belt carries: the source's controller blocks a thread on a queue while a reader thread fills it, and Node has no blocking read on a child's pipe from the parent side, so every controller method that waits is `async` and the case awaits it. Nothing about the ORDERING changes -- the barrier is still what sequences the run and the waits are still bounded by the same host-monotonic deadlines -- but every call site gains an `await`, and teardown moves from the `with` block's `__exit__` to a `finally`. One further substitution: the source's liveness check is `process.popen.poll() is None`, and Node reaps a child automatically rather than exposing a non-reaping poll, so RoleProcess records the exit in an `exit` handler and the case asserts `roleProcess.exited === false`. Same question ('is it still inside the window a moment later?'), asked of a flag the runtime maintains rather than of a syscall the runtime does not expose. The 200ms settle is the source's."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_the_occurrence_index_selects_which_pass_through_the_loop",
+      "target_id": "test/fault_injection/protocol.test.ts::the barrier > the occurrence index selects which pass through the loop",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The one structural adaptation this whole belt carries: the source's controller blocks a thread on a queue while a reader thread fills it, and Node has no blocking read on a child's pipe from the parent side, so every controller method that waits is `async` and the case awaits it. Nothing about the ORDERING changes -- the barrier is still what sequences the run and the waits are still bounded by the same host-monotonic deadlines -- but every call site gains an `await`, and teardown moves from the `with` block's `__exit__` to a `finally`. The two assertions are the source's: the barrier reports occurrence 2, and exactly one earlier attempt step is already in the trace -- so the index really did select the second pass rather than the first."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_a_barrier_that_is_never_reached_becomes_an_attributable_failure",
+      "target_id": "test/fault_injection/protocol.test.ts::the barrier > a barrier that is never reached becomes an attributable failure",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The one structural adaptation this whole belt carries: the source's controller blocks a thread on a queue while a reader thread fills it, and Node has no blocking read on a child's pipe from the parent side, so every controller method that waits is `async` and the case awaits it. Nothing about the ORDERING changes -- the barrier is still what sequences the run and the waits are still bounded by the same host-monotonic deadlines -- but every call site gains an `await`, and teardown moves from the `with` block's `__exit__` to a `finally`. `pytest.raises(BarrierTimeout)` around a blocking call becomes `await expect(promise).rejects.toBeInstanceOf(BarrierTimeout)`, which keeps the class half of the assertion -- the point of the case is that a CI hang is converted into a NAMED failure, so the type is the assertion and a message-only check would not be one. The 2s barrier timeout and 10s case timeout are the source's."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_every_role_process_gets_its_own_session_and_group",
+      "target_id": "test/fault_injection/protocol.test.ts::process hygiene > every role process gets its own session and group",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The property is the source's -- the role process is a session and process-group leader, so a stray shell cannot be confused with it and the group signals as a unit -- but there is no `os.getpgid` in Node, and asserting only the harness's own recorded pgid would assert that the harness agrees with itself. So the group id is read back OUT OF PROCESS from the OS: /proc/<pid>/stat field 5 on Linux (parsed from the LAST ')' so a command name containing spaces or parentheses cannot shift the field index), and `ps -o pgid=` on the other POSIX hosts. Both halves the source asserts are kept: the kernel's pgid equals the pid, and the harness's recorded pgid equals the pid. The spawn uses Node's `detached: true`, which is `setsid` and the direct counterpart of `start_new_session=True`. Skipped off POSIX, as the source is."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_teardown_runs_on_the_unhappy_path_and_leaves_nothing_behind",
+      "target_id": "test/fault_injection/protocol.test.ts::process hygiene > teardown runs on the unhappy path and leaves nothing behind",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The one structural adaptation this whole belt carries: the source's controller blocks a thread on a queue while a reader thread fills it, and Node has no blocking read on a child's pipe from the parent side, so every controller method that waits is `async` and the case awaits it. Nothing about the ORDERING changes -- the barrier is still what sequences the run and the waits are still bounded by the same host-monotonic deadlines -- but every call site gains an `await`, and teardown moves from the `with` block's `__exit__` to a `finally`. The source wraps the controller in a `with` inside `pytest.raises(RuntimeError)`, which asserts two things at once: the error escapes, and `__exit__` ran teardown anyway. TypeScript has no context manager, so the two are asserted separately and BOTH are kept -- the thrown error is captured and its type and message checked, and the `finally` that ran teardown is shown to have worked by asserting the process is reaped and exited. Splitting them is what stops the translation from quietly checking only one."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_a_kill_is_a_signal_and_the_exit_status_says_so",
+      "target_id": "test/fault_injection/protocol.test.ts::process hygiene > a kill is a signal and the exit status says so",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The one structural adaptation this whole belt carries: the source's controller blocks a thread on a queue while a reader thread fills it, and Node has no blocking read on a child's pipe from the parent side, so every controller method that waits is `async` and the case awaits it. Nothing about the ORDERING changes -- the barrier is still what sequences the run and the waits are still bounded by the same host-monotonic deadlines -- but every call site gains an `await`, and teardown moves from the `with` block's `__exit__` to a `finally`. `-signal.SIGKILL` becomes `-9`. Node reports a terminated child as `(code=null, signal='SIGKILL')` rather than as Python's negative returncode, so RoleProcess reconstructs the source's spelling -- the exit code, or the negated signal number -- and the case asserts against that. Measured: the child does report -9 here. Skipped off POSIX, as the source is."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_a_process_that_was_not_killed_fails_the_case_as_a_harness_error",
+      "target_id": "test/fault_injection/protocol.test.ts::process hygiene > a process that was not killed fails the case as a harness error",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The one structural adaptation this whole belt carries: the source's controller blocks a thread on a queue while a reader thread fills it, and Node has no blocking read on a child's pipe from the parent side, so every controller method that waits is `async` and the case awaits it. Nothing about the ORDERING changes -- the barrier is still what sequences the run and the waits are still bounded by the same host-monotonic deadlines -- but every call site gains an `await`, and teardown moves from the `with` block's `__exit__` to a `finally`. The case that proves the exit-status check can actually fire, asserted against a process that really did exit 0. `pytest.raises(ContractViolation, match='not -SIGKILL')` becomes `rejects.toThrow(/not -SIGKILL/)`; the message half is the source's own pattern, and the class half is carried by that message being the one only ContractViolation raises at that site. Skipped off POSIX, as the source is."
+    },
+    {
+      "source_nodeid": "tests/fault_injection/test_protocol.py::test_the_epoch_regression_reader_ignores_refusals_and_reads_insertion_order",
+      "target_id": "test/fault_injection/protocol.test.ts::the linear-history reader > the epoch regression reader ignores refusals and reads insertion order",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    }
+  ],
+  "totals": {
+    "source_cases": 13,
+    "ported": 4,
+    "adapted": 9,
+    "not_ported": 0,
+    "waivers": 0
+  }
+}

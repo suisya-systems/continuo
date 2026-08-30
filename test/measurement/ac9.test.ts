@@ -35,7 +35,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
@@ -75,7 +74,7 @@ import {
   renderHeaderJson,
 } from "../../src/measurement/provenance.js";
 import { openForMeasurement } from "../../src/measurement/reader.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -94,11 +93,20 @@ const CAP = 1_024;
 // helpers -- the smallest legal surroundings an invocation needs
 // --------------------------------------------------------------------------
 
+/**
+ * The migrated database every case starts from, built once for this file.
+ *
+ * Building it once per file and handing each case its own copy removes the
+ * migrations this file used to run once per case (D-0119, carrying out D-0118's
+ * approach on the remaining measurement files).
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
 /** The source's `db` fixture, as a per-test call (rule 8). */
 function productionDb(name = "production.sqlite3"): string {
-  const path = join(caseRoot("ac9"), name);
-  createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+  return productionTemplate.copyInto(caseRoot("ac9"), name);
 }
 
 /**

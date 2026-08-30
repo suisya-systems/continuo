@@ -1,0 +1,242 @@
+{
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "suite_baseline": {
+      "collected": 2199,
+      "passed": 2190,
+      "skipped": 8,
+      "xfailed": 1,
+      "reconciliation": "As recorded in parity/control-plane.ledger.json: 2194 collected + 5 modules skipped at collection time = 2199. Unchanged by this belt."
+    },
+    "subsystem": {
+      "name": "gate_item2",
+      "collected": 34,
+      "inventory": "parity/source-inventory/gate_item2.all.txt",
+      "note": "Gate item 2's crash-and-retry proof (issue #18), interlock tests/gate_item2/, three files. One ledger per source file (D-0019): this ledger (23), parity/gate_item2.mediated-real-provider.ledger.json (5), and the session-driver-harness file (6) which is deferred -- see that ledger's note. Downstream of the session belt (parity/session.*.ledger.json): every case here drives claude_org_runtime.supervisor.SessionOrchestrator (ported to src/supervisor.ts) and claude_org_runtime.control_plane.session_binding (ported to src/control_plane/session_binding.ts) over the S1 provider contract the session belt already carries."
+    },
+    "file": {
+      "path": "tests/gate_item2/test_orchestrator_walk.py",
+      "collected": 23,
+      "inventory": "parity/source-inventory/gate_item2.test_orchestrator_walk.txt",
+      "note": "The inventory is `pytest --collect-only -q` on the source at 65f36c5, in collection order; all 23 pass there (re-run 2026-08-29 against the read-only clone of interlock at 65f36c5, `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/gate_item2/ -p no:cacheprovider`: 34 passed, of which 23 are this file's). Entirely in-memory (a ScriptedProvider fixture, conftest.py) -- no subprocess, no /proc, platform-free throughout."
+    }
+  },
+  "target": {
+    "test_file": "test/gate_item2/orchestrator-walk.test.ts",
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "None. Every collected test in this file is a translation of a source case."
+    },
+    "systematic_mappings": [
+      {
+        "from": "`SessionOrchestrator.start()` / `.recover()` are ordinary blocking Python calls; the five `SessionProvider` verbs they drive are synchronous in the source.",
+        "to": "`SessionOrchestrator.start()` / `.recover()` are `async` and every call site in this file `await`s them.",
+        "why": "D-0301 made continuo's `SessionProvider` verbs `Promise`-returning (Node has no synchronous way to wait for a child to exit), so `src/supervisor.ts` (D-0801) is `async` end to end. This is a calling-convention change with no effect on what any case asserts -- every value compared, every row read, every exception type is the source's -- so it is recorded once here rather than argued per case, and no case is marked `adapted` for it alone (consistent with how the session belt's own ledgers treat the same D-0301 change).",
+        "affects": "every case in this file"
+      },
+      {
+        "from": "`pytest.raises(SomeError, match=...)`, a synchronous context manager.",
+        "to": "`expectAsyncRefusal(() => promise, SomeError, match)`, this belt's local async twin of `test/testkit/errors.ts`'s `expectRefusal` (kept local to `test/gate_item2/helpers.ts` rather than added to the shared testkit while other belts are mid-flight against it).",
+        "why": "Same reason as above: the refusal now arrives as a rejected promise. Both halves `pytest.raises` checks -- the exception class and a `match` search over its string form -- are kept.",
+        "affects": "every case that expects a refusal"
+      }
+    ]
+  },
+  "totals": {
+    "source_cases": 23,
+    "ported": 21,
+    "adapted": 2,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": [
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_the_binding_is_committed_before_the_provider_is_asked_to_spawn",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the admission ordering itself > the binding is committed before the provider is asked to spawn",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_the_readback_is_committed_not_assumed",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the admission ordering itself > the readback is committed not assumed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_an_identity_that_never_reads_back_is_never_confirmed",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the admission ordering itself > an identity that never reads back is never confirmed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_claimant_against_a_live_lease_never_reaches_the_provider",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the losing claimant never becomes a process > a claimant against a live lease never reaches the provider",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_the_u27_shape_through_interlock_spawns_only_the_winner",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the losing claimant never becomes a process > the u27 shape through interlock spawns only the winner",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The source's session_uuid_factory raises KeyboardInterrupt to simulate the claimant dying inside the admission window and asserts `pytest.raises(KeyboardInterrupt)`. TypeScript has no analogue of KeyboardInterrupt as a distinguished exception type reachable from user code, so the seam raises a plain Error and the assertion checks the message text via `.rejects.toThrow(<message>)` instead of a class. Every other assertion in the case -- zero start calls, zero active rows before the retry, LeaseHeld on the too-early retry, the eventual single spawn under the retry's own identity -- is carried unchanged."
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_stale_claimant_returning_before_its_admission_write_never_spawns",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the losing claimant never becomes a process > a stale claimant returning before its admission write never spawns",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_claimant_stopped_inside_the_critical_section_is_terminated_measured",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the losing claimant never becomes a process > a claimant stopped inside the critical section is terminated measured",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_killed_before_the_binding_commit_recovery_starts_fresh",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::recovery: the four injection points, re-identified from SQLite alone > killed before the binding commit recovery starts fresh",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_killed_between_commit_and_spawn_recovery_respawns_the_bound_identity",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::recovery: the four injection points, re-identified from SQLite alone > killed between commit and spawn recovery respawns the bound identity",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_killed_after_the_mark_but_before_the_spawn_ran_recovery_respawns",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::recovery: the four injection points, re-identified from SQLite alone > killed after the mark but before the spawn ran recovery respawns",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_killed_between_spawn_and_readback_recovery_resumes_never_reclaims",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::recovery: the four injection points, re-identified from SQLite alone > killed between spawn and readback recovery resumes never reclaims",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_killed_after_the_readback_commit_recovery_resumes_and_rewrites_nothing",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::recovery: the four injection points, re-identified from SQLite alone > killed after the readback commit recovery resumes and rewrites nothing",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_every_recovery_ends_with_exactly_one_active_binding",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::recovery: the four injection points, re-identified from SQLite alone > every recovery ends with exactly one active binding",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_the_u32_shape_through_interlock_issues_no_second_resume",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > the u32 shape through interlock issues no second resume",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_stale_recoverer_is_refused_before_its_resume",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > a stale recoverer is refused before its resume",
+      "disposition": "adapted",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5",
+      "reason": "The source restores the patched `provider.read_state` with `del provider.read_state`, which removes the instance attribute and lets attribute lookup fall through to the class's bound method -- Python's normal instance/class shadowing. TypeScript's `ScriptedProvider.readState` is a prototype method with no distinguished 'delete the instance override' operation with the same effect available at the call site used here, so the port captures the original bound method and reassigns it back explicitly (`provider.readState = originalReadState`) inside the patched function, before calling through to it. The effect on the provider's dispatch is identical -- the second attempt sees the original implementation -- and every assertion (StaleWriterRefused, zero resume calls, a durable post_spawn_gate refusal, the binding's session id unchanged) is carried unchanged."
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_an_orphan_the_binding_does_not_name_is_never_adopted",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > an orphan the binding does not name is never adopted",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_claimant_that_stalls_in_the_readback_never_returns_success",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > a claimant that stalls in the readback never returns success",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_provider_failure_does_not_bypass_the_fence",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > a provider failure does not bypass the fence",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_fruitless_readback_still_ends_in_a_fenced_write",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > a fruitless readback still ends in a fenced write",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_an_unconfirmed_stop_is_reported_as_unconfirmed",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > an unconfirmed stop is reported as unconfirmed",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_a_loser_stands_down_while_a_newer_writer_is_mid_walk",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > a loser stands down while a newer writer is mid walk",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_recovery_through_a_different_provider_is_refused",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > recovery through a different provider is refused",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    },
+    {
+      "source_nodeid": "tests/gate_item2/test_orchestrator_walk.py::test_refusals_are_rows_not_log_lines",
+      "target_id": "test/gate_item2/orchestrator-walk.test.ts::the U32 shape, mediated; orphans; refusal durability > refusals are rows not log lines",
+      "disposition": "ported",
+      "source_status": "passed",
+      "target_status": "passed",
+      "source_revision": "65f36c5"
+    }
+  ]
+}

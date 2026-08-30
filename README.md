@@ -6,13 +6,20 @@ plane for a coding-agent organization, its measurement harness, and its per-role
 The name is cadenza's structural counterpart. A basso continuo underpins the piece and realizes
 chords from figures, as this control plane realizes behavior from policy rows and rules.
 
-> **Status: bootstrap.** The repository skeleton, the CI discipline, and the first recorded
-> decisions are in place. No interlock module has been ported yet. The package is `private` and is
-> not published (`DECISIONS.md` D-0008).
+> **Status: porting, well advanced.** 1,973 node ids are ported, out of the 2,027 not declined --
+> a pool, not a commitment: 54 of them (`broker`'s 54) carry statuses that are still
+> proposals, undecided at continuo's own human gate rather than agreed to be ported. The per-subsystem record is
+> [`parity/source-inventory.belts.md`](./parity/source-inventory.belts.md) and is kept up to date
+> per belt. The package is `private` and is not published (`DECISIONS.md` D-0008).
 
 ## Design lineage
 
-Interlock is the **design lineage of record**, and this port cites it rather than restating it:
+Interlock is the **design lineage of record**, and this port cites it rather than restating it.
+**It is frozen, and it is not a decision-maker for continuo.** It is the source the port reads from
+and the archive its reasoning is cited out of; it will not answer continuo's open questions, review
+continuo's choices, or repair defects continuo inherits. Everything still undecided about continuo is
+decided at *this* repository's human gate -- see `DECISIONS.md` `D-0023` (inherited defects are
+repaired here) and `D-0036` (decision authority is here).
 
 - [`DECISIONS.md`](https://github.com/suisya-systems/interlock/blob/main/DECISIONS.md) -- `D-0001`..`D-0042`
 - [`docs/parity-audit.md`](https://github.com/suisya-systems/interlock/blob/main/docs/parity-audit.md)
@@ -57,6 +64,7 @@ built at Node-API 10, which Node provides only from v22.14.0 onward
 | [`docs/ci-merge-gate.md`](./docs/ci-merge-gate.md) | The double-green rule and the fail-closed merge gate |
 | [`docs/sqlite-value-contract.md`](./docs/sqlite-value-contract.md) | How SQLite values appear in JavaScript, and two silent hazards |
 | [`docs/cli-output-policy.md`](./docs/cli-output-policy.md) | ASCII-only output, and why Windows is a required CI cell |
+| [`docs/design/minimal-operating-loop.md`](./docs/design/minimal-operating-loop.md) | What the successor stack must still build to run one task end to end (propose-only) |
 
 ## License
 

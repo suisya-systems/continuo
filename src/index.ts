@@ -350,6 +350,27 @@ export {
   unlinkRunPr,
   upsertRepository,
 } from "./control_plane/repo_link.js";
+// `run_lifecycle.ts` also declares `TERMINAL_RUN_STATUSES`, and it is
+// deliberately not re-exported here: `gates.ts`'s copy above already carries
+// that name, and the two are independent restatements of the G1 adjudication
+// kept in step by a drift test (the same treatment `outbox.ts`'s second
+// declaration of `EXACTLY_ONCE_MECHANISMS` gets). One package entry point
+// (D-0002) cannot carry one name twice, and picking a different one for the
+// second would put two spellings of the same set into the public surface.
+export {
+  ADVANCE_RUN_STATUS_EFFECT,
+  acquireRunLease,
+  advanceRunStatus,
+  RUN_LEASE_PREFIX,
+  RUN_STATUSES,
+  RunLifecycleUsageError,
+  RunRecord,
+  type RunStatus,
+  RunTransitionRefused,
+  readRun,
+  runLeaseResource,
+  UnknownRunRefused,
+} from "./control_plane/run_lifecycle.js";
 export {
   type ControlPlaneState,
   createControlPlane,
@@ -363,6 +384,20 @@ export {
   SPIKE_SCHEMA_PATH,
   STATE_TABLES,
 } from "./control_plane/schema.js";
+export {
+  activeBinding,
+  bindingForSession,
+  confirmIdentity,
+  markSpawned,
+  PHASE_IDENTITY_CONFIRMED,
+  PHASE_PREPARED,
+  PHASE_SPAWNED,
+  prepareBinding,
+  REASON_PREPARED,
+  REASON_SPAWNED,
+  releaseBinding,
+  SessionBinding,
+} from "./control_plane/session_binding.js";
 export { SPIKE_APPLICATION_ID } from "./control_plane/spike.js";
 export {
   currentScope,
@@ -882,6 +917,30 @@ export {
   WindowReport,
   WORKER_ESCALATION_EPISODES_QUERY,
 } from "./measurement/index.js";
+/**
+ * S8 -- the worker-outbound `MessageBus` (interlock Issue `#19`, interlock
+ * D-0009's delivery half).
+ *
+ * Re-exported through `src/messagebus/index.ts` rather than from `bus.ts`
+ * directly, because the barrel *is* the surface: it names the bus, its envelope
+ * and its one refusal, and omits `Endpoint` / `EndpointConfig`. The endpoint is
+ * a process a worker's MCP configuration launches by path
+ * (`node dist/messagebus/endpoint.js`), the way the deny hook is (D-0204), not a
+ * delivery verb a consumer of this package calls.
+ *
+ * The package exports only `.` (D-0002), so this block is what makes the bus
+ * reachable by an installed consumer at all -- and a throwaway (interlock
+ * D-0026) whose delivery contract cannot be driven from outside is not a spike
+ * anyone can evaluate.
+ */
+export {
+  DeliveredEnvelope,
+  type DeliveredEnvelopeFields,
+  MessageBus,
+  type MessageBusOptions,
+  MessageBusUsageError,
+  type PollOptions,
+} from "./messagebus/index.js";
 export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
 /**
  * The item 8 rehearsal (interlock Issue `#21`, interlock D-0022): the stub
@@ -901,6 +960,78 @@ export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
  * down in `docs/secretary-intake-boundary.md` (D-0701).
  */
 export { IntakeQueue, IntakeReceipt, IntakeRefused, SecretaryIntake } from "./secretary/index.js";
+
+/**
+ * The session subsystem (S1, S2, S3).
+ *
+ * Re-exported through `src/session/index.ts` rather than from the four modules
+ * directly, so this file and that barrel cannot drift into two different
+ * answers about what the subsystem's surface is.
+ *
+ * **`Observation` is aliased, and only here.** `src/measurement/fixtures.ts`
+ * already exports a class of that name through this barrel, and the two mean
+ * different things -- the measurement one is a harness fixture, this one is
+ * S1's "the backend's state was read" / "it could not be read" distinction.
+ * It is the ONLY alias: `Ok`, `Failure` and `ContractViolation` are generic
+ * enough to look like clashes and are not, and renaming a name the source
+ * chose, without a clash to force it, is a divergence for tidiness.
+ * The alias is on the newcomer because the other name is already on this
+ * surface and renaming it would break a consumer to spare a name clash. Inside
+ * the subsystem, and in `src/session/index.ts`, the name stays `Observation`:
+ * that is what the source calls it and what every ported case asserts against.
+ *
+ * The interface this exposes is **provisional** by its own declaration
+ * (`PROVISIONAL` is `true`, and `PROMOTION_REQUIRES` says what would settle
+ * it). Exporting it is not a claim that it is settled. It is here because the
+ * alternative is worse: a barrel the package entry point does not reach is a
+ * module claiming a consumer it does not have, and it would leave the only
+ * subsystem in this repository that cannot be imported by the name the package
+ * publishes. The package is `private` until publication is decided (D-0008),
+ * so nothing is promised to anyone by this line today.
+ */
+export {
+  ANNOUNCE_AFTER_ENV,
+  CAPABILITY_ASSIGNMENTS,
+  CapabilityAssignment,
+  type CapabilityAssignmentFields,
+  CapabilityReport,
+  type CapabilityReportFields,
+  CLI_VERSION_WRITTEN_AGAINST,
+  ClaudeCliSessionProvider,
+  type ClaudeCliSessionProviderOptions,
+  ContractViolation,
+  checkSpawnPrecondition,
+  claudeSessionUuid,
+  D0009_VERBS,
+  DEFAULT_CHILD_STATE,
+  DELIVERY_ABSENCE_IS_DELIBERATE,
+  Failure,
+  FailureKind,
+  LocalProcessSessionProvider,
+  type LocalProcessSessionProviderOptions,
+  Observation as SessionObservation,
+  Ok,
+  OWNER_MESSAGE_BUS,
+  OWNER_NEITHER_CONTRACT,
+  OWNER_SESSION_PROVIDER,
+  PROMOTION_REQUIRES,
+  PROVISIONAL,
+  type ProviderResult,
+  REQUIRED_CAPABILITIES,
+  SessionProvider,
+  SessionReadout,
+  type SessionReadoutFields,
+  SpawnRefused,
+  STATE_FILE_ENV,
+  StartRequest,
+  type StartRequestFields,
+  VERB_IMPLEMENTATION_HOOKS,
+  WorkspaceDecision,
+  type WorkspaceLifecycleObserver,
+  WorkspaceTransition,
+  type WorkspaceTransitionFields,
+  WorkspaceVerdict,
+} from "./session/index.js";
 export {
   addArguments,
   addDoctorArguments,
@@ -976,3 +1107,18 @@ export {
 } from "./settings/sandbox_doctor.js";
 export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";
+export {
+  defaultIdentityConfirmation,
+  IdentityUnconfirmed,
+  LoserTerminated,
+  OrchestrationOutcome,
+  OrchestrationRefused,
+  ProviderStartFailed,
+  SEAM_AFTER_ADMISSION_BEFORE_SPAWN,
+  SEAM_AFTER_READBACK_COMMIT,
+  SEAM_AFTER_SPAWN_BEFORE_READBACK_COMMIT,
+  SEAM_BEFORE_ADMISSION_COMMIT,
+  SEAMS,
+  SessionOrchestrator,
+  type SessionOrchestratorOptions,
+} from "./supervisor.js";

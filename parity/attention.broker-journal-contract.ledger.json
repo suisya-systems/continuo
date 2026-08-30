@@ -1,0 +1,46 @@
+{
+  "$comment": "A ledger with zero entries, on purpose. Read this before concluding something is missing.",
+  "why_this_file_exists": [
+    "tests/attention/test_broker_journal_contract.py is quarantined in interlock by a module-level pytest.importorskip('claude_org_runtime.broker.server') (interlock#39), so pytest collects NO node id from it. It contributes nothing to the 2,194 and nothing to the attention subsystem's 194.",
+    "It therefore cannot have a normal ledger: parity/parity-check.mjs's first act on a ledger is to read the per-file inventory it points at, and there is no inventory file to point at -- an empty one could not be told apart from a generation failure, and a fabricated node id would be a case that does not exist (parity/source-inventory.manifest.json's collection_time_skips records it instead).",
+    "D-0034 ratified that the file nevertheless gets a standalone, metadata-only ledger recording zero entries, outside the parity checker's normal file-to-inventory linkage: an explicit, checked-in 'this file contributes nothing' rather than the file's total absence from every attention ledger being mistaken for an oversight."
+  ],
+  "not_registered_in": {
+    "path": "scripts/parity-check.mjs",
+    "list": "LEDGERS",
+    "why": "Deliberate, and named in a comment beside the attention lane there so the omission is visible at the place a reader would look for it. Registering this file would make the checker read an inventory that does not exist."
+  },
+  "source": {
+    "repository": "suisya-systems/interlock",
+    "revision": "65f36c5",
+    "file": {
+      "path": "tests/attention/test_broker_journal_contract.py",
+      "collected": 0,
+      "inventory": null,
+      "line": 21,
+      "requires": "claude_org_runtime.broker.server",
+      "reason": "Quarantined by interlock#39: the carried invariants in this file are kept verbatim, but they drive broker/server.py, which interlock's PORTING_LEDGER.md classes discard. Re-target onto the MessageBus rewrite (interlock Q-0023)."
+    }
+  },
+  "belongs_to": {
+    "subsystem": "broker",
+    "where_the_status_lives": "parity/source-inventory.belts.md, the `broker` section -- which is `retarget`: the invariants carry but they drive broker/server.py, so a port has to re-point them onto a continuo mechanism first. That re-pointing, and whether continuo takes these five modules at all, is decided at continuo's own human gate; interlock is frozen and answers Q-0023 for nobody (D-0036), so nothing here is waiting on it. The `attention` section of that document says the same thing from the other side, so a reader arriving from either place is told this file is not one of the 194.",
+    "not_this_belt": "A1 ports tests/attention/test_readers.py (29) and tests/attention/test_classifier.py (61). This file is neither, and no case of it is ported, deferred or waived here -- there is no case of it to do any of those to."
+  },
+  "target": {
+    "test_file": null,
+    "target_only_tests": {
+      "count": 0,
+      "ids": [],
+      "why": "Nothing is ported from this file, so nothing sits beside it."
+    }
+  },
+  "totals": {
+    "source_cases": 0,
+    "ported": 0,
+    "adapted": 0,
+    "not_ported": 0,
+    "waivers": 0
+  },
+  "entries": []
+}

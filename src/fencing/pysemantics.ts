@@ -989,6 +989,32 @@ export function pyStrip(text: string): string {
 }
 
 /**
+ * Python's `str.lstrip()` with no argument: the left half of {@link pyStrip},
+ * over the same `str.isspace()` set.
+ *
+ * Separate from `pyStrip` because the one caller that needs it asks a question
+ * only the left half answers: the session provider refuses a prompt whose
+ * *leading* whitespace hides a `-`, so `"  -r"` is a flag in disguise while
+ * `"-ish, trailing spaces  "` is not a different value once stripped from both
+ * ends.
+ *
+ * The mis-spelling to watch for is `value.replace(/^\s+/, "")`, and it is wrong
+ * in both directions, because `\s` and `str.isspace()` differ both ways. A
+ * value whose first character is U+001C and whose second is `-` is refused by
+ * CPython -- U+001C is `str.isspace()` -- and *accepted* by the regexp, which
+ * is a caller's settings reaching a spawn as a CLI flag. And a value beginning
+ * U+FEFF is kept by CPython and stripped by the regexp, so the regexp refuses a
+ * prompt interlock carries.
+ */
+export function pyLstrip(text: string): string {
+  let start = 0;
+  while (start < text.length && isPythonWhitespace(text[start] as string)) {
+    start += 1;
+  }
+  return text.slice(start);
+}
+
+/**
  * `str.isspace()`, which is NOT JavaScript's `\s`.
  *
  * The two sets differ in both directions, and both directions open a hole:
