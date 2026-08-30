@@ -45,6 +45,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import * as ts from "typescript";
 import { describe, expect, onTestFinished, test } from "vitest";
 import { TERMINAL_RUN_STATUSES as GATES_TERMINAL_RUN_STATUSES } from "../../src/control_plane/gates.js";
 import {
@@ -453,10 +454,13 @@ describe("the gate cannot be walked around", () => {
     // statement, and that place produces it with a builder rather than writing
     // it out. A raw `UPDATE run` or `INSERT INTO run` anywhere under `src/` is
     // the anomaly the rule names, and this is what surfaces it.
-    const offenders = sourceFiles().filter((path) =>
-      /\bUPDATE\s+run\b|\bINSERT\s+INTO\s+run\b/i.test(readFileSync(path, "utf8")),
-    );
-    expect(offenders).toEqual([]);
+    expect(sourceFilesWritingRun(/\bUPDATE\s+run\b|\bINSERT\s+INTO\s+run\b/i)).toEqual([]);
+
+    // Anti-vacuity: a scanner that matched nothing would report the same
+    // empty list for a build full of raw writes. This file is full of them --
+    // it is where the unfenced writes under test live -- so the same scan
+    // pointed at it must come back non-empty.
+    expect(filesWritingRun([fileURLToPath(import.meta.url)], /\bUPDATE\s+run\b/i)).not.toEqual([]);
   });
 
   test("no module under src deletes a run", () => {
@@ -466,10 +470,60 @@ describe("the gate cannot be walked around", () => {
     // there is no deletion path -- asserted rather than assumed, since `run`
     // has no `rows_are_never_deleted` trigger the way `outbox` does, and this
     // is the only thing saying so.
-    const offenders = sourceFiles().filter((path) =>
-      /\bDELETE\s+FROM\s+run\b/i.test(readFileSync(path, "utf8")),
+    expect(sourceFilesWritingRun(/\bDELETE\s+FROM\s+run\b/i)).toEqual([]);
+  });
+});
+
+// --------------------------------------------------------------------------
+// what the stamp does not buy
+// --------------------------------------------------------------------------
+
+describe("the writer_epoch stamp is evidence, not enforcement", () => {
+  test("an unfenced status write leaves the previous stamp standing", () => {
+    // The limitation D-0046 rule 4 leaves open, asserted rather than only
+    // described. Only the deferred `BEFORE UPDATE OF status ON run` trigger
+    // can close it; until then the column proves the property over the writes
+    // that came through the gate and says nothing about the ones that did not.
+    //
+    // This case is expected to go RED on the day that trigger lands -- the raw
+    // UPDATE below will abort -- which is the point: whoever writes the second
+    // stage is sent here to restate what changed.
+    const cp = cpFixture();
+    addRun(cp);
+    const lease = acquireRunLease(cp, { runId: RUN_ID, holder: HOLDER, nowMs: T0, ttlMs: TTL_MS });
+    advanceRunStatus(cp, lease, { runId: RUN_ID, from: "created", to: "running", nowMs: T0 + 1 });
+    const fenced = readRun(cp, RUN_ID);
+
+    // Nobody holds a lease for this write, and it names no epoch.
+    cp.prepare("UPDATE run SET status = 'completed', updated_at_ms = ? WHERE run_id = ?").run(
+      T0 + 2,
+      RUN_ID,
     );
-    expect(offenders).toEqual([]);
+
+    const unfenced = readRun(cp, RUN_ID);
+    expect(unfenced?.status).toBe("completed");
+    // Both directions, so the entry cannot go stale silently: the row moved,
+    // and its provenance column did not, so the transition to `completed` is
+    // indistinguishable from one the epoch-1 holder made.
+    expect(unfenced?.writerEpoch).toBe(fenced?.writerEpoch);
+    expect(unfenced?.writerEpoch).toBe(lease.epoch);
+  });
+
+  test("an unfenced write may also state an epoch of its own choosing", () => {
+    // The CHECK constrains the shape of the value, never its truth: any
+    // positive integer is accepted, including one no lease ever allocated.
+    // `fencedUpdate` is what makes the stamp mean something, and it renders
+    // the epoch as `:fence_epoch` from the token the same statement validated
+    // -- a caller cannot mint one (asserted above), but raw SQL is not a
+    // caller.
+    const cp = cpFixture();
+    addRun(cp);
+    cp.prepare("UPDATE run SET writer_epoch = 99 WHERE run_id = ?").run(RUN_ID);
+    expect(readRun(cp, RUN_ID)?.writerEpoch).toBe(99);
+    expect(
+      cp.prepare<[], number>("SELECT COUNT(*) FROM lease").pluck().get(),
+      "no lease exists at all, let alone one at epoch 99",
+    ).toBe(0);
   });
 });
 
@@ -739,6 +793,44 @@ describe("readRun", () => {
 // --------------------------------------------------------------------------
 // helpers
 // --------------------------------------------------------------------------
+
+/**
+ * The files under `src/` with a **string literal** matching `pattern`.
+ *
+ * Literals rather than raw text, because SQL reaches SQLite through a literal
+ * and never through a comment, and a scan over the bytes cannot tell the two
+ * apart -- it reports a docstring that *names* the statement it is warning
+ * about, which is how the module documenting this very limitation ends up
+ * accused of it. Template literals count: a statement assembled from one is
+ * still a statement.
+ */
+function sourceFilesWritingRun(pattern: RegExp): readonly string[] {
+  return filesWritingRun(sourceFiles(), pattern);
+}
+
+/** {@link sourceFilesWritingRun} over an arbitrary file list. */
+function filesWritingRun(paths: readonly string[], pattern: RegExp): readonly string[] {
+  return paths.filter((path) => {
+    const source = ts.createSourceFile(
+      path,
+      readFileSync(path, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    let found = false;
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) &&
+        pattern.test(node.text)
+      ) {
+        found = true;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return found;
+  });
+}
 
 /** Every `.ts` file shipped under `src/`, as absolute paths. */
 function sourceFiles(): readonly string[] {

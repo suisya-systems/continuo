@@ -48,8 +48,22 @@
 --  introduces the writer, burying the writer's review under a test migration.
 --  Until that question is answered, rule 1 -- one in-place writer for
 --  run.status -- is a convention plus a gate the writer opts into
---  (run_lifecycle.ts), and this column is what makes an opt-out visible
---  afterwards rather than invisible.
+--  (run_lifecycle.ts).
+--
+--  WHAT THE COLUMN DOES NOT DO, STATED SO IT IS NOT READ FOR MORE. It does not
+--  detect an out-of-module writer. UPDATE run SET status = ... that names no
+--  epoch leaves the previous stamp in place, so the row afterwards is
+--  indistinguishable from one the last legitimate holder wrote; and nothing
+--  stops such a write assigning any positive integer it likes. Only the
+--  deferred trigger can close that, which is why it is the trigger and not
+--  this column that would make rule 1 ENFORCED rather than observed.
+--
+--  What the column does do is make the property PROVABLE over the writes that
+--  did come through the gate: each of those records the lease that made it, so
+--  lease.ts's write_history()/applied_epoch_regressions() have something to
+--  read the single-writer property out of, and the deferred trigger has a
+--  column to fence on when it arrives. Without it, even a build in which every
+--  writer behaved would be unable to demonstrate that afterwards.
 -- ==========================================================================
 
 -- The token this row's status was last written under, as lease.epoch. Assigned

@@ -14,7 +14,7 @@ asserts the transcription agrees at every position.
 The corpus is **reconstructible, not committed**: it is every cumulative
 line-prefix of the shipped migration files, plus the adversarial cases in
 ``parity/oracle/complete-statement-corpus.json``. Committing 75 MB of prefixes to
-assert 2,271 booleans would be absurd, and rebuilding them from the files that
+assert 2,285 booleans would be absurd, and rebuilding them from the files that
 are already committed is exact.
 
 Not run in CI -- it needs no interlock checkout, but it does need Python. Run it

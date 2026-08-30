@@ -72,9 +72,15 @@ import { pythonList, pythonRepr } from "./python_repr.js";
  *   and says why (it would fail every existing test that advances a run
  *   without holding one). So rule 1 is, at this step, a convention plus a gate
  *   this module opts into; nothing stops a writer that does not come through
- *   here. That is stated rather than glossed, so the guarantee is not read as
- *   stronger than it is -- and the `writer_epoch` stamp is what makes such a
- *   writer visible after the fact rather than invisible.
+ *   here. **Nor does the `writer_epoch` stamp detect one**: an unfenced
+ *   `UPDATE run SET status = ...` leaves the previous stamp in place, so the
+ *   row afterwards is indistinguishable from one the last legitimate holder
+ *   wrote. What the stamp buys is that the writes which *did* come through
+ *   here each record the lease that made them, which is what makes the
+ *   single-writer property provable over them rather than merely asserted --
+ *   and what gives the deferred trigger a column to fence on. All of this is
+ *   stated rather than glossed, so the guarantee is not read as stronger than
+ *   it is.
  */
 
 // --------------------------------------------------------------------------
