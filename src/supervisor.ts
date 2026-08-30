@@ -796,6 +796,22 @@ export class SessionOrchestrator {
     }
 
     const known = await this.#provider.readState(sessionId);
+    if (known instanceof Failure && known.kind === FailureKind.IDENTITY_INCIDENT) {
+      // The probe already has the answer, so the resume below is not merely
+      // pointless: it is the verb that would bury the incident under a new
+      // generation. The C2 provider persists incidents and would refuse the
+      // resume too, but S1 does not require that of a provider -- one that
+      // reports the mismatch without recording it would have had this walk
+      // resume, poll a healthy readout, and confirm a binding it had already
+      // been told was contradicted (D-0047).
+      await this.#refuseIdentityConfirmation(lease, sessionId, {
+        moment: "identity-incident-probe",
+        lastAnswer: known,
+        why:
+          `the provider's record of session ${JSON.stringify(sessionId)} contradicts the ` +
+          `identity this run committed for it: ${known.detail}`,
+      });
+    }
     if (known instanceof Failure && known.kind === FailureKind.UNKNOWN_SESSION) {
       // The provider commits its own durable record before it creates a
       // process, so "unknown session" means the spawn never happened -- the

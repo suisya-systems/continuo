@@ -768,6 +768,28 @@ describe("an identity incident refuses the same way whoever detects it (target-o
     expect(activeRows(cp)).toEqual([[sessionId, "spawned", "unobserved"]]);
   });
 
+  test("resume: the probe's own incident is refused before the verb runs", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    const sessionId = spawnedBinding(cp, clock, provider, uuids);
+    // The third detection point, and the one that only a provider which does
+    // not *persist* its incidents can reach: `recover` probes `readState`
+    // before it resumes, and that probe can be the first thing to see the
+    // mismatch. S1 does not require a provider to record it, so the resume
+    // must not run on the strength of the walk having asked too early --
+    // resuming here is what buries the incident under a new generation.
+    provider.onReadState = (id, call) => (call === 0 ? identityIncident(id) : undefined);
+
+    const refusal = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-2").recover(),
+      IdentityUnconfirmed,
+    );
+
+    expect(provider.resumeCalls, "the resume ran past a known incident").toEqual([]);
+    expect((refusal.lastAnswer as Failure).kind).toBe(FailureKind.IDENTITY_INCIDENT);
+    expect(gateMoments(cp)).toContain("identity-incident-probe");
+    expect(activeRows(cp)).toEqual([[sessionId, "spawned", "unobserved"]]);
+  });
+
   test("a start that genuinely failed to start is still ProviderStartFailed", async () => {
     const { cp, clock, provider, uuids, workspace } = harness();
     // The regression guard the unification must not break: only the identity

@@ -8676,11 +8676,15 @@ Matching the `detail` prose instead would promote a message to an internal proto
    than hard-coding one. Sites that are **not** incidents keep `UNINTERPRETABLE_RESPONSE`, including
    the two "finished without any event naming a session identity" branches -- those are *never read
    back*, not *positively contradicted*.
-2. **One refusal class, both verbs.** `#unwrap` raises `IdentityUnconfirmed` for
-   `IDENTITY_INCIDENT` and `ProviderStartFailed` for everything else, so a start that genuinely
-   failed to start is unchanged. `#awaitIdentity` treats an incident as terminal instead of polling
-   a decided outcome to exhaustion. `start` and `resume` share `#spawn`, so both are covered; fixing
-   only `start` would have left the same nondeterminism one verb over.
+2. **One refusal class, everywhere the orchestrator can learn the fact.** `#unwrap` raises
+   `IdentityUnconfirmed` for `IDENTITY_INCIDENT` and `ProviderStartFailed` for everything else, so a
+   start that genuinely failed to start is unchanged. `#awaitIdentity` treats an incident as
+   terminal instead of polling a decided outcome to exhaustion. `recover()`'s pre-resume probe
+   refuses one too: the C2 provider persists incidents and would refuse the resume as well, but S1
+   does not require that of a provider, and a walk that resumed on the strength of having asked too
+   early would bury the incident under a new generation. `start` and `resume` share `#spawn`, so
+   both verbs are covered; fixing only `start` would have left the same nondeterminism one verb
+   over.
 3. **One helper, and it goes through the fence.** Both roads run through
    `#refuseIdentityConfirmation`, which calls `#validateAfterSpawn` **before** it raises. The
    stale-writer precedence is therefore preserved exactly: a claimant that lost its lease while the
@@ -8714,9 +8718,9 @@ other target-only case needed no change: it was written to state a relative orde
 whole list, deliberately, "so a seventh member must expand the axis, not fail this case" -- the
 repository had already decided that adding a member is a thing that may happen.
 
-Seven target-only cases land with it, and they are the point of the change rather than its
-paperwork: six in `test/gate_item2/orchestrator-walk.test.ts` force one detection point each across
-both verbs (and pin the `ProviderStartFailed` guard and the stale-writer precedence), and one in
+Eight target-only cases land with it, and they are the point of the change rather than its
+paperwork: seven in `test/gate_item2/orchestrator-walk.test.ts` force one detection point each
+across both verbs (and pin the `ProviderStartFailed` guard and the stale-writer precedence), and one in
 `test/gate_item2/mediated-real-provider.test.ts` takes the resume half over the real provider with
 the race *removed* -- the incident is already persisted, so there is no child left to lose a race
 to. Both mutations were measured: disabling `#unwrap`'s branch reddens the two verb-detected cases,
