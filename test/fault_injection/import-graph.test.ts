@@ -21,9 +21,9 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { describe, expect, test } from "vitest";
-
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import { installSuiteBudget, manifest, profile } from "./policy.js";
 
 const BUDGET_PROFILE = profile(manifest());
@@ -98,12 +98,7 @@ function harnessModules(): string[] {
  */
 function importedSpecifiers(file: string): string[] {
   const path = join(HARNESS_ROOT, file);
-  const source = ts.createSourceFile(
-    path,
-    readFileSync(path, "utf8"),
-    ts.ScriptTarget.ES2023,
-    true,
-  );
+  const source = parseSourceFile(path, readFileSync(path, "utf8"));
   const specifiers: string[] = [];
   const visit = (node: ts.Node): void => {
     if (
@@ -120,9 +115,9 @@ function importedSpecifiers(file: string): string[] {
         specifiers.push(first.text);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
-  ts.forEachChild(source, visit);
+  source.forEachChild(visit);
   return specifiers;
 }
 
@@ -190,20 +185,15 @@ describe("the import seam", () => {
     // property name, so a type annotation counts and a string does not.
     for (const name of ["contract.ts", "controller.ts", "manifest.ts"]) {
       const path = join(HARNESS_ROOT, name);
-      const source = ts.createSourceFile(
-        path,
-        readFileSync(path, "utf8"),
-        ts.ScriptTarget.ES2023,
-        true,
-      );
+      const source = parseSourceFile(path, readFileSync(path, "utf8"));
       const identifiers = new Set<string>();
       const visit = (node: ts.Node): void => {
         if (ts.isIdentifier(node)) {
           identifiers.add(node.text);
         }
-        ts.forEachChild(node, visit);
+        node.forEachChild(visit);
       };
-      ts.forEachChild(source, visit);
+      source.forEachChild(visit);
       for (const spike of ["Outbox", "KeyedDropbox", "ProtectedWrite", "FencedStatement"]) {
         expect(identifiers.has(spike), `${name} names ${spike}`).toBe(false);
       }

@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { describe, expect, test } from "vitest";
-
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import { importedModules } from "../testkit/ast.js";
 import { caseRoot } from "../testkit/cases.js";
 import { parametrize } from "../testkit/parametrize.js";
@@ -102,7 +102,7 @@ function moduleFiles(root: string): readonly string[] {
 /** `(relative name, parsed source)` for one file. */
 function parseFile(root: string, name: string): ts.SourceFile {
   const path = join(root, name);
-  return ts.createSourceFile(name, readFileSync(path, "utf-8"), ts.ScriptTarget.Latest, true);
+  return parseSourceFile(name, readFileSync(path, "utf-8"));
 }
 
 /**
@@ -133,7 +133,7 @@ function dynamicImportPrimitives(source: ts.SourceFile): readonly string[] {
       // from a call this scan would recognise.
       offenders.add(node.text);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   return [...offenders].sort();
@@ -294,12 +294,7 @@ describe("item 6's static assertion: the delivery layer has no session edge", ()
         "}\n",
       "utf-8",
     );
-    const parsed = ts.createSourceFile(
-      "probe.ts",
-      readFileSync(probe, "utf-8"),
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const parsed = parseSourceFile("probe.ts", readFileSync(probe, "utf-8"));
 
     const seen = importedModules(parsed, probe);
     expect(

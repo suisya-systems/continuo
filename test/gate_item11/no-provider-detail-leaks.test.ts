@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import type * as ts from "typescript/unstable/ast";
 import { expect, test } from "vitest";
-
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import { SessionProvider } from "../../src/session/provider.js";
 import { importedModules } from "../testkit/ast.js";
 import { parametrize } from "../testkit/parametrize.js";
@@ -134,7 +134,7 @@ function moduleFiles(root: string, nonModuleFiles: readonly string[]): readonly 
 
 function parseFile(root: string, name: string): ts.SourceFile {
   const path = join(root, name);
-  return ts.createSourceFile(name, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
+  return parseSourceFile(name, readFileSync(path, "utf8"));
 }
 
 /**

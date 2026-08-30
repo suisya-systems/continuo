@@ -36,7 +36,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 
 /**
  * `import.meta.glob` is Vite's, and it is replaced at transform time, so it has
@@ -86,7 +87,7 @@ export function packageFiles(): readonly string[] {
 export function moduleSources(): readonly (readonly [string, ts.SourceFile])[] {
   return packageFiles().map((entry) => {
     const text = readFileSync(join(PACKAGE_DIR, entry), "utf8");
-    return [entry.slice(0, -3), ts.createSourceFile(entry, text, ts.ScriptTarget.Latest, true)];
+    return [entry.slice(0, -3), parseSourceFile(entry, text)];
   });
 }
 
@@ -211,7 +212,11 @@ function boundNames(name: ts.BindingName): readonly string[] {
   }
   const found: string[] = [];
   for (const element of name.elements) {
-    if (ts.isOmittedExpression(element)) {
+    // A hole in an array pattern (`const [, b] = xs`) binds nothing, and in
+    // TypeScript 7 so does a `BindingElement` whose `name` the parser never
+    // reached -- the field is optional there, where TypeScript 5 declared it
+    // present and let a syntax error surface as `undefined` at run time.
+    if (ts.isOmittedExpression(element) || element.name === undefined) {
       continue;
     }
     found.push(...boundNames(element.name));
@@ -221,7 +226,11 @@ function boundNames(name: ts.BindingName): readonly string[] {
 
 function importedBindings(statement: ts.ImportDeclaration): ModuleBinding[] {
   const clause = statement.importClause;
-  if (clause === undefined || clause.isTypeOnly) {
+  // `import type { X } from "m"` is erased at emit and binds nothing at run
+  // time. TypeScript 7 replaces the clause's `isTypeOnly` flag with
+  // `phaseModifier`, which also carries `defer` -- and `import defer` is a real
+  // runtime import, so only the `type` phase is the one to skip.
+  if (clause === undefined || clause.phaseModifier === ts.SyntaxKind.TypeKeyword) {
     return [];
   }
   if (!ts.isStringLiteral(statement.moduleSpecifier)) {
@@ -398,7 +407,7 @@ class Sources {
       if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === "sql") {
         fields.push(node.initializer);
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(source);
     // Resolved in a second pass: a field bound to a constant declared further
@@ -469,7 +478,7 @@ class Sources {
     key: ts.Expression | undefined,
     depth: number,
   ): string | null {
-    if (key === undefined || !ts.isIdentifier(container) || !ts.isStringLiteralLike(key)) {
+    if (key === undefined || !ts.isIdentifier(container) || !ts.isStringLiteralLikeNode(key)) {
       return null;
     }
     const entry = this.mappings.get(container.text)?.get(key.text);
@@ -631,7 +640,7 @@ function mappingEntries(node: ts.Expression): Map<string, ts.Expression> | null 
   const entries = new Map<string, ts.Expression>();
   if (ts.isObjectLiteralExpression(literal)) {
     for (const property of literal.properties) {
-      if (ts.isPropertyAssignment(property) && ts.isStringLiteralLike(property.name)) {
+      if (ts.isPropertyAssignment(property) && ts.isStringLiteralLikeNode(property.name)) {
         entries.set(property.name.text, property.initializer);
       }
     }
@@ -643,7 +652,7 @@ function mappingEntries(node: ts.Expression): Map<string, ts.Expression> | null 
         continue;
       }
       const [key, value] = element.elements;
-      if (key !== undefined && value !== undefined && ts.isStringLiteralLike(key)) {
+      if (key !== undefined && value !== undefined && ts.isStringLiteralLikeNode(key)) {
         entries.set(key.text, value);
       }
     }
@@ -674,12 +683,12 @@ function enclosingFunctions(source: ts.SourceFile): Map<ts.Node, string> {
         if (!enclosing.has(child)) {
           enclosing.set(child, name);
         }
-        ts.forEachChild(child, (grandchild) => {
+        child.forEachChild((grandchild) => {
           descendants.push(grandchild);
         });
       }
     }
-    ts.forEachChild(node, (child) => {
+    node.forEachChild((child) => {
       queue.push(child);
     });
   }
@@ -699,7 +708,7 @@ function functionName(node: ts.Node): string | null {
   if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) {
     return node.name !== undefined && ts.isIdentifier(node.name) ? node.name.text : null;
   }
-  if (ts.isGetAccessor(node) || ts.isSetAccessor(node)) {
+  if (ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
     return ts.isIdentifier(node.name) ? node.name.text : null;
   }
   if (ts.isConstructorDeclaration(node)) {
@@ -798,7 +807,7 @@ function unwrap(node: ts.Expression): ts.Expression {
       ts.isAsExpression(current) ||
       ts.isSatisfiesExpression(current) ||
       ts.isNonNullExpression(current) ||
-      ts.isTypeAssertionExpression(current)
+      ts.isTypeAssertion(current)
     ) {
       current = current.expression;
       continue;
@@ -855,7 +864,7 @@ export function statementsExecuted(): readonly ExecutedStatement[] {
     const enclosing = enclosingFunctions(source);
 
     const visit = (node: ts.Node): void => {
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
       if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) {
         return;
       }
@@ -952,7 +961,7 @@ export function comparisonOperands(): readonly ComparisonOperand[] {
           }
         }
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(source);
   }

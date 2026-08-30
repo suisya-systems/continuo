@@ -42,6 +42,14 @@ export default defineConfig({
   test: {
     include: ["test/control_plane/**/*.test.ts"],
     environment: "node",
+
+    // The one thing this config does borrow from the main one. Its `include`
+    // covers `run-lifecycle.test.ts`, whose static assertions parse every
+    // module under `src/`, and a standalone config inherits no `setupFiles` --
+    // so without this line the nested run is the one place in the tree that
+    // opens the compiler and never closes it. It adds no test and changes no
+    // outcome, so it does not touch what this run measures.
+    setupFiles: ["test/helpers/parser-lifecycle.ts"],
     passWithNoTests: false,
     retry: 0,
     globals: false,

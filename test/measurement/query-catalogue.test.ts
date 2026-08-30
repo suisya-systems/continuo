@@ -57,7 +57,7 @@
  */
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -429,7 +429,7 @@ function* statementArguments(moduleName: string): Generator<[number, ts.Expressi
   const nodes: ts.Node[] = [source];
   while (nodes.length > 0) {
     const node = nodes.pop() as ts.Node;
-    ts.forEachChild(node, (child) => {
+    node.forEachChild((child) => {
       nodes.push(child);
     });
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) {
@@ -520,7 +520,7 @@ function catalogueEntryExpressions(moduleName: string): ReadonlyMap<string, ts.E
         }
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   return found;

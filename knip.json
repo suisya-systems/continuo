@@ -6,6 +6,7 @@
     "scripts/*.mjs",
     "test/**/*.test.ts",
     "vitest.config.ts",
+    "test/helpers/parser-lifecycle.ts",
     "test/gate_item11/support/suite-runs-unchanged.config.ts",
     "test/gate_item11/support/provider-plugin.ts"
   ],

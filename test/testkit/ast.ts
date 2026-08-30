@@ -1,5 +1,5 @@
 import { dirname, resolve } from "node:path";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 
 /**
  * Every module `source` imports, with relative specifiers resolved to a path.
@@ -30,7 +30,7 @@ export function importedModules(source: ts.SourceFile, filePath: string): Readon
   const here = dirname(filePath);
 
   const add = (specifier: ts.Expression | undefined): void => {
-    if (specifier === undefined || !ts.isStringLiteralLike(specifier)) {
+    if (specifier === undefined || !ts.isStringLiteralLikeNode(specifier)) {
       return;
     }
     const text = specifier.text;
@@ -54,7 +54,7 @@ export function importedModules(source: ts.SourceFile, filePath: string): Readon
         add(node.arguments[0]);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(source);

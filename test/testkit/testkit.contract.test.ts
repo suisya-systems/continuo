@@ -1,10 +1,9 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import process from "node:process";
-import * as ts from "typescript";
 
 import { afterAll, describe, expect, test } from "vitest";
-
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import { importedModules } from "./ast.js";
 import { caseRoot, databasePath, sidecars, suiteRoot, suiteTemplate, writeStep } from "./cases.js";
 import { chdirForTest } from "./cwd.js";
@@ -501,7 +500,7 @@ writeFileSync(
   "utf-8",
 );
 const astSeen = importedModules(
-  ts.createSourceFile("probe.ts", readFileSync(astProbe, "utf-8"), ts.ScriptTarget.Latest, true),
+  parseSourceFile("probe.ts", readFileSync(astProbe, "utf-8")),
   astProbe,
 );
 
