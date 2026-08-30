@@ -45,8 +45,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Database as SqliteDatabase } from "better-sqlite3";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { describe, expect, onTestFinished, test } from "vitest";
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import { TERMINAL_RUN_STATUSES as GATES_TERMINAL_RUN_STATUSES } from "../../src/control_plane/gates.js";
 import {
   eq,
@@ -811,21 +812,16 @@ function sourceFilesWritingRun(pattern: RegExp): readonly string[] {
 /** {@link sourceFilesWritingRun} over an arbitrary file list. */
 function filesWritingRun(paths: readonly string[], pattern: RegExp): readonly string[] {
   return paths.filter((path) => {
-    const source = ts.createSourceFile(
-      path,
-      readFileSync(path, "utf8"),
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const source = parseSourceFile(path, readFileSync(path, "utf8"));
     let found = false;
     const visit = (node: ts.Node): void => {
       if (
-        (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) &&
+        (ts.isStringLiteralLikeNode(node) || ts.isTemplateLiteralToken(node)) &&
         pattern.test(node.text)
       ) {
         found = true;
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(source);
     return found;

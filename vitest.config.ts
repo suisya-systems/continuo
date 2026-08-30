@@ -62,6 +62,12 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     environment: "node",
 
+    // Runs in every worker, before the test file it is setting up. Its only
+    // job is to shut down the TypeScript parser's compiler child process at
+    // the end of the file; see test/helpers/parser-lifecycle.ts for why that
+    // cannot be left to the files that parse.
+    setupFiles: ["test/helpers/parser-lifecycle.ts"],
+
     // Fail closed on an empty selection: a glob that stops matching must not
     // read as "everything passed".
     passWithNoTests: false,

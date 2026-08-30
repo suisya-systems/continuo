@@ -39,9 +39,9 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import type * as ts from "typescript/unstable/ast";
 import { describe, expect, test } from "vitest";
-
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import { REHEARSAL_MARKING } from "../../src/canary/marking.js";
 import { importedModules } from "../testkit/ast.js";
 import { caseRoot } from "../testkit/cases.js";
@@ -116,7 +116,7 @@ function canaryModules(): readonly (readonly [string, ts.SourceFile])[] {
     .filter((entry) => entry.endsWith(".ts"))
     .map((entry) => {
       const text = readFileSync(join(PACKAGE_DIR, entry), "utf-8");
-      return [entry, ts.createSourceFile(entry, text, ts.ScriptTarget.Latest, true)] as const;
+      return [entry, parseSourceFile(entry, text)] as const;
     });
 }
 
@@ -178,10 +178,7 @@ describe("structural assertions: independence and labelling", () => {
       "utf-8",
     );
 
-    const seen = importedModules(
-      ts.createSourceFile("probe.ts", readFileSync(probe, "utf-8"), ts.ScriptTarget.Latest, true),
-      probe,
-    );
+    const seen = importedModules(parseSourceFile("probe.ts", readFileSync(probe, "utf-8")), probe);
 
     expect(
       seen.has(resolve(probeDir, "../dispatcher/index.js")),

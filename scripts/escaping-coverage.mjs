@@ -71,7 +71,8 @@ import { cpSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "n
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { disposeParser, parseSourceFile } from "./lib/ts-ast.mjs";
 
 const MODULES = [
   "ac9",
@@ -110,13 +111,7 @@ const MODULES = [
  * function.
  */
 function callSites(source, fileName) {
-  const parsed = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const parsed = parseSourceFile(fileName, source);
   const sites = [];
 
   const visit = (node) => {
@@ -144,7 +139,7 @@ function callSites(source, fileName) {
         });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(parsed);
@@ -161,7 +156,19 @@ function main() {
   const modules = wanted.length > 0 ? wanted : MODULES;
 
   const scratch = mkdtempSync(join(tmpdir(), "continuo-escaping-"));
-  for (const entry of ["src", "test", "package.json", "tsconfig.json", "vitest.config.ts"]) {
+  // `scripts` is in the list because `vitest.config.ts` names
+  // `test/helpers/parser-lifecycle.ts`, which imports `scripts/lib/ts-ast.mjs`.
+  // A scratch tree without it fails to load the setup file, every run comes
+  // back red, and the unmutated-green check below then refuses to measure --
+  // which is the honest failure, but only because that check exists.
+  for (const entry of [
+    "src",
+    "test",
+    "scripts",
+    "package.json",
+    "tsconfig.json",
+    "vitest.config.ts",
+  ]) {
     cpSync(entry, join(scratch, entry), { recursive: true });
   }
   // "junction" rather than a plain directory symlink: on Windows, creating a
@@ -241,4 +248,11 @@ function main() {
   process.stdout.write(`scratch tree left at ${scratch}\n`);
 }
 
-main();
+// The parser holds a compiler child process and the last snapshot's program.
+// This hands both back before the script returns, whether or not it got that
+// far without throwing.
+try {
+  main();
+} finally {
+  disposeParser();
+}

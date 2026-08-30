@@ -36,8 +36,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 
-import ts from "typescript";
-
+import * as ts from "typescript/unstable/ast";
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import * as contract from "./contract.js";
 import {
   ArmedAnchor,
@@ -428,11 +428,9 @@ function dotted(node: ts.Node): string {
  * is scanned.
  */
 export function checkNoHostClock(adapter: FullFaultAdapter): void {
-  const source = ts.createSourceFile(
+  const source = parseSourceFile(
     adapter.driverSourcePath,
     readFileSync(adapter.driverSourcePath, "utf8"),
-    ts.ScriptTarget.ES2023,
-    true,
   );
 
   const offenders = new Set<string>();
@@ -452,9 +450,9 @@ export function checkNoHostClock(adapter: FullFaultAdapter): void {
         offenders.add(`new ${name}()`);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
-  ts.forEachChild(source, visit);
+  source.forEachChild(visit);
 
   if (offenders.size > 0) {
     throw new ContractViolation(

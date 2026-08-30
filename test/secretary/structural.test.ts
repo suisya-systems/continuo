@@ -50,9 +50,9 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { describe, expect, test } from "vitest";
-
+import { parseSourceFile } from "../../scripts/lib/ts-ast.mjs";
 import { importedModules } from "../testkit/ast.js";
 import { caseRoot } from "../testkit/cases.js";
 
@@ -219,7 +219,7 @@ function secretaryModules(): readonly (readonly [string, ts.SourceFile])[] {
     .filter((entry) => entry.endsWith(".ts"))
     .map((entry) => {
       const text = readFileSync(join(PACKAGE_DIR, entry), "utf-8");
-      return [entry, ts.createSourceFile(entry, text, ts.ScriptTarget.Latest, true)] as const;
+      return [entry, parseSourceFile(entry, text)] as const;
     });
 }
 
@@ -242,7 +242,7 @@ function calledNames(source: ts.SourceFile): ReadonlySet<string> {
       // source records the module's last dotted segment for `import x as y`.
       aliases.set(node.name.text, node.name.text);
     }
-    ts.forEachChild(node, collectAliases);
+    node.forEachChild(collectAliases);
   };
   collectAliases(source);
 
@@ -255,7 +255,7 @@ function calledNames(source: ts.SourceFile): ReadonlySet<string> {
       } else if (ts.isElementAccessExpression(fn)) {
         // `obj["readFileSync"](...)` is the same call written to dodge a scan
         // that only reads dotted names.
-        if (ts.isStringLiteralLike(fn.argumentExpression)) {
+        if (ts.isStringLiteralLikeNode(fn.argumentExpression)) {
           names.add(fn.argumentExpression.text);
         }
       } else if (ts.isIdentifier(fn)) {
@@ -263,7 +263,7 @@ function calledNames(source: ts.SourceFile): ReadonlySet<string> {
         names.add(aliases.get(fn.text) ?? fn.text);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   return names;
@@ -276,7 +276,7 @@ function referencedIdentifiers(source: ts.SourceFile): ReadonlySet<string> {
     if (ts.isIdentifier(node)) {
       names.add(node.text);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   return names;
@@ -300,7 +300,7 @@ function exportedNames(source: ts.SourceFile): ReadonlySet<string> {
       // exists to refuse.
       names.add("* (star re-export)");
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   return names;
@@ -311,6 +311,21 @@ function readable(module: string): string {
   return module.startsWith(REPO_ROOT)
     ? module.slice(REPO_ROOT.length).split(sep).join("/")
     : module;
+}
+
+/**
+ * Whether `node` carries the `async` modifier.
+ *
+ * The port of `ts.canHaveModifiers(node) && ts.getModifiers(node)?.some(...)`,
+ * both of which TypeScript 7 removes. A node that can have modifiers now
+ * carries the precomputed `modifierFlags` itself and a node that cannot has no
+ * such field at all, so the presence check is exactly what `canHaveModifiers`
+ * used to answer -- and `ModifierFlags.Async` is the answer the `.some(...)`
+ * scan over the modifier list was reaching for.
+ */
+function isAsync(node: ts.Node): boolean {
+  const flags = (node as { readonly modifierFlags?: ts.ModifierFlags }).modifierFlags;
+  return flags !== undefined && (flags & ts.ModifierFlags.Async) !== 0;
 }
 
 describe("structural assertions: the intake cannot block", () => {
@@ -374,15 +389,12 @@ describe("structural assertions: the intake cannot block", () => {
           suspensions.push("await");
         } else if (ts.isForOfStatement(node) && node.awaitModifier !== undefined) {
           suspensions.push("for await");
-        } else if (
-          ts.canHaveModifiers(node) &&
-          ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) === true
-        ) {
+        } else if (isAsync(node)) {
           suspensions.push("async");
         } else if (ts.isYieldExpression(node)) {
           suspensions.push("yield");
         }
-        ts.forEachChild(node, visit);
+        node.forEachChild(visit);
       };
       visit(source);
       expect(
@@ -417,7 +429,7 @@ describe("structural assertions: the intake cannot block", () => {
       ) {
         submitReturn = node.type === undefined ? "(none)" : node.type.getText(intake[1]);
       }
-      ts.forEachChild(node, findSubmit);
+      node.forEachChild(findSubmit);
     };
     findSubmit(intake[1]);
     expect(
@@ -465,12 +477,7 @@ describe("structural assertions: the intake cannot block", () => {
         "}\n",
       "utf-8",
     );
-    const parsed = ts.createSourceFile(
-      "probe.ts",
-      readFileSync(probe, "utf-8"),
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const parsed = parseSourceFile("probe.ts", readFileSync(probe, "utf-8"));
 
     const seen = importedModules(parsed, probe);
     expect(
