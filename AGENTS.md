@@ -73,17 +73,22 @@ empty [...]).
 ```bash
 npm ci --ignore-scripts   # --ignore-scripts is load-bearing, not hardening (D-0009)
 npm run verify            # lint, knip, typecheck, smoke:native, test, parity, inventory
+npm run check:package     # build, then publint and attw -- NOT part of verify, and gating
 ```
 
-`npm run verify` is the local equivalent of the merge gate. The mapping to
+`npm run verify` is most of the merge gate, and it is not all of it: it runs the suite **once**, on
+your platform only, and it does not run `publint` or `attw`. The mapping to
 [`.github/workflows/tests.yml`](./.github/workflows/tests.yml):
 
 | local | CI job |
 |---|---|
-| `npm test` (twice, two seeds) | `double-green` (ubuntu + windows × node 22 + 24) |
+| `npm test`, twice at two `CONTINUO_TEST_SEED` values | `double-green` (ubuntu + windows × node 22 + 24) |
 | `npm run lint` | `lint` |
-| `npm run knip` / `publint` / `attw` | `package` |
+| `npm run knip` (in `verify`), `npm run check:package` | `package` |
 | `npm run parity`, `npm run inventory` | `parity` |
+
+So green locally is weaker evidence than green in CI in three specific ways: one order instead of
+two, one platform instead of four cells, and no packaging check unless you ran `check:package`.
 
 **`ci-gate` is the only required check.** It aggregates the four jobs, runs with `always()` because
 GitHub reports a *skipped* required check as success, and allow-lists `success` only (`D-0005`,
