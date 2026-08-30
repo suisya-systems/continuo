@@ -147,9 +147,21 @@ Issues carry up to three headings, and they mean specific things:
 - **`## Implementation constraints`** — what you may *not* do, usually because a mechanical shortcut
   would produce a wrong-but-green result.
 - **`## Open decisions`** — **do not start this issue.** A judgment is unmade and it is not the
-  implementer's to make; the section names who decides, what, and why it cannot be inferred. The
-  label `needs-decision` marks the same thing: *"Has unresolved Open decisions; do not start -- the
-  decision is not the implementer's to make."* `ready-to-start` marks the opposite.
+  implementer's to make; the section names who decides, what, and why it cannot be inferred.
+
+Three labels say the same thing at a glance, and their descriptions are the definition:
+
+| label | description, verbatim | pick it up? |
+|---|---|---|
+| `ready-to-start` | Acceptance criteria are settled and nothing is waiting on a decision; safe to pick up | yes |
+| `needs-decision` | Has unresolved Open decisions; do not start -- the decision is not the implementer's to make | no |
+| `design-first` | Actionable, but the next step is a design decided here -- not work for an outside contributor | no |
+
+`design-first` is the one that is easy to misread as available. Nothing is blocking it and the
+`## Open decisions` heading may be gone, but what remains to be produced is a *design* this
+repository takes — so an outside implementer picking it up would be inventing the design instead of
+implementing one. `size:S` / `size:M` / `size:L` are effort estimates only and say nothing about
+whether an issue is yours to start.
 
 ## 6. Scope
 
