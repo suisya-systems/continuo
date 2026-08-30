@@ -114,8 +114,8 @@ byte continuo writes to stdout or stderr is ASCII** (`D-0006`,
 fails on any non-ASCII codepoint anywhere in `src/`, `scripts/` or `test/`, on every platform, so
 one em dash in a comment turns the suite red. The crash it guards against — a cp932
 `UnicodeEncodeError` on `--help` — is invisible to any test suite and appears only on a real Windows
-console, which is why the rule is enforced on the source text rather than on what gets printed. And **Node must be 22.14+ or 24**
-(`D-0003`); prose files are exempt from the ASCII rule, source files are not.
+console, which is why the rule is enforced on the source text rather than on what gets printed.
+Prose files are exempt; source files are not. And **Node must be 22.14+ or 24** (`D-0003`).
 
 ## 4. Files that are records, not code
 
@@ -155,9 +155,9 @@ Issues carry up to three headings, and they mean specific things:
 
 **One issue, one PR.** `#80`'s acceptance criteria put it as "submitted as its own PR/change at the
 human gate [...] not folded into unrelated belt work", citing `D-0036`, which requires the pass it
-governs to be "proposed as its own change, at the human gate". If you find work the issue does not cover — even
-obviously correct work — **do not widen the change**. Write what you found in the issue (or a new
-one) and stop at the issue's boundary. Deliberate omissions belong in the PR body (§7).
+governs to be "proposed as its own change, at the human gate". If you find work the issue does not
+cover — even obviously correct work — **do not widen the change**. Write what you found in the
+issue (or a new one) and stop at the issue's boundary. Deliberate omissions belong in the PR body (§7).
 
 ## 7. PRs: review and merge happen here
 
@@ -177,6 +177,7 @@ failure mode this section exists to prevent.
 ## 8. Language
 
 **Issues, PR titles and bodies, and commit messages are English** — as is every one of them in the
-current history, and the source tree's comments and prose with them. The merged commit title is the PR title (squash merge, with `(#NN)`
-appended). Some commits carry a `type(continuo):` prefix and many do not — it is not enforced, so
-match the imperative-summary style of `git log` rather than a convention it does not have.
+current history, and the source tree's comments and prose with them. The merged commit title is the
+PR title (squash merge, with `(#NN)` appended). Some commits carry a `type(continuo):` prefix and
+many do not — it is not enforced, so match the imperative-summary style of `git log` rather than a
+convention it does not have.
