@@ -48,7 +48,7 @@ formatted is one the OPERATOR wrote.
 
 Both halves do the same three things:
 
-1. Migrate an **empty** database to head through their own migrator
+1. Migrate an **empty** database through the **shared migration history** with their own migrator
    (`create_production_control_plane` / `createProductionControlPlane`), in a fresh temporary
    directory, with the clock pinned to `NOW_MS = 1700000000000`.
 2. Read the resulting database back out as a normalised JSON document (section 3).
@@ -59,10 +59,26 @@ TypeScript document and asserts equality -- field by field first, so a failure n
 diverged instead of printing a hundred-kilobyte object diff, and then over the whole object, so no
 field escapes by not having been listed.
 
+**The shared history ends at version 3** (`SHARED_HEAD_VERSION` in
+`test/oracle/control-plane-dump.ts`). Interlock is a frozen source, so that is the terminus of the
+shared half and not a high-water mark that moves: no step will ever be added below it. Migration
+steps above it are continuo's own, and there is no second implementation on the other side of one --
+so the comparison stops where the two migrators still have the same thing to build. The TypeScript
+half copies the shared steps byte for byte into a temporary directory and points its migrator at
+that, rather than the migrator gaining an "up to version N" mode: a build that can stop halfway
+through its own ledger is a build that can ship a database halfway migrated.
+
+**What this face does not claim.** A continuo-only migration is outside the comparison entirely. Its
+DDL, the rows it seeds, the column affinities it introduces and the pragmas in force while it runs
+are all unexamined here, and a defect introduced by one does not surface in this face. It says "the
+shared history builds the same database", never "the database is the same database". Those steps are
+covered by their own tests and by 2b, whose corpus is rebuilt from **every** shipped migration file
+including them.
+
 A second test asserts the vector is **not vacuous**: more than 50 schema objects, more than 10
-tables, exactly 3 `schema_migration` rows, and a non-empty `policy_revision`. A golden file that had
-been regenerated from a failed or empty run would otherwise let the comparison pass while comparing
-nothing.
+tables, one `schema_migration` row per shared step, a `user_version` at the shared terminus, and a
+non-empty `policy_revision`. A golden file that had been regenerated from a failed or empty run
+would otherwise let the comparison pass while comparing nothing.
 
 ### 2b. Statement completeness
 
