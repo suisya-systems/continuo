@@ -1,6 +1,6 @@
 # Testing continuo
 
-Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0001` (runner), `D-0005` (the CI rule).
+Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0001` (runner), `D-0005` (the CI rule), `D-0048` (the Windows split).
 
 ## Commands
 
@@ -66,13 +66,15 @@ On `windows-latest` the `double-green` cell fails roughly one run in five, and a
 those failures are timeouts or budget overruns rather than assertions (issue #83). The signature is
 starvation rather than a slow test: a job that trips a watchdog is already running slower than the
 *median green job* on the same cell, and `D-1003` named the mechanism -- several vitest workers on a
-small runner, each spawning child processes of its own.
+small runner, each spawning child processes of its own. The general form of that fix is `D-0048`;
+`D-1003`'s own skip stays where it is until a re-measurement says otherwise.
 
 So on Windows `npm test` runs the suite in two passes: everything that does not spawn children, in
 parallel as before, and then the files that do, one at a time. The set is listed in
 `scripts/run-suite.mjs`, which also records how it was measured and refuses to run when a test file
-names `child_process` without being classified -- two passes that between them skipped a file are
-not a green suite, and the script checks that they did not.
+reaches `child_process` -- in its own text or a helper's -- without being classified there. Two
+passes that between them skipped a file are not a green suite, and the script checks the two runs
+account for every file before it reports one.
 
 Nothing else moves: the seed and the double-green rule (`D-0005`) reach each pass unchanged, no time
 budget is touched (`D-0602`), and Linux still runs one pass exactly as it did.

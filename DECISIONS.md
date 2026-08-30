@@ -142,6 +142,7 @@ spaces distinct.
 | D-1001 | The gate_item11 belt takes `D-10xx`; `src/index.ts`'s dual re-export is an allowlisted exception, and `test_suite_runs_unchanged.py` is a declared follow-on | accepted |
 | D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
 | D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
+| D-0048 | Windows runs the child-process-spawning tests apart from the rest of the suite | accepted |
 
 ---
 
@@ -8824,3 +8825,108 @@ the defect being repaired. Both were observed red before they were kept.
 is the primary specification and carries the measurements above). Decision id allocated inside the
 fault-injection belt's band (`D-06xx`, `D-0601`), following `D-0603`: this amends `D-0602`'s
 implementation within the belt that owns it and takes no ruling outside it.
+
+---
+
+## D-0048 -- Windows runs the child-process-spawning tests apart from the rest of the suite
+
+**Context.** `double-green (windows-latest, node 24)` failed 17.7% of its executions over the seven
+days to 2026-08-30, and `windows-latest, node 22` 10.7%; the ubuntu cells failed 0.9%. Windows alone
+blocked 22.1% of all CI runs. Read from the Actions API over the workflow's whole life (195 runs,
+1580 job executions, 800 `double-green` cell executions, all attempts, `cancelled` excluded), the 35
+suite-step failures split 22 timeout-or-budget, 9 assertion-only, 2 both, 2 neither. The timeout
+class is the majority, and its signature is starvation rather than a slow test: those jobs have a
+p50 wall time of 808s against a p50 of 697s for *green* jobs on the same cell. 24 of the 40 Windows
+failures had the sibling Windows cell green, which is a machine-local signature, not a code one.
+
+**Diagnosis, and why it is D-1003's.** D-1003 already named the mechanism on one file: vitest workers
+running in parallel on a small runner, each spawning child processes of its own, produce enough
+concurrent demand to push an *unrelated* file past its own tuned budget. That decision skipped
+`suite-runs-unchanged.test.ts` as the instance in front of it and said so. The measurement above says
+the class did not stop there: by directory the 35 suite failures are `fault_injection` 21,
+`control_plane` 11, `measurement` 9, and six others, so the contention is general and the stopgap was
+scoped to one file.
+
+**Decision.** On Windows, `npm test` runs the suite in two passes rather than one:
+`scripts/run-suite.mjs` runs the files that do not spawn child processes in parallel exactly as
+before, then the files that do, one at a time. Everywhere else, and for any invocation given an
+argument, it is `vitest run` and nothing else.
+
+Three parts of that are load-bearing and are recorded here rather than left to the file:
+
+1. **The set is measured, not grepped.** `ChildProcess.prototype.spawn` was wrapped in a setup file
+   and the whole suite run, which attributes every asynchronous spawn to the file that caused it
+   (193 spawns over 89 files); the synchronous entry points take no shared object and cannot be
+   intercepted that way, so those came from their call sites under `test/`, including the ones
+   reached through a helper. The result is 18 files. A static closure was rejected as the selector:
+   followed through `src/` it classifies by what a module *could* do -- `src/control_plane/lease.ts`
+   names a spawn most of its callers never reach -- and covers a third of the suite. The closure is
+   kept only as a *guard*, stopping at `test/`'s edge, which is why three files appear in
+   `scripts/run-suite.mjs` as classified-not-spawning with a reason each.
+2. **The structural checks stay in the parallel pass.** The dozen sweeps that parse syntax trees
+   through `scripts/lib/ts-ast.mjs` do spawn a child -- the TypeScript 7 compiler is a separate
+   program -- but exactly one, long-lived, shut down per file by `test/helpers/parser-lifecycle.ts`.
+   Their subprocess demand is already bounded by the worker count, and serializing them would roughly
+   double the serial pass to relieve contention they do not create.
+3. **A split that is not the whole suite is a failure, not a green run.** The script refuses to run
+   when a listed file no longer exists or when a test file reaches `child_process` unclassified, and
+   after both passes it checks the two JSON reports account between them for every file the include
+   glob matches. Two green passes that skipped a file between them are the failure mode this shape
+   introduces, and it is checked rather than trusted.
+
+**What this does not change.** The double-green rule and its seed (D-0005) reach each pass exactly as
+they reached the single run, and CI still calls the entry point twice per cell with two distinct
+seeds. No time budget moves: D-0602's manifest is untouched, and `installSuiteBudget()`'s unscaled
+`suite_timeout_s` -- which accounts for about a quarter of Windows failures on its own -- was kept
+out of this diff as continuo#94 and landed separately as `D-0604` while this branch was open. `ci-gate` and the required check
+set are untouched. Linux runs what it ran before. D-1003's skip stays as it is: its own falsifier
+asks for a re-measurement, and this decision does not assume the answer.
+
+**Why not the alternatives.** Skipping the spawning tests on Windows (~28% of the suite, including
+the process-lifecycle behaviour the cell exists to check) gives up coverage that would have to be
+argued back. Raising the budgets is the move D-0029 and D-1003 both anti-recommend, and starvation
+under a full pool is not bounded by a larger number. Demoting the Windows cell from required also
+hides the assertion class and has no compensating control to hand. A larger runner (option E below)
+is the fallback, not the alternative, and is priced separately. Reducing the real per-test cost
+(a per-file SQLite template) is the change that would make all of this unnecessary, and it is blocked
+behind `test/testkit`'s own freeze.
+
+**The precondition, which is part of the decision.** Serialization buys contention relief with wall
+time, and this cell has the least of it to spend: p90 job wall time is 930s and the worst observed
+*green* job is 1864s against a 2400s `timeout-minutes` cap. Measured on Linux, whole suite minus the
+file D-1003 already skips on Windows: 58.6s unchanged, 112.4s with the spawning set at one worker
+(1.92x), 71.1s at two workers (1.21x). Those ratios are an upper bound rather than a prediction --
+part of what serialization removes on Windows is the contention that makes each file slow in the
+first place -- but 1.92x applied to the worst green job exceeds the cap, so the affordability of the
+one-worker setting is an open measurement, not an assumption. `CONTINUO_SPAWN_TEST_WORKERS` exists so
+that one worker and two can be compared on the Windows cell itself. **This decision is recorded as
+taken and must not be relied on before that comparison is run: if p90 Windows job wall time under
+serialization exceeds ~1500s, option B is not affordable at the current runner size and the answer
+becomes E (a larger runner), which is a decision for the human gate, not for this file.**
+
+**Falsifier.** Stated as continuo#83 states it, so that "CI is green now" is not what closes this:
+
+> **Primary criterion (a measurement, not a streak).** Re-run the sampling procedure on 30 green
+> Windows jobs after the change and compare the wall time of
+> `test/fault_injection/conformance.test.ts` against the pre-change baseline (n=60, p50 129s, p90
+> 161s, max 195s). The decision holds if **p90 falls below ~110s** (a ~1.5x contention relief). This
+> measures the mechanism directly and does not depend on any failure occurring or not occurring.
+>
+> **Secondary criterion (exposure).** Across the next **30 decided** `double-green (windows-latest,
+> node 24)` executions -- all attempts, `cancelled` excluded -- **zero** timeout/budget-class
+> failures. Under the null hypothesis that nothing changed, the timeout-class rate on that cell is
+> ~10.6%, so 30 clean executions happen by luck with probability ~3.5%. Assertion-class failures
+> (the continuo#92 shape) are explicitly **not** counted against this criterion.
+>
+> **Falsified if** either a timeout/budget-class failure recurs within those 30 executions, or the
+> p90 does not move -- the second case meaning the serialization did not actually relieve contention,
+> whatever the failure count did.
+>
+> **Not evidence:** any number of green runs below N=20 (at the measured 17.7% cell rate, N=5 is
+> green by luck 37.8% of the time and N=10 14.3%).
+
+**Source.** Task `continuo-windows-serialize-spawn-tests`, 2026-08-31, implementing the direction
+selected at the human gate on continuo#83 (option B of seven, with the spike measurement named as
+part of the recommendation). Decision id from the `D-0019`..`D-0099` shared band for cross-belt
+decisions taken at the window; this one is not owned by a belt, since the runner entry point is
+shared by all of them.

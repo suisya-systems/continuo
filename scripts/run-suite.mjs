@@ -49,7 +49,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -357,6 +357,18 @@ checkPartition(files);
 // the suite between them. `--reporter=default` is passed alongside because
 // naming a reporter replaces the default one rather than adding to it.
 const reportDir = mkdtempSync(join(tmpdir(), "continuo-run-suite-"));
+// On the way out, by whichever exit is taken -- both early returns on a red
+// pass, the coverage check's own failure, and the green path. `npm test` is run
+// often enough locally that a directory left behind each time is a leak, and
+// the reports are worth nothing once they have been read.
+process.on("exit", () => {
+  try {
+    rmSync(reportDir, { recursive: true, force: true });
+  } catch {
+    // A report directory that cannot be removed is not a reason to fail a run
+    // that has already decided its own outcome.
+  }
+});
 const reportFlags = (name) => [
   "--reporter=default",
   "--reporter=json",
