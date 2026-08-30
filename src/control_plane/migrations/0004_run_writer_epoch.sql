@@ -1,0 +1,68 @@
+-- ==========================================================================
+--  0004 -- run.writer_epoch: the column the single writer of run.status stamps
+--
+--  What was missing. docs/production-schema.md section 4.2's writer table has
+--  said since D-0029 that run.status is fenced by the RUN LEASE EPOCH, and
+--  0001_initial.sql's own lease comment names writer_epoch as how a protected
+--  write records the token it landed under. The run table did not carry the
+--  column. outbox, action, event_consumption, gate_transition and
+--  watcher_liveness all do; run was the one fenced state item whose rows could
+--  not say who wrote them.
+--
+--  The consequence of leaving it out is not that a wrong writer wins -- the
+--  fence in lease.ts decides that inside the statement either way -- but that
+--  the single-writer property becomes UNPROVABLE AFTER THE FACT. lease.ts's
+--  write_history()/applied_epoch_regressions() read the property out of the
+--  epoch each row was written under, and a row with no epoch leaves nothing to
+--  read it out of. D-0046 rule 4 makes this column step one for exactly that
+--  reason: the module and the column arrive together, so the writer's first
+--  transition is already evidence.
+--
+--  WHY ALTER TABLE AND NOT A REBUILD. 0003 rebuilt outbox because it CHANGED a
+--  CHECK, and SQLite has no ALTER TABLE that adds to, drops or replaces one.
+--  This step changes no existing constraint: it adds a nullable column whose
+--  own CHECKs travel with the column definition, which ALTER TABLE ADD COLUMN
+--  admits. Nothing is dropped, so nothing has to be restored -- run's
+--  run_status_is_forward_only trigger, its status vocabulary CHECK and its
+--  updated_at_ms >= created_at_ms CHECK are untouched by this step and are NOT
+--  re-authored below. A rebuild here would put the whole of run's DDL back
+--  through a copy for a change that needs none, and a rebuild that silently
+--  re-authors what it rebuilds is how a constraint disappears without a
+--  decision (0003's own words).
+--
+--  WHY NULLABLE, AND WHY NO BACKFILL. ALTER TABLE ADD COLUMN cannot validate
+--  rows that already exist, and there is no epoch to give them: a run row
+--  written before this step was written under no lease, and inventing one
+--  would be manufacturing the very evidence the column exists to carry. NULL
+--  is the honest word for "this row's status was last written by something
+--  that held no token", and it stays readable as that. The CHECK is therefore
+--  written as `IS NULL OR ...`, matching outbox and action, which carry the
+--  same nullable-epoch shape for the same reason.
+--
+--  WHAT THIS STEP DELIBERATELY DOES NOT DO. It adds no trigger requiring a
+--  live lease for a status transition. Such a trigger is BEFORE UPDATE OF
+--  status ON run and nothing wider (an insert must stay lease-free -- section
+--  4.2 assigns run CREATION no fence at all), and D-0046 rule 4 leaves it
+--  undecided on purpose: it would convert every existing test that advances a
+--  run's status without holding a lease into a failure in the same change that
+--  introduces the writer, burying the writer's review under a test migration.
+--  Until that question is answered, rule 1 -- one in-place writer for
+--  run.status -- is a convention plus a gate the writer opts into
+--  (run_lifecycle.ts), and this column is what makes an opt-out visible
+--  afterwards rather than invisible.
+-- ==========================================================================
+
+-- The token this row's status was last written under, as lease.epoch. Assigned
+-- only by a protected write (lease.ts fenced_update, stamps_writer_epoch on),
+-- which renders it as :fence_epoch and so cannot stamp an epoch the fence in
+-- the same statement did not just validate.
+--
+-- The two CHECKs are the pair outbox and action carry, character for
+-- character in meaning: typeof pins the affinity (a column that silently
+-- accepts a string is a history that silently sorts wrong -- 0001's own
+-- reasoning for CHECKing types rather than using STRICT), and > 0 mirrors
+-- lease's `CHECK (epoch > 0)`, because an epoch of zero is not an epoch any
+-- lease row could have allocated.
+ALTER TABLE run ADD COLUMN writer_epoch INTEGER
+    CHECK (writer_epoch IS NULL
+           OR (typeof(writer_epoch) = 'integer' AND writer_epoch > 0));

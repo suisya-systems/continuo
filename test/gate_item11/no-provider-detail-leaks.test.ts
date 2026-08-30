@@ -50,6 +50,7 @@ const CONTROL_PLANE_NON_MODULE_FILES: readonly string[] = [
   "migrations/0001_initial.sql",
   "migrations/0002_policy_seed.sql",
   "migrations/0003_outbox_cancelled_status.sql",
+  "migrations/0004_run_writer_epoch.sql",
   "spike_schema.sql",
 ];
 
@@ -59,6 +60,7 @@ const SRC_NON_MODULE_FILES: readonly string[] = [
   "control_plane/migrations/0001_initial.sql",
   "control_plane/migrations/0002_policy_seed.sql",
   "control_plane/migrations/0003_outbox_cancelled_status.sql",
+  "control_plane/migrations/0004_run_writer_epoch.sql",
   "control_plane/spike_schema.sql",
   "fencing/hook.mjs",
   "fencing/roles.json",

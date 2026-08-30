@@ -350,6 +350,26 @@ export {
   unlinkRunPr,
   upsertRepository,
 } from "./control_plane/repo_link.js";
+// `run_lifecycle.ts` also declares `TERMINAL_RUN_STATUSES`, and it is
+// deliberately not re-exported here: `gates.ts`'s copy above already carries
+// that name, and the two are independent restatements of the G1 adjudication
+// kept in step by a drift test (the same treatment `outbox.ts`'s second
+// declaration of `EXACTLY_ONCE_MECHANISMS` gets). One package entry point
+// (D-0002) cannot carry one name twice, and picking a different one for the
+// second would put two spellings of the same set into the public surface.
+export {
+  ADVANCE_RUN_STATUS_EFFECT,
+  acquireRunLease,
+  advanceRunStatus,
+  RUN_LEASE_PREFIX,
+  RUN_STATUSES,
+  RunLifecycleUsageError,
+  RunRecord,
+  type RunStatus,
+  RunTransitionRefused,
+  readRun,
+  runLeaseResource,
+} from "./control_plane/run_lifecycle.js";
 export {
   type ControlPlaneState,
   createControlPlane,

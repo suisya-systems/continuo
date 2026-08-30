@@ -25,7 +25,7 @@ import { isCompleteStatement, splitLinesKeepEnds } from "../../src/sqlite/comple
  * of the shipped migration files, which are already in the repository, plus the
  * adversarial cases in `parity/oracle/complete-statement-corpus.json`. The
  * prefixes of an 85 KB file come to tens of megabytes; committing them to
- * assert 2,203 booleans would be absurd, and rebuilding them from the committed
+ * assert 2,271 booleans would be absurd, and rebuilding them from the committed
  * files is exact.
  *
  * This corpus earned its place on its first run: it found a wrong cell in the
