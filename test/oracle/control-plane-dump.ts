@@ -1,18 +1,38 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
-import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
+import {
+  createProductionControlPlane,
+  discoverMigrationSteps,
+} from "../../src/control_plane/migrator.js";
 
 /**
  * The TypeScript half of the differential oracle.
  *
- * Migrates an empty database to head with a fixed clock and returns a
- * **normalised** description of the resulting database state. The Python half,
- * `scripts/oracle/dump_control_plane.py`, produces the same structure through
- * interlock's migrator against the same SQL; the vector it produced is
- * committed at `parity/oracle/control-plane-state.json`, and
+ * Migrates an empty database through the **shared migration history** with a
+ * fixed clock and returns a **normalised** description of the resulting
+ * database state. The Python half, `scripts/oracle/dump_control_plane.py`,
+ * produces the same structure through interlock's migrator against the same
+ * SQL; the vector it produced is committed at
+ * `parity/oracle/control-plane-state.json`, and
  * `test/control_plane/differential-oracle.test.ts` compares this against it.
+ *
+ * **The shared history ends at {@link SHARED_HEAD_VERSION}, and steps beyond
+ * it are continuo's own.** Interlock is a frozen source, so that terminus is
+ * settled rather than provisional: no step will ever be added to the shared
+ * half. Comparing the two migrators past it would not be a comparison at all
+ * -- there is nothing on the other side to compare a continuo-only step
+ * against -- so this dump stops where the two implementations still have the
+ * same thing to build.
+ *
+ * **What that means this face does not claim.** A continuo-only migration is
+ * outside the comparison: its DDL, the rows it seeds, the column affinities it
+ * introduces and the pragmas in force while it runs are all unexamined here.
+ * Nothing about a step past {@link SHARED_HEAD_VERSION} is asserted by this
+ * face, and a defect introduced by one will not surface in it. Those steps
+ * are covered by their own tests and by the statement-completeness face (2b),
+ * whose corpus is rebuilt from every shipped migration file including them.
  *
  * Why this face exists at all, given the SQL is copied verbatim: copying
  * guarantees the *text* is identical. It says nothing about the order the
@@ -34,6 +54,14 @@ import { createProductionControlPlane } from "../../src/control_plane/migrator.j
 
 /** The clock every dump is taken at. Fixed so two dumps are comparable. */
 export const ORACLE_NOW_MS = 1_700_000_000_000;
+
+/**
+ * The last migration version both implementations ship.
+ *
+ * Interlock's ledger ends here, so this is the terminus of the shared history
+ * and not a running high-water mark. Steps above it exist in continuo alone.
+ */
+export const SHARED_HEAD_VERSION = 3;
 
 /** Ordering for schema objects, as the generated reading aid uses. */
 const KIND_ORDER: Record<string, number> = { table: 0, view: 1, index: 2, trigger: 3 };
@@ -61,10 +89,39 @@ export interface ControlPlaneStateDump {
   >;
 }
 
+/**
+ * The shared steps, copied byte for byte into `directory`.
+ *
+ * Copied rather than filtered in the migrator, because the migrator has no
+ * "up to version N" mode and should not grow one for a test: a build that can
+ * stop halfway through its own ledger is a build that can ship a database
+ * halfway migrated. The copies are byte-identical, so the checksums the
+ * migrator computes are this build's own -- a hand-written stand-in would be
+ * refused as an edited step rather than accepted as the shared history.
+ */
+function sharedStepsInto(directory: string): string {
+  mkdirSync(directory, { recursive: true });
+  const shared = discoverMigrationSteps().filter((step) => step.version <= SHARED_HEAD_VERSION);
+  if (shared.length !== SHARED_HEAD_VERSION) {
+    // Anti-vacuity: a dump taken over fewer steps than the shared history has
+    // would compare a smaller database and still look like a comparison.
+    throw new Error(
+      `expected ${SHARED_HEAD_VERSION} shared migration steps, found ${shared.length}`,
+    );
+  }
+  for (const step of shared) {
+    copyFileSync(step.path, join(directory, basename(step.path)));
+  }
+  return directory;
+}
+
 export function dumpControlPlaneState(): ControlPlaneStateDump {
   const directory = mkdtempSync(join(tmpdir(), "continuo-oracle-"));
   const path = join(directory, "production.sqlite3");
-  const connection = createProductionControlPlane(path, { nowMs: ORACLE_NOW_MS });
+  const connection = createProductionControlPlane(path, {
+    nowMs: ORACLE_NOW_MS,
+    migrationsDir: sharedStepsInto(join(directory, "shared-steps")),
+  });
   try {
     const schema = (
       connection

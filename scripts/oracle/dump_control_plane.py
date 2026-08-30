@@ -6,6 +6,11 @@ normalised JSON. ``parity/oracle/control-plane-state.json`` holds the vector thi
 side produced, and ``test/control_plane/differential-oracle.test.ts`` compares
 continuo's dump against it.
 
+Interlock's head IS the shared migration history: interlock is a frozen source,
+so its ledger is the terminus continuo's half stops at
+(``SHARED_HEAD_VERSION``). This script therefore needs no version bound of its
+own -- there is nothing above the shared terminus on this side to exclude.
+
 This script is not run in CI -- it needs an interlock checkout, which CI does
 not have. It is run by hand when the vector is (re)generated, and the command
 is recorded in ``docs/differential-oracle.md`` so the vector is reproducible

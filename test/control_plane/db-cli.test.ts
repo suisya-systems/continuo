@@ -104,7 +104,12 @@ function countedClock(instant: number): { reads: () => number } {
  */
 function databaseBehindHead(root: string, count: number): string {
   const prefix = join(root, `at-000${count}`);
-  const names = ["0001_initial.sql", "0002_policy_seed.sql", "0003_outbox_cancelled_status.sql"];
+  const names = [
+    "0001_initial.sql",
+    "0002_policy_seed.sql",
+    "0003_outbox_cancelled_status.sql",
+    "0004_run_writer_epoch.sql",
+  ];
   for (const name of names.slice(0, count)) {
     writeStep(prefix, name, readFileSync(join(MIGRATIONS_DIR, name), "utf8"));
   }

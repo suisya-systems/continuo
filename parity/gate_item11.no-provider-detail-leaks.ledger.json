@@ -38,18 +38,20 @@
       }
     ],
     "target_only_tests": {
-      "count": 8,
+      "count": 10,
       "ids": [
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[cli.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[connection.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[python_json.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[python_repr.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[refusals.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[run_lifecycle.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[spike.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[db-cli.test.ts]",
-        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[differential-oracle.test.ts]"
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[differential-oracle.test.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[run-lifecycle.test.ts]"
       ],
-      "why": "The directory walks in this file are LISTINGS, not hand-written lists (the source's own `rglob('*.py')`), so a `.ts` file with no `.py` analogue still gets a case: `src/control_plane/connection.ts`, `python_json.ts`, `python_repr.ts`, `refusals.ts` and `spike.ts` are helpers this port split into their own modules where the source keeps the equivalent logic inline elsewhere, and `test/control_plane/differential-oracle.test.ts` is a target-only structural check this port added with no source counterpart. `src/control_plane/cli.ts` and `test/control_plane/db-cli.test.ts` join them for a different reason and it is worth stating: they are the `continuo db create|migrate|verify` mount, which interlock has no counterpart for at all (it mounts no `db` subtree), so there is no source case to port and the walk picks them up exactly as it is meant to. Each is still exercised by the same property (no session-backend import), which is the point of walking rather than listing."
+      "why": "The directory walks in this file are LISTINGS, not hand-written lists (the source's own `rglob('*.py')`), so a `.ts` file with no `.py` analogue still gets a case: `src/control_plane/connection.ts`, `python_json.ts`, `python_repr.ts`, `refusals.ts` and `spike.ts` are helpers this port split into their own modules where the source keeps the equivalent logic inline elsewhere, and `test/control_plane/differential-oracle.test.ts` is a target-only structural check this port added with no source counterpart. `src/control_plane/cli.ts` and `test/control_plane/db-cli.test.ts` join them for a different reason and it is worth stating: they are the `continuo db create|migrate|verify` mount, which interlock has no counterpart for at all (it mounts no `db` subtree), so there is no source case to port and the walk picks them up exactly as it is meant to. `src/control_plane/run_lifecycle.ts` and `test/control_plane/run-lifecycle.test.ts` join for the third reason: they are `D-0046`'s single in-place writer of `run.status` and its suite, a continuo decision with no interlock counterpart (interlock has no fenced run writer at all), so again there is no source case to port. Each is still exercised by the same property (no session-backend import), which is the point of walking rather than listing."
     },
     "approved_non_running": []
   },

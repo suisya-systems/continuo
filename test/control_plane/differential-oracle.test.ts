@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { dumpControlPlaneState } from "../oracle/control-plane-dump.js";
+import { dumpControlPlaneState, SHARED_HEAD_VERSION } from "../oracle/control-plane-dump.js";
 
 /**
  * The differential oracle: control-plane database state, Python against
@@ -24,6 +24,19 @@ import { dumpControlPlaneState } from "../oracle/control-plane-dump.js";
  * the text, not the execution order, the transaction boundaries, the pragmas in
  * force, or the value representations coming back through two different
  * drivers.
+ *
+ * **The comparison spans the shared migration history, which ends at
+ * `SHARED_HEAD_VERSION`.** Interlock is a frozen source, so that is the
+ * terminus of the shared half rather than a high-water mark that moves;
+ * migration steps above it are continuo's own, and there is no second
+ * implementation on the other side of one to compare it against.
+ *
+ * **What this face therefore does not claim.** A continuo-only migration is
+ * outside the comparison entirely -- its DDL, its seeded rows, the column
+ * affinities it introduces and the pragmas in force while it runs are all
+ * unexamined here, and a defect introduced by one does not surface in this
+ * test. Read it as "the shared history builds the same database", never as
+ * "the database is the same database".
  *
  * Regenerating the vector is a deliberate act, not a convenience: run the
  * Python side and commit the result, so a change to it appears in review as a
@@ -111,7 +124,10 @@ describe("differential oracle: control-plane database state", () => {
     expect(expected.source.revision).not.toBe("");
     expect(expected.schema.length).toBeGreaterThan(50);
     expect(Object.keys(expected.tables).length).toBeGreaterThan(10);
-    expect(expected.tables["schema_migration"]?.row_count).toBe(3);
+    // Tied to the shared terminus rather than spelled as a number, so the
+    // vector and the version the dump migrates to cannot drift apart.
+    expect(expected.tables["schema_migration"]?.row_count).toBe(SHARED_HEAD_VERSION);
+    expect(expected.user_version).toBe(SHARED_HEAD_VERSION);
     // 0002_policy_seed.sql is the numeric table of time-base-policy.md section 3
     // as data; if it seeded nothing, the rebuild in 0003 would have nothing to
     // carry forward and this face of the oracle would be comparing empty tables.
