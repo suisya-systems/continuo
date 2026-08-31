@@ -1,6 +1,6 @@
 # Testing continuo
 
-Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0001` (runner), `D-0005` (the CI rule).
+Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0001` (runner), `D-0005` (the CI rule), `D-0048` (the Windows split).
 
 ## Commands
 
@@ -12,8 +12,13 @@ npm test           # the suite, once, in a random order
 npm run verify     # all of the above, in that order
 ```
 
-`npm test` is `vitest run`: a single non-watch pass that exits non-zero on any failure. Use
-`npm run test:watch` while working.
+`npm test` runs `scripts/run-suite.mjs`, which on every platform but Windows is `vitest run` and
+nothing else: a single non-watch pass that exits non-zero on any failure. On Windows it runs the
+suite in two passes -- see [Windows runs the child-process tests
+apart](#windows-runs-the-child-process-tests-apart). Any argument at all (`npm test --
+test/messagebus`, `npm test -- --reporter=json`) turns the split off and says so on stderr: the two
+passes cannot honour a filter or a single report file without lying about one of them, and CI passes
+no arguments. Use `npm run test:watch` while working.
 
 ## The suite is the specification
 
@@ -47,13 +52,41 @@ For the duration of the port:
 | File order | shuffled |
 | Test order within a file | shuffled |
 | Tests concurrent within a file | **no** (`sequence.concurrent: false`) |
-| Files parallel across workers | yes (Vitest default), each isolated |
+| Files parallel across workers | yes (Vitest default), each isolated -- except the child-process tests on Windows |
 | Hook order | `stack` (Vitest default) |
 | Filesystem state | per-test temporary directory |
 
 Ordering and concurrency are separate properties. The ported suite has never been run concurrently,
 so turning concurrency on during translation would mix two independent sources of failure. It is a
 later decision, taken on its own evidence.
+
+## Windows runs the child-process tests apart
+
+On `windows-latest` the `double-green` cell fails roughly one run in five, and about two thirds of
+those failures are timeouts or budget overruns rather than assertions (issue #83). The signature is
+starvation rather than a slow test: a job that trips a watchdog is already running slower than the
+*median green job* on the same cell, and `D-1003` named the mechanism -- several vitest workers on a
+small runner, each spawning child processes of its own. The general form of that fix is `D-0048`;
+`D-1003`'s own skip stays where it is until a re-measurement says otherwise.
+
+So on Windows `npm test` runs the suite in two passes: everything that does not spawn children, in
+parallel as before, and then the files that do, one at a time. The set is listed in
+`scripts/run-suite.mjs`, which also records how it was measured and refuses to run when a test file
+reaches `child_process` -- in its own text or a helper's -- without being classified there. Two
+passes that between them skipped a file are not a green suite, and the script checks the two runs
+account for every file before it reports one.
+
+Nothing else moves: the seed and the double-green rule (`D-0005`) reach each pass unchanged, no time
+budget is touched (`D-0602`), and Linux still runs one pass exactly as it did.
+
+Two knobs exist for measuring the trade rather than for daily use. `CONTINUO_SERIALIZE_SPAWN_TESTS`
+(`0`/`1`) forces the split off or on whatever the platform, and `CONTINUO_SPAWN_TEST_WORKERS` sets
+how many workers the serialized pass gets (default `1`, which is what shipped). **CI sets neither**,
+and `tests.yml` is not part of this change. Serialization buys contention relief with wall time, so
+the right setting is a measurement on the cell rather than an opinion: at one worker the Windows job
+p90 went from 930s to 1017s -- 42% of the 40-minute cap, with the worst green job *falling* from
+1864s to 1054s -- while `test/fault_injection/conformance.test.ts` went from a p90 of 161s to 57.1s
+(`D-0048`).
 
 ## Temporary files
 
