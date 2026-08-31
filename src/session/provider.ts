@@ -364,6 +364,25 @@ export class FailureKind {
     "UNINTERPRETABLE_RESPONSE",
     "uninterpretable-response",
   );
+  /**
+   * The identity read back contradicts the one committed before the spawn
+   * (continuo D-0047; target-only, no interlock member corresponds).
+   *
+   * Still provider-neutral, and deliberately *narrower* than
+   * {@link UNINTERPRETABLE_RESPONSE}: that one covers every shape this
+   * interface cannot read -- a line that is not JSON, a `result` event naming
+   * no outcome, a capture file that cannot be opened -- and an orchestrator
+   * that split on it would be classifying broken output as an identity
+   * conflict. This member says the one thing U27 makes mandatory to tell
+   * apart: two writers claiming one id, or one writer claiming another's. It
+   * is the discriminator the caller is entitled to read *as a type*, so no
+   * caller has to match on `detail`'s prose to find it.
+   */
+  static readonly IDENTITY_INCIDENT = new FailureKind(
+    ENUM_MINT,
+    "IDENTITY_INCIDENT",
+    "identity-incident",
+  );
 
   /** `list(FailureKind)`, in declaration order and derived (see {@link derivedMembers}). */
   static get members(): readonly FailureKind[] {

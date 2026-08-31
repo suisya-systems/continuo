@@ -25,9 +25,11 @@
   "target": {
     "test_file": "test/gate_item2/mediated-real-provider.test.ts",
     "target_only_tests": {
-      "count": 0,
-      "ids": [],
-      "why": "None. Every collected test in this file is a translation of a source case."
+      "count": 1,
+      "ids": [
+        "test/gate_item2/mediated-real-provider.test.ts::recovery around an impounded identity is refused, not resumed (target-only)"
+      ],
+      "why": "One case, not counted as ported coverage, added by continuo#92 (D-0047). `start` and `resume` share `#spawn` and therefore shared the defect, but interlock's suite drives the identity mismatch only through `start`. This case takes the resume half over the real provider with the race removed rather than reduced: the incident is already persisted when the walk begins, so there is no child left to lose a race to and `resume` answers with the record's own incident deterministically. It also pins the property the class change exists to protect -- no second writer is minted on an impounded id (the spawn log stays at one entry) and the binding still says `spawned`/`unobserved`."
     },
     "approved_non_running": [
       {

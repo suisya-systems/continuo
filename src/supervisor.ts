@@ -110,10 +110,23 @@ export class ProviderStartFailed extends OrchestrationRefused {
 }
 
 /**
- * The committed identity did not read back within the allowed attempts.
+ * The committed identity was not confirmed, and the binding says so.
  *
- * The binding stays honestly at `spawned` -- never confirmed on trust -- and
- * the last thing the provider said rides along for the record.
+ * Two shapes reach this one class, and the distinction is deliberately not
+ * exported (continuo D-0047):
+ *
+ * - **Never positively read back.** The allowed attempts were spent without a
+ *   readout that names the committed identity. Nothing contradicted it; it was
+ *   simply never confirmed, and confirming on trust is what this refuses.
+ * - **Positively contradicted.** The provider answered with an identity
+ *   incident (`FailureKind.IDENTITY_INCIDENT`) -- the child reported an id that
+ *   is not the one committed before the spawn, which is the U27 failure shape.
+ *
+ * Which of the two happened is in `message` and in the provider's own answer on
+ * {@link lastAnswer}; what is *not* left to chance is the class, because which
+ * call first observes a mismatch is a race against the child (continuo #92).
+ * In both shapes the binding stays honestly at `spawned` -- never confirmed --
+ * and the last thing the provider said rides along for the record.
  */
 export class IdentityUnconfirmed extends OrchestrationRefused {
   readonly lastAnswer: unknown;
@@ -550,11 +563,33 @@ export class SessionOrchestrator {
 
   // -- provider answers ----------------------------------------------------
 
-  #unwrap(verb: string, answer: unknown): SessionReadout {
+  async #unwrap(
+    verb: string,
+    answer: unknown,
+    lease: Lease,
+    sessionId: string,
+  ): Promise<SessionReadout> {
     if (answer instanceof Ok) {
       return answer.value as SessionReadout;
     }
     if (answer instanceof Failure) {
+      if (answer.kind === FailureKind.IDENTITY_INCIDENT) {
+        // Not a start that failed to start: the verb reached a provider that
+        // says the child is claiming another identity. That is the same fact
+        // `#awaitIdentity` would have polled its way to had the mismatch
+        // surfaced a few milliseconds later, so it leaves as the same refusal
+        // (continuo D-0047). Split on the *kind* and never on `detail`:
+        // `UNINTERPRETABLE_RESPONSE` also carries garbage output and unreadable
+        // capture files, and matching prose would make a message an internal
+        // protocol.
+        await this.#refuseIdentityConfirmation(lease, sessionId, {
+          moment: `identity-incident-${verb}`,
+          lastAnswer: answer,
+          why:
+            `the provider's ${verb} answer contradicts the identity committed for ` +
+            `session ${JSON.stringify(sessionId)}: ${answer.detail}`,
+        });
+      }
       throw new ProviderStartFailed(
         `provider ${verb} failed: ${answer.kind.value}: ${answer.detail}`,
         answer,
@@ -570,13 +605,36 @@ export class SessionOrchestrator {
   }
 
   /**
+   * The one place this module refuses to confirm an identity.
+   *
+   * Both roads to {@link IdentityUnconfirmed} run through here -- the
+   * poll that ran out of attempts, and the provider answer that named an
+   * identity incident -- so they cannot drift apart in what they do before
+   * they raise. What they do is the part that matters: **a fenced write
+   * first**. A claimant whose lease was taken over while it was polling, or
+   * while the provider was answering, must leave as a refused stale writer
+   * with its child handled, never as a quiet identity refusal; that
+   * precedence is `#validateAfterSpawn`'s and is not this method's to
+   * re-decide. `moment` names the road for the gate row, which is how a
+   * reader of the `action` table can still tell them apart (continuo D-0047).
+   */
+  async #refuseIdentityConfirmation(
+    lease: Lease,
+    sessionId: string,
+    options: { readonly moment: string; readonly lastAnswer: unknown; readonly why: string },
+  ): Promise<never> {
+    await this.#validateAfterSpawn(lease, sessionId, { moment: options.moment });
+    throw new IdentityUnconfirmed(options.why, options.lastAnswer);
+  }
+
+  /**
    * Poll `readState` until the committed identity reads back.
    *
    * Never confirms on trust: exhausting the attempts raises, the binding
-   * stays `spawned`, and the last answer rides on the exception. The
-   * exhaustion path still ends in a fenced write first -- a claimant whose
-   * lease was taken over during a fruitless poll must leave as a refused
-   * stale writer (with its child handled), not as a quiet timeout.
+   * stays `spawned`, and the last answer rides on the exception. An identity
+   * incident ends the loop where it is found instead of being polled to
+   * exhaustion -- it is a decided outcome, and a session the provider has
+   * impounded will answer with it for every remaining attempt (D-0047).
    */
   async #awaitIdentity(lease: Lease, sessionId: string): Promise<SessionReadout> {
     let lastAnswer: unknown = null;
@@ -593,24 +651,29 @@ export class SessionOrchestrator {
       ) {
         return answer.value as SessionReadout;
       }
+      if (answer instanceof Failure && answer.kind === FailureKind.IDENTITY_INCIDENT) {
+        // Terminal, not merely unsuccessful: the committed identity has been
+        // contradicted, and no later attempt can un-contradict it.
+        await this.#refuseIdentityConfirmation(lease, sessionId, {
+          moment: "identity-incident-readback",
+          lastAnswer: answer,
+          why:
+            `the read-back for session ${JSON.stringify(sessionId)} contradicts the ` +
+            `identity committed before the spawn: ${answer.detail}`,
+        });
+      }
       if (attempt + 1 < this.#readbackAttempts && this.#wait !== null) {
         await this.#wait();
       }
     }
-    try {
-      this._postSpawnGate(lease, { moment: "readback-exhausted" });
-    } catch (refusal) {
-      if (refusal instanceof StaleWriterRefused) {
-        throw await this.#refuseAndTerminate(refusal, sessionId, lease);
-      }
-      throw refusal;
-    }
-    throw new IdentityUnconfirmed(
-      `the identity committed for session ${JSON.stringify(sessionId)} did not read ` +
+    return await this.#refuseIdentityConfirmation(lease, sessionId, {
+      moment: "readback-exhausted",
+      lastAnswer,
+      why:
+        `the identity committed for session ${JSON.stringify(sessionId)} did not read ` +
         `back within ${this.#readbackAttempts} attempts; the binding is ` +
         "left at 'spawned' rather than confirmed on trust",
-      lastAnswer,
-    );
+    });
   }
 
   // -- the walks -------------------------------------------------------
@@ -676,7 +739,7 @@ export class SessionOrchestrator {
     // claimant that lost its lease during the verb must be refused -- and
     // its possible child handled -- whatever the verb said.
     await this.#validateAfterSpawn(lease, sessionId, { moment: "after-start" });
-    this.#unwrap("start", answer);
+    await this.#unwrap("start", answer, lease, sessionId);
     const readout = await this.#awaitIdentity(lease, sessionId);
     await this.#commitReadback(lease, sessionId, readout);
     return this.#outcome(sessionId, options.path, readout);
@@ -733,6 +796,22 @@ export class SessionOrchestrator {
     }
 
     const known = await this.#provider.readState(sessionId);
+    if (known instanceof Failure && known.kind === FailureKind.IDENTITY_INCIDENT) {
+      // The probe already has the answer, so the resume below is not merely
+      // pointless: it is the verb that would bury the incident under a new
+      // generation. The C2 provider persists incidents and would refuse the
+      // resume too, but S1 does not require that of a provider -- one that
+      // reports the mismatch without recording it would have had this walk
+      // resume, poll a healthy readout, and confirm a binding it had already
+      // been told was contradicted (D-0047).
+      await this.#refuseIdentityConfirmation(lease, sessionId, {
+        moment: "identity-incident-probe",
+        lastAnswer: known,
+        why:
+          `the provider's record of session ${JSON.stringify(sessionId)} contradicts the ` +
+          `identity this run committed for it: ${known.detail}`,
+      });
+    }
     if (known instanceof Failure && known.kind === FailureKind.UNKNOWN_SESSION) {
       // The provider commits its own durable record before it creates a
       // process, so "unknown session" means the spawn never happened -- the
@@ -752,7 +831,7 @@ export class SessionOrchestrator {
     // Fence first, interpret second -- same reasoning as the start walk: a
     // resume Failure does not prove no process was created.
     await this.#validateAfterSpawn(lease, sessionId, { moment: "after-resume" });
-    this.#unwrap("resume", answer);
+    await this.#unwrap("resume", answer, lease, sessionId);
     const readout = await this.#awaitIdentity(lease, sessionId);
     await this.#commitReadback(lease, sessionId, readout);
     return this.#outcome(sessionId, "resumed", readout);

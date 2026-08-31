@@ -363,5 +363,18 @@
       "source_revision": "65f36c5"
     }
   ],
-  "inherited_limitations": []
+  "inherited_limitations": [],
+  "divergences": [
+    {
+      "what": "`FailureKind` has seven members here and six in interlock.",
+      "deliberate": true,
+      "matches_source": false,
+      "decision": "D-0047",
+      "detail": "`IDENTITY_INCIDENT` is added for continuo#92; see the `divergences` block in `parity/session.claude-cli-provider.ledger.json` for the behaviour it carries. Two target-only cases in this file touch the vocabulary and only one of them moved. `the closed vocabularies derive their member list from the class (target-only)` did not: it was written to state a relative order of two known members rather than the whole list, deliberately, so that `a seventh member must expand the axis, not fail this case`. `the closed vocabularies cannot be extended at runtime (target-only)` did: its closing `FailureKind.members.length` is there to show that the mint attempts above added nothing, so it counts 7 instead of 6. No ported case in this file reads the member count -- the source's own comment says copying the six names in `would make this test stale the moment a member is added`.",
+      "where_a_fix_belongs": "continuo (D-0023).",
+      "pinned_by": [
+        "test/session/provider-contract.test.ts::the closed vocabularies cannot be extended at runtime (target-only)"
+      ]
+    }
+  ]
 }

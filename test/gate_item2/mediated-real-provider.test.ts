@@ -188,12 +188,54 @@ test("a reported identity that disagrees is never confirmed", async () => {
   const provider = makeProvider(root, stateRoot);
   const orchestrator = makeRealOrchestrator(cp, clock, join(root, "workspace"), provider, "sup-1");
 
+  // Which of the two detection paths runs here is a race against the child
+  // (continuo #92), and this assertion no longer depends on winning it: both
+  // now answer with `FailureKind.IDENTITY_INCIDENT`, which the orchestrator
+  // refuses as this one class (D-0047). The two paths are forced apart, one
+  // per case, in `orchestrator-walk.test.ts`; what this case still measures
+  // is that a real child claiming a real other identity is refused at all.
   await expectAsyncRefusal(() => orchestrator.start(), IdentityUnconfirmed);
   // The binding never claimed a read-back that contradicted it.
   const rows = activeRows(cp);
   expect(rows).toHaveLength(1);
   const [, phase, observation] = rows[0] as [string, string, string];
   expect([phase, observation]).toEqual(["spawned", "unobserved"]);
+});
+
+test("recovery around an impounded identity is refused, not resumed (target-only)", async () => {
+  // The resume half of continuo #92, over the real provider and with no race
+  // in it: the incident is already *persisted* by the time this walk starts,
+  // so `resume` answers with it deterministically -- there is no child left
+  // to lose a race to. `start` and `resume` share `#spawn`, so a fix that
+  // covered only `start` would leave this verb raising the other class.
+  const { cp, clock, root, spawnLogPath, stateRoot } = harness();
+  fakeEnv("FAKE_MODE", "ok");
+  fakeEnv("FAKE_REPORT_ID", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  const provider = makeProvider(root, stateRoot);
+  const workspace = join(root, "workspace");
+  await expectAsyncRefusal(
+    () => makeRealOrchestrator(cp, clock, workspace, provider, "sup-1").start(),
+    IdentityUnconfirmed,
+  );
+
+  // A new supervisor life over the same state root: the binding is at
+  // 'spawned' and the provider knows the session, so recovery goes through
+  // `resume` -- which refuses on the record's own incident.
+  clock.advancePastExpiry();
+  const second = makeProvider(root, stateRoot);
+  const refusal = await expectAsyncRefusal(
+    () => makeRealOrchestrator(cp, clock, workspace, second, "sup-2").recover(),
+    IdentityUnconfirmed,
+  );
+  expect(String(refusal.message)).toContain("identity incident");
+
+  // No second writer was minted on the impounded id, and the binding still
+  // says exactly what it can prove.
+  expect(spawned(spawnLogPath)).toHaveLength(1);
+  const recovered = activeRows(cp);
+  expect(recovered).toHaveLength(1);
+  const [, phaseAfter, observationAfter] = recovered[0] as [string, string, string];
+  expect([phaseAfter, observationAfter]).toEqual(["spawned", "unobserved"]);
 });
 
 skipIf(

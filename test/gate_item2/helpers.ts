@@ -91,6 +91,25 @@ class ScriptedSession {
   }
 }
 
+/**
+ * The `Failure` the C2 provider answers with once a child has claimed an
+ * identity that is not the committed one.
+ *
+ * Shaped like `ClaudeCliSessionProvider`'s own -- the typed kind is what a
+ * caller reads, and the prose is deliberately *not* what anything splits on
+ * (continuo D-0047). Built here so the scripted provider can produce the
+ * answer at a chosen instant, which is the whole point: with a real child,
+ * which call first sees the mismatch is a race (continuo #92).
+ */
+export function identityIncident(sessionId: string, reported = "not-the-committed-id"): Failure {
+  return new Failure(
+    FailureKind.IDENTITY_INCIDENT,
+    `identity incident: session ${JSON.stringify(sessionId)} committed one identity before ` +
+      `the spawn, but the child's own init event reports ${JSON.stringify(reported)}`,
+    { expected: sessionId, reported },
+  );
+}
+
 /** An S1 provider that records everything and refuses nothing. */
 export class ScriptedProvider extends SessionProvider {
   readonly sessions = new Map<string, ScriptedSession>();
@@ -104,6 +123,21 @@ export class ScriptedProvider extends SessionProvider {
    */
   onStart: ((request: StartRequest) => ProviderResult<SessionReadout> | undefined) | undefined;
   onResume: ((sessionId: string) => ProviderResult<SessionReadout> | undefined) | undefined;
+  /**
+   * Called (with the id and this instance's 0-based `readState` call number)
+   * before a read-back is served; may return a `ProviderResult` to override.
+   *
+   * The twin of {@link onStart}/{@link onResume} on the one verb that had no
+   * seam, added for continuo #92's deterministic cases: an identity incident
+   * that surfaces only *during* the read-back poll is otherwise unreachable
+   * without racing a real child. The call number is what lets a case
+   * distinguish `recover`'s pre-resume probe from the poll that follows it.
+   */
+  onReadState:
+    | ((sessionId: string, call: number) => ProviderResult<SessionReadout> | undefined)
+    | undefined;
+  /** How many times `readState` has been called on this instance. */
+  readStateCalls = 0;
   /** Readouts to serve for the *next* started/resumed session. */
   nextReadouts: SessionReadout[] = [];
 
@@ -138,6 +172,14 @@ export class ScriptedProvider extends SessionProvider {
   }
 
   async readState(sessionId: string): Promise<ProviderResult<SessionReadout>> {
+    const call = this.readStateCalls;
+    this.readStateCalls += 1;
+    if (this.onReadState !== undefined) {
+      const override = this.onReadState(sessionId, call);
+      if (override !== undefined) {
+        return override;
+      }
+    }
     const session = this.sessions.get(sessionId);
     if (session === undefined) {
       return new Failure(
@@ -274,6 +316,26 @@ export function refusals(cp: SqliteDatabase): Record<string, unknown>[] {
         " WHERE status = 'refused' ORDER BY rowid",
     )
     .all() as Record<string, unknown>[];
+}
+
+/**
+ * The `moment` of every applied post-spawn gate write, in order.
+ *
+ * The moment is not a column -- it is a field of the idempotency key
+ * `post_spawn_gate:<run>:<holder>:<moment>:<now>:<seq>` -- so it is read back
+ * out of the key here. A case uses this to assert that a refusal went
+ * *through* the fence rather than around it: the row exists only if
+ * `protectedWrite` accepted the token (continuo D-0047).
+ */
+export function gateMoments(cp: SqliteDatabase): string[] {
+  return (
+    cp
+      .prepare(
+        "SELECT idempotency_key FROM action WHERE status = 'applied'" +
+          " AND idempotency_key LIKE 'post_spawn_gate:%' ORDER BY rowid",
+      )
+      .all() as { idempotency_key: string }[]
+  ).map((row) => (row.idempotency_key.split(":")[3] as string) ?? "");
 }
 
 export function activeRows(cp: SqliteDatabase): [string, string, string][] {
