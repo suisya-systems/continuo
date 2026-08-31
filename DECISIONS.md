@@ -8891,18 +8891,51 @@ is the fallback, not the alternative, and is priced separately. Reducing the rea
 (a per-file SQLite template) is the change that would make all of this unnecessary, and it is blocked
 behind `test/testkit`'s own freeze.
 
-**The precondition, which is part of the decision.** Serialization buys contention relief with wall
-time, and this cell has the least of it to spend: p90 job wall time is 930s and the worst observed
-*green* job is 1864s against a 2400s `timeout-minutes` cap. Measured on Linux, whole suite minus the
-file D-1003 already skips on Windows: 58.6s unchanged, 112.4s with the spawning set at one worker
-(1.92x), 71.1s at two workers (1.21x). Those ratios are an upper bound rather than a prediction --
-part of what serialization removes on Windows is the contention that makes each file slow in the
-first place -- but 1.92x applied to the worst green job exceeds the cap, so the affordability of the
-one-worker setting is an open measurement, not an assumption. `CONTINUO_SPAWN_TEST_WORKERS` exists so
-that one worker and two can be compared on the Windows cell itself. **This decision is recorded as
-taken and must not be relied on before that comparison is run: if p90 Windows job wall time under
-serialization exceeds ~1500s, option B is not affordable at the current runner size and the answer
-becomes E (a larger runner), which is a decision for the human gate, not for this file.**
+**What it costs, measured on the cell rather than modelled.** Serialization buys contention relief
+with wall time, and this cell has the least of it to spend: before the change, p90 job wall time was
+930s and the worst observed *green* job 1864s against a 2400s `timeout-minutes` cap. On Linux, whole
+suite minus the file D-1003 already skips on Windows, the split cost 1.92x at one worker (58.6s to
+112.4s) and 1.21x at two (71.1s) -- and 1.92x applied to the worst green job would have exceeded the
+cap, so the affordability of one worker was recorded here as an open measurement rather than an
+assumption, with `CONTINUO_SPAWN_TEST_WORKERS` added so that one worker and two could be compared on
+the Windows cell itself.
+
+That measurement has since been run, at one worker, on the branch that carries this decision: five
+executions of both Windows cells (run `33356059264`, attempts 1-5, `head_sha` `e3aeddd`), all ten
+jobs green, all twenty suite runs splitting as intended and accounting for all 89 files across their
+two passes.
+
+| | before | at one worker (n=10) |
+|---|---|---|
+| job wall p50 | ~640s | 762s |
+| job wall p90 | ~930s | **1017s** (42% of the 2400s cap) |
+| job wall max (green) | 1864s (78% of cap) | **1054s** (44%) |
+| `conformance.test.ts` p50 | 129s (n=60) | 35.7s (n=20) |
+| `conformance.test.ts` p90 | 161s | **57.1s** |
+
+Three things follow, and they are the reason this section is a result rather than a precondition.
+The affordability question is answered: p90 is 1017s against the ~1500s at which option B would have
+been unaffordable at this runner size, so E is not needed. **The Linux 1.92x did not reproduce on
+Windows** -- p90 rose 9% and the worst green job *fell* by 43% -- which is what the ratio being an
+upper bound rather than a prediction meant: part of what serialization removes on Windows is the
+contention that made each file slow to begin with. And the primary criterion below is met with
+margin: 161s to 57.1s is a 2.8x contention relief where 1.5x was asked for.
+
+Two limits on what that measurement shows, recorded so a later reader does not over-read it. It was
+taken **before D-0604** (which scales the fault-injection suite budget from an effective 240s to
+720s) reached this branch, so it is a clean comparison against the pre-change baseline but not a
+measurement of the two changes together; nothing was censored by the old budget either way, since the
+worst `conformance.test.ts` run in the sample reached 139.7s, well inside 240s. And ten jobs cannot
+decide the secondary criterion below, which asks for 30 -- with the further caveat that D-0604 makes
+zero budget-class failures easier to achieve, so that criterion is weaker evidence after D-0604 than
+it was when continuo#83 wrote it.
+
+The comparison against two workers was **not run**: one worker cleared both bars using 42% of the
+cap, so the second sample would have chosen between two affordable settings rather than deciding
+anything, and it was dropped for time at the window. One worker therefore ships as the default, which
+is what this decision records. `CONTINUO_SPAWN_TEST_WORKERS` stays in `scripts/run-suite.mjs` for the
+comparison a future runner change would make worth taking; CI passes no value for it, so the workflow
+file is untouched by this decision.
 
 **Falsifier.** Stated as continuo#83 states it, so that "CI is green now" is not what closes this:
 
@@ -8924,6 +8957,14 @@ becomes E (a larger runner), which is a decision for the human gate, not for thi
 >
 > **Not evidence:** any number of green runs below N=20 (at the measured 17.7% cell rate, N=5 is
 > green by luck 37.8% of the time and N=10 14.3%).
+
+**Where the falsifier stands as this lands.** The primary criterion is **met**: p90 161s to 57.1s,
+against the ~110s the criterion asks for. It was evaluated on 10 jobs rather than 30 because it is a
+measurement of wall time and not a count of failures -- 20 suite runs is a sample of the quantity
+itself, which is exactly why continuo#83 preferred it to a green streak. The secondary criterion is
+**open**: it needs 30 decided executions of `double-green (windows-latest, node 24)` and this
+decision lands with 5. It should be evaluated later, from the Actions API, with D-0604's effect on it
+noted above.
 
 **Source.** Task `continuo-windows-serialize-spawn-tests`, 2026-08-31, implementing the direction
 selected at the human gate on continuo#83 (option B of seven, with the spike measurement named as

@@ -81,9 +81,12 @@ budget is touched (`D-0602`), and Linux still runs one pass exactly as it did.
 
 Two knobs exist for measuring the trade rather than for daily use. `CONTINUO_SERIALIZE_SPAWN_TESTS`
 (`0`/`1`) forces the split off or on whatever the platform, and `CONTINUO_SPAWN_TEST_WORKERS` sets
-how many workers the serialized pass gets (default `1`). Serialization buys contention relief with
-wall time and the Windows cell has the least of it to spend, so which of those settings is right is
-a measurement on that cell, not an opinion. CI sets neither.
+how many workers the serialized pass gets (default `1`, which is what shipped). **CI sets neither**,
+and `tests.yml` is not part of this change. Serialization buys contention relief with wall time, so
+the right setting is a measurement on the cell rather than an opinion: at one worker the Windows job
+p90 went from 930s to 1017s -- 42% of the 40-minute cap, with the worst green job *falling* from
+1864s to 1054s -- while `test/fault_injection/conformance.test.ts` went from a p90 of 161s to 57.1s
+(`D-0048`).
 
 ## Temporary files
 

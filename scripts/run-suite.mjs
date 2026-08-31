@@ -38,14 +38,22 @@
  * ------------------
  * Serialization buys contention relief with wall time, and the Windows cell is
  * the one with the least of it to spend (worst observed green job 1864s against
- * a 2400s `timeout-minutes` cap). Measured on Linux, whole suite minus the file
- * D-1003 already skips on Windows: 58.6s unchanged, 112.4s with the spawning
- * set at one worker (1.92x), 71.1s with it at two workers (1.21x). Those ratios
- * are an upper bound for Windows rather than a prediction -- part of what
- * serialization removes on Windows is the contention that makes each file slow
- * in the first place -- but they are the reason `CONTINUO_SPAWN_TEST_WORKERS`
- * exists: the choice between one worker and two is a measurement on the Windows
- * cell, not an opinion.
+ * a 2400s `timeout-minutes` cap). On Linux, whole suite minus the file D-1003
+ * already skips on Windows: 58.6s unchanged, 112.4s with the spawning set at one
+ * worker (1.92x), 71.1s with it at two workers (1.21x) -- which made one worker
+ * look unaffordable on the worst Windows job, and is why the count is a variable
+ * at all.
+ *
+ * On the Windows cell itself it did not cost that. Ten green jobs at one worker
+ * (D-0048): p90 job wall 1017s against 930s before, 42% of the cap, and the
+ * worst green job *fell* from 1864s to 1054s; `conformance.test.ts` went from a
+ * p90 of 161s to 57.1s. The Linux ratio was an upper bound rather than a
+ * prediction, because part of what serialization removes on Windows is the
+ * contention that made each file slow to begin with.
+ *
+ * So one worker is the default and CI passes nothing.
+ * `CONTINUO_SPAWN_TEST_WORKERS` stays for the comparison a different runner
+ * would make worth taking again.
  */
 
 import { spawnSync } from "node:child_process";
