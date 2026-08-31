@@ -16,7 +16,7 @@ import { describe, expect, test } from "vitest";
 
 import { expectRefusal } from "../testkit/errors.js";
 import * as contract from "./contract.js";
-import { ContractViolation, caseSeed, resolveSkewMs } from "./contract.js";
+import { ContractViolation, caseSeed, type FaultCase, resolveSkewMs } from "./contract.js";
 import { caseTestTitle, escapeTestNamePattern, reproLine } from "./controller.js";
 import {
   buildManifest,
@@ -29,11 +29,16 @@ import {
   validateManifest,
 } from "./manifest.js";
 import {
+  barrierTimeoutS,
+  caseTimeoutS,
   DEFAULT_SUITE_SEED,
   installSuiteBudget,
+  PORT_BUDGET_SCALE,
   manifest as policyManifest,
   profile,
+  RUNNER_BUDGET_CEILING_S,
   SUITE_SEED_ENV,
+  suiteBudgetS,
   suiteSeed,
 } from "./policy.js";
 
@@ -493,6 +498,31 @@ describe("validation refuses", () => {
 // ---------------------------------------------------------------------------
 
 describe("the budgets", () => {
+  test("target-only -- every budget the belt enforces is scaled for this port, the suite one included", () => {
+    // D-0604. The manifest's numbers are interlock's and the case above asserts
+    // them literally; what this asserts is that nothing READS one of them raw.
+    // D-0602 scaled the per-case and per-barrier watchdogs and left the suite
+    // budget unscaled, so `fast`'s 240s stayed calibrated on interlock's
+    // runners while everything around it moved -- and a green Windows run
+    // already spent a p90 of 161s of it (continuo#94). This is the guard that
+    // makes a fourth budget added without the scale a red test here.
+    const profiles = loadManifest()["profiles"] as Record<string, Record<string, unknown>>;
+    const fast = profiles["fast"] as Record<string, unknown>;
+    const singleCase = { targets: ["dispatcher"], fault: "sigkill" } as unknown as FaultCase;
+
+    expect(suiteBudgetS(fast)).toBe(Number(fast["suite_timeout_s"]) * PORT_BUDGET_SCALE);
+    expect(caseTimeoutS(singleCase, fast)).toBe(
+      Number(fast["per_case_timeout_s"]) * PORT_BUDGET_SCALE,
+    );
+    expect(barrierTimeoutS(fast)).toBe(Number(fast["barrier_timeout_s"]) * PORT_BUDGET_SCALE);
+
+    // And the suite budget is the one that must NOT be held under the runner
+    // ceiling: it is checked in `afterAll` against the file's wall time and
+    // races no per-test timeout, so capping it would cut 240s to 50s rather
+    // than protect an attributable failure.
+    expect(suiteBudgetS(fast)).toBeGreaterThan(RUNNER_BUDGET_CEILING_S);
+  });
+
   test("the profiles carry the budgets the watchdogs enforce", () => {
     // These are harness engineering parameters, not acceptance thresholds. They
     // are revisable by an ordinary reviewed diff and require no `D-` entry.
