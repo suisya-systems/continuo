@@ -8807,9 +8807,12 @@ of it -- and the failure message now prints the manifest's raw number and the sc
 effective one, so the diff to argue about is visible from the log alone. If the scale is ever
 suspected of hiding growth, the measurement to redo is continuo#94's: sample the file's wall time
 over green Windows jobs and compare the p90 against the *unscaled* budget. If a fourth budget is
-ever added to the belt and read raw, `every budget the belt enforces is scaled for this port, the
-suite one included` (`test/fault_injection/manifest.test.ts`) goes red rather than the omission
-surviving a second time.
+ever added to the belt and read raw, `no budget in \`policy.ts\` is read outside the functions that
+scale it` (`test/fault_injection/manifest.test.ts`) goes red rather than the omission surviving a
+second time -- and its sibling case asserts the ENFORCER, `suiteBudgetViolation`, not just
+`suiteBudgetS`'s arithmetic, which is the review gate's correction on this change: a guard that
+checked only the helper would have been green over exactly the defect being repaired. Both were
+observed red before they were kept.
 
 **Source.** Human gate, 2026-08-31, task `continuo-suite-budget-scale`, on continuo#94 (whose body
 is the primary specification and carries the measurements above). Decision id allocated inside the
