@@ -56,21 +56,36 @@ installSuiteBudget(BUDGET_PROFILE);
 
 /**
  * Every place a `*_timeout_s` budget is read off a profile, with the top-level
- * function it sits in -- the matcher behind D-0604's raw-read scan.
+ * binding it sits under -- the matcher behind D-0604's raw-read scan.
  *
  * Deliberately a line scan rather than a parse: the rule is about which
- * function a read appears in, the file is one this belt owns, and a scan that
- * a reader can check by eye is the belt's own idiom (see `protocol.test.ts`'s
- * ceiling scan). Exported to its own function so the case can run it over a
- * snippet that really does violate the rule.
+ * function a read appears in, the file is one this belt owns, and a scan a
+ * reader can check by eye is the belt's own idiom (see `protocol.test.ts`'s
+ * ceiling scan). What it must not do is attribute a read to the WRONG owner and
+ * then find it allowlisted, so attribution is reset by any column-0 binding --
+ * `function`, `const`/`let`/`var` (an arrow watchdog is a `const`), `class` --
+ * and by a column-0 `}`, which ends a top-level block and puts the following
+ * lines back at file scope. A column-0 `)` does NOT reset: it closes a
+ * multi-line parameter list, and treating it as an end of block loses the body
+ * that follows it. Only a read genuinely inside an allowlisted
+ * function's body can therefore carry that function's name.
+ *
+ * Its own function so a case can run it over snippets that really do violate
+ * the rule.
  */
 function rawBudgetReads(source: string): { fn: string; line: number }[] {
   const hits: { fn: string; line: number }[] = [];
-  let current = "<file scope>";
+  const FILE_SCOPE = "<file scope>";
+  let current = FILE_SCOPE;
   for (const [index, line] of source.split("\n").entries()) {
-    const declaration = /^(?:export )?function ([A-Za-z0-9_]+)/.exec(line);
-    if (declaration !== null) {
-      current = declaration[1] as string;
+    const binding =
+      /^(?:export )?(?:default )?(?:async )?(?:function|const|let|var|class)\s+([A-Za-z0-9_$]+)/.exec(
+        line,
+      );
+    if (binding !== null) {
+      current = binding[1] as string;
+    } else if (/^}/.test(line)) {
+      current = FILE_SCOPE;
     }
     if (/\[\s*"[a-z_]*timeout_s"\s*\]/.test(line)) {
       hits.push({ fn: current, line: index + 1 });
@@ -591,7 +606,15 @@ describe("the budgets", () => {
           "than it looks",
       ).toBe(true);
     }
-    // ... and it really does flag one that is out of place.
+    // ... and it really does flag ones that are out of place. Three shapes,
+    // because two of them are how a line scan quietly stops working: a read
+    // attributed to the allowlisted function ABOVE it would be green while the
+    // rule it claims to enforce is broken (review gate, round 3).
+    const allowedBody = [
+      "export function suiteBudgetS(p: Record<string, unknown>): number {",
+      '  return Number(p["suite_timeout_s"]) * PORT_BUDGET_SCALE;',
+      "}",
+    ];
     expect(
       rawBudgetReads(
         [
@@ -600,7 +623,25 @@ describe("the budgets", () => {
           "}",
         ].join("\n"),
       ).map((hit) => hit.fn),
+      "a plain function declaration reading a budget raw",
     ).toEqual(["newWatchdogS"]);
+    expect(
+      rawBudgetReads(
+        [
+          ...allowedBody,
+          "",
+          "const newWatchdogS = (p: Record<string, unknown>): number =>",
+          '  Number(p["per_case_timeout_s"]);',
+        ].join("\n"),
+      ).map((hit) => hit.fn),
+      "an arrow watchdog after an allowlisted function -- attributed to itself, not to it",
+    ).toEqual(["suiteBudgetS", "newWatchdogS"]);
+    expect(
+      rawBudgetReads(
+        [...allowedBody, "", 'const RAW_S = PROFILES["fast"]["suite_timeout_s"];'].join("\n"),
+      ).map((hit) => hit.fn),
+      "a file-scope read after an allowlisted function -- likewise",
+    ).toEqual(["suiteBudgetS", "RAW_S"]);
 
     expect(
       found.filter((hit) => !allowed.has(hit.fn)).map((hit) => `${hit.fn}:${hit.line}`),
