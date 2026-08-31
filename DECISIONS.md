@@ -8966,6 +8966,8 @@ itself, which is exactly why continuo#83 preferred it to a green streak. The sec
 decision lands with 5. It should be evaluated later, from the Actions API, with D-0604's effect on it
 noted above.
 
+**Status.** accepted (2026-08-31)
+
 **Source.** Task `continuo-windows-serialize-spawn-tests`, 2026-08-31, implementing the direction
 selected at the human gate on continuo#83 (option B of seven, with the spike measurement named as
 part of the recommendation). Decision id from the `D-0019`..`D-0099` shared band for cross-belt
