@@ -238,23 +238,53 @@ export function laneSkipReason(faultCase: FaultCase): string | null {
  * Wall time rather than summed per-test durations, which is the other small
  * divergence: it additionally charges the file's imports and hooks, so it is
  * marginally stricter than the source, never looser.
+ *
+ * The budget it enforces is {@link suiteBudgetS}, not the manifest's raw
+ * number: this is a budget in the same belt, met by the same runners, as the
+ * two D-0602 already scales (D-0604). The comparison lives in
+ * {@link suiteBudgetViolation} so that it is reachable from a test; this
+ * function is the clock and the hooks, and nothing else.
  */
 export function installSuiteBudget(activeProfile: Record<string, unknown>): void {
-  const budgetS = Number(activeProfile["suite_timeout_s"]);
   let startedAtMs = 0;
   beforeAll(() => {
     startedAtMs = performance.now();
   });
   afterAll(() => {
-    const elapsedS = (performance.now() - startedAtMs) / 1000;
-    if (elapsedS > budgetS) {
-      throw new ContractViolation(
-        `the ${String(activeProfile["name"])} profile spent ${elapsedS.toFixed(0)}s in this ` +
-          `fault-injection file, over its ${budgetS.toFixed(0)}s suite budget (design 9): ` +
-          "prune the matrix or raise the budget in an explicit diff",
-      );
+    const violation = suiteBudgetViolation(activeProfile, (performance.now() - startedAtMs) / 1000);
+    if (violation !== null) {
+      throw new ContractViolation(violation);
     }
   });
+}
+
+/**
+ * The budget comparison itself, as a pure function of the profile and the
+ * elapsed seconds -- so the rule can be tested without a hook.
+ *
+ * {@link installSuiteBudget} contributes only the clock; everything that could
+ * be wrong about the budget is here, where a test can call it. That split is
+ * the review gate's on D-0604: a guard that checks {@link suiteBudgetS}'s
+ * arithmetic while the enforcer goes on reading the profile raw would be green
+ * over exactly the defect D-0604 repairs.
+ *
+ * Returns the failure message, or `null` when the file is inside its budget.
+ */
+export function suiteBudgetViolation(
+  activeProfile: Record<string, unknown>,
+  elapsedS: number,
+): string | null {
+  const budgetS = suiteBudgetS(activeProfile);
+  if (elapsedS <= budgetS) {
+    return null;
+  }
+  return (
+    `the ${String(activeProfile["name"])} profile spent ${elapsedS.toFixed(0)}s in this ` +
+    `fault-injection file, over its ${budgetS.toFixed(0)}s suite budget (design 9 -- the ` +
+    `manifest's ${Number(activeProfile["suite_timeout_s"]).toFixed(0)}s scaled by ` +
+    `${PORT_BUDGET_SCALE}x for this port's runners, D-0602/D-0604): ` +
+    "prune the matrix or raise the budget in an explicit diff"
+  );
 }
 
 /**
@@ -335,4 +365,29 @@ export function caseTimeoutS(faultCase: FaultCase, activeProfile: Record<string,
 /** The per-barrier watchdog (design 8.2), scaled for this port on the same grounds. */
 export function barrierTimeoutS(activeProfile: Record<string, unknown>): number {
   return scaled(Number(activeProfile["barrier_timeout_s"]));
+}
+
+/**
+ * The suite budget (design 9), scaled for this port -- and NOT held under the
+ * runner ceiling (D-0604).
+ *
+ * D-0602 scaled the per-case and per-barrier watchdogs and left this one
+ * reading the manifest raw, which made it the single budget in the belt still
+ * calibrated on interlock's runners. It meets continuo's exactly as the other
+ * two do, and the measurement is continuo#94's: over 30 green Windows jobs,
+ * `conformance.test.ts` spent a p50 of 129s and a p90 of 161s of the `fast`
+ * profile's 240s, so a 1.25x wobble on a *passing* run tripped it -- and
+ * `over its 240s suite budget` accounts for 10 of the belt's 40 Windows
+ * failures.
+ *
+ * {@link scaledBudgetS} is deliberately not used. Its
+ * {@link RUNNER_BUDGET_CEILING_S} exists because a CASE budget races Vitest's
+ * per-test `testTimeout`, and losing that race costs the attributable failure.
+ * This budget races nothing: it is measured in `afterAll` over the file's own
+ * wall time, so the ceiling would not protect anything and would instead cut
+ * the `fast` profile's 240s down to 50s. Scale without the cap; the manifest's
+ * numbers still are not touched.
+ */
+export function suiteBudgetS(activeProfile: Record<string, unknown>): number {
+  return Number(activeProfile["suite_timeout_s"]) * PORT_BUDGET_SCALE;
 }

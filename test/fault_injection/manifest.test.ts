@@ -10,13 +10,15 @@
  */
 
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
 import { expectRefusal } from "../testkit/errors.js";
 import * as contract from "./contract.js";
-import { ContractViolation, caseSeed, resolveSkewMs } from "./contract.js";
+import { ContractViolation, caseSeed, type FaultCase, resolveSkewMs } from "./contract.js";
 import { caseTestTitle, escapeTestNamePattern, reproLine } from "./controller.js";
 import {
   buildManifest,
@@ -29,11 +31,17 @@ import {
   validateManifest,
 } from "./manifest.js";
 import {
+  barrierTimeoutS,
+  caseTimeoutS,
   DEFAULT_SUITE_SEED,
   installSuiteBudget,
+  PORT_BUDGET_SCALE,
   manifest as policyManifest,
   profile,
+  RUNNER_BUDGET_CEILING_S,
   SUITE_SEED_ENV,
+  suiteBudgetS,
+  suiteBudgetViolation,
   suiteSeed,
 } from "./policy.js";
 
@@ -45,6 +53,46 @@ type CaseEntry = Record<string, unknown>;
 // see `installSuiteBudget` for why, and for what that narrowing does and does
 // not catch.
 installSuiteBudget(BUDGET_PROFILE);
+
+/**
+ * Every place a `*_timeout_s` budget is read off a profile, with the top-level
+ * binding it sits under -- the matcher behind D-0604's raw-read scan.
+ *
+ * Deliberately a line scan rather than a parse: the rule is about which
+ * function a read appears in, the file is one this belt owns, and a scan a
+ * reader can check by eye is the belt's own idiom (see `protocol.test.ts`'s
+ * ceiling scan). What it must not do is attribute a read to the WRONG owner and
+ * then find it allowlisted, so attribution is reset by any column-0 binding --
+ * `function`, `const`/`let`/`var` (an arrow watchdog is a `const`), `class` --
+ * and by a column-0 `}`, which ends a top-level block and puts the following
+ * lines back at file scope. A column-0 `)` does NOT reset: it closes a
+ * multi-line parameter list, and treating it as an end of block loses the body
+ * that follows it. Only a read genuinely inside an allowlisted
+ * function's body can therefore carry that function's name.
+ *
+ * Its own function so a case can run it over snippets that really do violate
+ * the rule.
+ */
+function rawBudgetReads(source: string): { fn: string; line: number }[] {
+  const hits: { fn: string; line: number }[] = [];
+  const FILE_SCOPE = "<file scope>";
+  let current = FILE_SCOPE;
+  for (const [index, line] of source.split("\n").entries()) {
+    const binding =
+      /^(?:export )?(?:default )?(?:async )?(?:function|const|let|var|class)\s+([A-Za-z0-9_$]+)/.exec(
+        line,
+      );
+    if (binding !== null) {
+      current = binding[1] as string;
+    } else if (/^}/.test(line)) {
+      current = FILE_SCOPE;
+    }
+    if (/\[\s*"[a-z_]*timeout_s"\s*\]/.test(line)) {
+      hits.push({ fn: current, line: index + 1 });
+    }
+  }
+  return hits;
+}
 
 /** A deep copy, so a mutation made to provoke a refusal cannot leak. */
 function copy<T>(value: T): T {
@@ -493,6 +541,115 @@ describe("validation refuses", () => {
 // ---------------------------------------------------------------------------
 
 describe("the budgets", () => {
+  test("target-only -- every budget the belt enforces is scaled for this port, the suite one included", () => {
+    // D-0604. The manifest's numbers are interlock's and the case below asserts
+    // them literally; what this asserts is that nothing ENFORCES one of them
+    // raw. D-0602 scaled the per-case and per-barrier watchdogs and left the
+    // suite budget unscaled, so `fast`'s 240s stayed calibrated on interlock's
+    // runners while everything around it moved -- and a green Windows run
+    // already spent a p90 of 161s of it (continuo#94).
+    const profiles = loadManifest()["profiles"] as Record<string, Record<string, unknown>>;
+    const fast = { ...profiles["fast"], name: "fast" } as Record<string, unknown>;
+    const rawSuiteS = Number(fast["suite_timeout_s"]);
+    const singleCase = { targets: ["dispatcher"], fault: "sigkill" } as unknown as FaultCase;
+
+    expect(suiteBudgetS(fast)).toBe(rawSuiteS * PORT_BUDGET_SCALE);
+    expect(caseTimeoutS(singleCase, fast)).toBe(
+      Number(fast["per_case_timeout_s"]) * PORT_BUDGET_SCALE,
+    );
+    expect(barrierTimeoutS(fast)).toBe(Number(fast["barrier_timeout_s"]) * PORT_BUDGET_SCALE);
+
+    // The ENFORCER, not just the helper's arithmetic: a file that runs past the
+    // manifest's raw number but inside the scaled one is not a violation. This
+    // is the assertion that goes red if `installSuiteBudget` is changed back to
+    // reading the profile directly -- the defect D-0604 repairs.
+    expect(suiteBudgetViolation(fast, rawSuiteS + 1)).toBeNull();
+    expect(suiteBudgetViolation(fast, suiteBudgetS(fast) - 1)).toBeNull();
+    const violation = suiteBudgetViolation(fast, suiteBudgetS(fast) + 1);
+    expect(violation).toContain(`over its ${suiteBudgetS(fast)}s suite budget`);
+    // and it names the manifest's own number beside the scaled one, so a
+    // failing log does not send a reader looking for 720 in the manifest.
+    expect(violation).toContain(`${rawSuiteS}s scaled by ${PORT_BUDGET_SCALE}x`);
+
+    // The suite budget is the one budget that must NOT be held under the runner
+    // ceiling: it is compared against the file's wall time after every test has
+    // finished and races no per-test timeout, so capping it would cut 240s to
+    // 50s rather than protect an attributable failure.
+    expect(suiteBudgetS(fast)).toBeGreaterThan(RUNNER_BUDGET_CEILING_S);
+  });
+
+  test("target-only -- no budget in `policy.ts` is read outside the functions that scale it", () => {
+    // The other half of D-0604's claim, and the half that catches a FOURTH
+    // budget rather than this one regressing: any `*_timeout_s` read from a
+    // profile must sit inside one of the three scale functions (or the message
+    // builder, which prints the manifest's raw number on purpose). A new
+    // watchdog reading the profile directly -- exactly how the suite budget
+    // came to be the odd one out -- is an offender here.
+    //
+    // The scan sees literal keys only, which is the one thing it cannot check:
+    // `caseTimeoutS` picks its key with a variable (`per_case` or
+    // `combination`) and is therefore invisible here -- the case above covers
+    // that one behaviourally instead.
+    const allowed = new Set(["suiteBudgetS", "barrierTimeoutS", "suiteBudgetViolation"]);
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "policy.ts"), "utf8");
+    const found = rawBudgetReads(source);
+
+    // Anti-vacuity, both directions: the scan sees the reads that are there ...
+    expect(
+      found.map((hit) => hit.fn).sort(),
+      "the scan found no budget read at all in policy.ts, so it proves nothing",
+    ).not.toEqual([]);
+    for (const name of allowed) {
+      expect(
+        found.some((hit) => hit.fn === name),
+        `${name} reads no budget, so the allowlist entry is stale and the scan is weaker ` +
+          "than it looks",
+      ).toBe(true);
+    }
+    // ... and it really does flag ones that are out of place. Three shapes,
+    // because two of them are how a line scan quietly stops working: a read
+    // attributed to the allowlisted function ABOVE it would be green while the
+    // rule it claims to enforce is broken (review gate, round 3).
+    const allowedBody = [
+      "export function suiteBudgetS(p: Record<string, unknown>): number {",
+      '  return Number(p["suite_timeout_s"]) * PORT_BUDGET_SCALE;',
+      "}",
+    ];
+    expect(
+      rawBudgetReads(
+        [
+          "function newWatchdogS(p: Record<string, unknown>): number {",
+          '  return Number(p["per_case_timeout_s"]);',
+          "}",
+        ].join("\n"),
+      ).map((hit) => hit.fn),
+      "a plain function declaration reading a budget raw",
+    ).toEqual(["newWatchdogS"]);
+    expect(
+      rawBudgetReads(
+        [
+          ...allowedBody,
+          "",
+          "const newWatchdogS = (p: Record<string, unknown>): number =>",
+          '  Number(p["per_case_timeout_s"]);',
+        ].join("\n"),
+      ).map((hit) => hit.fn),
+      "an arrow watchdog after an allowlisted function -- attributed to itself, not to it",
+    ).toEqual(["suiteBudgetS", "newWatchdogS"]);
+    expect(
+      rawBudgetReads(
+        [...allowedBody, "", 'const RAW_S = PROFILES["fast"]["suite_timeout_s"];'].join("\n"),
+      ).map((hit) => hit.fn),
+      "a file-scope read after an allowlisted function -- likewise",
+    ).toEqual(["suiteBudgetS", "RAW_S"]);
+
+    expect(
+      found.filter((hit) => !allowed.has(hit.fn)).map((hit) => `${hit.fn}:${hit.line}`),
+      "a fault-injection budget is read outside the functions that scale it for this port " +
+        "(D-0602/D-0604); route it through `scaledBudgetS` or `suiteBudgetS`",
+    ).toEqual([]);
+  });
+
   test("the profiles carry the budgets the watchdogs enforce", () => {
     // These are harness engineering parameters, not acceptance thresholds. They
     // are revisable by an ordinary reviewed diff and require no `D-` entry.

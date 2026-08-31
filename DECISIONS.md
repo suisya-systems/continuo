@@ -128,6 +128,7 @@ spaces distinct.
 | D-0701 | The secretary belt takes `D-07xx`; `submit()` is synchronous, and the stall is proved by state order | accepted |
 | D-0801 | The gate_item2 belt takes `D-08xx`; `SessionOrchestrator` is `async` end to end, and the session-driver-harness file is deferred | accepted |
 | D-0603 | The session adapter's driver command needs `--experimental-transform-types`, not `--experimental-strip-types` | accepted |
+| D-0604 | D-0602's scale reaches the suite budget too: `installSuiteBudget` stops reading `suite_timeout_s` raw, and the ceiling stays off it | accepted |
 | D-0802 | D-0801's deferred session-driver-harness file lands; no dedicated reaper for the destination's grandchild | accepted |
 | D-0901 | The attention belt takes `D-09xx`; the six-name fact vocabulary is adopted, not merely restated | accepted |
 | D-0902 | A1 lands the one `config.ts` constant its classifier imports; the config belt stays A2's | accepted |
@@ -8744,3 +8745,82 @@ discriminator has stopped discriminating and part 1 has failed on its own terms.
 (`D-0019`..`D-0099`): the change straddles the session belt (`FailureKind` in
 `src/session/provider.ts`) and the gate_item2 belt (`src/supervisor.ts`), and the adoption itself
 was taken at the window rather than inside either belt's work.
+
+---
+
+## D-0604 -- D-0602's scale reaches the suite budget too: `installSuiteBudget` stops reading `suite_timeout_s` raw, and the ceiling stays off it
+
+**Context.** `D-0602` scaled this belt's watchdogs for continuo's runners by `PORT_BUDGET_SCALE = 3`,
+applied where a budget is *used* so the manifest keeps interlock's numbers. It reached two of the
+three budgets. `policy.installSuiteBudget()` -- the design-section-9 growth check every belt file
+installs -- kept reading `suite_timeout_s` straight out of the profile, so the `fast` profile's 240s
+was the one budget in the belt still calibrated on interlock's CI while the per-case and per-barrier
+ones around it had already moved. Nothing chose that; `D-0602` simply did not enumerate this call
+site, and under this file's append-only rule that entry is left exactly as written -- this one
+carries the correction.
+
+The measurement is continuo#94's. Thirty *green* Windows jobs (2026-08-28..30), 60 suite runs, wall
+time of `test/fault_injection/conformance.test.ts`:
+
+    n=60   min 49s   p50 129s   p90 161s   max 195s
+    as a fraction of the 240s budget:  p50 54%   p90 67%   max 81%
+
+A passing Windows run already spent over half the file budget, and the worst passing run 81% -- a
+1.25x wobble from the p90 *green* run trips it. Over the repository's life, `over its 240s suite
+budget` appears in **10 of the 40** Windows `double-green` job failures (workflow `tests`, id
+`339613836`, every job execution, all attempts, 2026-08-21..2026-08-30; `cancelled` excluded), so
+about a quarter of all Windows failures came through this one unscaled number. That is the same
+runner weather `D-0602` measured, arriving at the one budget `D-0602` missed.
+
+**Decision.** The suite budget is scaled like the other two. `policy.suiteBudgetS(profile)` returns
+`suite_timeout_s * PORT_BUDGET_SCALE`, and the comparison itself is `policy.suiteBudgetViolation()`,
+a pure function of the profile and the elapsed seconds that `installSuiteBudget()` wires to a clock
+-- so the enforcement path is reachable from a test rather than only from a hook. `fast` becomes
+240s -> 720s effective and `full` 1500s -> 4500s. **No number in `manifest.ts` changes**, exactly as
+`D-0602` ruled: the profile numbers stay interlock's, and `the profiles carry the budgets the
+watchdogs enforce` still asserts them literally. The failure message prints the manifest's raw
+number and the scale beside the effective one, so a failing log does not send a reader looking for
+720 in a manifest that says 240.
+
+**Alternatives.**
+
+- **Reuse `scaledBudgetS()`, which every other scaled budget uses.** Rejected: it would cap the
+  suite budget at `RUNNER_BUDGET_CEILING_S = 50` and turn `fast`'s 240s into 50s. That ceiling
+  exists for a specific race -- a *case* budget competes with Vitest's per-test `testTimeout`, and
+  if the runner wins, the failure stops naming the case. The suite budget races nothing: it is a
+  comparison made in `afterAll` against the file's own wall time, after every test has finished. The
+  ceiling would protect nothing here and only mis-scale, so `suiteBudgetS()` is a separate function
+  and says so at its definition.
+- **Raise `suite_timeout_s` in the manifest.** Rejected on `D-0602`'s grounds and `D-0029`'s: it is
+  the "raise the timeout" move `D-0029` and `D-1003` both anti-recommend, it invents a threshold,
+  and a ported case asserts interlock's numbers literally. Scaling at the point of use invents
+  nothing -- the factor is the one `D-0602` already established with its own measurement.
+- **Fold this into continuo#83's Windows-flake work.** Rejected deliberately: #83's direction is
+  serialization of the child-process-spawning tests, and its AC-3 requires the chosen direction not
+  to share a diff with adjacent repairs. The two are independent and can land in either order.
+
+**Consequences.** The growth detector on these files is weakened: 240s -> 720s of effective
+headroom. Measured green p90 is 161s, so a file would have to become **4.5x** slower than today's
+worst-case-but-passing Windows run before the budget fires. It still detects the unbounded growth
+design section 9 asks it to detect, with a wide margin, and the alternative -- a detector that fires
+on a 1.25x wobble -- mostly reports runner weather. Expected effect, from continuo#94: Windows-only
+red run rate 22.1% -> ~17% (estimate, not a claim this entry rests on).
+
+**Falsifier.** If a belt file's runtime crosses 720s for a reason that is not runner weather, the
+watchdog still fires and still names the profile and the file, which is what design section 9 asks
+of it -- and the message now carries the raw number and the scale, so the diff to argue about is
+visible from the log alone. If the scale is ever suspected of hiding growth, the measurement to redo
+is continuo#94's: sample the file's wall time over green Windows jobs and compare the p90 against
+the *unscaled* budget. If a fourth budget is ever added to the belt and read raw, the case
+"no budget in `policy.ts` is read outside the functions that scale it"
+(`test/fault_injection/manifest.test.ts`) goes red rather than the omission surviving a second time -- and its sibling case asserts the
+ENFORCER, `suiteBudgetViolation`, not just `suiteBudgetS`'s arithmetic, which is the review gate's
+correction on this change: a guard that checked only the helper would have been green over exactly
+the defect being repaired. Both were observed red before they were kept.
+
+**Status.** accepted
+
+**Source.** Human gate, 2026-08-31, task `continuo-suite-budget-scale`, on continuo#94 (whose body
+is the primary specification and carries the measurements above). Decision id allocated inside the
+fault-injection belt's band (`D-06xx`, `D-0601`), following `D-0603`: this amends `D-0602`'s
+implementation within the belt that owns it and takes no ruling outside it.
