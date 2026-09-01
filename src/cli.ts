@@ -91,7 +91,7 @@ function defaultStreams(): ArgparseStreams {
 export function buildParser(): ArgumentParser {
   const parser = new ArgumentParser(
     "continuo",
-    "TypeScript runtime for the Interlock control plane: the read-only " +
+    "TypeScript runtime for the continuo control plane: the read-only " +
       "measurement harness, the worker settings generator, and the sandbox " +
       "preflight.",
   );

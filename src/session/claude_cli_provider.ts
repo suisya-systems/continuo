@@ -168,7 +168,7 @@ const CLI_ARGS_SETTING = "cli_args";
 
 /** The prompt a start carries when the caller named none. */
 const DEFAULT_PROMPT =
-  "You are a supervised Interlock worker session. Confirm you are running " +
+  "You are a supervised continuo worker session. Confirm you are running " +
   "and await instructions delivered separately.";
 
 /** The prompt a resume carries when the caller named none at start. */

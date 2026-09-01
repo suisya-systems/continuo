@@ -259,7 +259,7 @@ export async function decidePayload(fencePath, event, options = {}) {
       throw error;
     }
     const decision = denySelfCheck(
-      "Interlock cannot read its own fence, so it cannot tell whether this " +
+      "continuo cannot read its own fence, so it cannot tell whether this " +
         `call is permitted: ${errorText(error)}`,
     );
     return [decision, hookOutput(decision)];
@@ -348,7 +348,7 @@ function denySelfCheck(reason) {
 // argument parsing
 // ---------------------------------------------------------------------------
 
-const PROG = "interlock-fence-hook";
+const PROG = "continuo-fence-hook";
 const USAGE = `usage: ${PROG} [-h] --fence FENCE [--role ROLE]`;
 /**
  * The full `--help` text.
@@ -361,7 +361,7 @@ const USAGE = `usage: ${PROG} [-h] --fence FENCE [--role ROLE]`;
  */
 const HELP_TEXT = `${USAGE}
 
-Interlock PreToolUse deny hook. Reads the hook event on stdin, evaluates it
+continuo PreToolUse deny hook. Reads the hook event on stdin, evaluates it
 against the persisted per-role fence, and denies on stdout with exit 2. Fails
 closed on every error.
 
@@ -894,7 +894,7 @@ export async function main(argv = process.argv.slice(2)) {
       // load. Reaching the interpreter's own error handling here would exit 1,
       // the status i04 section 4 measured being absorbed.
       const reason =
-        "Interlock deny hook could not load its own fence logic and denied " +
+        "continuo deny hook could not load its own fence logic and denied " +
         `by default: ${formatError(error)}`;
       writeStdout(dumps(literalDenyPayload(reason)));
       writeStderr(`${reason}\n`);
@@ -954,7 +954,7 @@ export async function main(argv = process.argv.slice(2)) {
       // Anything at all, including a bug in this file, denies. An unhandled
       // throw would exit 1, and A6 measured exit 1 being absorbed.
       decision = denySelfCheck(
-        `Interlock deny hook failed and denied by default: ${formatError(error)}`,
+        `continuo deny hook failed and denied by default: ${formatError(error)}`,
       );
       payload = hookOutput(decision);
     }
@@ -970,7 +970,7 @@ export async function main(argv = process.argv.slice(2)) {
     // above. There is no state left worth reporting accurately, and the one
     // thing that must still hold is that this call does not raise and does not
     // resolve to 1.
-    writeStderr(`Interlock deny hook failed while denying: ${formatError(error)}\n`);
+    writeStderr(`continuo deny hook failed while denying: ${formatError(error)}\n`);
     return EXIT_DENY;
   }
 }
@@ -1366,7 +1366,7 @@ function realpathSafe(path) {
 let fatalDeny = false;
 
 function denyAndExit(error) {
-  const reason = `Interlock deny hook failed and denied by default: ${formatError(error)}`;
+  const reason = `continuo deny hook failed and denied by default: ${formatError(error)}`;
   if (!payloadWritten) {
     writeStdout(dumps(literalDenyPayload(reason)));
   }

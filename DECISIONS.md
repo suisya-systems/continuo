@@ -143,6 +143,7 @@ spaces distinct.
 | D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
 | D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
 | D-0048 | Windows runs the child-process-spawning tests apart from the rest of the suite | accepted |
+| D-0049 | The runtime surfaces continuo operates -- the fence hook, the default worker prompt and the CLI descriptions -- say `continuo`, not `Interlock` | accepted |
 
 ---
 
@@ -8973,3 +8974,115 @@ selected at the human gate on continuo#83 (option B of seven, with the spike mea
 part of the recommendation). Decision id from the `D-0019`..`D-0099` shared band for cross-belt
 decisions taken at the window; this one is not owned by a belt, since the runner entry point is
 shared by all of them.
+
+## D-0049 -- The runtime surfaces continuo operates say `continuo`, not `Interlock`
+
+**Context.** Continuo carries interlock's source text faithfully, and for the test suite that
+faithfulness is the whole discipline (`AGENTS.md` section 1). A set of runtime strings inherited that
+discipline by accident rather than by decision. They are not assertions and no case reads them; they
+are what an operator or a spawned worker sees at runtime.
+
+**The inventory, counted two ways.** Nine distinct strings, at ten sites -- one message text appears
+at two sites. Counts below are of *distinct strings* unless a site count is given.
+
+Carried byte-verbatim from interlock at `65f36c5` -- **seven strings, eight sites**:
+
+| # | String | Site | Interlock source |
+|---|---|---|---|
+| 1 | the `argparse` program name `interlock-fence-hook`, printed in the usage line and every argument error | `src/fencing/hook.mjs` `PROG` | `fencing/hook.py` |
+| 2 | the `--help` description opening *"Interlock PreToolUse deny hook."* | `src/fencing/hook.mjs` `HELP_TEXT` | `fencing/hook.py` |
+| 3 | *"Interlock cannot read its own fence, so it cannot tell whether this ..."* | `src/fencing/hook.mjs` | `fencing/hook.py` |
+| 4 | *"Interlock deny hook could not load its own fence logic and denied ..."* | `src/fencing/hook.mjs` | `fencing/hook.py` |
+| 5 | *"Interlock deny hook failed and denied by default: ..."* | `src/fencing/hook.mjs`, **two sites** | `fencing/hook.py` |
+| 6 | the default prompt handed to a `claude -p` child: *"You are a supervised Interlock worker session ..."* | `src/session/claude_cli_provider.ts` | `session/claude_cli_provider.py:155-156` |
+| 7 | *"Measurement harness for the Interlock control plane"* | `src/measurement/cli.ts`, the belt's **standalone** parser (prog `continuo measure`, *"for driving this command without the top-level CLI"*) | `measurement/cli.py:341` |
+
+Not carried -- continuo's own text -- **two strings, two sites**:
+
+| # | String | Site | Why it is continuo's |
+|---|---|---|---|
+| 8 | *"TypeScript runtime for the Interlock control plane"* | `src/cli.ts`, the top-level parser | interlock has no such string; a TypeScript runtime is not something it could have described. The sibling descriptions in the same two files all say *"a production control plane"*. |
+| 9 | *"Interlock deny hook failed while denying: ..."* | `src/fencing/hook.mjs`, the last-resort `catch` around the deny path | the `catch` itself is continuo's; interlock's `hook.py` has no such guard, and its only `Interlock ...` message strings are items 1-5 above. |
+
+Item 7 is **not** the description the mounted `continuo measure` subcommand prints: that one is
+declared in `src/cli.ts` and already said *"a production control plane"*.
+
+An operator running continuo does not run Interlock. A worker continuo spawns is not an Interlock
+worker session. The strings named a system that is not there.
+
+**Decision.** All nine strings say `continuo`, at all ten sites. `PROG` becomes
+`continuo-fence-hook`; the hook's `--help` description, its three distinct carried messages (items
+3-5, at four sites) and continuo's own last-resort message are reworded to match; the default worker
+prompt says *"a supervised continuo worker session"*; the top-level and standalone-measurement
+descriptions both say *"the continuo control plane"*.
+
+Three things this decision does **not** do:
+
+1. **It does not touch anything a case asserts.** Every literal a ported or adapted case reads keeps
+   interlock's spelling: `INTERLOCK_MESSAGEBUS_*` and `interlock-messagebus`
+   (`test/messagebus/endpoint.test.ts`, and `D-0502` decides them besides),
+   `interlock-measurement-report` (`test/measurement/cli.test.ts:223`, from a **ported** case),
+   `interlock-breach-witness` (in the pinned oracle vector), the hook's `interlock` payload key
+   (`D-0201`, *"the wire key, verbatim"*), and the uuid5 namespace at `src/session/uuid5.ts:120`,
+   which every derived session UUID depends on.
+2. **It does not touch identifiers anything outside this repository reads.**
+   `INTERLOCK_STUB_STATE_FILE` and `INTERLOCK_SESSION_UUID` keep their names for the reason `D-0502`
+   already gave: the name is read by a configuration file this repository does not own.
+3. **It does not touch `owning_system = 'interlock'`**, the canary's persisted vocabulary. That one
+   is a `CHECK` constraint plus roughly thirty ported assertions; it is documented rather than
+   changed (`src/canary/ledger.ts`).
+
+The line the decision draws is therefore: **what continuo emits at runtime says continuo; what
+continuo is compared against, keyed by, or asserted on keeps interlock's spelling.**
+
+**Alternatives.**
+
+- *Leave all nine verbatim.* Rejected: the port's fidelity obligation is to interlock's **suite**,
+  which is the specification (`AGENTS.md:11-12`). A free-standing string no case reads carries no
+  parity claim, and keeping it costs an operator a wrong system name at exactly the moment a fence
+  has failed closed and they are reading stderr.
+- *Change only continuo's own two strings* (items 8 and 9), since those need no divergence at all.
+  Rejected as worse than either extreme: the seven carried strings sit beside them in the same output
+  surfaces, so the top-level parser would say `continuo` while the measurement belt's standalone
+  parser -- the same phrase, one word apart -- still said `Interlock`, and item 9's line of the
+  hook's stderr would disagree with items 3-5 beside it.
+  Half a rename is less legible than none.
+- *File this per belt* (fencing, session, measurement). Rejected: the three surfaces are changed for
+  one reason and should stand or fall together; splitting the record would let one be reverted
+  without the others and reintroduce exactly the inconsistency above.
+
+**Consequences.** `continuo-fence-hook`'s usage line and argument errors change text, as do the
+hook's `--help` description and its four fail-closed stderr sites, the default worker prompt, and two
+parser descriptions. No test changes: none of the nine is asserted anywhere (verified by
+exact-string grep over `test/`), which is also why the suite cannot witness this change -- the reason
+it is recorded here instead.
+
+`HELP_TEXT` in `hook.mjs` is a hand-wrapped reproduction of what CPython's `argparse` folds at 79
+columns. `Interlock` (9) to `continuo` (8) shortens its first line to 74 characters; the next word,
+`against`, would take it to 82, so the fold point is unchanged. But the text is now continuo's own
+and no longer reproduces interlock's `--help` byte for byte -- a later reader should not re-derive it
+by diffing against CPython for the source string.
+
+`DECISIONS.md`'s own record of the 2026-08-22 help-token measurement (`D-0207`) is written in terms
+of the literal command `interlock-fence-hook`. It is a record of what was measured then and is **not**
+edited: the program it names is the one that was run.
+
+**Status.** accepted (2026-09-01)
+
+**Falsifier.** Evidence that any of the nine strings is depended on from outside this repository --
+a fence configuration, a log parser, or a harness matching on `interlock-fence-hook` or on one of the
+stderr messages. That would put them in `D-0502`'s class (names an external file reads) rather than
+in this one, and this decision would be superseded rather than amended.
+
+**Falsified by.** interlock resuming. The seven carried strings would then be a divergence continuo
+maintains against a live upstream rather than against a frozen one, and the question of whether to
+follow upstream wording would be reopened under `D-0023`.
+
+**Source.** Task `continuo-interlock-naming-audit`, 2026-09-01. The audit classified all 2309
+interlock mentions in the tree and separated carried text from continuo's own by grepping the frozen
+interlock checkout at `65f36c5`; these nine were the runtime surfaces in the (b) and judgement
+classes. Direction selected at the human gate (D1), which also directed that the coupled pairs be
+changed together. Decision id from the `D-0019`..`D-0099` shared band for cross-belt decisions taken
+at the window: this one spans the fencing, session and measurement belts and is owned by none of
+them. (Ids `D-0037`..`D-0042` are left unused, as they have been throughout, because continuo cites
+interlock's decisions of those numbers.)
