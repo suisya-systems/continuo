@@ -461,7 +461,7 @@ export function addSubparsers(sub: Subparsers): void {
 export function buildParser(): ArgumentParser {
   const parser = new ArgumentParser(
     "continuo measure",
-    "Measurement harness for the Interlock control plane " +
+    "Measurement harness for the continuo control plane " +
       "(docs/measurement-harness.md). Read-only by capability.",
   );
   addSubparsers(parser.addSubparsers("cmd"));

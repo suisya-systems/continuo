@@ -50,7 +50,22 @@ import { REHEARSAL_MARKING } from "./marking.js";
 // the closed owning-system vocabulary
 // --------------------------------------------------------------------------
 
-/** The live system. Matches the `CHECK (owning_system IN ...)` literal. */
+/**
+ * The live system. Matches the `CHECK (owning_system IN ...)` literal.
+ *
+ * The value spells `interlock`, but what it names is **the live control plane,
+ * whichever implementation is serving it** -- continuo, once continuo is the
+ * one deployed. It is not a provenance reference and not a claim that the rows
+ * belong to the Python original: it is one of the two operands the canary
+ * shape (interlock `D-0013`) compares, opposite {@link SYNTHETIC_V1}.
+ *
+ * The spelling is fixed and is not a naming preference. It is written into the
+ * `CHECK` constraint in `routing_ledger.sql`, into every row already persisted
+ * under it, and into the ported cases that assert it, so changing it is a
+ * schema migration plus a re-translation of those cases -- a parity divergence,
+ * not a rename. Recorded here so a reader who meets `owning_system = 'interlock'`
+ * in a continuo-owned database does not read it as a mistake.
+ */
 export const INTERLOCK = "interlock";
 
 /**

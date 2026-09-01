@@ -7,13 +7,12 @@ decision; interlock `D-0017` ("Workers are few, capped, and fenced per role") fo
 per-role at all; interlock `D-0026` for why the implementations are throwaway and the tests are the
 durable output; and interlock's own `docs/per-role-fencing.md`, which this document carries.
 
-**Porting status.** The fencing subsystem arrives across several pull requests, and this document
-describes the whole design rather than the part that has landed. Present in continuo today:
-`src/fencing/rules.ts`, `renderer.ts`, `battery.ts`, and the transcribed matching primitives
-(`fnmatch.ts`, `shlex.ts`, `pypath.ts`). Still to arrive: `hook.ts`, `state.ts`, `spawn.ts` and
-`readback.ts`. Sections 4 and 5 therefore describe the deny hook and the restart diff as designed
-and as interlock implements them, not as code continuo currently ships. The parity ledgers under
-`parity/` are the authority on what is actually ported at any moment.
+**Porting status.** The whole fencing subsystem is in continuo: `src/fencing/rules.ts`,
+`renderer.ts`, `battery.ts`, `state.ts`, `spawn.ts`, `readback.ts`, the deny hook as `hook.mjs`
+(a separate process, hence `.mjs` rather than `.ts` -- see `src/fencing/spawn.ts`), and the
+transcribed matching primitives (`fnmatch.ts`, `shlex.ts`, `pypath.ts`, `pyjson.ts`, `pyregex.ts`,
+`pyrepr.ts`, `pysemantics.ts`, `uescape.ts`). Sections 4 and 5 describe code continuo ships. The
+parity ledgers under `parity/` are the authority on what is actually ported at any moment.
 
 This is the carried design doc named by interlock#74. It restates interlock's own
 `docs/per-role-fencing.md`, adjusted only where the runtime changes what is true. Where the two
@@ -129,9 +128,10 @@ directly, and a test asserts *that dependency exists* rather than only asserting
 own behaviour in isolation -- because a precondition tested only in isolation is exactly the dead
 code with the shape of a precondition that interlock#71 is about.
 
-**Not yet landed.** `spawn.ts` arrives in a later pull request, and the decision recording this
-representation -- interlock#74's acceptance criterion 4 -- is written in the same one. Until then
-this section states the obligation the port is carrying, not a property it currently has.
+**Landed.** `spawn.ts` is in continuo (`src/fencing/spawn.ts`), with interlock#74's acceptance
+criterion 4 recorded alongside it and its cases in
+`parity/fencing.spawn-precondition.ledger.json`. This section states a property the port has, not
+merely an obligation it is carrying.
 
 ## 7. Language-specific notes for the TypeScript port
 
@@ -172,9 +172,10 @@ executable, and `access(X_OK)` on Windows is only an existence check, so the ren
 while `cmd` could not launch the hook at all -- an unfenced child with the spawn recorded as
 admitted. `D-0208` records the divergence, the amendment and the measurements.
 
-**Not yet landed.** Which runtime resolves the hook command is one of the questions interlock#74
-named and interlock never answered; **continuo answers it**, in the pull request that ports
-`hook.ts`, and not here (`D-0036` -- interlock is frozen and no answer is coming from it). The
-renderer already carries one consequence of the answer this repository will give: its check that a
-hook command's script token names an existing file recognises `.mjs`, `.js` and `.cjs` in addition
-to interlock's `.sh` and `.py`, which is strictly more that must resolve, never less.
+**Answered.** Which runtime resolves the hook command is one of the questions interlock#74 named
+and interlock never answered; **continuo answers it** in `D-0208` above (`D-0036` -- interlock is
+frozen and no answer is coming from it), and the hook ships as `hook.mjs` rather than `hook.ts`
+because it is launched as a separate process. The renderer carries one consequence of that answer:
+its check that a hook command's script token names an existing file recognises `.mjs`, `.js` and
+`.cjs` in addition to interlock's `.sh` and `.py`, which is strictly more that must resolve, never
+less.
