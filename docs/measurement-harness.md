@@ -3,28 +3,29 @@
 **Carried from interlock.** This document is carried, substance verbatim, from interlock's
 `docs/measurement-harness.md` at revision `65f36c5`. It is the design of record for continuo's G6
 measurement harness; only language-specific notes (identifier spellings, the read-only mechanism in
-section 1, and decision-reference conventions) were adjusted for the port. As of this commit, only
-the reader (`src/measurement/reader.ts`) is ported; every other module this document names --
-`cohort`, `ac9`, `windows`, `shadow`, `latency`, `canary`, `provenance`, `render`, `fixtures`, `cli`,
-and the `policy`/`gates`/`ci_ingest`/`ai_invocation` control-plane modules -- is not yet in continuo
-and is left in its interlock spelling below. File paths this document references that continuo does
-not have (`ACCEPTANCE.md`, `production-schema.md`, `time-base-policy.md`, `investigation/`) are
-interlock's own files, not continuo's; they are named here as interlock names them. Decision
-references of the form `D-00NN` refer to interlock's `DECISIONS.md` and are written `interlock
-D-00NN` throughout, per continuo's `DECISIONS.md` citation convention; a bare `D-00NN` refers to
-continuo's own `DECISIONS.md`.
+section 1, and decision-reference conventions) were adjusted for the port. Every module this
+document names is now in continuo: `reader`, `cohort`, `ac9`, `windows`, `shadow`, `latency`,
+`canary`, `provenance`, `render`, `fixtures` and `cli` under `src/measurement/`, and the
+`policy`/`gates`/`ci_ingest`/`ai_invocation` modules under `src/control_plane/`. The parity ledgers
+(`parity/measurement.*.ledger.json`) remain the authority on which individual cases are ported.
+`production-schema.md` and `time-base-policy.md` are carried into continuo's own `docs/` and each
+declares itself the live copy; `ACCEPTANCE.md` and `investigation/` have no continuo counterpart and
+are named below as interlock names them. Decision references of the form `D-00NN` refer to
+interlock's `DECISIONS.md` and are written `interlock D-00NN` throughout, per continuo's
+`DECISIONS.md` citation convention; a bare `D-00NN` refers to continuo's own `DECISIONS.md`.
 
 **Scope.** The design half of Issue `#67` (G6). Defines what AC-9 and AC-10 are measured over, where
 their ground truth comes from, how the AC-7 canary divergence report correlates two systems, and
 what a report must record about itself to be reproducible.
 
-**Status: design, not implementation.** Decisions filed from this document: interlock `D-0038` (AC-9
-denominator and coverage), interlock `D-0039` (AC-10 ground truth), interlock `D-0040` (report
-provenance).
+**Status: implemented.** This document is the design of record; the code is under
+`src/measurement/` and `src/control_plane/`, and `parity/measurement.*.ledger.json` records what is
+ported. Decisions filed from this document: interlock `D-0038` (AC-9 denominator and coverage),
+interlock `D-0039` (AC-10 ground truth), interlock `D-0040` (report provenance).
 
 **Companion documents.** `production-schema.md` is the schema this reads;
-`time-base-policy.md` holds the budgets AC-10 is judged against. Both are
-interlock documents.
+`time-base-policy.md` holds the budgets AC-10 is judged against. Both are carried into continuo's
+`docs/` and are the live copies (see each file's own provenance header).
 
 ---
 
