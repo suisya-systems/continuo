@@ -150,6 +150,7 @@ spaces distinct.
 | D-0053 | The broker belt is declined and discharged rather than ported, and the endpoint moves onto the production schema with the outbox aligned to `cancelled` | accepted |
 | D-0054 | `writer_epoch` on `outbox` is delivery-side ownership, not producer provenance: the delivery worker adopts one row immediately before it attempts it | accepted |
 | D-0055 | The lap's execution intent is fixed at admission as `LapRunIntent`, written with the run in one transaction, and carries no authority | accepted |
+| D-0056 | The report ingress reads the transcript: the provider gains a terminal-report read API, and the escalation event and its gate are written in one transaction | accepted |
 
 ---
 
@@ -10346,3 +10347,187 @@ it loses the property decision 6 is built on: a caller could construct the inter
 were settled at the gate ahead of the work -- including the resolution of section 6.3's L1/L2
 contradiction in decision 1 -- and this entry records them; decision 6 and the field rules are the
 implementation's. Decision id from the `D-0019`..`D-0099` shared band, next after `D-0054`. This entry was written as `D-0054` and re-taken on rebase: the parallel adoption-gap task claimed that id and merged ahead of it, under the band's first-merged-wins rule.
+
+---
+
+## D-0056 -- The report ingress reads the transcript: the provider gains a terminal-report read API, and the escalation event and its gate are written in one transaction
+
+**Context.** `docs/design/minimal-operating-loop.md` section 4.7 is the one seam in the lap with no
+mechanism at all rather than a mechanism with no mouth. The MCP endpoint exposes `poll` and `ack` and
+nothing else; S1 forbids the provider a delivery verb and says so as a property
+(`src/session/provider.ts`). So the only write a worker can make into the control plane anywhere in
+the successor stack is `ack(message_id)` -- one bit per message it was already sent. Meanwhile
+`openGate` requires the escalation event to be on the spine already, and its own docstring says the
+party that observed the escalation is the party that appends it. Nobody could observe one. Section 7
+step 9 is that gap, and its stated purpose is to unblock `openGate`, "which cannot fire without a
+prior event".
+
+Section 4.7 lists three ways to close it and calls the choice "genuinely open", recommending the
+first without deciding it. This entry decides it, and decides the four sub-questions the design left
+to the implementation: where the read API lives, what the ingress does with an ambiguous report, which
+event type it appends, and how the event and the gate come to be one fact.
+
+**Decision.**
+
+1. **The transcript is read.** The orchestrator reads the child's terminal `result` line and appends
+   a `worker_escalation_raised` event. Section 4.7's option 1, taken as a decision rather than left
+   as a recommendation. It needs no new transport and no new tool, it uses an artifact the provider
+   already writes on every turn, and it adds no path on which a worker that forgets to call something
+   loses its report -- which options 2 and 3 both do, from opposite directions. The endpoint's
+   two-verb contract is untouched, and so is its stated "nothing here pushes" posture.
+
+   **The limitation, stated rather than discovered later:** this works because lap 1's worker is
+   turn-shaped. A report exists only when a turn has ended. **If mid-turn escalation is ever needed
+   -- a worker that must ask a question and then keep working -- option 2, an MCP `report` tool, is
+   the intended successor, not a widening of this one.** That is a decision when it is taken, because
+   section 4.7 records that it reverses the endpoint's posture in one direction; this entry does not
+   pre-approve it.
+
+2. **The judgement is deterministic, and it is the ingress' rather than the provider's.** An
+   identity-confirmed, non-blank, non-error terminal report is **always** a publish-approval
+   escalation. There is no prose classification: nothing greps the worker's words for "approve" or
+   "permission". Four shapes are refused rather than absorbed, as observation or execution failures:
+   `is_error` set, no body, a body that is blank or not a string, an identity that does not reconcile,
+   and no `result` line at all.
+
+   **"Identity-confirmed" has two halves, and both are checked.** The provider's read-back proves the
+   *transcript* belongs to the session. It cannot prove the *session* belongs to the run, and the
+   ingress' `runId` is a caller's argument while the payload's `session_id` has no foreign key -- so
+   a stale or transposed identifier would make one worker's question a gate on a run that worker
+   never touched. The `session` table is the authority that says otherwise, so the ingress reads the
+   binding inside its own transaction and requires it to exist, to name this run, and to be at
+   `binding_phase = 'identity_confirmed'`. That third condition is the durable record that a
+   read-back actually happened and committed; accepting a report at `spawned` would take on trust
+   exactly what `D-0027` says exit 0 is not evidence of.
+
+   **Blankness is decided by one predicate on both sides of the hand-off.** The provider strips with
+   `pyStrip` and so does the ingress. `String.prototype.trim` is not the same function -- `U+FEFF` is
+   blank to JavaScript and not to Python, `U+001C` the other way round -- and two predicates at the
+   two ends of a structural hand-off means a report the provider returns as reportable can be refused
+   as blank on arrival. That is an escalation lost precisely at the seam, and it is why
+   `src/control_plane/` takes its first import from `src/fencing/` here.
+
+   **The limitation this admits:** lap 1 therefore cannot distinguish an ordinary completion from an
+   escalation. Every finished turn that wrote prose opens a gate. **Telling the two apart requires an
+   explicit structured discriminator in the terminal output** -- a field the worker sets, not a
+   sentence a reader interprets -- and lap 1 does not have one. Making the gate's existence depend on
+   how a model happened to phrase itself is the failure this refuses; opening a gate that did not need
+   opening is the cost it accepts, and a person is present throughout by the lap's own definition.
+
+3. **No event type is added.** `worker_escalation_raised` has been in `EVENT_TYPES` since the
+   vocabulary was named and is exactly this L4 fact; `gate_type = 'worker_escalation'` is already one
+   of the four the `gate` DDL admits. `EVENT_TYPES` is not edited by this change.
+
+4. **The provider gains an explicit read API rather than the wire format being re-implemented.**
+   `ClaudeCliSessionProvider.readTerminalReport` is `@internal` (`D-0101`), beside `childOf` and
+   `heldSessionIds`. The alternative was for a composition root to open the transcript itself, and
+   what it would have had to reproduce is not a path: the state root's layout, the zero-padded
+   generation in the file name, the complete-lines-only rule, the choice of the **last** `result`
+   line, and the C2 identity read-back. Every one of those is a rule with a reason, and the second
+   copy is the one that goes stale. The three rules two readers now share -- last-result selection,
+   the read-back, the mismatch scan -- are extracted as functions so `#readout` and
+   `readTerminalReport` cannot answer differently about one file.
+
+   The four questions section 4.7 left open are answered there: **multiple `result` lines** -- the
+   last wins, the readout's own rule; **an empty body** -- a typed "no report" answer carrying the
+   reason, not an `Ok(null)`, which `R4` forbids; **an error result** -- reported with `isError` set,
+   because the provider observes and the ingress judges; **generations** -- only the record's current
+   generation is read, so a resumed session answers about the turn it is on.
+
+   **Whether to poll again is a field, not a sentence.** `NoTerminalReport.pending` is `true` only
+   for a live child that has not finished. A caller that had to read the diagnostic `reason` to
+   decide whether to retry would be parsing a message for control flow -- the same mistake decision 2
+   refuses when it declines to classify the worker's prose -- and would poll forever, or stop early,
+   the first time the wording changed.
+
+   **A missing `result` line is two different answers, and the verb distinguishes them.** "Not yet"
+   and "not ever" look identical on disk, so the verb consults `#childLiveness`: a live child gets
+   the typed "the turn has not ended" and a caller that polls again; a child that is gone without a
+   terminal line gets a `Failure`, because no report can arrive on that generation and answering
+   "not ended" would leave an ingress polling forever. A complete unparseable line is likewise a
+   `Failure` rather than a step-over -- `#readout` never drops one silently, and the line that could
+   not be parsed may be the very event that would have named the identity.
+
+5. **The event and the gate are written in one transaction, and no new gate-open primitive is
+   built.** A crash between an event that committed and a gate that did not leaves an escalation on
+   the spine that nothing is asking anybody about -- a report received and silently dropped. The
+   brief anticipated needing a transaction-aware copy of `openGate` on the grounds that `openGate`
+   opens its own transaction. It does, and that turned out not to matter: `txn.ts`'s `transaction()`
+   **joins** an inner call to an outer one rather than nesting it, so `appendEvent` and `openGate`
+   both run inside one block without knowing it. Writing a second implementation of `openGate`'s
+   three-statement open would have duplicated the only order the `gate_opens_without_a_projection`
+   and `gate_stage_matches_its_transition` constraints admit, to buy nothing. The joining is pinned
+   by a case that abandons the outer transaction and asserts neither the event nor the gate landed.
+
+6. **The dedup key is per turn: `worker_escalation/<sessionId>/<generation>`.** Without the
+   generation, a resumed session's second report collides with its first, `appendEvent` absorbs it as
+   an idempotent no-op, and the second turn's escalation never reaches a human. On re-processing --
+   a restart re-reading a transcript it already ingested -- `appendEvent` returns `seq = null`, so the
+   sequence is read back by the same `dedup_key` lookup that detected the duplicate, and the gate is
+   opened only if no gate already names that origin event. The check is on `origin_event_seq` rather
+   than on the gate id, so a caller with its own naming scheme still cannot open a second gate over
+   one escalation.
+
+7. **The report goes in the event payload and into `gate.rationale`, byte for byte, and never into
+   `gate_transition.body`.** Section 4.7 is explicit and this entry keeps it: `body` carries the
+   human's verbatim answer on the `presented -> answered` advance, and putting worker prose there
+   would record worker-authored text as the approval, destroying the single property the lap is being
+   built to gain. The rationale is the unmodified report -- not trimmed -- so the gate's text and the
+   transcript's cannot disagree about what the worker wrote. A blank-or-whitespace report is refused
+   in the ingress, because the DDL's `CHECK (length(rationale) > 0)` accepts three spaces.
+
+**Consequences.**
+
+- Section 7 step 9 is closed for the writing half. What this entry delivers is a callable ingress
+  function, not a running loop: **the composition root that polls `readState`, notices an
+  identity-confirmed terminal result and calls the ingress is step 8's, and is not built here.**
+- `src/control_plane/report_ingress.ts` takes the report as plain data and declares its own
+  `TerminalReportFact`, structurally satisfied by the provider's `TerminalReport`. This is forced
+  rather than chosen: `test/gate_item11/no-provider-detail-leaks.test.ts` fails any module under
+  `src/control_plane/` that names a session backend and any module under `src/` -- `src/index.ts`
+  excepted -- that knows both. The composition root is therefore the one place holding both, which is
+  the arrangement item 11 measures the cost of a provider swap by. The structural hand-off is the
+  price of that property and is paid deliberately.
+- The payload is `{schema_version, report, session_id, generation, terminal_reason, subtype,
+  is_error, returncode}`, rendered by `pythonJsonDocumentSorted` -- the only renderer that accepts the
+  booleans and nulls it carries -- so **its keys are in sorted order, not the order the design listed
+  them in.** Nothing reads it positionally, and `schema_version` is what a later shape change moves.
+- Decisions 2 and 4's last paragraphs each close a hole a pre-merge review found rather than a
+  hazard anticipated in the brief: the run-binding check, the shared blank predicate, the
+  liveness split and the garbage propagation were all added after the first green suite, and each
+  has a case that fails without it.
+- `#readout` was refactored to call the three extracted rules. Behaviour-preserving: the order the
+  checks are applied in is observable and is unchanged, and the full 65-case ported provider suite
+  passes untouched.
+- `gate_id` is derived as `gate/<dedup key>`, which makes re-processing idempotent without the caller
+  remembering an identifier across a restart. If a second gate type is ever opened off one escalation,
+  that derivation collides and must change.
+
+**One known limitation, left open rather than closed.** A report is returned as soon as a terminal
+line is on the transcript, without waiting for the child to exit. If a child ever wrote **two**
+`result` lines on one generation, a poll landing between them would return the first, the ingress
+would commit it under the generation's dedup key, and the second -- the one last-wins says should
+have won -- would be discarded as a duplicate fact. The window is real but the shape is
+hypothetical: the CLI writes one `result` per turn and then exits, no fixture or fake in this
+repository emits two, and last-wins was adopted defensively to match `#readout` rather than to
+describe observed output. The obvious fix -- treat a result as terminal only once the child is gone
+-- is **not** taken here, because it contradicts a deliberate property of `#readout`, which never
+consults the exit for its verdict, and it would strand any child that writes its result and then
+hangs. Closing this is a design decision about what "the turn is over" means, and it belongs with
+the composition root in step 8, which is the component that will actually poll.
+
+**Falsifier.** A worker whose report must reach a human *before* its turn ends -- at which point the
+transcript has no terminal `result` line to read and decision 1 has nothing to offer, and option 2
+becomes required rather than optional. Or a lap in which opening a gate on every prose-writing turn
+is too expensive to accept, which falsifies decision 2's cost trade and forces the structured
+discriminator it names. Decision 5 is falsified the moment `txn.ts` stops joining an inner
+`transaction()` to an outer one: the case that abandons the outer transaction is what would go red,
+and it is there for that.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-report-ingress`. The design is
+`docs/design/minimal-operating-loop.md` section 4.7 (the three options and the recommendation) and
+section 7 step 9 (the order and what it unblocks). Decision id from the `D-0019`..`D-0099` shared
+band; `D-0055` was taken concurrently by the delegation-record lane, so this entry takes the next
+free id after it rather than after `D-0054`.

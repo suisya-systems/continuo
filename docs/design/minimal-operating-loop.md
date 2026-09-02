@@ -377,15 +377,22 @@ with no run row the foreign key refuses it. Nothing downstream of L1 can be reco
 
 ### 4.4 Run lifecycle -- the lap's events have no vocabulary and no producer (L1, L4, L5)
 
-`EVENT_TYPES` (`src/control_plane/events.ts:110-125`) holds ten names: `ci_observed`,
+`EVENT_TYPES` (`src/control_plane/events.ts`) holds twelve names: `ci_observed`,
 `pr_head_updated`, `pr_merged`, `pr_closed`, `pr_reopened`, `worker_escalation_raised`,
-`gate_expired`, `gate_closed`, `consumption_skipped`, `watcher_heartbeat_refused`. There is no
-`delegated`, no `spawned`, no `reported`, no `completed`. `appendEvent` is imported by exactly three
-modules -- `gates.ts`, `repo_link.ts`, `ci_ingest.ts`.
+`gate_expired`, `gate_closed`, `consumption_skipped`, `watcher_heartbeat_refused`, `run_created`,
+`run_delegation_recorded`. There is still no `spawned` and no `completed`.
+
+> **Corrected since this section was written.** It counted ten names, said there was no `delegated`,
+> and named three importers of `appendEvent`. Two of the three claims have since been overtaken by
+> the steps this document ordered: `run_created` was added by `D-0051` and `run_delegation_recorded`
+> by `D-0055`, which is the delegation record section 6.3 asks for; the importers are now five --
+> `run_admission.ts` and `report_ingress.ts` alongside `gates.ts`, `repo_link.ts` and `ci_ingest.ts`.
+> Line anchors are dropped rather than re-pinned: they drift, and the set is short enough to read.
 
 This matters because `gate.origin_event_seq` is `NOT NULL REFERENCES event(seq)`
 (`migrations/0001_initial.sql:1270`): **a gate cannot be opened without a prior event on the spine.**
-`worker_escalation_raised` is the type the lap would use, and it has no producer.
+`worker_escalation_raised` is the type the lap uses. It had no producer when this was written;
+`D-0056` gives it one (`src/control_plane/report_ingress.ts`), which is what section 7 step 9 closes.
 
 *Required, but only a thin slice: naming the two or three types the lap emits. Closing the whole
 vocabulary in a CHECK can wait.*
