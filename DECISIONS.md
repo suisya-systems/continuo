@@ -9823,8 +9823,17 @@ parity divergence with its own D- entry, never slipped in.
 
 *(c) Have `enqueueRelay` stamp the delivery lease's epoch at enqueue.* Architecturally this is where
 the row's owner *should* be decided -- `Outbox.enqueue` already believes that -- and it is **the only
-candidate that leaves `UNOWNED_OUTBOX_QUERY` true at every instant**, because the row is never unowned,
-not even for a poll interval. It is also **not decidable here.** `enqueueRelay`
+candidate under which a row is never born unowned** -- it does not wait for a poll interval to acquire
+an owner. Note the limit of that claim, because an earlier draft of this entry overstated it and the
+overstatement is the kind a later reader would act on: stamping a non-null `writer_epoch` does *not*
+make `UNOWNED_OUTBOX_QUERY` true at every instant afterwards. That query has two disjuncts
+(`src/control_plane/outbox.ts`), and the second one -- `NOT EXISTS` a live lease on the row's epoch --
+selects a row whose stamped epoch has since expired, non-null though it is. That is deliberate and is
+the invariant doing its job: it is exactly the crash-and-recover case the criterion exists to catch.
+So what (c) buys is **initial** ownership, not **continued live** ownership, and keeping the row owned
+after that still depends on somebody renewing the delivery lease -- which is step 4 again, arriving
+from the other side for the second time in this paragraph. The same qualification conditions (b): a
+row adopted inside `poll` is owned until that lease lapses, not forever. It is also **not decidable here.** `enqueueRelay`
 (`src/control_plane/gates.ts:542-551`) takes no lease, no epoch and no resource, and runs in the
 Secretary's transaction rather than the delivery worker's, so it would have to learn the delivery
 lease's identity -- `gates.ts` naming `outbox-delivery` or importing `DELIVERY_LEASE_RESOURCE` from
@@ -9857,11 +9866,11 @@ violates `UNOWNED_OUTBOX_QUERY`, and `Outbox.recover`'s report becomes decorativ
 
 The four axes that decided it:
 
-| candidate | fixes mid-life relays | touches a ported module | needs a step-4 / step-8 decision | leaves `UNOWNED_OUTBOX_QUERY` true |
+| candidate | fixes mid-life relays | touches a ported module | needs a step-4 / step-8 decision | when `UNOWNED_OUTBOX_QUERY` is satisfied |
 |---|---|---|---|---|
 | (a) `recover()` in `main()` | **no** | no | no | no -- violated again at the next enqueue |
-| (b) adopt inside `poll` | yes | **yes (`MessageBus`, a ported facade)** | no | yes, between polls |
-| (c) stamp the epoch at enqueue | yes | no, but couples `gates.ts` and `events.ts` to the delivery lease | **yes (lease liveness and ownership)** | **yes, at every instant** |
+| (b) adopt inside `poll` | yes | **yes (`MessageBus`, a ported facade)** | no | between polls -- and only while the adopting lease stays live |
+| (c) stamp the epoch at enqueue | yes | no, but couples `gates.ts` and `events.ts` to the delivery lease | **yes (lease liveness and ownership)** | at birth -- but only while the stamped lease stays live |
 | (d) relax `_COUNT_ATTEMPT` | yes | **yes (`lease.ts`'s grammar)** | **yes (weakens rule 4's fence)** | **no** |
 | none (what ships here) | **no** | no | no | **no** |
 
