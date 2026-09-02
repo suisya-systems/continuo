@@ -10,6 +10,7 @@
  * - `sandbox doctor ...`   -> `src/settings/cli.ts`
  * - `attention scan|watch ...`   -> `src/attention/cli.ts`
  * - `db create|migrate|verify ...` -> `src/control_plane/cli.ts`
+ * - `run admit ...`         -> `src/control_plane/run_cli.ts`
  *
  * Ported from interlock `src/claude_org_runtime/cli.py` at `65f36c5`, which
  * mounts six subtrees. Two of them are not here -- `dispatcher` and `migrate`
@@ -51,6 +52,7 @@ import { TOOL_VERSION } from "./about.js";
 import * as attentionCli from "./attention/cli.js";
 import { ArgparseExit, type ArgparseStreams, ArgumentParser, dispatch } from "./cli/parser.js";
 import * as dbCli from "./control_plane/cli.js";
+import * as runCli from "./control_plane/run_cli.js";
 import * as measurementCli from "./measurement/cli.js";
 import { PACKAGE_NAME } from "./meta.js";
 import { addSandboxSubparsers, addSettingsSubparsers } from "./settings/cli.js";
@@ -130,6 +132,14 @@ export function buildParser(): ArgumentParser {
       "existing one forward, or check that this build can open it.",
   );
   dbCli.addSubparsers(db.addSubparsers("cmd"));
+
+  // run (what the control plane holds: admission, and the spine event for it)
+  const run = sub.addParser(
+    "run",
+    "Runs recorded in a production control plane: admit one, which creates " +
+      "its row at status 'created' and appends the run_created event for it.",
+  );
+  runCli.addSubparsers(run.addSubparsers("cmd"));
 
   return parser;
 }

@@ -358,6 +358,15 @@ export {
 // (D-0002) cannot carry one name twice, and picking a different one for the
 // second would put two spellings of the same set into the public surface.
 export {
+  ADMITTED_RUN_STATUS,
+  type AdmittedRun,
+  admitRun,
+  RUN_ADMISSION_PRODUCER,
+  RUN_CREATED_EVENT_TYPE,
+  RunAdmissionUsageError,
+  RunAlreadyAdmitted,
+} from "./control_plane/run_admission.js";
+export {
   ADVANCE_RUN_STATUS_EFFECT,
   acquireRunLease,
   advanceRunStatus,
