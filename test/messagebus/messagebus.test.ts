@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT,
   CHECKPOINT_BEFORE_DURABLE_WRITE,
   HandlerRejected,
   OutboxUsageError,
@@ -458,6 +459,141 @@ describe("the message bus: drop, resend, exactly one ack", () => {
       // ack, and MessageBus.poll's own comment explains why eliminating it is
       // out of scope.
       expect(env.refusedActionCount()).toBe(1);
+    } finally {
+      env.close();
+    }
+  });
+
+  test("a cancellation just before the effect costs one message, not the batch", () => {
+    // The pre-effect guard and the residual test that catches it, pinned as one
+    // path -- because they are only ever correct together.
+    //
+    // `Outbox.attempt` re-reads the row's status immediately before it calls
+    // `handler.apply`, beside the fence re-read and for the same reason: the
+    // top-of-method terminal check answered "was this message finished when I
+    // picked it up", and since migration 0003 that is a different question from
+    // "is it finished now", because `pending -> cancelled` is an edge gate
+    // closure takes without consulting this bus. When that re-read finds a
+    // terminal row it records a refusal and throws `CancelledBeforeEffect`
+    // *with the effect not yet performed* (`src/control_plane/outbox.ts`,
+    // around the `beforeEffect` load). `MessageBus.poll` then admits that class
+    // alongside `OutboxUsageError` and `StaleWriterRefused` in its
+    // post-exception residual test (`src/messagebus/bus.ts`), so the throw ends
+    // one message instead of the poll.
+    //
+    // **This case is the reason neither of those two lines may be deleted, and
+    // it is deliberately the only case that covers either.**
+    //
+    // Delete the widening in `bus.ts` -- drop `CancelledBeforeEffect` from the
+    // `residual` disjunction -- and the throw is re-raised out of `poll`
+    // entirely. `poll` accumulates envelopes in a local array and returns it
+    // only at the end, so every envelope already built is discarded, including
+    // task-2's, whose effect has really happened at the destination; the worker
+    // sees the whole poll come back as an `isError` tool response
+    // (`src/messagebus/endpoint.ts`). Assertion (a) is what goes red: one
+    // closed gate would have failed this recipient's other work.
+    //
+    // Delete the pre-effect guard in `Outbox.attempt` instead, and nothing
+    // throws at all: the attempt walks straight into `handler.apply` and the
+    // external side effect fires for a message whose gate has already closed.
+    // The database then refuses to record it -- `_MARK_DELIVERED` carries
+    // `status = 'pending'`, which matches no cancelled row -- so the effect
+    // happened and the control plane denies it ever did. Assertion (c) is what
+    // goes red, and it is the loudest one here because that outcome is the
+    // whole reason the guard exists: a relay whose human gate closed is a
+    // question nobody is waiting for, and asking it anyway is worse than losing
+    // an envelope.
+    //
+    // The distinction from "a cancellation inside the attempt itself is skipped,
+    // not raised" above is which door the attempt leaves by. That case cancels
+    // at `before_durable_write`, so the *fenced statement* misses its row and
+    // the outbox surfaces the skip as a predicate that moved nothing; it reaches
+    // the residual branch through `StaleWriterRefused` and never exercises the
+    // pre-effect guard. This one cancels at `after_record_before_effect`, one
+    // checkpoint later, where the fenced write has already committed and the
+    // guard is the only thing standing between the closed gate and the
+    // destination.
+    //
+    // Fired on the FIRST `after_record_before_effect` of the armed poll, which
+    // is task-1's own: task-1 has incremented its retry count and written its
+    // pending action row, and is cancelled at the last instant before its
+    // effect. task-2 is attempted afterwards, in the same poll, against a
+    // database that has moved underneath it.
+    const state = { armed: false, seen: 0, fired: 0 };
+    const cancelTask1BeforeItsEffect = (name: string): void => {
+      if (state.armed && name === CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT) {
+        state.seen += 1;
+        if (state.seen === 1) {
+          state.fired = env.cancelRelay("task-1");
+        }
+      }
+    };
+
+    const env = makeBusEnv(createTempDir("cancel-before-effect"), "cancel-before-effect", {
+      checkpoint: cancelTask1BeforeItsEffect,
+    });
+    try {
+      send(env, { messageId: "task-1" });
+      send(env, { messageId: "task-2" });
+      state.armed = true;
+      const envelopes = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+      expect(state.fired, "the checkpoint must actually have cancelled a row").toBe(1);
+
+      // (a) and (b) together: the batch survived, and it survived without the
+      // message the gate closed. Spelled as one equality over the whole result
+      // rather than two membership tests, so a poll that returned *both* fails
+      // here as loudly as a poll that returned neither.
+      expect(
+        envelopes.map((e) => e.messageId),
+        "the surviving message must come back from the same poll the cancellation landed in",
+      ).toEqual(["task-2"]);
+
+      // (c) The assertion the round-2 fix exists for. The destination's own
+      // ledger is the only witness that distinguishes "refused before the
+      // effect" from "effect performed and then disowned by the database" --
+      // the outbox row looks identical in both worlds, which is precisely what
+      // made the bug survivable without this line.
+      expect(
+        env.effectCount("dk-task-1"),
+        "the effect must NOT have reached the destination: the guard refuses before handler.apply",
+      ).toBe(0);
+      // The survivor's effect really did happen, which is what makes the
+      // discarded-batch failure above a loss of *delivered* work rather than of
+      // an empty array.
+      expect(env.effectCount("dk-task-2"), "the survivor was really delivered").toBe(1);
+
+      // (d) The cancelled row is terminal and was never recorded as delivered.
+      // `delivered_at_ms` is read straight from the row because it is the field
+      // `_MARK_DELIVERED` writes: a NULL here says the delivery record was never
+      // written, which is the database half of (c).
+      expect(env.outboxStatus("task-1")).toBe("cancelled");
+      const cancelledRow = env.connection
+        .prepare("SELECT delivered_at_ms FROM outbox WHERE message_id = ?")
+        .get("task-1") as { delivered_at_ms: number | null };
+      expect(
+        cancelledRow.delivered_at_ms,
+        "a row refused before its effect must carry no delivery timestamp",
+      ).toBeNull();
+      expect(env.outboxStatus("task-2")).toBe("delivered");
+
+      // (e) Exactly one refusal row, counted rather than bounded. The guard
+      // records its reason durably before throwing -- the same discipline
+      // `StaleWriterRefused` follows, kept because the obligation is the same:
+      // a refusal nobody catches must still be readable out of the `action`
+      // table afterwards. One is the whole audit trail this poll should leave;
+      // `>= 1` would pass just as well if the survivor's attempt had also been
+      // refused, which is the failure hiding inside a lost batch.
+      expect(env.refusedActionCount(), "exactly one attempt was refused, and it is task-1's").toBe(
+        1,
+      );
+
+      // The survivor settles normally afterwards: the poll was not left in a
+      // half-state by the refusal it walked past.
+      expect(env.bus.ack("task-2", { nowMs: T0 + 2_000, recipient: RECIPIENT }).recorded).toBe(
+        true,
+      );
+      // And the cancelled row stays gone from the resend engine.
+      expect(env.bus.outbox.due(T0 + 10_000).map((m) => m.messageId)).toEqual([]);
     } finally {
       env.close();
     }

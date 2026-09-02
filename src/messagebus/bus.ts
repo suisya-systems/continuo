@@ -3,6 +3,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import {
   type AckOutcome,
   type AttemptOutcome,
+  CancelledBeforeEffect,
   type HandlerRegistry,
   isTerminalOutboxStatus,
   Outbox,
@@ -347,7 +348,23 @@ export class MessageBus {
         // than the list"; these two `src/messagebus/bus.ts` tests are the part
         // above the floor, invisible to a search of the outbox's SQL because
         // they are written in TypeScript against `load().status`.
-        const residual = error instanceof OutboxUsageError || error instanceof StaleWriterRefused;
+        //
+        // `CancelledBeforeEffect` is the *third* shape, and it is the one the
+        // outbox raises deliberately rather than as a side effect of a
+        // predicate missing its row: `Outbox.attempt` re-reads the status
+        // immediately before it applies the effect, and a cancellation that
+        // landed since the top-of-method check is refused there with the
+        // effect not yet performed. It is admitted here for exactly the same
+        // reason the other two are -- the row is terminal, so the delivery is
+        // finished and nobody is owed it -- and omitting it would make the
+        // guard that prevents the side effect cost the whole batch instead,
+        // which is a worse outcome than the one it was added to prevent. The
+        // re-read below is still what decides: the class says only *how* the
+        // attempt stopped, never that the row is in fact settled.
+        const residual =
+          error instanceof OutboxUsageError ||
+          error instanceof StaleWriterRefused ||
+          error instanceof CancelledBeforeEffect;
         if (residual && isTerminalOutboxStatus(this._outbox.load(message.messageId).status)) {
           continue;
         }

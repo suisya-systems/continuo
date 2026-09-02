@@ -5,6 +5,7 @@ import { onTestFinished } from "vitest";
 import { KeyedDropbox } from "../../src/control_plane/destination.js";
 import { NOTIFY_RECIPIENT, spikeRegistry } from "../../src/control_plane/handlers.js";
 import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
+import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { type DeliveredEnvelope, MessageBus } from "../../src/messagebus/index.js";
 import { createTempDir } from "../helpers/tmp.js";
 
@@ -58,7 +59,24 @@ import { createTempDir } from "../helpers/tmp.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
 export const T0 = 1_700_000_000_000;
-export const RESOURCE = "messagebus-of-run-1";
+/**
+ * The delivery lease resource, taken from the product rather than spelled here.
+ *
+ * It used to be the literal `"messagebus-of-run-1"` -- a name shaped like one
+ * lease *per run*, which is precisely the illusion D-0053 rule 4 forbids: the
+ * outbox row carries no resource column and neither the due pass nor the
+ * recovery pass is scoped to one, so a per-run name would advertise a
+ * partitioning the schema does not have, and this suite would have been the
+ * document a later reader consulted for it.
+ *
+ * Imported rather than re-spelled so the fixture and the endpoint cannot drift:
+ * `main()` now admits exactly this string and refuses any other
+ * (`src/messagebus/endpoint.ts`, {@link DELIVERY_LEASE_RESOURCE}), so a suite
+ * carrying its own copy would keep passing on the day the product's name
+ * changed and would leave the subprocess cases failing for a reason no
+ * assertion here explained.
+ */
+export const RESOURCE = DELIVERY_LEASE_RESOURCE;
 export const HOLDER = "bus-writer";
 export const EPOCH = 1;
 export const TTL_MS = 300_000;

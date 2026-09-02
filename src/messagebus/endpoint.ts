@@ -80,19 +80,15 @@ import { type DeliveredEnvelope, MessageBus } from "./bus.js";
  *   orchestration is the control plane's, and a stale epoch surfaces as
  *   `StaleWriterRefused` out of `poll`, refused durably.
  *
- *   **For lap 1 that resource is ONE GLOBAL DELIVERY LEASE, not a lease per
- *   endpoint** (pre-implementation design review, Blocker B1). "Per process" is
- *   a statement about a lease's *lifetime*; it says nothing about the *scope* of
- *   what the lease protects, and the outbox's scope is the whole table: an
- *   outbox row carries no lease or resource column, and both the due pass and
- *   the recovery pass in `src/control_plane/outbox.ts` range over *all*
- *   unfinished rows regardless of recipient. Hand two endpoints two different
- *   per-process lease resources and each one's epoch is free to advance rows the
- *   other is mid-delivery on, which is precisely the interleaving the fence
- *   exists to prevent -- the fence would be intact and the exclusion would be
- *   gone. Several concurrent delivery leases therefore wait on a design that
- *   gives the outbox either a scope column or a strict recipient predicate; they
- *   are not unlocked by configuring different resource strings here.
+ *   **`INTERLOCK_MESSAGEBUS_RESOURCE` admits exactly one value on lap 1: the
+ *   string {@link DELIVERY_LEASE_RESOURCE}**, which is the one global delivery
+ *   lease of D-0053 rule 4 (pre-implementation design review, Blocker B1). The
+ *   variable is not deleted, because it is a wire contract with a worker's MCP
+ *   configuration; what changed is that it stopped being a choice. {@link main}
+ *   refuses any other value at startup with exit status 2, alongside its other
+ *   startup refusals. The whole argument for the restriction -- and the two
+ *   schema changes that would lift it -- is written out on the constant, which
+ *   is where a reader who is about to widen this will be standing.
  *
  *   Renewing that lease is deliberately **not** this module's job and is not
  *   implemented anywhere yet: it belongs to the launcher (the composition root)
@@ -193,6 +189,42 @@ function parseEpoch(raw: string): number | null {
   const value = Number(text.replace(/_/g, ""));
   return Number.isSafeInteger(value) ? value : null;
 }
+
+/**
+ * The name of the one delivery lease resource lap 1 admits (D-0053 rule 4).
+ *
+ * **This is a constraint, not a preference, and it is enforced rather than
+ * described** -- see the refusal in {@link main}. The value is deliberately not
+ * a per-run or per-worker name (contrast the suites' `session-run:${runId}` and
+ * `outbox-of-run-1`): a name with a run or a recipient in it would advertise a
+ * partitioning of the outbox that does not exist, and the whole point of rule 4
+ * is that no such partitioning exists yet.
+ *
+ * **Why one resource.** `docs/production-schema.md` section 4.2 names the single
+ * writer of `outbox.status` as "the delivery worker holding the outbox lease",
+ * fenced by `writer_epoch` validated inside the write (`:213`). But an outbox
+ * row carries **no lease or resource column**, and neither pass that selects
+ * rows is scoped to one: `_DUE_QUERY` in `src/control_plane/outbox.ts` reads
+ * every unfinished row regardless of who is asking, and `Outbox.recover` adopts
+ * every unfinished row through `_ADOPT`. Section 4.9's "the endpoint's lease is
+ * per-process" therefore fixes a **lifetime** and says nothing about a
+ * **scope**, and the two are routinely confused. Admit two resources and each
+ * holder holds a live epoch of its own; each one's fenced write then validates
+ * against a live lease while touching rows the other believes it owns, because
+ * `writer_epoch` records a number and not a resource, so equal epoch numbers
+ * under different resources are indistinguishable in the row. The fence would
+ * be intact and would be proving only that *some* lease is live, which is not
+ * what a fence is for -- the exclusion it exists to provide would be gone.
+ *
+ * **What would lift this, so a later reader knows it is dated and not a law.**
+ * Either a scope column on `outbox` (a resource or partition the due and
+ * recovery passes filter on), or a strict recipient predicate applied to both
+ * of those passes so that a resource's holder can only ever see its own
+ * recipient's rows. Both are schema-and-query questions that D-0053 leaves open
+ * on purpose; neither is unlocked by configuring a second resource string here,
+ * which is exactly why configuring one is refused instead of trusted.
+ */
+export const DELIVERY_LEASE_RESOURCE = "outbox-delivery";
 
 /** The env contract, read once and validated loudly. */
 export class EndpointConfig {
@@ -521,6 +553,43 @@ export async function main(
   const gaps = config.missing();
   if (gaps.length > 0) {
     fail(`FATAL: missing env: ${gaps.join(", ")}`);
+    return 2;
+  }
+  if (config.resource !== DELIVERY_LEASE_RESOURCE) {
+    // The one delivery resource of D-0053 rule 4, **enforced here** rather than
+    // stated in a docstring. A constraint that only a comment knows is a
+    // constraint two endpoints can be started in violation of, each fenced under
+    // a live lease of its own and each free to advance the other's rows -- the
+    // scenario {@link DELIVERY_LEASE_RESOURCE} argues cannot be allowed to be
+    // reachable by configuration.
+    //
+    // The env var stays, and stays required by `missing()` above: it is a wire
+    // contract with a worker's MCP configuration, exactly as
+    // `INTERLOCK_MESSAGEBUS_DB` and `INTERLOCK_MESSAGEBUS_RECIPIENT` are, and
+    // deleting it would break every config that sets it while silently changing
+    // what the endpoint fences under. What changes is only that exactly one
+    // value is admitted -- so an operator who spells a second resource gets a
+    // refusal naming the admitted one, not a running endpoint that quietly
+    // shares the outbox.
+    //
+    // **Here and not in `EndpointConfig`**, on two grounds. First, `missing()`
+    // answers a different question -- "what did the operator fail to set" -- and
+    // an unset resource must keep being reported as missing rather than as "not
+    // the admitted name", which is a different fix. Second, `config.resource` is
+    // read at exactly one place in this module, the `new MessageBus` below, so
+    // the admission sits immediately above its only use; welding it into the
+    // constructor would instead make `EndpointConfig` unable to *describe* a
+    // configuration, which the in-process tests construct directly (they build
+    // `Endpoint(bus, config)` around a bus they made themselves, and `Endpoint`
+    // never reads `config.resource` at all).
+    //
+    // Order matters: after `missing()`, so an unset value is reported as unset;
+    // before the database is opened, so a refused configuration never gets as
+    // far as touching a file.
+    fail(
+      `FATAL: INTERLOCK_MESSAGEBUS_RESOURCE=${pythonRepr(config.resource)} is not the one` +
+        ` delivery lease resource lap 1 admits (${pythonRepr(DELIVERY_LEASE_RESOURCE)})`,
+    );
     return 2;
   }
   let connection: SqliteDatabase;

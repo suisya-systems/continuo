@@ -100,6 +100,7 @@ import {
   _MARK_DELIVERED,
   _PENDING_ACTION,
   ActionHandler,
+  CancelledBeforeEffect,
   CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD,
   CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT,
   CHECKPOINT_BEFORE_DURABLE_WRITE,
@@ -3036,5 +3037,142 @@ describe("cancelled is terminal on every path (target-only, production schema)",
     const settled = realLoad(message.messageId);
     expect(settled.status).toBe("cancelled");
     expect(settled.ackedAtMs).toBeNull();
+  });
+
+  test("a cancellation landing inside attempt refuses before the effect", () => {
+    // The other half of the case above it -- "attempt refuses a cancelled
+    // message before it performs the effect" -- and the half the one-shot
+    // guard at the top of `attempt` cannot cover. There the row was already
+    // cancelled when the attempt began. Here it is live at that guard and is
+    // retired while the attempt is running, which is the ordinary timing the
+    // human gate creates: steps 1 and 2 are two committed transactions' worth
+    // of wall clock, and gate closure is a different writer that never
+    // consults the outbox before taking the `pending -> cancelled` edge.
+    //
+    // Without the re-read in front of the effect the attempt ran the whole
+    // way through: the destination was written to, `_MARK_DELIVERED`'s
+    // `status = 'pending'` conjunct then matched nothing, and because
+    // `_markDelivered` passes `allowNoRow` the miss was silent. The effect
+    // had happened and no row anywhere said so. So the assertion that matters
+    // is the destination's own ledger reading ZERO, exactly as ACCEPTANCE.md
+    // section 2 requires the evidence to be read.
+    //
+    // `CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT` is where the cancellation is
+    // placed because it is the module's own name for this window (it is one
+    // of the three ACCEPTANCE.md names), and it puts the gate closure between
+    // the action row committing and the effect going out -- the exact instant
+    // the re-read exists to notice.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const seen: string[] = [];
+    const outbox = makeOutbox(cp, dropbox, {
+      checkpoint: (name: string): void => {
+        seen.push(name);
+        if (name === CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT) {
+          closeTheGateOver(cp, "msg-1");
+        }
+      },
+    });
+    const message = enqueue(outbox);
+
+    const refused = expectRefusal(
+      () => outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH }),
+      CancelledBeforeEffect,
+      /had been retired before the effect was attempted/,
+    );
+    expect(seen, "the checkpoint never fired, so no race was driven").toContain(
+      CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT,
+    );
+    // Not a stale writer and not a caller bug: the lease is live, the epoch
+    // owns the row, and nobody used this module wrongly. Asserted because the
+    // class is the whole point of the branch -- reusing either existing class
+    // would send an operator to look at the two things that were fine.
+    expect(refused).not.toBeInstanceOf(StaleWriterRefused);
+    expect(refused).not.toBeInstanceOf(OutboxUsageError);
+    expect(refused.name).toBe("CancelledBeforeEffect");
+
+    // 1. The destination's ledger. The only evidence that counts.
+    expect(dropbox.effectCount(keyFor("dk-1"))).toBe(0);
+    // 2. The refusal is durable, and it is durable BEFORE the throw -- the
+    //    discipline `StaleWriterRefused` carries and the reason a refusal
+    //    nobody catches is still readable afterwards.
+    const refusals = actionsOf(cp, { status: "refused" });
+    expect(refusals).toHaveLength(1);
+    expect(String(refusals[0]?.refusal_reason)).toMatch(/before the effect was attempted/);
+    expect(refusals[0]?.idempotency_key).toBe(keyFor("dk-1"));
+    // 3. The row is left exactly as the cancelling writer left it. This
+    //    module writes nothing more to a row it has just refused to advance.
+    const after = outbox.load(message.messageId);
+    expect(after.status).toBe("cancelled");
+    expect(after.deliveredAtMs).toBeNull();
+    // 4. The steps that ran before the cancellation landed are NOT rolled
+    //    back, and pretending otherwise would be the lie: the attempt count
+    //    was incremented and the intent recorded before the gate closed, and
+    //    both are true statements about what happened.
+    expect(after.retryCount).toBe(1);
+    expect(actionsOf(cp, { status: "pending" })).toHaveLength(1);
+  });
+
+  test("a cancellation landing after the effect is recorded, not swallowed", () => {
+    // The residue the re-read above admits it cannot remove. Nothing of ours
+    // runs between the status re-read and `handler.apply`, so a cancellation
+    // inside that gap is invisible until the delivery transition tries to
+    // land -- and by then the destination has been written to.
+    //
+    // What is under test is that the ledger stops being silent about it.
+    // `_MARK_DELIVERED` matches nothing (no `cancelled -> delivered` edge in
+    // 0003's lattice, and the `status = 'pending'` conjunct keeps the
+    // disagreement in the WHERE clause rather than letting the forward-only
+    // trigger abort mid-attempt), `allowNoRow` used to swallow that, and the
+    // result was an effect at the destination with no envelope, no delivery
+    // record, and nothing an operator could reconcile against.
+    //
+    // It is RECORDED rather than thrown, and the two reasons are worth
+    // keeping: the effect really did land, so the returned outcome is a true
+    // statement about this attempt; and a throw here would additionally cost
+    // `MessageBus.poll` the whole batch it was building, since
+    // `src/messagebus/bus.ts` accepts only two classes as residual. Nobody is
+    // owed an exception for a race nobody could have avoided -- what they are
+    // owed is a row.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const seen: string[] = [];
+    const outbox = makeOutbox(cp, dropbox, {
+      checkpoint: (name: string): void => {
+        seen.push(name);
+        if (name === CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD) {
+          closeTheGateOver(cp, "msg-1");
+        }
+      },
+    });
+    const message = enqueue(outbox);
+
+    const outcome = outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH });
+    expect(seen, "the checkpoint never fired, so no race was driven").toContain(
+      CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD,
+    );
+
+    // The effect is real, and the row will never say so: `cancelled` has no
+    // outgoing edge, so there is no delivery instant and there never will be.
+    expect(dropbox.effectCount(keyFor("dk-1"))).toBe(1);
+    const after = outbox.load(message.messageId);
+    expect(after.status).toBe("cancelled");
+    expect(after.deliveredAtMs).toBeNull();
+
+    // The evidence, in the table refusals are already written to. It names
+    // the idempotency key the effect was keyed with, which is what makes it
+    // reconcilable against the destination's own ledger.
+    const refusals = actionsOf(cp, { status: "refused" });
+    expect(refusals).toHaveLength(1);
+    expect(String(refusals[0]?.refusal_reason)).toMatch(
+      /retired after the destination had already been written to/,
+    );
+    expect(refusals[0]?.idempotency_key).toBe(keyFor("dk-1"));
+
+    // And the attempt still reports what it did rather than throwing.
+    expect(outcome.messageId).toBe(message.messageId);
+    expect(outcome.idempotencyKey).toBe(keyFor("dk-1"));
   });
 });

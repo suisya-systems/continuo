@@ -7,7 +7,11 @@ import { describe, expect, onTestFinished, test } from "vitest";
 
 import { createProductionControlPlane, MIGRATIONS_DIR } from "../../src/control_plane/migrator.js";
 import { createControlPlane } from "../../src/control_plane/schema.js";
-import { Endpoint, EndpointConfig } from "../../src/messagebus/endpoint.js";
+import {
+  DELIVERY_LEASE_RESOURCE,
+  Endpoint,
+  EndpointConfig,
+} from "../../src/messagebus/endpoint.js";
 import { createTempDir } from "../helpers/tmp.js";
 import { writeStep } from "../testkit/cases.js";
 import { type BusEnv, EPOCH, HOLDER, makeBusEnv, RECIPIENT, RESOURCE, RUN_ID } from "./_env.js";
@@ -137,10 +141,18 @@ function requireBuiltEndpoint(): void {
  * and the recipient is one the spike registry serves. That is deliberate. It
  * leaves the database as the only thing wrong, so a case that goes green has
  * nowhere else the refusal could have come from.
+ *
+ * `overrides` is how the lease-resource cases spoil exactly one more field. It
+ * is deliberately applied *last*, over a configuration that is otherwise whole:
+ * the same one-thing-wrong discipline, extended to a second thing that can be
+ * wrong. With `stdio` stdin at `ignore` the child sees end-of-input at once, so
+ * a configuration the endpoint *accepts* serves nothing and exits 0 -- which is
+ * what lets one helper express both the refusal and its anti-vacuity twin.
  */
 function startAgainst(
   dbPath: string,
   destinationDir: string,
+  overrides: Readonly<Record<string, string>> = {},
 ): { status: number | null; stderr: string } {
   const done = spawnSync(process.execPath, [ENDPOINT_ENTRY], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -152,6 +164,7 @@ function startAgainst(
       INTERLOCK_MESSAGEBUS_EPOCH: String(EPOCH),
       INTERLOCK_MESSAGEBUS_RECIPIENT: RECIPIENT,
       INTERLOCK_MESSAGEBUS_DESTINATION_DIR: destinationDir,
+      ...overrides,
     },
     timeout: 30_000,
     encoding: "utf-8",
@@ -577,6 +590,62 @@ describe("the worker-outbound MCP endpoint", () => {
       startAgainst(behind, join(root, "dest-behind")),
       /is at version 1 and this build knows steps up to \d+/,
     );
+  });
+
+  // ------------------------ target-only: the one delivery resource (lap 1)
+  //
+  // D-0053 rule 4 fixes the outbox's lease resource at ONE GLOBAL DELIVERY
+  // LEASE for lap 1, and until now that was a statement in a docstring while
+  // `INTERLOCK_MESSAGEBUS_RESOURCE` accepted any non-empty string. The two
+  // cases below are the difference between a constraint that is described and
+  // one that holds: the first shows a second resource name refused, the second
+  // shows the admitted name still starting, because a refusal that refuses
+  // everything proves nothing about what it is refusing.
+  //
+  // Why this matters more than a tidy config check: `writer_epoch` records a
+  // number and not a resource, so two endpoints under two resources at equal
+  // epochs are indistinguishable in an outbox row -- and neither `_DUE_QUERY`
+  // nor `Outbox.recover` narrows to a resource, so each holder ranges over the
+  // other's rows while its own fence reports everything is in order.
+  //
+  // Target-only, like the refused-open cases above: interlock's
+  // `tests/messagebus/test_endpoint.py` has no counterpart, because the
+  // resource was a free string there too.
+
+  test("a delivery resource other than the admitted one refuses to start", () => {
+    // Everything is valid except the resource name -- the same one-thing-wrong
+    // shape the refused-open cases use, so a green case has nowhere else the
+    // exit 2 could have come from. The database is the suite's own production
+    // control plane, built and migrated to head by `makeBusEnv`.
+    requireBuiltEndpoint();
+    const { env, root } = rtEnv("ep-second-resource");
+    const other = `${DELIVERY_LEASE_RESOURCE}-of-run-1`;
+    expect(other, "the case is about a name the endpoint must not admit").not.toBe(
+      DELIVERY_LEASE_RESOURCE,
+    );
+    expectRefusedStartup(
+      startAgainst(env.dbPath, join(root, "dest-second-resource"), {
+        INTERLOCK_MESSAGEBUS_RESOURCE: other,
+      }),
+      "is not the one delivery lease resource lap 1 admits",
+    );
+  });
+
+  test("the admitted delivery resource starts, which is what makes that refusal mean something", () => {
+    // The anti-vacuity half.
+    //
+    // With stdin at `ignore` the child reaches end-of-input immediately and
+    // `main()` returns 0, so "started" is observable as a clean exit rather
+    // than by keeping a process alive. A refusal that also fired here would be
+    // a check on nothing -- and, worse, one that no case above could tell apart
+    // from the database refusals, since all four exit 2 with a FATAL line.
+    requireBuiltEndpoint();
+    const { env, root } = rtEnv("ep-admitted-resource");
+    const result = startAgainst(env.dbPath, join(root, "dest-admitted-resource"), {
+      INTERLOCK_MESSAGEBUS_RESOURCE: DELIVERY_LEASE_RESOURCE,
+    });
+    expect(result.status, `stderr was:\n${result.stderr}`).toBe(0);
+    expect(result.stderr).not.toContain("FATAL:");
   });
 
   test("the acceptance sequence end to end over stdio", async () => {

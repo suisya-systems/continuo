@@ -26,8 +26,8 @@ The status vocabulary:
 **No status in this document is waiting on interlock, and none can be.** interlock is the port's
 source and is frozen (`D-0023`, `D-0036`): it decides nothing about continuo and answers no question
 continuo asks. Where a status turns on a question inherited from interlock -- `Q-0023` for `broker`,
-`Q-0011` for the secretary window -- that question is one interlock left unanswered, not one with an
-answer in transit. The question itself is worth keeping, because it records what has to be settled;
+since settled at continuo's own gate by `D-0053`, and `Q-0011` for the secretary window -- that
+question is one interlock left unanswered, not one with an answer in transit. The question itself is worth keeping, because it records what has to be settled;
 what does not follow from it is waiting. If continuo needs it settled, it is settled at continuo's
 human gate, and until it is, the honest reading of the status is "undecided here", never "blocked
 there".
@@ -447,7 +447,7 @@ translation itself).
 | `tests/gate_item2/test_mediated_real_provider.py` | 5 | `parity/gate_item2.mediated-real-provider.ledger.json` |
 | `tests/gate_item2/test_session_driver_harness.py` | 6 | `parity/gate_item2.session-driver-harness.ledger.json` |
 
-### `broker` -- `retarget` -- 54 cases collected, 5 further modules not collected
+### `broker` -- `not-porting` (ratified 2026-09-03, D-0053) -- 54 cases collected, 5 further modules not collected
 
 The only subsystem where the inventory and the source directory disagree in size.
 
@@ -467,20 +467,40 @@ re-target them onto the MessageBus rewrite (`Q-0023`). They are recorded in
 gives, and they have **no node ids** -- pytest never collected them, so there is nothing to
 inventory and nothing may be invented.
 
-**`Q-0023` is a question interlock left unanswered, not one it is going to answer.** interlock is
-frozen (`D-0023`, `D-0036`), so the MessageBus rewrite its instruction points at will never happen
-there and no re-targeting instruction is coming. `retarget` here therefore names work that belongs
-to this repository, and the two things still to decide are decided at continuo's human gate:
+**`Q-0023` is a question interlock left unanswered, not one it was ever going to answer.** interlock
+is frozen (`D-0023`, `D-0036`), so the MessageBus rewrite its instruction points at will never happen
+there and no re-targeting instruction was coming. The re-pointing was therefore work belonging to
+this repository, and it was settled here rather than waited for.
 
-- **The collected 54 (`test_residents.py`).** Whether continuo makes `residents._hostname` and
-  `residents._clock_ticks` injectable seams -- the twelve `monkeypatch.setattr` calls have no
-  continuo equivalent, so the seams are the port rather than a detail of it. Nothing external
-  settles this; it is a design decision for whichever belt takes the subsystem.
-- **The five uncollected modules.** Whether continuo grows a `broker/server.py` equivalent at all,
-  or re-points those files onto the messagebus package this repository already has (`D-05xx`,
-  ported 2026-08-29) -- which is exactly what `Q-0023` asked and interlock never answered. Their
-  having no node ids constrains the *evidence* (nothing may be invented for cases pytest never
-  collected); it does not make the decision someone else's.
+**Both halves were settled at continuo's human gate on 2026-09-03 (`D-0053`), and by different
+answers -- which is why the `retarget` this section used to carry was the wrong single word for
+them.** The status conflated a question about 54 collected cases with a question about five modules
+that have no cases at all, and the answers do not even share a subject:
+
+- **The collected 54 (`test_residents.py`) are declined, on the ground that the subject exists on
+  neither side of the port.** `residents.py:6-16` states that the registry it scans is written by the
+  **consumer** rather than by the runtime, and `D-0053` checked the consequence rather than taking it
+  on the design's word: `grep -rni resident src/ test/` over this repository returns **zero** hits --
+  no module, no suite, no fixture reads or writes such a registry -- and the same grep over
+  claude-org-ja returns zero as well. Porting the cases therefore means building **both** halves of a
+  protocol that has never had either half, which makes the `_hostname` / `_clock_ticks` seam work
+  above the smaller of the two costs rather than the whole of it. There is a second, independent
+  ground: `src/supervisor.ts:699-703` refuses to adopt an orphan into a run its binding does not
+  name, so a faithful port would install a reclamation rule this repository's supervisor already
+  contradicts. **What would falsify this:** if the host application grows a reaper for orphaned agent
+  sessions, the subject exists here and the decline is superseded rather than edited. What does
+  *not* falsify it is someone porting `residents.py` for its own sake -- what is declined is a belt
+  with no reader, not an algorithm.
+- **The five uncollected modules are discharged by the completed `messagebus` belt, at belt level
+  rather than case by case.** `D-0032` had already named the messagebus package as their destination
+  and that belt is complete at 43 of 43 (the `messagebus` section below), so **`Q-0023` -- "re-target
+  onto the MessageBus rewrite" -- is answered by the rewrite existing**, and continuo grew no
+  `broker/server.py` equivalent to answer it any other way. A per-case retarget was never merely
+  expensive, it was **unavailable**: with no node ids there are no cases to retarget, and by the rule
+  above nothing may be invented in their place. `D-0034`'s treatment of
+  `test_broker_journal_contract.py` -- a metadata-only ledger recording zero entries -- stands
+  unchanged, because what stops that file having a normal ledger is the absence of an inventory to
+  point at, which `D-0053` does not change.
 
 ### `messagebus` -- `in-scope` (ratified 2026-08-28) -- **ported: 43 of 43 cases**
 
@@ -669,14 +689,15 @@ continuo does not ship would assert nothing.
 | status | subsystems | cases |
 |---|---|---|
 | `in-scope` | `control_plane`, `measurement`, `fencing`, `settings`, `canary` (**ported** 2026-08-28), `fault_injection` (ratified and **ported** 2026-08-29), `session` (**ported** 2026-08-29), `messagebus` (**ported** 2026-08-29), `secretary` (**ported** 2026-08-29), `gate_item2` (ratified and **ported** 2026-08-29), `attention` (all three sub-belts, **ported** 2026-08-29), `gate_item11` (ratified and **ported** 2026-08-29) | 1,973 |
-| `retarget` | `broker` | 54 |
-| `not-porting` (ratified 2026-08-28; `curator` ratified 2026-08-29; `migrate` ratified 2026-08-30, D-0043) | `gate_record`, `scrub`, `package_smoke`, `curator`, `migrate` | 167 |
+| `not-porting` (ratified 2026-08-28; `curator` ratified 2026-08-29; `migrate` ratified 2026-08-30, D-0043; `broker` ratified 2026-09-03, D-0053) | `gate_record`, `scrub`, `package_smoke`, `curator`, `migrate`, `broker` | 221 |
 | | **18** | **2,194** |
 
-With the 167 `not-porting` cases ratified out, continuo's effective porting target is
-**2,194 − 167 = 2,027** node ids -- the pool of cases not declined, not a commitment to port all of
-it: within that pool, every status not marked ratified remains a proposal. The inventory itself
-stays at 2,194: the evidence set is unconditional and does not shrink with the decision.
+With the 221 `not-porting` cases ratified out, continuo's effective porting target is
+**2,194 − 221 = 1,973** node ids, and all 1,973 are ported. The qualification this paragraph used to
+carry -- that the target was a pool rather than a commitment, because a status inside it was still a
+proposal -- has nothing left to qualify: `broker` was the last such status, and `D-0053` declined it
+at the human gate on 2026-09-03. The inventory itself stays at 2,194: the evidence set is
+unconditional and does not shrink with the decision.
 
 Plus the 5 modules skipped at collection time, which have no cases: 2,194 + 5 = 2,199, interlock's
 suite baseline at `65f36c5`.

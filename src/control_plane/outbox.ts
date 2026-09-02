@@ -607,6 +607,53 @@ export class HumanGateRequired extends Error {
 }
 
 /**
+ * The row went terminal after the attempt began, and before the effect.
+ *
+ * `Outbox.attempt`'s step 0 guard refuses a message that is *already*
+ * finished, and it runs once. This is the other half: the row was live when
+ * the guard read it and had been retired -- gate closure writing
+ * `'cancelled'`, most plausibly, since 0003 makes `pending -> cancelled` and
+ * `delivered -> cancelled` edges a *different* writer takes without
+ * consulting us -- by the time the attempt reached the destination. The
+ * re-read beside the fence sees it and stops there, so the external effect
+ * is never performed.
+ *
+ * A class of its own, and neither of the two it could have reused:
+ *
+ * - Not {@link StaleWriterRefused}. Nothing is stale about this writer; its
+ *   lease is live, its epoch owns the row, and the very next thing the
+ *   method does is prove it. Saying "stale writer" would send an operator
+ *   looking at lease expiry and holder identity, which are exactly the two
+ *   things that were fine.
+ * - Not {@link OutboxUsageError}. That class is the module's
+ *   programming-error class -- the source's bare `ValueError` -- and this is
+ *   not a caller bug. A human answering a gate at the instant a delivery
+ *   worker picks the relay up is an ordinary race that the design creates on
+ *   purpose (`docs/design/minimal-operating-loop.md` section 5.1), and there
+ *   is nothing for the caller to have done differently.
+ *
+ * Like {@link StaleWriterRefused}, the refusal is **durable before this is
+ * thrown**: an `action` row in status `'refused'` records it, so the
+ * evidence `ACCEPTANCE.md` section 2 asks for exists whether or not anyone
+ * catches this. The row itself is left exactly as the cancelling writer left
+ * it -- terminal, and this module writes nothing more to it.
+ *
+ * Known cost, stated rather than hidden: `src/messagebus/bus.ts:350` accepts
+ * a residual exception out of `attempt()` only when it is an
+ * {@link OutboxUsageError} or a {@link StaleWriterRefused}, so this class
+ * does **not** currently flow through `MessageBus.poll`'s residual path and
+ * a poll meeting this race loses its whole batch. Widening that test is
+ * `src/messagebus/bus.ts`'s change to make, not this module's.
+ */
+export class CancelledBeforeEffect extends Error {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "CancelledBeforeEffect";
+    Object.setPrototypeOf(this, CancelledBeforeEffect.prototype);
+  }
+}
+
+/**
  * The caller used this module in a way that would break its guarantees.
  *
  * Mirrors the source's bare `ValueError`: not a delivery-ledger refusal, a
@@ -1164,6 +1211,18 @@ export class Outbox {
    * responsible for never arriving here with such a row; this guard exists
    * for everything that is not it.
    *
+   * **Step 0 is asked twice, and the second asking is a different
+   * question.** Step 0 answers *was this message finished when I picked it
+   * up*, which is about the caller. The re-read in front of step 3 answers
+   * *is it finished now*, which is about a race: gate closure writes
+   * `'cancelled'` from another writer entirely, and steps 1 and 2 are two
+   * committed transactions' worth of time for it to do so. That refusal is
+   * a {@link CancelledBeforeEffect}, not an {@link OutboxUsageError} --
+   * nobody made a mistake -- and it is recorded durably before it is
+   * thrown. Step 4 then covers the remainder: a cancellation that lands
+   * after the effect cannot be prevented, so it is *recorded* instead (see
+   * {@link _markDelivered}).
+   *
    * The ack is deliberately *not* here. Delivery and acknowledgement are
    * separate events with a kill window between them, and collapsing them
    * would erase the window the gate injects into.
@@ -1177,16 +1236,17 @@ export class Outbox {
     // The terminal check is the first statement in the method, and its
     // position is the load-bearing part.
     //
-    // Nothing below re-reads the status. A row that got past this line runs
-    // the *whole* delivery path: it increments `retry_count` durably, writes
-    // a pending action row, and then **calls the handler and performs the
-    // external effect** -- and only after all of that does it reach
-    // {@link _MARK_DELIVERED}, whose `status = 'pending'` conjunct matches
-    // nothing and turns into a refusal. The refusal is far too late to be
-    // any use: the effect has happened. A relay whose gate was closed --
-    // withdrawn, cancelled, no longer wanted -- firing its side effect at
-    // the destination anyway is the worst outcome this whole change exists
-    // to prevent, and it is prevented here or not at all.
+    // It is not the only one. A row that got past this line goes on to
+    // increment `retry_count` durably and write a pending action row, and a
+    // status re-read stands beside the fence re-read further down, in front
+    // of the effect, because this reading of the row goes stale the instant
+    // it is taken (gate closure is a different writer and does not consult
+    // us). What the *first* check buys is that a caller presenting an
+    // already-finished message is refused before any of the four steps runs
+    // at all -- no attempt count, no action row, no effect -- and what the
+    // second buys is that a message retired *during* those steps still never
+    // reaches the destination. Neither subsumes the other, and only the
+    // second is a race; this one is a caller bug.
     //
     // Both terminal words get their own sentence rather than one shared
     // "already finished": the reader of this error is being told what
@@ -1274,6 +1334,63 @@ export class Outbox {
         "before the effect was attempted";
       const refusal = this._recordRefusal(message, handler, reason, { nowMs, epoch });
       throw new StaleWriterRefused(reason, refusal);
+    }
+
+    // The status, re-read at the same point and for the same reason.
+    //
+    // Step 0's guard above reads the row once, at the top of the method, and
+    // everything between there and here happens on that reading: the fenced
+    // retry-count increment, the pending action row, and -- one line below --
+    // the external effect. The guard answers "was this message finished when
+    // I picked it up"; it cannot answer "is it finished now", and since
+    // migration 0003 those are different questions, because `pending ->
+    // cancelled` and `delivered -> cancelled` are edges a *different* writer
+    // takes without consulting us. Gate closure is that writer, and a human
+    // answering a gate while a delivery worker is mid-attempt on its relay is
+    // not an exotic interleaving -- it is the ordinary timing the human gate
+    // creates (`docs/design/minimal-operating-loop.md` section 5.1).
+    //
+    // Without this, the attempt ran the effect and then met
+    // {@link _MARK_DELIVERED}'s `status = 'pending'` conjunct, which matches
+    // nothing on a cancelled row; {@link _markDelivered} passes `allowNoRow`,
+    // so the miss was *silent*, and `MessageBus.poll` counted the row as an
+    // ordinary skip. The destination had been written to, and neither an
+    // envelope nor a delivery record said so anywhere. Refusing here is the
+    // only place that outcome can be prevented, because one line further on
+    // it has already happened.
+    //
+    // The same honest admission the fence re-read above makes, and it is not
+    // rhetorical here either: **this narrows the window, it does not close
+    // it.** No statement of ours runs during the pause between this `load`
+    // and `handler.apply` below, so a cancellation landing inside that pause
+    // is invisible to us and the effect goes out. The irreducible residue is
+    // exactly that gap, and what makes it acceptable is the second half of
+    // the guard -- the same second half the fence comment argues for the
+    // epoch. The effect carries the handler's idempotency key, so a
+    // destination that already refused or recorded that key does not double
+    // anything; what is left over is a *first* effect for a message retired
+    // microseconds earlier, which is a delivery the gate was one instant too
+    // late to stop and is indistinguishable, from the destination's side,
+    // from one it was two instants too late to stop. Making that gap smaller
+    // is possible (re-read under the same transaction as the effect); making
+    // it zero is not, because the effect is outside the database.
+    //
+    // Terminality is asked of {@link isTerminalOutboxStatus} rather than
+    // compared against `'cancelled'`, so a fifth terminal status added to
+    // 0003's CHECK is classified in the one place this module keeps that
+    // judgement.
+    const beforeEffect = this.load(messageId);
+    if (isTerminalOutboxStatus(beforeEffect.status)) {
+      const reason =
+        `refused to apply the effect for ${pythonRepr(messageId)}: the row reached ` +
+        `${pythonRepr(beforeEffect.status)} after this attempt began, so the message the effect ` +
+        "would deliver had been retired before the effect was attempted";
+      // Durable first, then thrown -- {@link StaleWriterRefused}'s discipline
+      // on the branch above, kept here because the evidence obligation is the
+      // same one: a refusal nobody catches must still be readable out of the
+      // `action` table afterwards.
+      this._recordRefusal(message, handler, reason, { nowMs, epoch });
+      throw new CancelledBeforeEffect(reason);
     }
 
     // (3) the effect itself -- attempted every time, including when our own
@@ -1639,12 +1756,49 @@ export class Outbox {
   }
 
   /**
-   * Move the row to `'delivered'` once, fenced.
+   * Move the row to `'delivered'` once, fenced -- and account for the miss.
    *
    * Idempotent by predicate rather than by trigger-catching: a resend of an
    * already delivered message must leave the original delivery instant
    * alone, and S5's `outbox_delivery_is_set_once` would abort the whole
-   * transaction if we tried to rewrite it.
+   * transaction if we tried to rewrite it. That is what `allowNoRow` was
+   * added for, and it is the *only* thing it was added for: the statement
+   * matching nothing because the row is already `'delivered'` is a resend
+   * doing exactly what a resend should do, and it must stay tolerated --
+   * source-translated cases depend on it (the deduplicated-resend cases in
+   * `test/control_plane/outbox.test.ts`).
+   *
+   * Under migration 0003 that is no longer the only way to match nothing,
+   * and the other ways are not benign. `_MARK_DELIVERED` now requires
+   * `status = 'pending'`, so a row cancelled *after* the effect went out --
+   * inside the window the pre-effect re-read in {@link attempt} admits it
+   * cannot close -- also matches nothing, and `allowNoRow` swallowed it. The
+   * result was the failure this method now exists to prevent: the external
+   * effect had happened, and every durable trace of it disagreed. No
+   * envelope (the outbox row is terminal, so `MessageBus.poll` skips it), no
+   * delivery record (the transition never landed), nothing but an `action`
+   * row in `'applied'` that no one is looking for.
+   *
+   * So the miss is classified rather than tolerated wholesale, on the same
+   * three-way shape {@link recordAck}'s zero-rows branch uses, and for the
+   * same reason -- there is more than one way to leave a status now and they
+   * mean different things:
+   *
+   * - **`'delivered'`**: the resend case above. Tolerated silently.
+   * - **terminal**: retired mid-flight. The effect is real and the ledger
+   *   has no room to say so, so it is written down where refusals are
+   *   written down -- an `action` row in `'refused'` naming what happened.
+   *   Recorded, not thrown: the effect *did* land, so the caller's
+   *   {@link AttemptOutcome} is a true statement about what this attempt
+   *   did, and throwing would additionally cost `MessageBus.poll` the rest
+   *   of its batch (`src/messagebus/bus.ts:350` accepts only two classes as
+   *   residual). The refusal row is the honest half; nobody is owed an
+   *   exception for a race nobody could have avoided.
+   * - **anything else** -- `'pending'` still, most plausibly with a
+   *   `writer_epoch` that is no longer ours: loud. The fence was live when
+   *   this ran, so under 0003's lattice there is no legitimate way for a
+   *   pending row owned by a live epoch to refuse this update, and a silent
+   *   return would report a lost delivery record as an idempotent no-op.
    */
   private _markDelivered(
     messageId: string,
@@ -1656,7 +1810,7 @@ export class Outbox {
     },
   ): void {
     const { nowMs, epoch, message, handler } = options;
-    this._fenced(
+    const moved = this._fenced(
       _MARK_DELIVERED,
       {
         message_id: messageId,
@@ -1673,6 +1827,43 @@ export class Outbox {
         what: "record the delivery",
         allowNoRow: true,
       },
+    );
+    if (moved) {
+      return;
+    }
+
+    const settled = this.load(messageId);
+    if (settled.status === "delivered") {
+      // The resend, delivered already. The original instant stands.
+      return;
+    }
+    if (isTerminalOutboxStatus(settled.status)) {
+      // Retired between the pre-effect re-read and here. The effect is out
+      // and cannot be recalled; what is still in our power is to stop the
+      // database from being silent about it. `_recordRefusal` is reused
+      // rather than a new table invented: the `action` row it writes already
+      // carries the run, the action kind, the idempotency key the effect was
+      // keyed with, the mechanism and a reason string, which is the whole of
+      // what an operator needs to reconcile this against the destination's
+      // own ledger -- and reconciling against the destination is what
+      // `ACCEPTANCE.md` section 2 says the evidence is for.
+      this._recordRefusal(
+        message,
+        handler,
+        `applied the effect for ${pythonRepr(messageId)} and could not record the delivery: the ` +
+          `row reached ${pythonRepr(settled.status)} while the effect was in flight, so it was ` +
+          "retired after the destination had already been written to -- the effect is real and " +
+          "the outbox row will never say so",
+        { nowMs, epoch },
+      );
+      return;
+    }
+
+    throw new OutboxUsageError(
+      `${pythonRepr(messageId)} could not be marked delivered and is neither delivered nor ` +
+        `terminal (status ${pythonRepr(settled.status)}): the fence was live, so under migration ` +
+        "0003's forward-only lattice this update had no legitimate reason to match no row -- a " +
+        "concurrent writer moved the row outside the vocabulary this module and the DDL share",
     );
   }
 
@@ -1702,6 +1893,15 @@ export class Outbox {
    * statement's own change count alone, so when zero rows change and the
    * caller allows it, the fence is re-read on its own: if it is live,
    * nothing was refused and the statement was simply a no-op.
+   *
+   * Returns whether the statement actually moved its row. A stale writer
+   * still throws, so the `false` return has exactly one meaning: *the fence
+   * was live and the `WHERE` matched nothing*, which is the outcome
+   * `allowNoRow` exists to permit. The caller is the only party that knows
+   * which no-ops are legitimate for its own predicate -- this method cannot,
+   * since it is handed the statement already rendered -- so it is handed the
+   * fact rather than the judgement. Callers that pass no `allowNoRow` can
+   * ignore the result: it is `true` on every path that returns.
    */
   private _fenced(
     statement: FencedStatement,
@@ -1714,7 +1914,7 @@ export class Outbox {
       readonly what: string;
       readonly allowNoRow?: boolean;
     },
-  ): void {
+  ): boolean {
     const { nowMs, epoch, message, handler, what, allowNoRow = false } = options;
     const bound = { ...params, ...this._fenceParams({ epoch, nowMs }) };
 
@@ -1732,11 +1932,13 @@ export class Outbox {
     // Joined rather than nested when the caller already holds a transaction:
     // `withImmediate` refuses an open one, and several callers wrap this.
     let refused = false;
+    let changed = false;
     const attempt = (): void => {
       const info = this._connection
         .prepare(String.prototype.valueOf.call(statement) as string)
         .run(bound);
       if (info.changes >= 1) {
+        changed = true;
         return;
       }
       if (allowNoRow && this._fenceIsLive({ epoch, nowMs })) {
@@ -1750,7 +1952,7 @@ export class Outbox {
       withImmediate(this._connection, attempt);
     }
     if (!refused) {
-      return;
+      return changed;
     }
 
     const reason =

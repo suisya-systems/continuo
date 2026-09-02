@@ -9466,6 +9466,19 @@ a pre-implementation design review found were open in a way that would have been
    globally, for the delivery role on lap 1. Multiple endpoint leases are refused until a later
    design adds either a scope column to `outbox` or a strict recipient predicate to the due and
    recovery passes; that is a schema question and it is not decided here.
+   The resource is fixed **by name**: `DELIVERY_LEASE_RESOURCE = "outbox-delivery"` in
+   `src/messagebus/endpoint.ts`, and `main()` refuses any other `INTERLOCK_MESSAGEBUS_RESOURCE` at
+   startup with exit 2 -- the same code and the same `FATAL:` shape as the missing-env and
+   unserved-recipient refusals rule 3 describes. The enforcement is part of the decision rather than
+   an implementation detail of it, because a constraint recorded only in a docstring is *described*
+   and not *fixed*, and this constraint in particular is invisible in the row shape it governs:
+   `writer_epoch` stores a number and not a resource, so two resources whose epochs happen to
+   coincide are indistinguishable in an outbox row and a violation of the rule leaves nothing behind
+   to find afterwards. The admitted value carries **no run and no recipient**, deliberately -- a
+   per-run or per-recipient name would advertise a partitioning of `outbox` that the table does not
+   have. The test fixture's old per-run `"messagebus-of-run-1"` (`test/messagebus/_env.ts`) was
+   exactly that advertisement, and it goes with the rule: the fixture now imports the constant from
+   the product instead of spelling a name of its own.
 5. **Lap 1 keeps the stdio child endpoint.** Section 0's premise 1 raises a host application serving
    MCP in-process over localhost, and section 5.1's re-check is explicit about what that costs: the
    isolation that exists today is crude and effective -- one worker, one endpoint process, one
@@ -9504,7 +9517,31 @@ a pre-implementation design review found were open in a way that would have been
      the reads only where a human decided it belongs.
    - `Outbox.attempt` recognises **both** terminal statuses and refuses each with its own message; it
      stays a loud `OutboxUsageError`, because a direct caller attempting a finished row is a
-     programming error. `Outbox.recordAck` classifies `cancelled` **before** its "has not been
+     programming error. But that guard runs **once**, and once is not enough. It answers *was this
+     message finished when the caller picked it up*, which is a question about the caller; it cannot
+     answer *is it finished now*, and gate closure takes the `pending -> cancelled` edge from another
+     writer entirely, with `_COUNT_ATTEMPT`'s committed transaction and the pending action row
+     standing between the guard and the destination. The effect is the one thing in this module that
+     cannot be undone, so `attempt` asks the terminality question a **second** time, immediately
+     before `handler.apply()` and beside the fence's own re-read, for the reason the fence re-reads
+     there. Stated in the register that comment already uses, because it is not rhetorical here
+     either: **the re-read narrows the window and does not close it.** The irreducible residue is the
+     pause between the re-read and `handler.apply()`, because no statement of ours runs during it,
+     and what makes the residue acceptable is the second half of the guard -- the destination's
+     idempotency key, which is exactly the argument the fence already makes for the epoch and is
+     written down here rather than left implied. The second refusal is a new exported class,
+     `CancelledBeforeEffect`, made durable as an `action` row in `'refused'` before it is thrown, on
+     `StaleWriterRefused`'s discipline. It is deliberately neither class it could have reused: not
+     `StaleWriterRefused`, because nothing is stale -- the lease is live and the epoch owns the row,
+     and calling it staleness would send an operator to inspect lease expiry and holder identity,
+     the two things that were fine; and not `OutboxUsageError`, because it is not a caller bug but an
+     ordinary race with the human gate, which the design creates on purpose and about which the
+     caller could have done nothing differently. `MessageBus.poll`'s post-exception residual test
+     admits it alongside the other two, for the same reason it admits them: the row is terminal, so
+     the delivery is finished and the batch goes on. Omitting it would have made a guard against one
+     unrecorded side effect cost the whole poll batch instead -- a worse outcome than the one the
+     guard prevents, and a guard paid for by a larger failure is not a guard.
+     `Outbox.recordAck` classifies `cancelled` **before** its "has not been
      delivered" check -- a cancelled-while-pending row has `delivered_at_ms` NULL and would otherwise
      be reported as evidence of a lost delivery record, which is a wildly misleading diagnosis of a
      perfectly ordinary gate closure -- narrows its `UPDATE` from `acked_at_ms IS NULL` to
@@ -9553,6 +9590,21 @@ a pre-implementation design review found were open in a way that would have been
 - **The existing production-schema, gates and events contracts are the side this change conforms to.**
   Their `cancelled`, gate-cancellation and partial-index tests are unchanged. The new integration is
   the party that had to move.
+- **A new row appears in the audit trail, and an operator will meet it.** Rule 6's pre-effect
+  re-read cannot catch a cancellation that lands *after* the effect. When one does, `_MARK_DELIVERED`
+  -- now conjoined with `status = 'pending'` -- matches no row, and the `allowNoRow: true` this call
+  has always passed would have swallowed the miss in silence. The miss is classified instead: still
+  `'delivered'` is the deduplicated-resend case `allowNoRow` exists for and stays tolerated; a row
+  that is neither delivered nor terminal is a loud `OutboxUsageError`, since a live fence over a
+  pending row has no legitimate way to refuse the update; and **terminal writes an `action` row in
+  `'refused'`, naming the idempotency key the effect was keyed with.** Recording beats throwing here
+  on two counts. The effect *did* land, so the attempt truthfully succeeded and the caller's
+  `AttemptOutcome` is a true statement about what this attempt did -- reporting it as a failure would
+  be the lie. And a throw would additionally cost `MessageBus.poll` the remainder of its batch,
+  charging every other recipient for a race none of them were in. What is left over is a message the
+  outbox row will never admit was delivered; the refusal row is the one place the database says
+  otherwise, and it carries the run, the action kind, the idempotency key, the mechanism and a reason
+  -- which is the whole of what reconciling against the destination's own ledger takes.
 - **The fault-injection belt cannot exercise `cancelled` at all, and this entry does not pretend
   otherwise.** Verified here rather than assumed: `test/fault_injection/import-graph.test.ts` permits
   exactly two modules to import `src/` (`ADAPTER_MODULES` = `spike_driver.ts`, `session_driver.ts`),
@@ -9579,11 +9631,22 @@ a pre-implementation design review found were open in a way that would have been
   in real behaviour terms.** A deployment that pointed the endpoint at a spike file was served before
   this change and exits 2 after it. Had the package been public, this entry would have carried a major
   bump.
-- **A bookkeeping fix rides along.** `parity/source-inventory.belts.md`'s broker heading said "4
-  further modules not collected" while its own body and the manifest list five. The heading is
-  corrected to five. It is fixed here rather than separately because this is the entry that names the
-  five and discharges them, and a count that disagrees with the list underneath it is exactly the kind
-  of drift a later reader resolves in the wrong direction.
+- **The scope-of-record moves with the decision, in this change rather than a later one.**
+  `parity/source-inventory.belts.md`'s `broker` section changes status from `retarget` to
+  **`not-porting` (ratified 2026-09-03, D-0053)**, and the two open decisions its body carried -- the
+  `_hostname` / `_clock_ticks` seam question for the collected 54, and whether continuo grows a
+  `broker/server.py` equivalent at all -- are replaced by rules 1 and 2, which answer them with
+  *different* answers, which is precisely why one status word was the wrong shape for the section.
+  The roll-up table follows: the `retarget` row is gone, `not-porting` goes from 167 cases to 221,
+  and the effective-target paragraph loses the qualification it used to carry, because 2,194 - 221 =
+  **1,973** and all 1,973 are ported. `README.md`'s status line is corrected to say exactly that --
+  every subsystem interlock's suite collects is now classified, and no status is still a proposal --
+  where it previously described a 2,027 pool containing 54 undecided ids. The stale heading ("4
+  further modules not collected" over a body and a manifest that list five) is corrected in passing.
+  None of this waits for a tidy-up, because the alternative is a scope-of-record that contradicts an
+  accepted decision, and that contradiction is exactly the drift a later reader resolves in the wrong
+  direction -- most plausibly by believing the roll-up table, which is the half that is easier to
+  read and, here, the half that would be wrong.
 
 **Falsifier.** Three observations would show this entry wrong, and each is evaluable from inside this
 repository.
@@ -9591,9 +9654,14 @@ repository.
 *A second delivery lease resource turning out to be needed on lap 1.* Rule 4 asserts that one global
 resource is sufficient because the lap has one delivery role. If a second concurrent deliverer appears
 -- a second endpoint for a second worker, most plausibly -- then the global resource serialises them,
-and the fix is not to relax rule 4 but to give `outbox` the scope column rule 4 names. An
-implementation that quietly ran two resources against the current row shape would be the failure, not
-the falsification.
+and the fix is not to relax rule 4 but to give `outbox` the scope column rule 4 names. The failure
+this paragraph used to warn about -- an implementation quietly running two resources against the
+current row shape -- is no longer reachable by configuration, because `main()` admits the one
+resource name and exits 2 on any other. So the falsifier now bites on a design need rather than on an
+accident: a second concurrent deliverer announces itself as an operator meeting a startup refusal,
+with the demand for the schema change in the refusal's own message, instead of as a fence that has
+silently stopped fencing. Converting the one into the other is what enforcing rule 4 at the boundary
+buys.
 
 *A legitimate reader that must see cancelled rows as due.* The positive predicate is the whole
 alignment, and it assumes no consumer needs a cancelled relay returned as work. An audit or reporting
@@ -9651,3 +9719,13 @@ both as blockers, and this entry records them. Step 4 (the endpoint's lease rene
 deliberately not in scope: its implementing component is the composition root of step 8, which does
 not exist yet. Decision id from the `D-0019`..`D-0099` shared band, next after `D-0052`, which the
 parallel task `continuo-test-timeout-scale` took on `origin/main` first.
+
+Three things in this entry post-date the gate and are recorded in place rather than as an addendum,
+which is the house form -- but a later reader should know which they are and why they exist. Rule 4's
+enforcement point, rule 6's second terminality check in front of the effect, and the `'refused'`
+record of a cancellation that lands after the effect were all added in response to an independent
+model's review of the implemented diff, which raised the first two as blockers. The design as gated
+fixed the delivery resource without saying who would enforce it, and asked the terminality question
+once because the second asking is visible only from inside the implementation. That is worth knowing
+because it says what kind of review found them: reading the code against the rule, not reading the
+rule.
