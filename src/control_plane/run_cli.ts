@@ -68,6 +68,7 @@
 
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
+import { LapRunIntent } from "./lap_run_intent.js";
 import { openProductionControlPlane } from "./migrator.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import { admitRun } from "./run_admission.js";
@@ -83,14 +84,33 @@ const RUN_ID_HELP =
   "states that a run begins.";
 const NOW_MS_HELP =
   "the clock, epoch milliseconds, stamped as the run's created_at_ms and " +
-  "updated_at_ms and as the run_created event's timestamps. Read once from " +
-  "the system clock when omitted; nothing below this command reads a clock.";
+  "updated_at_ms and as both events' timestamps. Read once from the system " +
+  "clock when omitted; nothing below this command reads a clock.";
+const LEASE_CLAIMANT_ID_HELP =
+  "the value this run's lease will be taken under. A claimant identity, not " +
+  "an authority: it grants nothing, and the lease's exclusivity comes from " +
+  "the database's epoch rule rather than from this string.";
+const WORKSPACE_HELP =
+  "absolute path this lap will materialise its workspace INTO. It need not " +
+  "exist yet; recording it fixes where the work goes, and the task that " +
+  "creates it reports what it made in its own event.";
+const ROLE_HELP = "the role the worker runs as.";
+const BASE_BRANCH_HELP = "the branch this lap's work starts from.";
+const TOPIC_BRANCH_HELP = "the branch this lap's work lands on.";
+const PROMPT_HELP =
+  "what the worker is being asked to do, verbatim. Free-form text: unlike " +
+  "--run-id it is not held to ASCII, because it is prose and is stored " +
+  "rather than printed back by this command.";
+const CLI_ARG_HELP =
+  "one extra argument for the worker's CLI. Repeat the flag to give several, " +
+  "in order; omit it for none.";
 
 const ADMIT_DESCRIPTION =
-  "Admit a run: insert its row at status 'created' and append the " +
-  "run_created event that records it, in one transaction. Refuses a run-id " +
-  "already on the table rather than re-admitting it, and exits 2 with the " +
-  "reason when it refuses.";
+  "Admit a run: insert its row at status 'created', append the run_created " +
+  "event that records it, and append the run_delegation_recorded event that " +
+  "fixes what this lap was asked to do -- all in one transaction. Refuses a " +
+  "run-id already on the table rather than re-admitting it, and exits 2 with " +
+  "the reason when it refuses.";
 
 /**
  * The three effects this module has on the world, as a replaceable record.
@@ -143,6 +163,42 @@ function nowMsOf(args: Namespace): number {
 }
 
 /**
+ * `--cli-arg`, repeated, as the list the record takes.
+ *
+ * `action="append"` leaves the namespace key `None` when the flag was never
+ * given and a list when it was, so both shapes are handled here rather than
+ * inside {@link LapRunIntent}: an absent optional flag is a fact about the
+ * command line, and the record's own vocabulary for "no arguments" is an empty
+ * list.
+ */
+function cliArgsOf(args: Namespace): readonly string[] {
+  const supplied = args["cli_args"];
+  return Array.isArray(supplied) ? supplied.map(String) : [];
+}
+
+/**
+ * The intent, built from the parsed arguments and validated by its own
+ * constructor.
+ *
+ * Every value is read through `String` for the reason the existing `--db` and
+ * `--run-id` reads are: the parser's namespace is `unknown`-valued, and the
+ * record refuses what is not text anyway, so this narrows the type without
+ * deciding anything the record has not already decided.
+ */
+function intentOf(args: Namespace): LapRunIntent {
+  return new LapRunIntent({
+    runId: String(args["run_id"]),
+    leaseClaimantId: String(args["lease_claimant_id"]),
+    workspace: String(args["workspace"]),
+    role: String(args["role"]),
+    baseBranch: String(args["base_branch"]),
+    topicBranch: String(args["topic_branch"]),
+    prompt: String(args["prompt"]),
+    cliArgs: cliArgsOf(args),
+  });
+}
+
+/**
  * `continuo run admit`.
  *
  * The handle is closed in a `finally` whatever the outcome, including a
@@ -152,16 +208,24 @@ function nowMsOf(args: Namespace): number {
  */
 export function cmdRunAdmit(args: Namespace): number {
   const path = String(args["db"]);
-  const runId = String(args["run_id"]);
+  // Built BEFORE the database is opened, so a malformed field costs no handle:
+  // the record's constructor is the whole of this verb's field validation, and
+  // it must be reached on the path where nothing is open yet.
+  const intent = intentOf(args);
   const nowMs = nowMsOf(args);
 
   try {
     const connection = openProductionControlPlane(path);
     try {
-      const admitted = admitRun(connection, { runId, nowMs });
+      const admitted = admitRun(connection, { intent, nowMs });
+      // Both events, named and numbered. The line is what an operator has to
+      // read to know the work statement landed with the run rather than after
+      // it -- reporting only the first would make the transaction's whole point
+      // invisible at the surface that performs it.
       runCliSeams.write(
         `admitted ${admitted.runId} in ${path}: status ${admitted.status}, ` +
-          `${admitted.eventId} at seq ${admitted.eventSeq}\n`,
+          `${admitted.eventId} at seq ${admitted.eventSeq}, ` +
+          `${admitted.delegationEventId} at seq ${admitted.delegationEventSeq}\n`,
       );
     } finally {
       connection.close();
@@ -196,6 +260,31 @@ export function addSubparsers(sub: Subparsers): void {
     required: true,
     metavar: "RUN_ID",
     help: RUN_ID_HELP,
+  });
+  // The intent's fields, in the record's own field order rather than
+  // alphabetically, so `--help` reads as the record reads.
+  for (const [option, dest, help] of [
+    ["--lease-claimant-id", "lease_claimant_id", LEASE_CLAIMANT_ID_HELP],
+    ["--workspace", "workspace", WORKSPACE_HELP],
+    ["--role", "role", ROLE_HELP],
+    ["--base-branch", "base_branch", BASE_BRANCH_HELP],
+    ["--topic-branch", "topic_branch", TOPIC_BRANCH_HELP],
+    ["--prompt", "prompt", PROMPT_HELP],
+  ] as const) {
+    admit.addArgument({
+      optionStrings: [option],
+      dest,
+      required: true,
+      metavar: dest.toUpperCase(),
+      help,
+    });
+  }
+  admit.addArgument({
+    optionStrings: ["--cli-arg"],
+    dest: "cli_args",
+    append: true,
+    metavar: "CLI_ARG",
+    help: CLI_ARG_HELP,
   });
   admit.addArgument({
     optionStrings: ["--now-ms"],

@@ -217,6 +217,16 @@ export {
   NotifyDestinationHandler,
   spikeRegistry,
 } from "./control_plane/handlers.js";
+// `D-0055`'s lap-scoped execution intent. Exported because `admitRun` takes one
+// and the package exports only `.` (D-0002), so a consumer that cannot name the
+// type cannot call the function; the module's own doc is where its boundary --
+// lap-scoped, no authority semantics, superseded by cadenza's G2 rather than
+// promoted into it -- is stated.
+export {
+  LapRunIntent,
+  type LapRunIntentFields,
+  LapRunIntentUsageError,
+} from "./control_plane/lap_run_intent.js";
 export {
   Authority,
   acquire,
@@ -400,6 +410,7 @@ export {
   admitRun,
   RUN_ADMISSION_PRODUCER,
   RUN_CREATED_EVENT_TYPE,
+  RUN_DELEGATION_RECORDED_EVENT_TYPE,
   RunAdmissionUsageError,
   RunAlreadyAdmitted,
 } from "./control_plane/run_admission.js";

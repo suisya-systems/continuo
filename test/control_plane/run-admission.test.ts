@@ -13,12 +13,21 @@
  *
  * What these cases are for, in the order they appear:
  *
- * * **The row and the event are one fact, written once.** `D-0051`'s whole
- *   claim is atomicity: a run exists if and only if the spine says why. The
- *   cases that carry it are the ones that interrupt the block -- an abandoned
- *   outer transaction leaves neither -- because a suite that only ever watches
- *   the happy path cannot tell one transaction from two that both happened to
- *   succeed.
+ * * **The row and both events are one fact, written once.** `D-0051`'s claim is
+ *   atomicity: a run exists if and only if the spine says why. `D-0055` extends
+ *   it: a run exists if and only if the spine also says what it was admitted to
+ *   do. The cases that carry both are the ones that interrupt the block -- an
+ *   abandoned outer transaction leaves none of the three -- because a suite
+ *   that only ever watches the happy path cannot tell one transaction from
+ *   three that all happened to succeed.
+ * * **The lap's execution intent is recorded, and it is complete.**
+ *   `run_delegation_recorded` is asserted as its own fact with its own identity
+ *   and its own place in the append order, and its payload is asserted by
+ *   EQUALITY rather than by containment: a durable work statement whose point
+ *   is completeness has to fail when a field stops being persisted, and it has
+ *   to fail just as loudly when one appears that nobody decided to put on the
+ *   spine. `LapRunIntent`'s own field rules are `lap-run-intent.test.ts`'s
+ *   subject and are deliberately not restated here.
  * * **A second admission is refused, not absorbed.** The spine underneath
  *   treats a re-appended fact as an idempotent no-op, so "refused" here is a
  *   deliberate difference from it rather than the default, and what is asserted
@@ -40,13 +49,18 @@
  */
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
 import { helpStrings } from "../../src/cli/parser.js";
 import { buildParser, main, cliSeams as topLevelSeams } from "../../src/cli.js";
 import { EVENT_TYPES } from "../../src/control_plane/events.js";
+import {
+  LapRunIntent,
+  type LapRunIntentFields,
+  LapRunIntentUsageError,
+} from "../../src/control_plane/lap_run_intent.js";
 import {
   createProductionControlPlane,
   headVersion,
@@ -58,6 +72,7 @@ import {
   admitRun,
   RUN_ADMISSION_PRODUCER,
   RUN_CREATED_EVENT_TYPE,
+  RUN_DELEGATION_RECORDED_EVENT_TYPE,
   RunAdmissionUsageError,
   RunAlreadyAdmitted,
 } from "../../src/control_plane/run_admission.js";
@@ -76,6 +91,62 @@ import { patchSeam } from "../testkit/seams.js";
 const T0 = 1_700_000_000_000;
 const T1 = T0 + 60_000;
 const RUN_ID = "run-1";
+
+/**
+ * The intent every case admits with, unless the intent is the case's subject.
+ *
+ * One shape for the whole file, overridden field by field, so that a case
+ * asserting something about the run or the transaction is not also silently
+ * asserting a particular workspace or prompt. `LapRunIntent`'s own field rules
+ * are `lap-run-intent.test.ts`'s subject and are not restated here.
+ *
+ * The workspace is built with `resolve` rather than written down. `D-0003` puts
+ * Windows on the merge path and the record requires an absolute path, and a
+ * literal `/wt/run-1` is *not* absolute on `win32` -- so a written-down POSIX
+ * path would make this whole file refuse on one of the two cells the double-
+ * green rule runs it on.
+ */
+function intent(overrides: Partial<LapRunIntentFields> = {}): LapRunIntent {
+  return new LapRunIntent({
+    runId: RUN_ID,
+    leaseClaimantId: "secretary-1",
+    workspace: WORKSPACE,
+    role: "worker",
+    baseBranch: "main",
+    topicBranch: "feat/run-1",
+    prompt: "port the thing",
+    ...overrides,
+  });
+}
+
+/** The absolute workspace path the fixtures record, on whichever platform. */
+const WORKSPACE = resolve("wt", "run-1");
+
+/**
+ * `continuo run admit`'s argv with every flag the record requires.
+ *
+ * A helper rather than a literal per case, and it is the flag *set* that is the
+ * point: `run admit` now refuses unless all seven intent fields are given, so a
+ * case that spelled its own argv would go red for a missing flag it never meant
+ * to be about the day an eighth is added.
+ */
+function admitArgv(
+  path: string,
+  overrides: Readonly<Record<string, string>> = {},
+): readonly string[] {
+  const flags: Record<string, string> = {
+    "--db": path,
+    "--run-id": RUN_ID,
+    "--lease-claimant-id": "secretary-1",
+    "--workspace": WORKSPACE,
+    "--role": "worker",
+    "--base-branch": "main",
+    "--topic-branch": "feat/run-1",
+    "--prompt": "port the thing",
+    ...overrides,
+  };
+  return ["run", "admit", ...Object.entries(flags).flat()];
+}
 
 /** This build's head, read rather than written down. */
 const HEAD = headVersion();
@@ -102,6 +173,27 @@ function runRows(connection: SqliteDatabase): Record<string, unknown>[] {
 /** The `event` rows, as the database holds them. */
 function eventRows(connection: SqliteDatabase): Record<string, unknown>[] {
   return connection.prepare("SELECT * FROM event ORDER BY seq").all() as Record<string, unknown>[];
+}
+
+/**
+ * The `run_delegation_recorded` payload in the database at `path`, parsed.
+ *
+ * Opened fresh and closed, so a CLI case reads what the command left on disk
+ * rather than what it believed it wrote -- and on a handle the command did not
+ * leave open, which on Windows is the difference between a locked file and a
+ * readable one.
+ */
+function delegationPayload(path: string): Record<string, unknown> {
+  const connection = openProductionControlPlane(path);
+  try {
+    const row = connection
+      .prepare("SELECT payload FROM event WHERE event_type = ? ")
+      .get(RUN_DELEGATION_RECORDED_EVENT_TYPE) as { payload: string } | undefined;
+    expect(row, `no ${RUN_DELEGATION_RECORDED_EVENT_TYPE} event in ${path}`).toBeDefined();
+    return JSON.parse(String(row?.payload)) as Record<string, unknown>;
+  } finally {
+    connection.close();
+  }
 }
 
 /** What one verb wrote to each stream. */
@@ -174,7 +266,7 @@ describe("admitRun writes the run and its admission event", () => {
   test("inserts the run at 'created' with one caller-supplied clock", () => {
     const { connection } = cpFixture();
 
-    const admitted = admitRun(connection, { runId: RUN_ID, nowMs: T0 });
+    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
 
     expect(admitted.runId).toBe(RUN_ID);
     expect(admitted.status).toBe(ADMITTED_RUN_STATUS);
@@ -198,10 +290,12 @@ describe("admitRun writes the run and its admission event", () => {
   test("appends exactly one run_created event, pointed at the run it created", () => {
     const { connection } = cpFixture();
 
-    const admitted = admitRun(connection, { runId: RUN_ID, nowMs: T0 });
+    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
 
     const events = eventRows(connection);
-    expect(events).toHaveLength(1);
+    // Two: `run_created` and, after it, `run_delegation_recorded`. This case is
+    // about the first; the delegation block above owns the second.
+    expect(events).toHaveLength(2);
     const event = events[0];
     expect(event?.["seq"]).toBe(admitted.eventSeq);
     expect(event?.["event_id"]).toBe(admitted.eventId);
@@ -234,11 +328,18 @@ describe("admitRun writes the run and its admission event", () => {
   test("admits several runs independently", () => {
     const { connection } = cpFixture();
 
-    admitRun(connection, { runId: "run-a", nowMs: T0 });
-    admitRun(connection, { runId: "run-b", nowMs: T1 });
+    admitRun(connection, { intent: intent({ runId: "run-a" }), nowMs: T0 });
+    admitRun(connection, { intent: intent({ runId: "run-b" }), nowMs: T1 });
 
     expect(runRows(connection).map((row) => row["run_id"])).toEqual(["run-a", "run-b"]);
-    expect(eventRows(connection).map((row) => row["run_id"])).toEqual(["run-a", "run-b"]);
+    // Each run's pair, in append order, with no interleaving: one admission is
+    // one transaction, so run-b's events cannot land between run-a's.
+    expect(eventRows(connection).map((row) => row["run_id"])).toEqual([
+      "run-a",
+      "run-a",
+      "run-b",
+      "run-b",
+    ]);
   });
 
   test("appends with no consumer registered", () => {
@@ -249,13 +350,170 @@ describe("admitRun writes the run and its admission event", () => {
     // arrive as a foreign-key error rather than as anything readable.
     const { connection } = cpFixture();
 
-    const admitted = admitRun(connection, { runId: RUN_ID, nowMs: T0 });
+    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
 
     expect(admitted.eventSeq).toBeGreaterThan(0);
     expect(connection.prepare("SELECT COUNT(*) AS n FROM event_consumption").get()).toEqual({
       n: 0,
     });
     expect(connection.prepare("SELECT COUNT(*) AS n FROM outbox").get()).toEqual({ n: 0 });
+  });
+});
+
+// --------------------------------------------------------------------------
+// the lap's execution intent
+// --------------------------------------------------------------------------
+
+describe("admitRun records the lap's execution intent alongside the run", () => {
+  test("appends run_delegation_recorded after run_created, both about the run", () => {
+    const { connection } = cpFixture();
+
+    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
+
+    const events = eventRows(connection);
+    expect(events).toHaveLength(2);
+    // The order is the decision, not the observation. Both events carry the
+    // same `nowMs`, so `seq` is the only thing that orders them and `seq` is
+    // what a draining consumer sees: a run's first event must be the one that
+    // says the run exists, or the intent arrives as a statement about a subject
+    // the reader has no record of.
+    expect(events.map((row) => row["event_type"])).toEqual([
+      RUN_CREATED_EVENT_TYPE,
+      RUN_DELEGATION_RECORDED_EVENT_TYPE,
+    ]);
+    expect(events[1]?.["seq"]).toBe(Number(events[0]?.["seq"]) + 1);
+
+    const delegation = events[1];
+    expect(delegation?.["seq"]).toBe(admitted.delegationEventSeq);
+    expect(delegation?.["event_id"]).toBe(admitted.delegationEventId);
+    // Pointed at the run in all three of the columns a per-run reader uses.
+    // `subject_kind` is the DDL's closed set and `run` is already in it, so
+    // this record needs no schema change -- asserted because a value outside
+    // the set would fail as a CHECK from three frames down rather than here.
+    expect(delegation?.["subject_kind"]).toBe("run");
+    expect(delegation?.["subject_id"]).toBe(RUN_ID);
+    expect(delegation?.["run_id"]).toBe(RUN_ID);
+    expect(delegation?.["producer"]).toBe(RUN_ADMISSION_PRODUCER);
+    // Lease-free like the admission it is part of: `D-0046` rule 4 gives run
+    // creation no fence, and the intent is written by the same unfenced call.
+    expect(delegation?.["producer_epoch"]).toBeNull();
+    expect(delegation?.["occurred_at_ms"]).toBe(T0);
+    expect(delegation?.["ingested_at_ms"]).toBe(T0);
+    // Its own fact identity, distinct from `run_created`'s. Both are derived
+    // from the run id, and a shared `dedup_key` would collide on
+    // `event_one_row_per_fact` -- which is the spine refusing to hold two facts
+    // under one identity, arriving as a duplicate rather than as a name clash.
+    expect(delegation?.["event_id"]).toBe(`${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${RUN_ID}`);
+    expect(delegation?.["dedup_key"]).toBe(`${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${RUN_ID}`);
+    expect(delegation?.["event_id"]).not.toBe(events[0]?.["event_id"]);
+  });
+
+  test("the payload is every field of the record, and nothing else", () => {
+    const { connection } = cpFixture();
+
+    admitRun(connection, {
+      intent: intent({
+        leaseClaimantId: "secretary-7",
+        role: "reviewer",
+        baseBranch: "release/1.x",
+        topicBranch: "fix/leak",
+        prompt: "close the handle",
+        cliArgs: ["--verbose"],
+      }),
+      nowMs: T0,
+    });
+
+    const payload = JSON.parse(String(eventRows(connection)[1]?.["payload"])) as Record<
+      string,
+      unknown
+    >;
+    // An equality rather than a set of `toContain`s: the point of a durable
+    // work statement is that it is complete, so a field that stopped being
+    // persisted has to fail here, and so does one that appeared without anyone
+    // deciding it should be on the spine.
+    expect(payload).toEqual({
+      lease_claimant_id: "secretary-7",
+      workspace: WORKSPACE,
+      role: "reviewer",
+      base_branch: "release/1.x",
+      topic_branch: "fix/leak",
+      prompt: "close the handle",
+      cli_args: ["--verbose"],
+    });
+    // The run identifier is deliberately NOT in it. `run_created`'s payload
+    // names no run either: `subject_id` and `run_id` are the columns the
+    // per-run indexes are built on, and a copy in the payload would be a second
+    // answer to which run an event is about.
+    expect(Object.keys(payload)).not.toContain("run_id");
+  });
+
+  test("the payload is json.dumps text, sorted and ASCII-escaped", () => {
+    // The payload column is a parity surface (`python_json.ts`): the
+    // differential oracle compares stored TEXT, so two databases whose payloads
+    // differ have diverged even where every assertion that parses them agrees.
+    // A prompt in Japanese is the case that separates `json.dumps` from
+    // `JSON.stringify` -- the first escapes every character from U+007F up,
+    // the second emits it raw -- and this organization writes prompts in
+    // Japanese. Constructed rather than typed, per `docs/cli-output-policy.md`:
+    // this source file stays ASCII, the value at runtime does not.
+    const { connection } = cpFixture();
+    const prompt = String.fromCodePoint(0x65e5, 0x672c, 0x8a9e);
+
+    admitRun(connection, { intent: intent({ prompt }), nowMs: T0 });
+
+    const text = String(eventRows(connection)[1]?.["payload"]);
+    expect(text).toContain('"prompt": "\\u65e5\\u672c\\u8a9e"');
+    // Keys sorted, separators with their spaces, and the whole thing ASCII.
+    expect(text.startsWith('{"base_branch": ')).toBe(true);
+    expect(text).toMatch(/^[\x20-\x7e]*$/);
+  });
+
+  test("an intent with no cli args records an empty list, not an absent key", () => {
+    // The record's own vocabulary for "no arguments", asserted because the two
+    // shapes are not the same to a reader: an absent key is a producer that did
+    // not write the field, and a reader cannot tell that from a worker that was
+    // given none.
+    const { connection } = cpFixture();
+
+    admitRun(connection, { intent: intent(), nowMs: T0 });
+
+    const payload = JSON.parse(String(eventRows(connection)[1]?.["payload"])) as Record<
+      string,
+      unknown
+    >;
+    expect(payload["cli_args"]).toEqual([]);
+  });
+
+  test("run_delegation_recorded is in the produced vocabulary", () => {
+    // `EVENT_TYPES` is defined as the vocabulary this implementation produces,
+    // so the entry and the producer arrive together -- `D-0051` rule 5 is
+    // explicit that a type is registered when its producer is written and not
+    // before. Without this the set could drift from the code by a rename in
+    // either direction and nothing would say so.
+    expect(EVENT_TYPES.has(RUN_DELEGATION_RECORDED_EVENT_TYPE)).toBe(true);
+  });
+
+  test("two runs record two independent intents", () => {
+    const { connection } = cpFixture();
+
+    admitRun(connection, {
+      intent: intent({ runId: "run-a", prompt: "the first" }),
+      nowMs: T0,
+    });
+    admitRun(connection, {
+      intent: intent({ runId: "run-b", prompt: "the second" }),
+      nowMs: T1,
+    });
+
+    const delegations = eventRows(connection).filter(
+      (row) => row["event_type"] === RUN_DELEGATION_RECORDED_EVENT_TYPE,
+    );
+    expect(delegations.map((row) => row["run_id"])).toEqual(["run-a", "run-b"]);
+    expect(
+      delegations.map(
+        (row) => (JSON.parse(String(row["payload"])) as Record<string, unknown>)["prompt"],
+      ),
+    ).toEqual(["the first", "the second"]);
   });
 });
 
@@ -275,7 +533,7 @@ describe("the row and the event commit together or not at all", () => {
 
     expect(() => {
       transaction(connection, (tx) => {
-        admitRun(tx, { runId: RUN_ID, nowMs: T0 });
+        admitRun(tx, { intent: intent(), nowMs: T0 });
         throw new Error("the caller abandoned the transaction");
       });
     }).toThrow("the caller abandoned the transaction");
@@ -286,12 +544,12 @@ describe("the row and the event commit together or not at all", () => {
 
   test("a refused second admission writes nothing at all", () => {
     const { connection } = cpFixture();
-    admitRun(connection, { runId: RUN_ID, nowMs: T0 });
+    admitRun(connection, { intent: intent(), nowMs: T0 });
     const runsBefore = runRows(connection);
     const eventsBefore = eventRows(connection);
 
     expectRefusal(
-      () => admitRun(connection, { runId: RUN_ID, nowMs: T1 }),
+      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
       RunAlreadyAdmitted,
       /already admitted/,
     );
@@ -311,10 +569,10 @@ describe("the row and the event commit together or not at all", () => {
 describe("a run identifier is admitted once", () => {
   test("refuses a re-admission and names the status the run is at", () => {
     const { connection } = cpFixture();
-    admitRun(connection, { runId: RUN_ID, nowMs: T0 });
+    admitRun(connection, { intent: intent(), nowMs: T0 });
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { runId: RUN_ID, nowMs: T1 }),
+      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
       RunAlreadyAdmitted,
     );
 
@@ -329,7 +587,7 @@ describe("a run identifier is admitted once", () => {
     // to `created`. The status in the message is what tells the operator which
     // run they actually found.
     const { connection } = cpFixture();
-    admitRun(connection, { runId: RUN_ID, nowMs: T0 });
+    admitRun(connection, { intent: intent(), nowMs: T0 });
     const lease = acquireRunLease(connection, {
       runId: RUN_ID,
       holder: "secretary-1",
@@ -346,13 +604,13 @@ describe("a run identifier is admitted once", () => {
     });
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { runId: RUN_ID, nowMs: T1 }),
+      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
       RunAlreadyAdmitted,
     );
 
     expect(refusal.message).toContain("'running'");
     expect(readRun(connection, RUN_ID)?.status).toBe("running");
-    expect(eventRows(connection)).toHaveLength(1);
+    expect(eventRows(connection)).toHaveLength(2);
   });
 
   test("the refusal is in the ControlPlaneRefusal family", () => {
@@ -360,10 +618,10 @@ describe("a run identifier is admitted once", () => {
     // a refusal outside it would reach the operator as a stack trace with the
     // message this class carefully writes buried above it.
     const { connection } = cpFixture();
-    admitRun(connection, { runId: RUN_ID, nowMs: T0 });
+    admitRun(connection, { intent: intent(), nowMs: T0 });
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { runId: RUN_ID, nowMs: T1 }),
+      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
       RunAlreadyAdmitted,
     );
     expect(refusal.name).toBe("RunAlreadyAdmitted");
@@ -375,85 +633,34 @@ describe("a run identifier is admitted once", () => {
 // --------------------------------------------------------------------------
 
 describe("a malformed argument is refused before anything is written", () => {
-  test.each([
-    ["an empty run id", "", "run_id must be a non-empty string"],
-    ["a blank run id", "   ", "run_id must be a non-empty string"],
-  ])("refuses %s", (_label, runId, message) => {
+  test("refuses an intent that is not a LapRunIntent", () => {
+    // The one field check `admitRun` keeps for itself, and the reason it can
+    // keep only one: `LapRunIntent` carries a private field, so an object
+    // literal of the right shape does not satisfy the parameter and every
+    // intent that gets this far went through the constructor. Asserted at
+    // runtime as well as in the types, because a caller in plain JavaScript --
+    // or one reaching through a cast -- has no type check at all.
     const { connection } = cpFixture();
 
     expectRefusal(
-      () => admitRun(connection, { runId, nowMs: T0 }),
+      () =>
+        admitRun(connection, {
+          intent: { runId: RUN_ID } as unknown as LapRunIntent,
+          nowMs: T0,
+        }),
       RunAdmissionUsageError,
-      message,
+      /intent must be a LapRunIntent/,
     );
 
     expect(runRows(connection)).toEqual([]);
     expect(eventRows(connection)).toEqual([]);
-  });
-
-  test.each([
-    ["a newline", "run-1\nerror: forged"],
-    ["a carriage return", "run-1\rerror: forged"],
-    ["an escape sequence", "run-\u001b[31m1"],
-    ["a zero-width joiner", "run-\u200d1"],
-    // Non-ASCII is refused for the second reason the rule states: a cp932
-    // console cannot encode it, and `D-0003` puts Windows on the merge path.
-    // Constructed rather than typed, per `docs/cli-output-policy.md` -- this
-    // source file stays ASCII, the value at runtime does not.
-    ["an emoji", `run-${String.fromCodePoint(0x1f600)}`],
-    ["a Japanese character", `run-${String.fromCodePoint(0x3042)}`],
-  ])("refuses a run id carrying %s", (_label, runId) => {
-    // The identifier is quoted verbatim into the one-line report and into the
-    // re-admission refusal, both of which end at a single newline. A newline
-    // inside the identifier makes the command appear to print a second line --
-    // `error: ` included -- and a character the console cannot encode makes it
-    // print none at all. Refusing here is what keeps the row, the event and the
-    // report all quoting the same string.
-    const { connection } = cpFixture();
-
-    expectRefusal(
-      () => admitRun(connection, { runId, nowMs: T0 }),
-      RunAdmissionUsageError,
-      /must be printable ASCII/,
-    );
-
-    expect(runRows(connection)).toEqual([]);
-    expect(eventRows(connection)).toEqual([]);
-  });
-
-  test("the refusal reaches the operator through the mounted command", () => {
-    const path = productionTemplate.copyInto(caseRoot("run-admit-control-char"));
-    const streams = captureStreams();
-    const usage: string[] = [];
-    patchSeam(topLevelSeams, "err", (text: string) => {
-      usage.push(text);
-    });
-
-    // A usage error is NOT in the ControlPlaneRefusal family, so it is not
-    // flattened into one `error: ` line -- it escapes as a defect with its
-    // stack, which is the distinction this module draws deliberately. What
-    // matters here is that nothing was printed as though the run had been
-    // admitted.
-    expect(() =>
-      main([
-        "run",
-        "admit",
-        "--db",
-        path,
-        "--run-id",
-        "run-1\nadmitted forged",
-        "--now-ms",
-        String(T0),
-      ]),
-    ).toThrow(RunAdmissionUsageError);
-    expect(streams.out()).toBe("");
   });
 
   test("refuses a clock that is not an integer of epoch milliseconds", () => {
     const { connection } = cpFixture();
 
     expectRefusal(
-      () => admitRun(connection, { runId: RUN_ID, nowMs: T0 + 0.5 }),
+      () => admitRun(connection, { intent: intent(), nowMs: T0 + 0.5 }),
       RunAdmissionUsageError,
       /now_ms must be an int/,
     );
@@ -468,10 +675,48 @@ describe("a malformed argument is refused before anything is written", () => {
     const { connection } = cpFixture();
 
     const error = expectRefusal(
-      () => admitRun(connection, { runId: "", nowMs: T0 }),
+      () => admitRun(connection, { intent: intent(), nowMs: T0 + 0.5 }),
       RunAdmissionUsageError,
     );
     expect(error).not.toBeInstanceOf(RunAlreadyAdmitted);
+  });
+
+  test("a malformed field reaches the operator through the mounted command", () => {
+    const path = productionTemplate.copyInto(caseRoot("run-admit-control-char"));
+    const streams = captureStreams();
+    const usage: string[] = [];
+    patchSeam(topLevelSeams, "err", (text: string) => {
+      usage.push(text);
+    });
+
+    // A usage error is NOT in the ControlPlaneRefusal family, so it is not
+    // flattened into one `error: ` line -- it escapes as a defect with its
+    // stack, which is the distinction this module draws deliberately. `D-0051`
+    // settled that placement for a malformed `--run-id` and `D-0055` keeps it
+    // for the rest of the record, so the class here is the record's rather than
+    // admission's. What matters is unchanged: nothing was printed as though the
+    // run had been admitted.
+    expect(() => main(admitArgv(path, { "--run-id": "run-1\nadmitted forged" }))).toThrow(
+      LapRunIntentUsageError,
+    );
+    expect(streams.out()).toBe("");
+  });
+
+  test("nothing is opened when a field is malformed", () => {
+    // The record is built before the database is opened, which is what makes
+    // the case above cost no handle -- and on Windows an open handle is a
+    // locked file. Driven through a path that does not exist: if the verb
+    // opened first, the failure would be the migrator's "does not exist"
+    // refusal rather than the record's, and the ordering would be silently
+    // wrong.
+    const path = databasePath(caseRoot("run-admit-field-before-open"));
+    const streams = captureStreams();
+
+    expect(() => main(admitArgv(path, { "--workspace": "wt/run-1" }))).toThrow(
+      LapRunIntentUsageError,
+    );
+    expect(streams.out()).toBe("");
+    expect(streams.err()).toBe("");
   });
 });
 
@@ -484,12 +729,17 @@ describe("continuo run admit", () => {
     const path = productionTemplate.copyInto(caseRoot("run-admit-cli"));
     const streams = captureStreams();
 
-    const code = main(["run", "admit", "--db", path, "--run-id", RUN_ID, "--now-ms", String(T0)]);
+    const code = main(admitArgv(path, { "--now-ms": String(T0) }));
 
     expect(code).toBe(0);
     expect(streams.err()).toBe("");
+    // Both events on the one line, in append order and with their sequence
+    // numbers: the report is where an operator sees that the work statement
+    // landed with the run rather than after it.
     expect(streams.out()).toBe(
-      `admitted ${RUN_ID} in ${path}: status created, run_created/${RUN_ID} at seq 1\n`,
+      `admitted ${RUN_ID} in ${path}: status created, ` +
+        `run_created/${RUN_ID} at seq 1, ` +
+        `run_delegation_recorded/${RUN_ID} at seq 2\n`,
     );
 
     // The claim in the printed line is checked against the file, not against
@@ -501,16 +751,18 @@ describe("continuo run admit", () => {
     });
     expect(runRows(connection)).toHaveLength(1);
     expect(runRows(connection)[0]?.["status"]).toBe("created");
-    expect(eventRows(connection)).toHaveLength(1);
-    expect(eventRows(connection)[0]?.["event_type"]).toBe(RUN_CREATED_EVENT_TYPE);
+    expect(eventRows(connection).map((row) => row["event_type"])).toEqual([
+      RUN_CREATED_EVENT_TYPE,
+      RUN_DELEGATION_RECORDED_EVENT_TYPE,
+    ]);
   });
 
   test("refuses a second admission with one stderr line and exit 2", () => {
     const path = productionTemplate.copyInto(caseRoot("run-admit-twice"));
     const streams = captureStreams();
 
-    const first = main(["run", "admit", "--db", path, "--run-id", RUN_ID, "--now-ms", String(T0)]);
-    const second = main(["run", "admit", "--db", path, "--run-id", RUN_ID, "--now-ms", String(T1)]);
+    const first = main(admitArgv(path, { "--now-ms": String(T0) }));
+    const second = main(admitArgv(path, { "--now-ms": String(T1) }));
 
     expect(first).toBe(0);
     expect(second).toBe(2);
@@ -524,7 +776,7 @@ describe("continuo run admit", () => {
       connection.close();
     });
     expect(runRows(connection)).toHaveLength(1);
-    expect(eventRows(connection)).toHaveLength(1);
+    expect(eventRows(connection)).toHaveLength(2);
   });
 
   test("reads the clock exactly once when --now-ms is omitted", () => {
@@ -532,7 +784,7 @@ describe("continuo run admit", () => {
     captureStreams();
     const clock = countedClock(T1);
 
-    const code = main(["run", "admit", "--db", path, "--run-id", RUN_ID]);
+    const code = main(admitArgv(path));
 
     expect(code).toBe(0);
     expect(clock.reads()).toBe(1);
@@ -546,8 +798,13 @@ describe("continuo run admit", () => {
     // created_at_ms` rests on.
     expect(row?.["created_at_ms"]).toBe(T1);
     expect(row?.["updated_at_ms"]).toBe(T1);
-    expect(eventRows(connection)[0]?.["occurred_at_ms"]).toBe(T1);
-    expect(eventRows(connection)[0]?.["ingested_at_ms"]).toBe(T1);
+    // All four event stamps, not just the first event's: two appends from one
+    // clock read is the property, and reading only `run_created` would pass
+    // against a second append that called the clock again.
+    for (const event of eventRows(connection)) {
+      expect(event["occurred_at_ms"]).toBe(T1);
+      expect(event["ingested_at_ms"]).toBe(T1);
+    }
   });
 
   test("does not read the clock when --now-ms is given", () => {
@@ -555,9 +812,7 @@ describe("continuo run admit", () => {
     captureStreams();
     const clock = countedClock(T1);
 
-    expect(main(["run", "admit", "--db", path, "--run-id", RUN_ID, "--now-ms", String(T0)])).toBe(
-      0,
-    );
+    expect(main(admitArgv(path, { "--now-ms": String(T0) }))).toBe(0);
     expect(clock.reads()).toBe(0);
   });
 
@@ -565,7 +820,7 @@ describe("continuo run admit", () => {
     const path = databasePath(caseRoot("run-admit-absent"));
     const streams = captureStreams();
 
-    const code = main(["run", "admit", "--db", path, "--run-id", RUN_ID, "--now-ms", String(T0)]);
+    const code = main(admitArgv(path, { "--now-ms": String(T0) }));
 
     expect(code).toBe(2);
     expect(streams.out()).toBe("");
@@ -581,15 +836,31 @@ describe("continuo run admit", () => {
     const path = databaseBehindHead(root, HEAD - 1);
     const streams = captureStreams();
 
-    const code = main(["run", "admit", "--db", path, "--run-id", RUN_ID, "--now-ms", String(T0)]);
+    const code = main(admitArgv(path, { "--now-ms": String(T0) }));
 
     expect(code).toBe(2);
     expect(streams.out()).toBe("");
     expect(streams.err()).toContain(`is at version ${HEAD - 1}`);
   });
 
-  test("requires --run-id", () => {
-    const path = productionTemplate.copyInto(caseRoot("run-admit-norunid"));
+  test.each([
+    ["--run-id", "run_id"],
+    ["--lease-claimant-id", "lease_claimant_id"],
+    ["--workspace", "workspace"],
+    ["--role", "role"],
+    ["--base-branch", "base_branch"],
+    ["--topic-branch", "topic_branch"],
+    ["--prompt", "prompt"],
+  ])("requires %s", (flag) => {
+    // Every intent field is required, one case each. `D-0055`'s whole claim is
+    // that admission fixes the WHOLE record, so a field the parser lets through
+    // as absent is a record admission could complete without -- and the
+    // resulting event would be a work statement missing the part nobody
+    // noticed. Driven through the parser rather than the record because these
+    // are two separate refusals: the parser's is a usage line and exit 2, and
+    // reaching the record's constructor instead would mean the flag was
+    // optional after all.
+    const path = productionTemplate.copyInto(caseRoot(`run-admit-no${flag}`));
     const streams = captureStreams();
     // The parser's own usage line goes out through the TOP-LEVEL seam, not this
     // subtree's, so it is captured separately -- both to keep it off the
@@ -599,18 +870,55 @@ describe("continuo run admit", () => {
       usage.push(text);
     });
 
+    const argv = admitArgv(path, { "--now-ms": String(T0) }).filter(
+      (token, index, tokens) => token !== flag && tokens[index - 1] !== flag,
+    );
+
     // Exit 2 from the parser, not from the command: the argument is refused
     // before a database is opened at all.
-    expect(main(["run", "admit", "--db", path, "--now-ms", String(T0)])).toBe(2);
-    expect(usage.join("")).toContain("the following arguments are required: --run-id");
+    expect(main(argv)).toBe(2);
+    expect(usage.join("")).toContain(`the following arguments are required: ${flag}`);
     expect(streams.out()).toBe("");
     expect(streams.err()).toBe("");
+  });
+
+  test("takes --cli-arg any number of times, in order, and none by default", () => {
+    // `action="append"` leaves the namespace key absent when the flag never
+    // appears, which is a different shape from an empty list -- so both are
+    // driven, and both must reach the payload as `[]` and as the two arguments
+    // in the order they were typed. Order is asserted because argv order IS the
+    // meaning of an argument list: a set here would be a different record.
+    //
+    // Written in the `--cli-arg=VALUE` form, and that is the interesting part
+    // rather than a detail. The values a worker's CLI takes mostly begin with a
+    // dash, and argparse -- which `cli/parser.ts` reproduces -- refuses to
+    // consume a following token that looks like an option, so
+    // `--cli-arg --verbose` is a usage error and not a passed-through argument.
+    // The `=` form is the escape, it is argparse's own, and pinning it here is
+    // what stops the first operator to pass a flag through from concluding the
+    // option is broken.
+    const withNone = productionTemplate.copyInto(caseRoot("run-admit-noargs"));
+    const withSome = productionTemplate.copyInto(caseRoot("run-admit-args"));
+    captureStreams();
+
+    expect(main(admitArgv(withNone, { "--now-ms": String(T0) }))).toBe(0);
+    expect(
+      main([
+        ...admitArgv(withSome, { "--now-ms": String(T0) }),
+        "--cli-arg=--verbose",
+        "--cli-arg=--model=sonnet",
+      ]),
+    ).toBe(0);
+
+    expect(delegationPayload(withNone)["cli_args"]).toEqual([]);
+    expect(delegationPayload(withSome)["cli_args"]).toEqual(["--verbose", "--model=sonnet"]);
   });
 
   test("is reachable from the top-level parser, and says what it does", () => {
     const strings = helpStrings(buildParser());
     expect(strings.some((text) => text.startsWith("Admit a run:"))).toBe(true);
     expect(strings.some((text) => text.includes("run_created event"))).toBe(true);
+    expect(strings.some((text) => text.includes("run_delegation_recorded event"))).toBe(true);
   });
 
   test("every string it puts in --help is ASCII", () => {

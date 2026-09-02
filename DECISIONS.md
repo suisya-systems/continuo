@@ -149,6 +149,7 @@ spaces distinct.
 | D-0052 | The runner's per-test timeout is scaled on a slow platform, from the same constant the harness budgets use | accepted |
 | D-0053 | The broker belt is declined and discharged rather than ported, and the endpoint moves onto the production schema with the outbox aligned to `cancelled` | accepted |
 | D-0054 | `writer_epoch` on `outbox` is delivery-side ownership, not producer provenance: the delivery worker adopts one row immediately before it attempts it | accepted |
+| D-0055 | The lap's execution intent is fixed at admission as `LapRunIntent`, written with the run in one transaction, and carries no authority | accepted |
 
 ---
 
@@ -10184,3 +10185,164 @@ axes and the instruction that the narrowed (b) be taken as an explicit parity di
 `D-0053`'s, under **"The four candidates for the adoption gap, and what each costs"**; the
 Alternatives section above reports which of them this entry takes and which stay rejected. Decision id
 from the `D-0019`..`D-0099` shared band, next after `D-0053`.
+---
+
+## D-0055 -- The lap's execution intent is fixed at admission as `LapRunIntent`, written with the run in one transaction, and carries no authority
+
+**Context.** `docs/design/minimal-operating-loop.md` section 6.3 places the delegation record in
+continuo rather than in cadenza's G2, and step 6 of section 7 asks for it. `D-0051` had already
+built the writer it belongs to: `continuo run admit` inserts the `run` row and appends `run_created`
+in one transaction, and refuses a second admission of one identifier. What was missing was any
+durable statement of what a run was admitted **to do** -- section 4.6's finding, that the instruction
+reaches the child as an untyped `settings.prompt` string and is persisted nowhere, so a run row says
+that work exists and nothing anywhere says what it is.
+
+Section 6.3 also contained a contradiction that had to be resolved before anything could be built.
+It says the record is produced by the admission command at L1, while section 7's step 7 has the
+workspace materialised later, at L2 -- which leaves open whether the record is a statement fixed at
+admission or a row the later step comes back and completes.
+
+**Decision.**
+
+1. **The record is an intent fixed at admission, not a document that is later updated.**
+   `LapRunIntent` (`src/control_plane/lap_run_intent.ts`) is constructed once, validated by its
+   constructor, frozen, and persisted as an event payload. Nothing writes it again. What comes after
+   admission -- the workspace that was actually created, the commit a base branch resolved to, the
+   session that was spawned -- is a **later fact in a later event**, produced by the task that
+   observed it, never a correction of this one. That is the spine's own rule
+   (`event_rows_are_immutable`: "correct a fact with a new event"), applied to the record that lives
+   on it rather than re-decided for it.
+
+   The field this settles most visibly is `workspace`. It is **not** "the workspace that exists"; it
+   is the path this lap has *chosen* to materialise into. At admission the directory typically does
+   not exist, and the record makes no claim that it ever will.
+2. **`run admit`'s required arguments are extended; there is no `run delegate` verb.** The record is
+   an argument of admission, and `admitRun` takes it whole. A second verb would make "admitted but
+   never delegated" a reachable state, and it is one an operator cannot recover from: `D-0051` rule 4
+   refuses a second admission, so the run cannot be re-admitted and the intent cannot be attached
+   after the fact. One verb makes the incomplete state unrepresentable instead of making it
+   recoverable.
+3. **The run row, `run_created` and `run_delegation_recorded` are written in the existing single
+   transaction, in that order.** The atomicity `D-0051` rule 3 established is extended rather than
+   duplicated. An admission that committed the run and its cause and then failed to append the
+   intent would leave L1 half done, and the missing half is the one nothing downstream can
+   reconstruct. The order is a decision, not an artifact: both events carry the same `nowMs`, so
+   `seq` is the only thing that orders them and `seq` is what a draining consumer sees. A run's first
+   event must be the one that says the run exists, or the intent arrives as a statement about a
+   subject the reader has no record of.
+4. **One event type is added: `run_delegation_recorded`.** Not extra keys in `run_created`'s payload,
+   which would grow an event meaning "a row exists" into the carrier of a work statement and make
+   every later reader of `run_created` ask which of the two it was handed. The word says `recorded`
+   rather than `delegated` because nothing is delegated at admission -- no worker is spawned, no
+   workspace exists, no lease is taken; what happened is that the intent was written down.
+   `EVENT_TYPES` gains exactly one line, with its producer, per `D-0051` rule 5.
+5. **The record carries no authority, and the naming is the mechanism.** The field is
+   `leaseClaimantId`, not `holder`, `owner` or `principal`: the string's whole meaning is the value
+   the lease will be taken under, and a lease's exclusivity comes from the database's epoch rule and
+   not from the word. Only the adapter that eventually calls the orchestrator spells it `holder`, and
+   that spelling stops at the lease call. No `Authority`, `Principal` or `DelegationContract` name
+   appears, and no union, permission list or scope field is added in anticipation of G2. This record
+   is **superseded** by G2, not promoted into it.
+6. **Construction is validation, and the type is nominal.** `LapRunIntent` carries a private field,
+   so a plain object of the right shape does not satisfy it in TypeScript and there is no way to
+   obtain one except through the constructor. `admitRun` therefore keeps no field rules of its own --
+   there is no second place a rule could be written and drift from the first -- and checks only that
+   what it was handed is an intent at all. `D-0051`'s printable-ASCII rule for `run_id` moves here
+   with the field, unchanged in substance; the class of the resulting error changes from
+   `RunAdmissionUsageError` to `LapRunIntentUsageError`, both outside the `ControlPlaneRefusal`
+   family, so a malformed field still escapes with its stack rather than being flattened into one
+   operator-facing line.
+
+**Each field's consumer and provisionality, which is the part section 6.3 got wrong.** The document
+said the field list "is read off `StartRequest`". It is not: `StartRequestFields` is `sessionId`,
+`workspace`, `role` and `settings` and nothing else, so of the seven fields exactly two are
+`StartRequest`'s. The sentence created a dependency the code does not have -- that an S1 promotion
+moves the record as a unit -- when each field's provenance is its own. The correction is made in the
+design document itself; the table is here.
+
+| Field | Direct consumer | How provisional |
+|---|---|---|
+| `runId` | `admitRun`: the `run` row, and both events' `subject_id` / `run_id` | Settled. Not a `StartRequest` field at all. |
+| `leaseClaimantId` | `SessionOrchestratorOptions.holder` -> `acquireRunLease`'s `holder` | The lease layer is settled; the **name** is lap-scoped and superseded by G2. Never reaches a `StartRequest`. |
+| `workspace` | `StartRequest.workspace` | One of the two genuine `StartRequest` fields. S1 is provisional scaffold (5.5), so the *carrier* can move; the value's meaning -- chosen, not created -- is this entry's. |
+| `role` | `StartRequest.role` | The other genuine `StartRequest` field. Same provisionality. |
+| `prompt` | `StartRequest.settings["prompt"]`, read by `claude_cli_provider.ts` | Twice removed: not a `StartRequest` field, and read out of an opaque bag by a provider S1 calls scaffold. The most likely of the seven to change shape. |
+| `cliArgs` | `StartRequest.settings["cli_args"]`, read by `claude_cli_provider.ts` | As `prompt`. Provider-specific in a way the others are not. |
+| `baseBranch` | **none in `src/`** | A forward declaration. Section 7 step 7 requires a base branch be recorded rather than an arbitrary ref, and this is where it is recorded; the task that resolves it to a commit reports that in its own event. |
+| `topicBranch` | **none in `src/`** | As `baseBranch`. The operator's publish step (7.11) is its first reader. |
+
+**Consequences.**
+
+- **`continuo run admit` now takes seven required flags rather than one.** `--run-id`,
+  `--lease-claimant-id`, `--workspace`, `--role`, `--base-branch`, `--topic-branch` and `--prompt`,
+  plus a repeatable `--cli-arg`. Every one is required because a partially-stated intent is the thing
+  decision 1 exists to prevent; there is no default, because a default for any of these is a guess
+  about the work being asked for.
+- **`--cli-arg` values that begin with a dash need the `--cli-arg=VALUE` form.** argparse, which
+  `cli/parser.ts` reproduces, will not consume a following token that looks like an option. Most
+  arguments a worker's CLI takes begin with a dash, so this is the ordinary case rather than an edge
+  one. It is argparse's own escape and is pinned by a test rather than worked around.
+- **The field rules differ by field, deliberately.** `run_id` is printable ASCII because it is
+  printed back verbatim (`D-0051`). `prompt` is held to nothing but non-emptiness, because it is
+  prose and this organization writes prose in Japanese -- `docs/cli-output-policy.md` governs what
+  continuo *authors*, and says in as many words that values it receives from outside "may of course
+  be non-ASCII". The remaining fields -- and each element of `cliArgs` -- refuse control
+  characters only: a branch name or an argv element that ends a line is a value no later report can
+  quote back as the string the database holds, while a non-ASCII role or workspace path is ordinary
+  here. An empty string stays a legal `cliArgs` element, because an empty argv element is legal and
+  refusing it would be a rule this record invented.
+- **`workspace` must be fully qualified.** The one shape rule imposed on a path, and it follows from
+  the record being durable: the value is read back by a different process whose working directory is
+  its own, so a path whose meaning depends on who reads it is one this record cannot fix.
+  `isAbsolute` alone is **not** that rule on Windows -- `path.win32.isAbsolute("\worktree")` is
+  `true` and the path is still drive-relative, so admission on `D:` and a materialise step on `C:`
+  would read one recorded string as two directories -- so the check is the path's *root*: a drive
+  letter or a UNC share on `win32`, and `isAbsolute` alone on POSIX, where the two cannot disagree.
+  Being resolvable is all that is checked -- the path is not normalised, and its existence is not
+  tested. Normalising would mean the record holds a string the operator did not type, and stat'ing
+  would make admission depend on a filesystem state that decision 1 says does not exist yet.
+- **The payload is `json.dumps(..., sort_keys=True)`, in the schema's `snake_case`.** It is a parity
+  surface: the differential oracle compares stored TEXT, so `pythonJsonDocumentSorted` is used rather
+  than `JSON.stringify`, and a Japanese prompt is stored ASCII-escaped exactly as CPython would write
+  it. The run identifier is **not** in the payload -- `run_created`'s payload names no run either;
+  `subject_id` and `run_id` are the columns the per-run indexes are built on, and a copy would be a
+  second answer to which run an event is about.
+- **No consumer is registered for `run_delegation_recorded`.** As with `run_created` (`D-0051`), the
+  append fans out to nobody, and `D-0046`'s falsifier about the consumer indirection having no reader
+  on the lap remains live and is not resolved here.
+- **`D-0051` is extended, not superseded.** Every rule it states still holds. This entry adds a
+  second event to the same transaction and moves one validation rule to the type that now owns the
+  field.
+
+**Falsifier.** A field of this record that a later step must legitimately *change* rather than
+restate. That would mean decision 1 is wrong -- that this is a mutable delegation document after all
+-- and the fix would be a second event type plus a reader that folds the two, not a setter. Also: a
+workspace an operator must give relatively, or a `base_branch`/`topic_branch` whose eventual consumer
+needs a shape this record does not check (a resolved sha, say, rather than a ref name); either would
+mean the field's rule was decided before its reader existed and should be re-decided with it. And if
+cadenza's G2 arrives and the sensible move is to *promote* this type rather than supersede it, then
+decision 5's whole premise -- that a lap-scoped work statement and an authority model are different
+subjects -- was wrong, and the entry should be superseded rather than quietly widened one field at a
+time.
+
+**Rejected alternative: a separate `run delegate` verb.** It is the shape that keeps `run admit`
+unchanged, and decision 2 rejects it on a concrete failure rather than on taste: admit-then-delegate
+has a middle state, and `D-0051` rule 4 makes that state unrecoverable, because the run cannot be
+re-admitted and there is no path that attaches an intent to a run already on the table.
+
+**Rejected alternative: carry the record inside `run_created`'s payload.** It avoids adding to
+`EVENT_TYPES` and keeps the transaction at two writes. Rejected on decision 4's grounds: the two are
+facts about different subjects, and the cost lands on every future reader of `run_created` rather
+than on this change.
+
+**Rejected alternative: an interface plus a validating factory function.** Structurally simpler, and
+it loses the property decision 6 is built on: a caller could construct the interface directly, so
+`admitRun` would have to re-validate, and the field rules would exist in two places.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-delegation-record`, on
+`docs/design/minimal-operating-loop.md` section 6.3 and step 6, and against `D-0051`. Decisions 1-5
+were settled at the gate ahead of the work -- including the resolution of section 6.3's L1/L2
+contradiction in decision 1 -- and this entry records them; decision 6 and the field rules are the
+implementation's. Decision id from the `D-0019`..`D-0099` shared band, next after `D-0054`. This entry was written as `D-0054` and re-taken on rebase: the parallel adoption-gap task claimed that id and merged ahead of it, under the band's first-merged-wins rule.

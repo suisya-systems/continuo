@@ -1,6 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { appendEvent } from "./events.js";
+import { LapRunIntent } from "./lap_run_intent.js";
 import { pythonJsonObject } from "./python_json.js";
 import { pythonRepr } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
@@ -21,10 +22,10 @@ import { transaction } from "./txn.js";
  * Three properties are load-bearing, and each is here rather than in a
  * convention.
  *
- * - **The row and its admission event are one transaction.** `event.run_id`
- *   is a foreign key onto `run(run_id)` and the connection runs with
- *   `PRAGMA foreign_keys = ON` (`connection.ts`), so the order inside the
- *   block is forced: `INSERT INTO run` first, {@link appendEvent} second. What
+ * - **The row and both of its admission events are one transaction.**
+ *   `event.run_id` is a foreign key onto `run(run_id)` and the connection runs
+ *   with `PRAGMA foreign_keys = ON` (`connection.ts`), so the order inside the
+ *   block is forced: `INSERT INTO run` first, {@link appendEvent} after. What
  *   is *not* forced, and is the reason the boundary is taken here rather than
  *   left to `appendEvent`'s own, is the failure in between -- a crash after
  *   the row and before the event would leave a run nobody can point at an
@@ -32,6 +33,17 @@ import { transaction } from "./txn.js";
  *   `txn.ts`'s {@link transaction} joins an inner call to an outer one rather
  *   than nesting it, so `appendEvent` runs inside this block without knowing
  *   it and without committing half of it.
+ *
+ *   `D-0055` puts the lap's execution intent inside that same boundary, and
+ *   for the same argument one step further out. An admission that committed
+ *   the run and its `run_created` and then failed to append
+ *   `run_delegation_recorded` would leave a run that exists, has a recorded
+ *   cause, and has no statement of what it was admitted **to do** -- a half of
+ *   L1, and the half nothing downstream can reconstruct. So the intent is an
+ *   argument of admission rather than a later `run delegate` verb: two verbs
+ *   would make "admitted but never delegated" a state an operator has to
+ *   recover from, and there is no recovery, because a second admission is
+ *   refused.
  * - **A second admission of one run is refused, not absorbed.** Re-running the
  *   command is not an idempotent retry: `run admit` is the statement that a run
  *   *begins*, and a second statement of a beginning is either a mistaken repeat
@@ -79,7 +91,7 @@ import { transaction } from "./txn.js";
 export const ADMITTED_RUN_STATUS = "created";
 
 /**
- * The event type this module produces, and the only one `D-0051` adds.
+ * The event type `D-0051` adds: a `run` row now exists.
  *
  * Registered in `EVENT_TYPES` (`events.ts`), which is defined as the vocabulary
  * *this implementation produces* -- so it is listed there because this producer
@@ -91,7 +103,28 @@ export const ADMITTED_RUN_STATUS = "created";
 export const RUN_CREATED_EVENT_TYPE = "run_created";
 
 /**
- * The `producer` stamped on every `run_created` event.
+ * The event type `D-0055` adds: this run's execution intent, as admission fixed
+ * it.
+ *
+ * A second type rather than more keys in {@link RUN_CREATED_EVENT_TYPE}'s
+ * payload, because the two are different facts about different subjects even
+ * though one transaction writes both. `run_created` is a fact about *this
+ * database* -- a row is on the table -- and its payload is the status that row
+ * was inserted at. `run_delegation_recorded` is a fact about *the work*: what
+ * this lap was asked for. Folding the second into the first would grow an event
+ * whose meaning is "a row exists" into the carrier of a work statement, and
+ * every later reader of `run_created` would have to know which of the two it
+ * was being handed.
+ *
+ * The word keeps the `subject_pastparticiple` form and says `recorded` rather
+ * than `delegated` on purpose. Nothing is delegated at admission: no worker has
+ * been spawned, no workspace exists, no lease has been taken. What has happened
+ * is that the intent was written down, and that is the fact this names.
+ */
+export const RUN_DELEGATION_RECORDED_EVENT_TYPE = "run_delegation_recorded";
+
+/**
+ * The `producer` stamped on every event this module appends.
  *
  * Fixed rather than a caller's argument, and that is the point: the column
  * records which code path put the fact on the spine, and there is exactly one
@@ -112,9 +145,14 @@ export const RUN_ADMISSION_PRODUCER = "run_admission";
  * Outside the {@link ControlPlaneRefusal} family on purpose, and for the reason
  * `events.ts` keeps `EventSpineUsageError` outside it: a refusal in that family
  * is a *fact stated about the data* -- this database is behind, this run is
- * already admitted -- and is reported to the operator as one line. A `runId`
- * that is not a string is a defect in the caller, and burying its stack under
+ * already admitted -- and is reported to the operator as one line. A `nowMs`
+ * that is not an integer is a defect in the caller, and burying its stack under
  * `error: ...` would cost the frames that diagnose it.
+ *
+ * The intent's own fields are checked by {@link LapRunIntent}'s constructor and
+ * raise `LapRunIntentUsageError`, which sits outside the family for the same
+ * reason. Two classes rather than one because they have two subjects: this one
+ * says the *call* is malformed, that one says the *record* is.
  */
 export class RunAdmissionUsageError extends Error {
   constructor(message: string, options?: { readonly cause?: unknown }) {
@@ -156,62 +194,46 @@ export interface AdmittedRun {
   /** The `run_created` event's identity and sequence on the spine. */
   readonly eventId: string;
   readonly eventSeq: number;
+  /**
+   * The `run_delegation_recorded` event's identity and sequence.
+   *
+   * Its own pair rather than a list of events, because the two are not
+   * interchangeable and a caller that wanted "the second one" would be reading
+   * the append order back out of a container instead of naming the fact it
+   * means. `run_cli.ts` reports both, so an operator can see that the run and
+   * its work statement landed together and at which sequence numbers.
+   */
+  readonly delegationEventId: string;
+  readonly delegationEventSeq: number;
+}
+
+/** The one identity an event of `type` about `runId` has. */
+function factId(eventType: string, runId: string): string {
+  return `${eventType}/${runId}`;
 }
 
 /**
- * What a run identifier may be made of: printable ASCII, and nothing else.
+ * Admit a run: insert its row at `created`, append the `run_created` event that
+ * says why it exists, and append the `run_delegation_recorded` event that says
+ * what it was admitted to do. One transaction.
  *
- * A positive rule rather than a list of characters to reject, because the
- * question it answers is asked from two directions and a rejection list only
- * ever answers the direction someone thought of.
- *
- * - **A newline splits the report.** The identifier is interpolated verbatim
- *   into the one-line success report and into the `RunAlreadyAdmitted` message,
- *   both of which `run_cli.ts` terminates with a single `\n`. An identifier
- *   carrying its own newline makes the command appear to print a second line it
- *   never wrote, and `error: ` is a prefix worth forging. An escape sequence is
- *   the same problem with a terminal doing the rendering, and a zero-width
- *   joiner is the same problem with two identifiers that look identical.
- * - **A non-ASCII character can crash the console it is printed to.**
- *   `docs/cli-output-policy.md` governs what continuo *authors* and explicitly
- *   leaves external values out -- "any code path that echoes external text to a
- *   console has to deal with encoding on its own terms -- that problem is real,
- *   and it is not this policy". This is that code path dealing with it. A cp932
- *   console cannot encode `U+1F600`, and `D-0003` puts Windows on the merge
- *   path, so a run id that is only ever discovered to be unprintable at the
- *   moment an operator asks about it is a run id that cannot be reported.
- *
- * Refused at the writer rather than escaped at the print site, so that the row,
- * the event and every report about them quote the same string. Escaping in the
- * CLI would let the database hold an identifier no report can quote back
- * faithfully, which trades a visible refusal for an invisible divergence.
- *
- * This is narrower than the `run` table's own `CHECK`, which asks only for
- * non-empty text, and deliberately so: the column has to hold every identifier
- * ever admitted by any writer, and this is the rule for the one writer that
- * puts identifiers there **and** promises to print them back.
- */
-const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
-
-/** The one identity a `run_created` event has, derived from the run it is about. */
-function runCreatedFactId(runId: string): string {
-  return `${RUN_CREATED_EVENT_TYPE}/${runId}`;
-}
-
-/**
- * Admit a run: insert its row at `created` and append the `run_created` event
- * that says why it exists. One transaction.
+ * `intent` is the whole of what admission fixes about this lap, and it arrives
+ * already validated: {@link LapRunIntent} has no other constructor, and it
+ * carries a private field, so an object literal of the right shape does not
+ * satisfy the parameter. That is why this function has no field checks of its
+ * own beyond the one that says the argument is an intent at all -- there is no
+ * second place a field rule could be written and drift from the first.
  *
  * `nowMs` is the caller's clock, taken once and written to `created_at_ms`,
- * `updated_at_ms` and both of the event's timestamps. It is a parameter rather
- * than a `Date.now()` here for the reason every other writer in this package
- * takes one: the DDL requires `updated_at_ms >= created_at_ms`, and two reads of
- * a clock are two values, so the invariant would rest on the ordering of two
- * calls instead of on there being one. The event's `occurred_at_ms` and
+ * `updated_at_ms` and all four of the events' timestamps. It is a parameter
+ * rather than a `Date.now()` here for the reason every other writer in this
+ * package takes one: the DDL requires `updated_at_ms >= created_at_ms`, and two
+ * reads of a clock are two values, so the invariant would rest on the ordering
+ * of two calls instead of on there being one. The events' `occurred_at_ms` and
  * `ingested_at_ms` are the same instant here and that is not a shortcut --
  * `time-base-policy.md` section 2 separates the source clock from ours, and for
- * an admission we *are* the source: the fact is the row this call is writing,
- * not something a provider reported.
+ * an admission we *are* the source: the facts are the row this call is writing
+ * and the intent it was handed, not something a provider reported.
  *
  * The existence check is a `SELECT` before the `INSERT` rather than a caught
  * `UNIQUE` violation, mirroring how `appendEvent` detects a duplicate fact. The
@@ -221,25 +243,31 @@ function runCreatedFactId(runId: string): string {
  * one carrying the run's own identifier, rather than a driver's constraint
  * message from three frames down.
  *
+ * **The append order is `run_created` then `run_delegation_recorded`, and it is
+ * a decision rather than an accident of the source.** Both are true at the same
+ * instant and both carry the same `nowMs`, so `seq` is the only thing that
+ * orders them, and `seq` is what a reader draining the spine sees. A run's
+ * first event should be the one that says the run exists: a consumer that is
+ * handed the intent before it has ever seen the run has been handed a statement
+ * about a subject it has no record of.
+ *
  * @throws {RunAdmissionUsageError} for a malformed argument, before any write.
+ * @throws {LapRunIntentUsageError} from the intent's own constructor, before
+ *   this function is ever called.
  * @throws {RunAlreadyAdmitted} if the run identifier is already on the table.
  *   Nothing is written: the whole block rolls back.
  */
 export function admitRun(
   connection: SqliteDatabase,
-  options: { readonly runId: string; readonly nowMs: number },
+  options: { readonly intent: LapRunIntent; readonly nowMs: number },
 ): AdmittedRun {
-  const { runId, nowMs } = options;
+  const { intent, nowMs } = options;
 
-  if (typeof runId !== "string" || runId.trim() === "") {
-    throw new RunAdmissionUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
-  }
-  if (!PRINTABLE_ASCII.test(runId)) {
+  if (!(intent instanceof LapRunIntent)) {
     throw new RunAdmissionUsageError(
-      `run_id must be printable ASCII (U+0020..U+007E), got ${pythonRepr(runId)}; ` +
-        "the identifier is printed back verbatim in this command's report and in " +
-        "its refusals, so a character that cannot be printed is one that cannot " +
-        "be reported",
+      `intent must be a LapRunIntent, got ${pythonRepr(intent)}; ` +
+        "the record is validated by its own constructor and there is no other " +
+        "way to obtain one",
     );
   }
   if (typeof nowMs !== "number" || !Number.isInteger(nowMs)) {
@@ -247,6 +275,8 @@ export function admitRun(
       `now_ms must be an int of epoch milliseconds, got ${pythonRepr(nowMs)}`,
     );
   }
+
+  const runId = intent.runId;
 
   return transaction(connection, (tx) => {
     const existing = tx
@@ -280,52 +310,86 @@ export function admitRun(
       updated_at_ms: nowMs,
     });
 
-    const factId = runCreatedFactId(runId);
-    const appended = appendEvent(tx, {
-      eventId: factId,
+    const created = appendOrRefuse(tx, {
       eventType: RUN_CREATED_EVENT_TYPE,
-      subjectKind: "run",
-      subjectId: runId,
-      dedupKey: factId,
-      producer: RUN_ADMISSION_PRODUCER,
-      occurredAtMs: nowMs,
-      ingestedAtMs: nowMs,
       runId,
+      nowMs,
       payload: pythonJsonObject([["status", ADMITTED_RUN_STATUS]]),
     });
-
-    if (appended.seq === null) {
-      // Unreachable in this build, and checked anyway -- this is the line that
-      // makes the module's own atomicity claim true rather than incidental.
-      //
-      // `appendEvent` treats a `dedup_key` already on the spine as an
-      // idempotent no-op: it raises internally, and because `transaction`
-      // JOINS an inner call rather than nesting it, that raise unwinds only as
-      // far as `appendEvent`'s own catch, which returns `duplicate: true`. The
-      // block we are standing in is NOT rolled back by it. So the append
-      // returning quietly would commit a `run` row with no admission event on
-      // the spine -- exactly the inconsistency the one-transaction rule above
-      // exists to prevent, arriving through the mechanism meant to prevent it.
-      // Refusing turns it back into a rollback.
-      //
-      // Nothing can reach it today: the only producer of this fact is this
-      // function, its `dedup_key` is derived from the run identifier, and the
-      // duplicate run row is already refused above. It becomes reachable the
-      // moment a second producer appends under this vocabulary, which is when
-      // a silent commit would be hardest to trace back.
-      throw new RunAlreadyAdmitted(
-        `the spine already holds ${factId} as event ${appended.eventId}, but ` +
-          `run ${runId} was not on the run table; refusing to admit a run whose ` +
-          "admission event cannot be appended alongside it",
-      );
-    }
+    const delegation = appendOrRefuse(tx, {
+      eventType: RUN_DELEGATION_RECORDED_EVENT_TYPE,
+      runId,
+      nowMs,
+      payload: intent.payload,
+    });
 
     return Object.freeze({
       runId,
       status: ADMITTED_RUN_STATUS,
       createdAtMs: nowMs,
-      eventId: appended.eventId,
-      eventSeq: appended.seq,
+      eventId: created.eventId,
+      eventSeq: created.seq,
+      delegationEventId: delegation.eventId,
+      delegationEventSeq: delegation.seq,
     });
   });
+}
+
+/**
+ * Append one of admission's events, refusing rather than absorbing a duplicate.
+ *
+ * The `seq === null` branch is unreachable in this build, and checked anyway --
+ * this is the line that makes the module's own atomicity claim true rather than
+ * incidental.
+ *
+ * `appendEvent` treats a `dedup_key` already on the spine as an idempotent
+ * no-op: it raises internally, and because `transaction` JOINS an inner call
+ * rather than nesting it, that raise unwinds only as far as `appendEvent`'s own
+ * catch, which returns `duplicate: true`. The block this runs inside is NOT
+ * rolled back by it. So an append returning quietly would commit a `run` row
+ * with one of its two admission events missing from the spine -- exactly the
+ * inconsistency the one-transaction rule exists to prevent, arriving through
+ * the mechanism meant to prevent it. Refusing turns it back into a rollback.
+ *
+ * Nothing can reach it today: the only producer of either fact is this module,
+ * both `dedup_key`s are derived from the run identifier, and the duplicate run
+ * row is already refused above. It becomes reachable the moment a second
+ * producer appends under either vocabulary, which is when a silent commit would
+ * be hardest to trace back.
+ *
+ * Shared by both appends rather than written twice, because a check that exists
+ * for one of two events and not the other is the shape of the bug it is here to
+ * catch.
+ */
+function appendOrRefuse(
+  tx: SqliteDatabase,
+  options: {
+    readonly eventType: string;
+    readonly runId: string;
+    readonly nowMs: number;
+    readonly payload: string;
+  },
+): { readonly eventId: string; readonly seq: number } {
+  const { eventType, runId, nowMs, payload } = options;
+  const id = factId(eventType, runId);
+  const appended = appendEvent(tx, {
+    eventId: id,
+    eventType,
+    subjectKind: "run",
+    subjectId: runId,
+    dedupKey: id,
+    producer: RUN_ADMISSION_PRODUCER,
+    occurredAtMs: nowMs,
+    ingestedAtMs: nowMs,
+    runId,
+    payload,
+  });
+  if (appended.seq === null) {
+    throw new RunAlreadyAdmitted(
+      `the spine already holds ${id} as event ${appended.eventId}, but ` +
+        `run ${runId} was not on the run table; refusing to admit a run whose ` +
+        "admission events cannot be appended alongside it",
+    );
+  }
+  return { eventId: appended.eventId, seq: appended.seq };
 }
