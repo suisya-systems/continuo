@@ -607,6 +607,74 @@ export class HumanGateRequired extends Error {
 }
 
 /**
+ * The row was retired by another writer while this attempt was running.
+ *
+ * The base of a two-member family, and the family exists because the race it
+ * names has two halves that an operator must not confuse. `Outbox.attempt`
+ * reads the row once at step 0, and everything after that runs on a reading
+ * that goes stale the instant it is taken: gate closure takes `pending ->
+ * cancelled` and `delivered -> cancelled` without consulting this module
+ * (migration 0003's lattice), and a human answering a gate while a delivery
+ * worker is mid-attempt on its relay is the ordinary timing the human gate
+ * creates (`docs/design/minimal-operating-loop.md` section 5.1), not an exotic
+ * interleaving. The attempt can meet that cancellation on either side of the
+ * external effect, and {@link effectApplied} is which.
+ *
+ * **Why a shared base with a field rather than two unrelated siblings.** Two
+ * questions get asked of this exception and they want different shapes. A
+ * *catch site* asks "is the row finished, so is this attempt's failure a
+ * normal end rather than a fault" -- one question, one `instanceof`, and
+ * `MessageBus.poll`'s residual test (`src/messagebus/bus.ts`) is the caller
+ * that asks it; siblings would make every such site enumerate the members and
+ * be edited again the day a third window is found, which is the same
+ * find-all-six failure {@link TERMINAL_OUTBOX_STATUSES} exists to prevent one
+ * layer down. An *operator* asks the other question -- did the side effect
+ * happen -- because that, and only that, decides whether the destination's own
+ * ledger has to be reconciled (`ACCEPTANCE.md` section 2). A boolean on a
+ * shared base answers the second without splitting the first. Reusing one
+ * class for both halves was rejected for the same reason from the other end:
+ * `CancelledBeforeEffect` naming a cancellation that won *after* the effect
+ * would put the wrong word in front of the only reader who has work to do.
+ *
+ * Both members keep {@link StaleWriterRefused}'s discipline where there is
+ * evidence to keep: what is durable is written *before* the throw, so a
+ * refusal nobody catches is still readable out of the `action` table
+ * afterwards. What differs is whether there is anything to record at all --
+ * see {@link CancelledAfterEffect}, whose subclass docstring says when there
+ * is not.
+ *
+ * Not {@link StaleWriterRefused} and not {@link OutboxUsageError}, for either
+ * member. Nothing is stale about this writer -- its lease is live and its
+ * epoch owns the row -- so "stale writer" would send an operator to look at
+ * lease expiry and holder identity, the two things that were fine; and
+ * `OutboxUsageError` is the module's programming-error class (the source's
+ * bare `ValueError`), while nobody made a mistake here.
+ */
+export class CancellationRaced extends Error {
+  /**
+   * Whether the destination was written to before the cancellation was seen.
+   *
+   * `false` -- {@link CancelledBeforeEffect} -- means the effect never left:
+   * nothing to reconcile, and the row is exactly as the cancelling writer left
+   * it. `true` -- {@link CancelledAfterEffect} -- means it did: the
+   * destination holds an effect for a message the outbox will never record as
+   * delivered, and reconciling that against the destination's ledger is the
+   * operator's work.
+   */
+  readonly effectApplied: boolean;
+
+  constructor(
+    message: string,
+    options: { readonly effectApplied: boolean; readonly cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "CancellationRaced";
+    this.effectApplied = options.effectApplied;
+    Object.setPrototypeOf(this, CancellationRaced.prototype);
+  }
+}
+
+/**
  * The row went terminal after the attempt began, and before the effect.
  *
  * `Outbox.attempt`'s step 0 guard refuses a message that is *already*
@@ -618,19 +686,13 @@ export class HumanGateRequired extends Error {
  * re-read beside the fence sees it and stops there, so the external effect
  * is never performed.
  *
- * A class of its own, and neither of the two it could have reused:
- *
- * - Not {@link StaleWriterRefused}. Nothing is stale about this writer; its
- *   lease is live, its epoch owns the row, and the very next thing the
- *   method does is prove it. Saying "stale writer" would send an operator
- *   looking at lease expiry and holder identity, which are exactly the two
- *   things that were fine.
- * - Not {@link OutboxUsageError}. That class is the module's
- *   programming-error class -- the source's bare `ValueError` -- and this is
- *   not a caller bug. A human answering a gate at the instant a delivery
- *   worker picks the relay up is an ordinary race that the design creates on
- *   purpose (`docs/design/minimal-operating-loop.md` section 5.1), and there
- *   is nothing for the caller to have done differently.
+ * A member of the {@link CancellationRaced} family and not a class standing
+ * on its own: the base's docstring argues why the family is a base plus a
+ * field, and it carries the "not StaleWriterRefused, not OutboxUsageError"
+ * reasoning that applies to both halves. What is specific to this half is
+ * that {@link effectApplied} is `false` -- the guard ran in time, so **there
+ * is nothing at the destination to reconcile**, which is the single fact that
+ * separates this from {@link CancelledAfterEffect} for the person reading it.
  *
  * Like {@link StaleWriterRefused}, the refusal is **durable before this is
  * thrown**: an `action` row in status `'refused'` records it, so the
@@ -638,18 +700,70 @@ export class HumanGateRequired extends Error {
  * catches this. The row itself is left exactly as the cancelling writer left
  * it -- terminal, and this module writes nothing more to it.
  *
- * Known cost, stated rather than hidden: `src/messagebus/bus.ts:350` accepts
- * a residual exception out of `attempt()` only when it is an
- * {@link OutboxUsageError} or a {@link StaleWriterRefused}, so this class
- * does **not** currently flow through `MessageBus.poll`'s residual path and
- * a poll meeting this race loses its whole batch. Widening that test is
- * `src/messagebus/bus.ts`'s change to make, not this module's.
+ * `MessageBus.poll` admits this class on its residual path
+ * (`src/messagebus/bus.ts`) and skips the row, which is right: the row is
+ * terminal, so the delivery is finished and nobody is owed it.
  */
-export class CancelledBeforeEffect extends Error {
+export class CancelledBeforeEffect extends CancellationRaced {
   constructor(message: string, options?: { readonly cause?: unknown }) {
-    super(message, options);
+    super(message, { ...options, effectApplied: false });
     this.name = "CancelledBeforeEffect";
     Object.setPrototypeOf(this, CancelledBeforeEffect.prototype);
+  }
+}
+
+/**
+ * The row went terminal after the effect had already been performed.
+ *
+ * The residue {@link CancelledBeforeEffect}'s guard admits it cannot remove.
+ * Nothing of this module's runs between that guard's `load` and
+ * `handler.apply`, so a cancellation landing inside that gap is invisible
+ * until {@link _MARK_DELIVERED} tries to move the row and matches nothing --
+ * and by then the destination has been written to. {@link effectApplied} is
+ * `true`, and it is the whole difference: the outbox row is terminal with no
+ * delivery instant and will never carry one (`cancelled` has no outgoing edge
+ * in 0003's lattice), so **the only place the effect is written down is the
+ * destination's own ledger and the `action` row that names the idempotency key
+ * it was keyed with**. Reconciling those two is real operator work, and it is
+ * work {@link CancelledBeforeEffect} never creates.
+ *
+ * **Recorded and then thrown, where the previous shape recorded and
+ * returned.** Both halves are needed and they answer different obligations:
+ *
+ * - *Recorded*, because the effect really did land. An `action` row in
+ *   `'refused'` is written before the throw -- {@link StaleWriterRefused}'s
+ *   discipline -- for the same reason it is written on the pre-effect half:
+ *   the evidence must survive nobody catching this.
+ * - *Thrown*, because returning normally handed `MessageBus.poll` an
+ *   {@link AttemptOutcome}, and `poll` appends an envelope for every outcome
+ *   it gets back. That put the payload of a message whose gate had closed in
+ *   front of the worker, which is exactly what `D-0053` rule 7 forbids: a
+ *   cancelled row is normally finished and is skipped, and nobody is owed the
+ *   delivery of a message whose gate has closed. The outcome would have been
+ *   a true statement about the attempt and a false one about the message.
+ *
+ * The cost that argument used to be weighed against no longer exists, and the
+ * correction matters because `D-0053` still states it: a throw was said to
+ * cost `MessageBus.poll` its whole batch. `poll`'s residual handler admits a
+ * terminal row's exception and continues with the batch it was building
+ * (`src/messagebus/bus.ts`), so the choice is between an envelope that must
+ * not be sent and a skip that is already implemented.
+ *
+ * **`MessageBus.poll` must name this class, or its base, to keep that
+ * property.** `instanceof` is not satisfied by a sibling: the residual test
+ * naming {@link CancelledBeforeEffect} alone is *false* for this class, since
+ * neither is an ancestor of the other. Widening it to
+ * {@link CancellationRaced} covers both halves and every later member, and is
+ * `src/messagebus/bus.ts`'s change to make rather than this module's. Until it
+ * is made, a poll meeting this race re-throws and loses its batch -- loud and
+ * recoverable (the rows stay due), where the bug this class replaces was
+ * silent and delivered.
+ */
+export class CancelledAfterEffect extends CancellationRaced {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, { ...options, effectApplied: true });
+    this.name = "CancelledAfterEffect";
+    Object.setPrototypeOf(this, CancelledAfterEffect.prototype);
   }
 }
 
@@ -1220,8 +1334,11 @@ export class Outbox {
    * a {@link CancelledBeforeEffect}, not an {@link OutboxUsageError} --
    * nobody made a mistake -- and it is recorded durably before it is
    * thrown. Step 4 then covers the remainder: a cancellation that lands
-   * after the effect cannot be prevented, so it is *recorded* instead (see
-   * {@link _markDelivered}).
+   * after the effect cannot be prevented, so it is *recorded and then
+   * refused* -- a {@link CancelledAfterEffect}, whose two halves answer two
+   * obligations. The effect cannot be unmade, so the evidence is written
+   * down; the message is nonetheless finished, so it must not become an
+   * envelope (`D-0053` rule 7). See {@link _markDelivered}.
    *
    * The ack is deliberately *not* here. Delivery and acknowledgement are
    * separate events with a kill window between them, and collapsing them
@@ -1775,30 +1892,84 @@ export class Outbox {
    * cannot close -- also matches nothing, and `allowNoRow` swallowed it. The
    * result was the failure this method now exists to prevent: the external
    * effect had happened, and every durable trace of it disagreed. No
-   * envelope (the outbox row is terminal, so `MessageBus.poll` skips it), no
-   * delivery record (the transition never landed), nothing but an `action`
-   * row in `'applied'` that no one is looking for.
+   * delivery record (the transition never landed) and nothing but an `action`
+   * row in `'applied'` that no one is looking for -- while the attempt
+   * returned normally, so `MessageBus.poll` appended an envelope for it and
+   * the worker was handed the payload of a message whose gate had closed.
+   * (An earlier shape of this comment claimed there was no envelope either,
+   * on the grounds that `poll` skips a terminal row. `poll` asks that
+   * question *before* the attempt and not after it, so the claim was false,
+   * and the delivery it hid is what `D-0053` rule 7 forbids.)
    *
    * So the miss is classified rather than tolerated wholesale, on the same
    * three-way shape {@link recordAck}'s zero-rows branch uses, and for the
    * same reason -- there is more than one way to leave a status now and they
-   * mean different things:
+   * mean different things. The discriminator is **not terminality on its
+   * own**, and that distinction is the whole of the branch below:
    *
    * - **`'delivered'`**: the resend case above. Tolerated silently.
-   * - **terminal**: retired mid-flight. The effect is real and the ledger
-   *   has no room to say so, so it is written down where refusals are
-   *   written down -- an `action` row in `'refused'` naming what happened.
-   *   Recorded, not thrown: the effect *did* land, so the caller's
-   *   {@link AttemptOutcome} is a true statement about what this attempt
-   *   did, and throwing would additionally cost `MessageBus.poll` the rest
-   *   of its batch (`src/messagebus/bus.ts:350` accepts only two classes as
-   *   residual). The refusal row is the honest half; nobody is owed an
-   *   exception for a race nobody could have avoided.
+   * - **terminal with a delivery instant** (`delivered_at_ms IS NOT NULL`):
+   *   also a resend, of a row that has since been acked or cancelled.
+   *   Tolerated silently, exactly like the plain resend, because the row
+   *   already carries the delivery this statement was trying to record --
+   *   there is no disagreement between the effect and the ledger to write
+   *   down. Discriminating on terminality alone made this write a refusal
+   *   claiming the delivery could not be recorded while the row's own
+   *   `delivered_at_ms` (and, on the acked branch, its ack) said the
+   *   opposite, and an ack landing concurrently with an ordinary resend is
+   *   ordinary traffic, so the audit trail refusals live in would have
+   *   accumulated false entries at the rate the system does its normal work.
+   * - **terminal with no delivery instant**: retired mid-flight, on this
+   *   attempt's own first delivery. The effect is real and the ledger has no
+   *   room to say so, so it is written down where refusals are written down
+   *   -- an `action` row in `'refused'` naming what happened -- and then
+   *   {@link CancelledAfterEffect} is thrown.
    * - **anything else** -- `'pending'` still, most plausibly with a
    *   `writer_epoch` that is no longer ours: loud. The fence was live when
    *   this ran, so under 0003's lattice there is no legitimate way for a
    *   pending row owned by a live epoch to refuse this update, and a silent
    *   return would report a lost delivery record as an idempotent no-op.
+   *
+   * **`delivered_at_ms` is the discriminator, and migration 0003's CHECK is
+   * what makes it exact.** `0003_outbox_cancelled_status.sql` writes
+   *
+   *     CHECK (CASE status
+   *              WHEN 'pending'   THEN delivered_at_ms IS NULL
+   *              WHEN 'delivered' THEN delivered_at_ms IS NOT NULL
+   *              WHEN 'acked'     THEN delivered_at_ms IS NOT NULL
+   *              WHEN 'cancelled' THEN 1
+   *            END)
+   *
+   * and says in its own comment why `'cancelled'` is the row that constrains
+   * nothing: *cancellation is terminal but it is NOT an erasure*, so a
+   * cancelled row carries a delivery instant if it was cancelled after being
+   * sent and none if it was cancelled while pending. Both are true statements,
+   * and they are the two cases this branch has to tell apart. The column is
+   * trustworthy as a record of the past because
+   * `outbox_delivery_is_set_once` refuses to clear or rewrite it, so a
+   * non-null value here means *a delivery was recorded before this statement
+   * ran* -- and it cannot have been recorded by this statement, which matched
+   * nothing. `'acked'` needs no separate test: the CHECK above makes an acked
+   * row's instant non-null unconditionally, so the ack race lands in the
+   * second bullet by construction rather than by a status comparison.
+   *
+   * **Which path a resend of a delivered-then-cancelled row takes, and why.**
+   * It takes the silent one for the refusal (its delivery is recorded, so
+   * bullet two applies), and it still **throws** -- because the caller must
+   * not be handed an outcome for a cancelled row. Those are two independent
+   * questions and the branch answers them separately: *is there evidence to
+   * write down* (no -- the delivery instant is there) and *may this message be
+   * put in front of the worker* (no -- `D-0053` rule 7: a cancelled row is
+   * normally finished and is skipped, nobody is owed the delivery of a message
+   * whose gate has closed). An acked row is the case where both answers are
+   * "nothing to do": the ack is evidence the work was done, the presentation
+   * was legitimate when it was made, and `MessageBus.poll`'s own contract
+   * already accepts that a just-acked message can be presented once more
+   * (at-least-once to the wire; the recipient deduplicates on `dedupKey`).
+   *
+   * The throw itself is argued on {@link CancelledAfterEffect}, including the
+   * `D-0053` sentence it corrects and the widening `src/messagebus/bus.ts`
+   * needs so that a poll skips the row instead of losing its batch.
    */
   private _markDelivered(
     messageId: string,
@@ -1838,25 +2009,66 @@ export class Outbox {
       return;
     }
     if (isTerminalOutboxStatus(settled.status)) {
-      // Retired between the pre-effect re-read and here. The effect is out
-      // and cannot be recalled; what is still in our power is to stop the
-      // database from being silent about it. `_recordRefusal` is reused
-      // rather than a new table invented: the `action` row it writes already
-      // carries the run, the action kind, the idempotency key the effect was
-      // keyed with, the mechanism and a reason string, which is the whole of
-      // what an operator needs to reconcile this against the destination's
-      // own ledger -- and reconciling against the destination is what
-      // `ACCEPTANCE.md` section 2 says the evidence is for.
-      this._recordRefusal(
-        message,
-        handler,
-        `applied the effect for ${pythonRepr(messageId)} and could not record the delivery: the ` +
-          `row reached ${pythonRepr(settled.status)} while the effect was in flight, so it was ` +
-          "retired after the destination had already been written to -- the effect is real and " +
-          "the outbox row will never say so",
-        { nowMs, epoch },
+      if (settled.deliveredAtMs !== null) {
+        // A resend of a row that was already delivered, which has since been
+        // acked or cancelled. The delivery this statement could not write is
+        // already written, so there is nothing to record and nothing to
+        // reconcile -- treated exactly like the `'delivered'` return above,
+        // which is what it is, only observed a moment later.
+        //
+        // The cancelled half still may not become an envelope, so it does not
+        // return here: falling through to the throw below is what keeps
+        // `D-0053` rule 7 true for it. See the docstring for why those are two
+        // questions and not one.
+        //
+        // The word is compared directly here, unlike every *terminality*
+        // decision in this module, because this is not one: terminality has
+        // already been decided one line up by {@link isTerminalOutboxStatus},
+        // and what is left is which terminal word it was --
+        // `attempt`'s step 0 guard tells the two apart by name for the same
+        // reason. A fifth terminal word added to 0003's CHECK therefore lands
+        // on the throw rather than on the return, which is the safe side: a
+        // status this build has never heard of does not get to authorise an
+        // envelope.
+        if (settled.status !== "cancelled") {
+          return;
+        }
+      } else {
+        // Retired between the pre-effect re-read and here, on this attempt's
+        // own first delivery: the row has no delivery instant and 0003's
+        // lattice gives it no edge on which to acquire one. The effect is out
+        // and cannot be recalled; what is still in our power is to stop the
+        // database from being silent about it. `_recordRefusal` is reused
+        // rather than a new table invented: the `action` row it writes already
+        // carries the run, the action kind, the idempotency key the effect was
+        // keyed with, the mechanism and a reason string, which is the whole of
+        // what an operator needs to reconcile this against the destination's
+        // own ledger -- and reconciling against the destination is what
+        // `ACCEPTANCE.md` section 2 says the evidence is for.
+        this._recordRefusal(
+          message,
+          handler,
+          `applied the effect for ${pythonRepr(messageId)} and could not record the delivery: ` +
+            `the row reached ${pythonRepr(settled.status)} while the effect was in flight, so ` +
+            "it was retired after the destination had already been written to -- the effect is " +
+            "real and the outbox row will never say so",
+          { nowMs, epoch },
+        );
+      }
+
+      // Durable first, then thrown, on the branch that had something to make
+      // durable -- {@link StaleWriterRefused}'s discipline, kept here for the
+      // same evidence obligation. The throw is not about the evidence though:
+      // it is about the envelope. Returning normally handed the caller an
+      // {@link AttemptOutcome}, and `MessageBus.poll` turns every outcome into
+      // an envelope without asking the row again, so the payload of a message
+      // whose gate had closed reached the worker.
+      throw new CancelledAfterEffect(
+        `applied the effect for ${pythonRepr(messageId)} and will not present it: the row ` +
+          `reached ${pythonRepr(settled.status)} while the effect was in flight, so the message ` +
+          "is finished and is not delivered to anyone -- the effect at the destination is real " +
+          "and is reconciled from the action row, not from this message",
       );
-      return;
     }
 
     throw new OutboxUsageError(

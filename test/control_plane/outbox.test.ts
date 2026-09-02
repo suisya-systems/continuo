@@ -100,6 +100,8 @@ import {
   _MARK_DELIVERED,
   _PENDING_ACTION,
   ActionHandler,
+  CancellationRaced,
+  CancelledAfterEffect,
   CancelledBeforeEffect,
   CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD,
   CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT,
@@ -3114,27 +3116,35 @@ describe("cancelled is terminal on every path (target-only, production schema)",
     expect(actionsOf(cp, { status: "pending" })).toHaveLength(1);
   });
 
-  test("a cancellation landing after the effect is recorded, not swallowed", () => {
+  test("a cancellation landing after the effect is recorded and then refused", () => {
     // The residue the re-read above admits it cannot remove. Nothing of ours
     // runs between the status re-read and `handler.apply`, so a cancellation
     // inside that gap is invisible until the delivery transition tries to
     // land -- and by then the destination has been written to.
     //
-    // What is under test is that the ledger stops being silent about it.
-    // `_MARK_DELIVERED` matches nothing (no `cancelled -> delivered` edge in
-    // 0003's lattice, and the `status = 'pending'` conjunct keeps the
-    // disagreement in the WHERE clause rather than letting the forward-only
-    // trigger abort mid-attempt), `allowNoRow` used to swallow that, and the
-    // result was an effect at the destination with no envelope, no delivery
-    // record, and nothing an operator could reconcile against.
+    // Two properties are under test and they are separate obligations.
     //
-    // It is RECORDED rather than thrown, and the two reasons are worth
-    // keeping: the effect really did land, so the returned outcome is a true
-    // statement about this attempt; and a throw here would additionally cost
-    // `MessageBus.poll` the whole batch it was building, since
-    // `src/messagebus/bus.ts` accepts only two classes as residual. Nobody is
-    // owed an exception for a race nobody could have avoided -- what they are
-    // owed is a row.
+    // 1. The ledger stops being silent about the effect. `_MARK_DELIVERED`
+    //    matches nothing (no `cancelled -> delivered` edge in 0003's lattice,
+    //    and the `status = 'pending'` conjunct keeps the disagreement in the
+    //    WHERE clause rather than letting the forward-only trigger abort
+    //    mid-attempt), `allowNoRow` used to swallow that, and the result was
+    //    an effect at the destination with nothing an operator could
+    //    reconcile against.
+    // 2. The message does not become an envelope. This is the half the case
+    //    was originally written without, and the omission was a real
+    //    delivery: recording the refusal and then RETURNING handed
+    //    `MessageBus.poll` an `AttemptOutcome`, and `poll` appends an envelope
+    //    for every outcome it gets back without asking the row's status again
+    //    (it asks before the attempt, not after). So the worker received the
+    //    payload of a message whose gate had closed -- exactly what D-0053
+    //    rule 7 forbids. The throw is what makes `poll` skip it instead.
+    //
+    // D-0053's own argument for recording-rather-than-throwing cited a cost
+    // that no longer exists ("a throw would cost `MessageBus.poll` its
+    // batch"): `poll`'s residual handler admits a terminal row's exception and
+    // continues with the batch. Recording and throwing are not alternatives
+    // here; they answer the two obligations above one each.
     const root = caseRoot("s7");
     const cp = productionCpFixture(productionDbPath(root));
     const dropbox = dropboxFixture(root);
@@ -3149,10 +3159,36 @@ describe("cancelled is terminal on every path (target-only, production schema)",
     });
     const message = enqueue(outbox);
 
-    const outcome = outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH });
+    const refused = expectRefusal(
+      () => outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH }),
+      CancelledAfterEffect,
+      /will not present it/,
+    );
     expect(seen, "the checkpoint never fired, so no race was driven").toContain(
       CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD,
     );
+
+    // The class carries which side of the effect the cancellation landed on,
+    // and that field is the operator's whole decision procedure: `true` means
+    // the destination holds an effect the outbox will never record, so its
+    // ledger has to be reconciled. Asserted here rather than left implicit
+    // because reusing `CancelledBeforeEffect` for this window would have put
+    // the opposite claim in front of that reader.
+    expect(refused.effectApplied).toBe(true);
+    expect(refused.name).toBe("CancelledAfterEffect");
+    expect(refused).toBeInstanceOf(CancellationRaced);
+    // ...and the sibling relationship, asserted because a catch site's
+    // `instanceof` depends on it. `CancelledAfterEffect` is NOT a
+    // `CancelledBeforeEffect` -- neither is an ancestor of the other -- so a
+    // residual test naming only the pre-effect class does not admit this one.
+    // `src/messagebus/bus.ts` names three classes and must widen to
+    // `CancellationRaced` (or add this one) or a poll meeting this race
+    // re-throws and loses its batch. That widening is the bus's change to
+    // make; this line is what fails if the family is later rearranged in a way
+    // that quietly changes the answer.
+    expect(refused).not.toBeInstanceOf(CancelledBeforeEffect);
+    expect(refused).not.toBeInstanceOf(StaleWriterRefused);
+    expect(refused).not.toBeInstanceOf(OutboxUsageError);
 
     // The effect is real, and the row will never say so: `cancelled` has no
     // outgoing edge, so there is no delivery instant and there never will be.
@@ -3161,18 +3197,150 @@ describe("cancelled is terminal on every path (target-only, production schema)",
     expect(after.status).toBe("cancelled");
     expect(after.deliveredAtMs).toBeNull();
 
-    // The evidence, in the table refusals are already written to. It names
-    // the idempotency key the effect was keyed with, which is what makes it
-    // reconcilable against the destination's own ledger.
+    // The evidence, in the table refusals are already written to, and durable
+    // BEFORE the throw. It names the idempotency key the effect was keyed
+    // with, which is what makes it reconcilable against the destination's own
+    // ledger.
     const refusals = actionsOf(cp, { status: "refused" });
     expect(refusals).toHaveLength(1);
     expect(String(refusals[0]?.refusal_reason)).toMatch(
       /retired after the destination had already been written to/,
     );
     expect(refusals[0]?.idempotency_key).toBe(keyFor("dk-1"));
+  });
 
-    // And the attempt still reports what it did rather than throwing.
+  test("a resend whose ack lands inside the attempt records no refusal", () => {
+    // Ordinary traffic, and the case that shows why terminality alone is the
+    // wrong discriminator in `_markDelivered`'s zero-row branch.
+    //
+    // The row here is already `delivered`: the first attempt sent it and the
+    // recipient has not acked yet, so `due` keeps offering it and the second
+    // attempt is the ordinary resend the module is built around. On that
+    // resend `_MARK_DELIVERED` legitimately matches nothing -- its
+    // `status = 'pending'` conjunct is false, and the original delivery
+    // instant must be left alone (`outbox_delivery_is_set_once` would abort
+    // the transaction if we rewrote it). If the recipient's ack lands between
+    // that UPDATE and the branch's re-read, the re-read sees `acked`, which
+    // IS terminal -- and the branch used to write a durable refusal saying the
+    // delivery could not be recorded, while the row's own `delivered_at_ms`
+    // and its ack said the opposite. Nothing went wrong at all, so the audit
+    // trail refusals live in would have filled up at the rate of normal work.
+    //
+    // The ack is driven from `CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD` because
+    // that is the module's own name for the instant after the effect and
+    // before the delivery transition -- the window the race lives in. It is
+    // the same seam the case above uses; only the writer differs (the
+    // recipient acking, not a gate closing), which is the point.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const seen: string[] = [];
+    let acked = false;
+    const outbox = makeOutbox(cp, dropbox, {
+      checkpoint: (name: string): void => {
+        seen.push(name);
+        if (name === CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD && acked) {
+          outbox.recordAck("msg-1", { nowMs: T0 + 20 });
+        }
+      },
+    });
+    const message = enqueue(outbox);
+
+    // First attempt: the delivery is real and recorded.
+    outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH });
+    expect(outbox.load(message.messageId).status).toBe("delivered");
+    const refusalsBefore = actionsOf(cp, { status: "refused" }).length;
+
+    // Second attempt: the resend, with the ack landing inside it.
+    acked = true;
+    const outcome = outbox.attempt(message.messageId, { nowMs: T0 + 30, epoch: EPOCH });
+    expect(seen.filter((name) => name === CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD)).toHaveLength(2);
+
+    // The race really happened -- the row is acked, and it was acked by the
+    // checkpoint rather than by anything after the attempt returned.
+    const after = outbox.load(message.messageId);
+    expect(after.status).toBe("acked");
+    expect(after.ackedAtMs).toBe(T0 + 20);
+    // The delivery instant is the FIRST attempt's, untouched by the resend.
+    expect(after.deliveredAtMs).toBe(T0 + 10);
+
+    // The property under test: not one refusal row. Measured as a delta so
+    // the case cannot pass because the table happened to be empty for some
+    // other reason.
+    expect(
+      actionsOf(cp, { status: "refused" }).length - refusalsBefore,
+      "an ordinary resend racing an ordinary ack wrote a refusal",
+    ).toBe(0);
+
+    // ...and the resend is still a resend: the outcome comes back normally
+    // (an acked row is evidence the work was done, and `MessageBus.poll` is
+    // explicitly at-least-once to the wire -- the recipient deduplicates on
+    // `dedupKey`), and the destination applied one effect, not two.
     expect(outcome.messageId).toBe(message.messageId);
-    expect(outcome.idempotencyKey).toBe(keyFor("dk-1"));
+    expect(dropbox.effectCount(keyFor("dk-1"))).toBe(1);
+  });
+
+  test("a resend of a delivered row cancelled inside the attempt refuses without a refusal row", () => {
+    // The third corner, and the one where the two questions
+    // `_markDelivered`'s branch asks come apart:
+    //
+    // - *Is there evidence to write down?* No. The row was already
+    //   `delivered` before this attempt, so it carries a `delivered_at_ms`
+    //   and the ledger is not silent about the delivery -- which is what the
+    //   refusal row exists to say. Migration 0003's CHECK is what makes that
+    //   test exact: it constrains `delivered_at_ms` for `pending`,
+    //   `delivered` and `acked` and deliberately says nothing for
+    //   `cancelled`, because a relay cancelled after it was sent keeps its
+    //   instant and one cancelled while pending has none. So the column, not
+    //   the status word, separates a first delivery cancelled in flight from
+    //   a resend of a row that was already delivered.
+    // - *May this message be presented?* No. The gate has closed, and D-0053
+    //   rule 7 says a cancelled row is normally finished and is skipped:
+    //   nobody is owed the delivery of a message whose gate has closed. So
+    //   this path still throws, and `MessageBus.poll` skips the row instead
+    //   of appending an envelope for it.
+    //
+    // That is the difference from the acked resend above, which answers "no"
+    // to the first and "yes" to the second, and it is why the two cases sit
+    // next to each other.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    let cancelling = false;
+    const outbox = makeOutbox(cp, dropbox, {
+      checkpoint: (name: string): void => {
+        if (name === CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD && cancelling) {
+          closeTheGateOver(cp, "msg-1");
+        }
+      },
+    });
+    const message = enqueue(outbox);
+    outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH });
+    expect(outbox.load(message.messageId).status).toBe("delivered");
+    const refusalsBefore = actionsOf(cp, { status: "refused" }).length;
+
+    cancelling = true;
+    const refused = expectRefusal(
+      () => outbox.attempt(message.messageId, { nowMs: T0 + 30, epoch: EPOCH }),
+      CancelledAfterEffect,
+      /will not present it/,
+    );
+    expect(refused.effectApplied).toBe(true);
+
+    // No refusal row: the delivery this attempt could not record is already
+    // recorded, and a refusal here would be a durable claim that is false.
+    expect(
+      actionsOf(cp, { status: "refused" }).length - refusalsBefore,
+      "a resend of an already-delivered row wrote a refusal it had nothing to refuse",
+    ).toBe(0);
+
+    // The row is `cancelled` and KEEPS its delivery instant -- the half of
+    // 0003's CHECK that stays silent about `cancelled`, made observable.
+    // Cancellation is terminal; it is not an erasure.
+    const after = outbox.load(message.messageId);
+    expect(after.status).toBe("cancelled");
+    expect(after.deliveredAtMs).toBe(T0 + 10);
+    expect(after.ackedAtMs).toBeNull();
+    expect(dropbox.effectCount(keyFor("dk-1"))).toBe(1);
   });
 });

@@ -9386,7 +9386,17 @@ reason is that the status conflates three questions which have three different a
 puts the answer at step 5 and says what it unblocks in four words: **the human gate. It is unreachable
 until this lands.**
 
-The unreachability is concrete rather than rhetorical, and it is a consequence of `D-0050`. The gate
+That sentence names a necessary condition and it is easy to read as a sufficient one, so this entry
+states which it is: **what lands here is the removal of the *schema* obstacle, and the gate is still
+not reachable when it lands.** After this change the endpoint opens the database the gate lives in
+and the outbox speaks 0003's vocabulary throughout, which is what step 5 is for and what section 5.1
+costed; the gate's first relay is nonetheless still refused, for a reason section 5.1's estimate never
+reached, and the adoption-gap bullet under Consequences says what that reason is and why closing it
+is not this entry's to take. Everything in the Decision below is unaffected by that; only the claim
+about what it adds up to is corrected here.
+
+The obstacle that *is* removed is concrete rather than rhetorical, and it is a consequence of
+`D-0050`. The gate
 lives only in the production schema -- `gate`, `gate_transition` and `gate_relay` are production
 tables and the spike schema has six tables and no `event` at all -- while `src/messagebus/endpoint.ts`
 opened its database through `openControlPlane`, the *spike* opener (`endpoint.ts:10`). The two
@@ -9456,7 +9466,9 @@ a pre-implementation design review found were open in a way that would have been
    the write (`docs/production-schema.md:213`). But the outbox row carries **no lease resource
    column**, and neither of the two passes that select rows is scoped to one: `_DUE_QUERY`
    (`src/control_plane/outbox.ts:312`) reads every unfinished row regardless of who is asking, and
-   `Outbox.recover` (`:1264`) adopts every unfinished row through `_ADOPT`.
+   `Outbox.recover` (`:1264`) adopts every unfinished row through `_ADOPT` -- a description of what
+   the method does, not of something that happens, since nothing in `src/` calls it; see the adoption
+   gap under Consequences.
    `UNOWNED_OUTBOX_QUERY` (`:278`) -- the invariant query, whose whole subject is a row left with no
    owner -- is likewise over all unfinished rows. Section 4.9's phrase "the endpoint's lease is
    per-process" fixes a **lifetime**, not a **scope**, and the two are routinely confused. If several
@@ -9541,6 +9553,23 @@ a pre-implementation design review found were open in a way that would have been
      the delivery is finished and the batch goes on. Omitting it would have made a guard against one
      unrecorded side effect cost the whole poll batch instead -- a worse outcome than the one the
      guard prevents, and a guard paid for by a larger failure is not a guard.
+     `CancelledBeforeEffect` is not on its own, and the shape it sits in is part of the decision.
+     There are **two** windows in which the gate can close under an attempt, and the post-effect one
+     (the Consequences bullet on the `'refused'` record) throws as well, so the two refusals are
+     members of one family: `CancellationRaced` (`src/control_plane/outbox.ts:653`) is the base and
+     carries `readonly effectApplied: boolean`; `CancelledBeforeEffect` (`:707`) is the member with
+     `false`, and `CancelledAfterEffect` (`:762`) the member with `true`, the latter paired with the
+     `'refused'` action row that says the effect is real. A base with a discriminating field beats two
+     unrelated classes because **the two readers ask two different questions and neither should have
+     to enumerate members to get an answer.** A catch site asks "did this delivery end here?" -- that
+     is all `MessageBus.poll`'s residual test needs in order to decide whether to keep building its
+     batch, and it is written against the base (`src/messagebus/bus.ts:374`) precisely so that a third
+     window, if one is ever found, does not require this line to be found and widened a third time;
+     there have already been two. An operator asks the other question -- "did the side effect
+     happen?" -- and that one is not rhetorical either, because only its answer decides whether the
+     destination's own ledger has to be reconciled against ours. `effectApplied` answers it on the
+     instance, without a lookup table of class names and without the answer depending on which
+     members this build happens to have.
      `Outbox.recordAck` classifies `cancelled` **before** its "has not been
      delivered" check -- a cancelled-while-pending row has `delivered_at_ms` NULL and would otherwise
      be reported as evidence of a lost delivery record, which is a wildly misleading diagnosis of a
@@ -9596,15 +9625,104 @@ a pre-implementation design review found were open in a way that would have been
   has always passed would have swallowed the miss in silence. The miss is classified instead: still
   `'delivered'` is the deduplicated-resend case `allowNoRow` exists for and stays tolerated; a row
   that is neither delivered nor terminal is a loud `OutboxUsageError`, since a live fence over a
-  pending row has no legitimate way to refuse the update; and **terminal writes an `action` row in
-  `'refused'`, naming the idempotency key the effect was keyed with.** Recording beats throwing here
-  on two counts. The effect *did* land, so the attempt truthfully succeeded and the caller's
-  `AttemptOutcome` is a true statement about what this attempt did -- reporting it as a failure would
-  be the lie. And a throw would additionally cost `MessageBus.poll` the remainder of its batch,
-  charging every other recipient for a race none of them were in. What is left over is a message the
-  outbox row will never admit was delivered; the refusal row is the one place the database says
-  otherwise, and it carries the run, the action kind, the idempotency key, the mechanism and a reason
-  -- which is the whole of what reconciling against the destination's own ledger takes.
+  pending row has no legitimate way to refuse the update; and a **terminal** row is split once more,
+  on `delivered_at_ms` -- see the next bullet, which is why that column and not terminality is the
+  discriminator. A terminal row with no delivery instant is this attempt's own first delivery
+  overtaken in flight, and it **writes an `action` row in `'refused'`, naming the idempotency key the
+  effect was keyed with**.
+
+  **The branch does two things, and an earlier draft of this entry got the argument for that wrong.**
+  It said recording "beats" throwing, on two counts: that the effect did land, so the attempt
+  truthfully succeeded and reporting it as a failure would be the lie; and that a throw would cost
+  `MessageBus.poll` the remainder of its batch, charging every other recipient for a race none of
+  them were in. **The second count is false, and it is left standing here rather than deleted,
+  because a decision record that quietly drops a bad argument teaches a later reader nothing about
+  why the code is shaped as it is.** `poll`'s post-exception residual test admits a member of the
+  `CancellationRaced` family, re-reads the row, finds it terminal and `continue`s
+  (`src/messagebus/bus.ts:374-378`): the batch is not lost, and it was not lost by any version of
+  this code that threw a class the residual test admits. So recording and throwing were never
+  alternatives to be traded off. They discharge one obligation each, and both obligations are real.
+  **The evidence cannot be unmade**, so the `'refused'` row is written first, on `StaleWriterRefused`'s
+  discipline -- the effect at the destination is durable and the outbox row has no edge left on which
+  to admit it, so the action row is the only place the database will ever say the delivery happened.
+  **And the envelope must not be produced** (rule 7), so the branch then throws `CancelledAfterEffect`:
+  returning an `AttemptOutcome` normally would have been turned into a `DeliveredEnvelope` by `poll`
+  without the row being asked again, handing a worker the payload of a message whose gate has already
+  closed -- which is the one thing the whole cancellation alignment exists to prevent. What is left
+  over is a message the outbox row will never admit was delivered; the refusal row is the one place
+  the database says otherwise, and it carries the run, the action kind, the idempotency key, the
+  mechanism and a reason -- which is the whole of what reconciling against the destination's own
+  ledger takes.
+- **The zero-row branch discriminates on `delivered_at_ms`, not on terminality, and the difference is
+  the difference between an audit trail and noise.** An earlier form of this branch treated *every*
+  terminal row it found on the re-read as a post-effect cancellation and recorded a refusal. That is
+  wrong for the commonest terminal row there is: an ordinary **resend** of a row that was already
+  delivered, whose ack lands from the worker while this attempt is in flight, arrives at exactly the
+  same place -- `_MARK_DELIVERED` moved nothing (its `status = 'pending'` conjunct), the re-read says
+  `acked`, and the terminality-only test called it a lost delivery. The refusal it wrote claimed a
+  delivery could not be recorded when the row's own `delivered_at_ms` and its ack said the delivery
+  had been recorded and answered. Nothing was wrong, nothing needed reconciling, and a durable
+  `'refused'` row was written anyway. Name it for what it was: a fix that would have slowly polluted
+  the refusal audit with ordinary traffic, and done it in proportion to how well the system was
+  working -- which is the failure mode that makes an audit trail stop being read.
+  `delivered_at_ms` is the exact discriminator, and it is exact because
+  `migrations/0003_outbox_cancelled_status.sql:99-103` makes it so: the `CASE` constrains the instant
+  for `pending` (NULL), `delivered` and `acked` (NOT NULL), and says **nothing** for `cancelled`,
+  deliberately, because a cancellation is terminal without being an erasure and a relay cancelled
+  after it was sent keeps the instant it was sent at (`:86-97`). So a non-null instant on a terminal
+  row means the delivery this statement could not write **is already written**, whoever wrote it --
+  that is a resend, and it returns exactly as the `'delivered'` case above it does. A null instant
+  means this attempt's own first delivery was overtaken and there is genuinely no record, which is the
+  only case that has anything to reconcile and the only case that records. The cancelled half still
+  falls through to the throw either way, because "the delivery is already recorded" and "the message
+  may be presented" are two questions and 0003 answers only the first.
+- **A gate relay is still not deliverable after this change, and the reason is ownership, not
+  `cancelled`.** This is the correction the Context paragraph above points at, and it is **verified,
+  not suspected**: reproduced on a real production plane at head, with a live `outbox-delivery` lease
+  held at epoch 1, a gate opened at `received` and `enqueueRelay` for `presented`. The mechanism runs
+  in one line. `enqueueRelay` (`src/control_plane/gates.ts:608-612`) writes its outbox row with a
+  hand-written `INSERT` naming seven columns, and `writer_epoch` is not among them, so the row is
+  committed **unowned** -- `NULL` is explicitly legal there
+  (`migrations/0003_outbox_cancelled_status.sql:66`, `CHECK (writer_epoch IS NULL OR ...)`). The
+  event fan-out does the same (`src/control_plane/events.ts:441-445`), which makes an unowned row a
+  property of **every outbox producer in this repository except `Outbox.enqueue`**, not a slip in the
+  gate path. `_COUNT_ATTEMPT`'s `writer_epoch = :fence_epoch` conjunct
+  (`src/control_plane/outbox.ts:455`) is then never true of such a row -- a comparison against NULL is
+  NULL, never true -- so `_fenced`, called without `allowNoRow`, sees a zero-row update and raises
+  `StaleWriterRefused` **on the first delivery attempt the human gate ever makes**. And it does so
+  with a message naming lease expiry and holder identity, both of which are fine; `_fenced` is handed
+  the statement already rendered and can only see `changes === 0`, so it cannot tell "the lease is
+  dead" from "the row is unowned". That is the same category error rule 6 already refused for
+  `CancelledBeforeEffect` ("not `StaleWriterRefused`, because nothing is stale"), reappearing at a
+  different site. The one statement that can move a row from unowned to owned is `_ADOPT` (`:535`),
+  whose sole caller is `Outbox.recover` (`:1714`) -- and **nothing in `src/` calls `recover`**: not
+  `main()` (`src/messagebus/endpoint.ts:597-650`), not `MessageBus.poll`. The blast radius is wider
+  than the one relay. `poll` builds its envelope array locally and returns it only at the end, so a
+  throw discards the whole batch, `_DUE_QUERY` orders by `enqueued_at_ms`, and one unowned row at the
+  head of `due()` therefore re-throws on every pass, **discarding the healthy deliveries queued behind
+  it and writing another `'refused'` action row each time**, for as long as it is there. A restart does
+  not clear it, because a restart adopts nothing either.
+  **This entry does not close that, and the reason is not oversight.** Who stamps `writer_epoch` on an
+  outbox row created by a producer that is not the delivery worker is the same family of question as
+  step 4's renewal ownership and step 8's composition root, both of which this task's scope fences off
+  -- the candidate that would fix it at the source requires the Secretary to hold or read a *live*
+  delivery lease at gate-open time, which is step 4's question arriving from the other side. And the
+  question is under-determined in the documentation before it is under-determined in the code:
+  `docs/production-schema.md:207`'s writer table answers it **two incompatible ways**, giving `outbox`
+  (enqueue) as "append, **any producer**, fenced by the `message_id` primary key" while
+  `outbox.status` / `retry_count` belong to the delivery worker under `writer_epoch`. `enqueueRelay`
+  conforms to the first row; `Outbox.enqueue`'s fenced `INSERT` conforms to the second. Both halves
+  are internally coherent and together they contradict, so the gap is **a documented contradiction
+  surfacing, not a missing line of code**, and it has to be decided against that table rather than
+  around it. Rule 4 fixed the delivery *resource*; the *stamp* is the question rule 4 did not reach.
+  Four candidates are on the table and **under human review, and this entry deliberately does not pick
+  one**: adopt at endpoint startup; adopt inside `poll`; stamp the epoch at enqueue; or relax
+  `_COUNT_ATTEMPT` to claim an unowned row. The recommendation carried into that review is
+  `Outbox.recover()` in `main()` before serving, **paired with this correction and explicitly labelled
+  insufficient on its own** -- it is the only candidate decidable inside step 5 and it restores the
+  recovery criterion at process start, but the relay that matters is enqueued mid-life by a running
+  lap while the endpoint is already serving, so shipping it alone would buy a green suite and a still
+  unreachable gate, which is worse than the visible failure because it looks like a fix.
 - **The fault-injection belt cannot exercise `cancelled` at all, and this entry does not pretend
   otherwise.** Verified here rather than assumed: `test/fault_injection/import-graph.test.ts` permits
   exactly two modules to import `src/` (`ADAPTER_MODULES` = `spike_driver.ts`, `session_driver.ts`),
@@ -9620,10 +9738,15 @@ a pre-implementation design review found were open in a way that would have been
   means a third adapter or a re-pointed `spike_driver` and a revision of `D-0601`'s two-adapter rule.
   **That is named here as follow-on work and is not done.** Claiming the old evidence still covers the
   new predicates would be the failure this bullet exists to prevent.
-- **The endpoint's lease is still not renewed, and step 4 is still open.** Section 4.9 requires the
-  launcher to hold and renew the endpoint's lease for its whole life, and the launcher is the
-  composition root of step 8, which does not exist. This entry deliberately does not invent a renewal
-  owner; it fixes the *resource* (rule 4) so that whoever eventually renews is renewing one thing.
+- **The endpoint's lease is still not renewed, and step 4 is still open -- and renewal is not the only
+  thing left open.** Section 4.9 requires the launcher to hold and renew the endpoint's lease for its
+  whole life, and the launcher is the composition root of step 8, which does not exist. This entry
+  deliberately does not invent a renewal owner; it fixes the *resource* (rule 4) so that whoever
+  eventually renews is renewing one thing. Naming renewal alone used to read as a claim that
+  everything else was closed, which it is not: the adoption gap two bullets above is a second open
+  item, it is on the same lap, and it differs from renewal in the way that matters for scheduling --
+  renewal is waiting on a component that does not exist yet, while adoption is waiting on a decision
+  between four candidates that all exist today.
 - **Publication.** `package.json` is `private: true` at `version 0.0.0`, so no registry consumer has a
   compatibility claim on this repository yet and nothing here moves a release line; `D-0045`'s
   publication work is a separate change and is not mixed in. Recorded explicitly all the same, because
@@ -9648,7 +9771,7 @@ a pre-implementation design review found were open in a way that would have been
   direction -- most plausibly by believing the roll-up table, which is the half that is easier to
   read and, here, the half that would be wrong.
 
-**Falsifier.** Three observations would show this entry wrong, and each is evaluable from inside this
+**Falsifier.** Four observations would show this entry wrong, and each is evaluable from inside this
 repository.
 
 *A second delivery lease resource turning out to be needed on lap 1.* Rule 4 asserts that one global
@@ -9669,6 +9792,23 @@ path that must enumerate cancelled relays alongside live ones would mean "due" a
 two questions rather than one, and would need its own query rather than a widened `_DUE_QUERY` --
 widening it would return the index to a full scan and hand `Outbox.attempt` rows the trigger will
 abort.
+
+*The adoption gap turning out to be wider or narrower than the bullet describes.* The bullet asserts
+three measurable things: that an unowned row is produced by every outbox producer except
+`Outbox.enqueue`, that nothing in `src/` adopts one, and that one such row at the head of `due()`
+costs the healthy rows behind it on every poll. **Narrower** if a caller of `Outbox.recover` is added
+under `src/` and the first gate relay is nonetheless still refused -- that would mean the mechanism is
+not the one described and the diagnosis has to be reopened, not merely the fix; or if a producer
+turns out to stamp `writer_epoch` after all on a path this reading missed, in which case the "every
+producer" claim is too strong and the gap is a `gates.ts` bug rather than a schema-contract one.
+**Wider** if an unowned row is ever observed that no candidate can adopt -- for instance one whose
+`recipient` no live endpoint serves, which `_ADOPT` will happily claim and no `poll` will ever
+retire, making adoption necessary and insufficient in the same way startup-only recovery is. The
+first falsifier above also acquires a companion here: if the gap is closed by relaxing
+`_COUNT_ATTEMPT` to admit `writer_epoch IS NULL`, rule 4's fence is weakened inside the very
+statement rule 4 relies on -- an unowned row becomes claimable by whichever live epoch reaches it
+first, with no scope column to say who should have had it -- and that falsifier must be re-read at
+that time rather than inherited.
 
 *A residents-registry reader appearing in the port.* Rule 1 rests on the subject being absent, and
 section 0's premise 1 makes it less hypothetical than it looks: under a single host application the
