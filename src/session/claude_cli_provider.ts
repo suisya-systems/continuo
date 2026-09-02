@@ -910,6 +910,165 @@ interface ParsedEvents {
   readonly garbage: string | null;
 }
 
+// --------------------------------------------------------------------------
+// the three rules a transcript is read by, as functions rather than as prose
+// --------------------------------------------------------------------------
+//
+// `#readout` and `#terminalReport` are two readers of one file and they must
+// not answer differently about which event is terminal or whether the identity
+// read back. Written once here and called from both, rather than transcribed
+// into the second reader, which is what would let the two drift: a transcript
+// carrying two `result` lines would be read as one turn by whichever reader
+// happened to scan forwards.
+//
+// Pure, and deliberately so. The *order* the checks are applied in is
+// observable (`#readout`'s own comment says which error a record breaking
+// several rules at once reports) and the incident write is a side effect, so
+// both stay at the call sites; only the rules move here.
+
+/**
+ * The **last** `result` event, which is what `next(... reversed(events) ...)`
+ * finds, or `null` when the child has not written one.
+ */
+function lastResultEvent(
+  events: readonly Record<string, unknown>[],
+): Record<string, unknown> | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as Record<string, unknown>;
+    if (getOwn(event, "type") === "result") {
+      return event;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether any event named a session identity at all -- the positive half of the
+ * C2 read-back.
+ *
+ * Positive, not merely non-contradictory: structured output that never names
+ * the session's identity cannot be reconciled with the one committed before the
+ * spawn, and accepting it anyway would let schema drift quietly defeat the one
+ * check U27 makes mandatory.
+ */
+function identityReadBackOf(events: readonly Record<string, unknown>[]): boolean {
+  return events.some((event) => {
+    const reported = getOwn(event, "session_id");
+    return reported !== undefined && reported !== null;
+  });
+}
+
+/**
+ * The first event whose `session_id` contradicts `expected`, and the id it
+ * reported -- the negative half of the read-back, and the U27 failure shape.
+ *
+ * Returns the *event* as well as the id because the incident message quotes the
+ * event's `type`: which kind of line disagreed is part of the evidence, not
+ * decoration.
+ */
+function identityMismatchIn(
+  events: readonly Record<string, unknown>[],
+  expected: string,
+): { readonly event: Record<string, unknown>; readonly reported: unknown } | null {
+  for (const event of events) {
+    const reported = getOwn(event, "session_id");
+    if (reported !== undefined && reported !== null && reported !== expected) {
+      return { event, reported };
+    }
+  }
+  return null;
+}
+
+/**
+ * The sentence an identity mismatch is impounded with, written once.
+ *
+ * The *kind* of the answer is part of the evidence and continuo #92 measured a
+ * race deciding it (`D-0047`); so is the wording, for the same reason -- two
+ * readers of one transcript that phrase the impoundment differently make which
+ * verb noticed it visible in the record, which is exactly the race that entry
+ * closed.
+ */
+function identityIncidentText(
+  record: SessionRecord,
+  event: Record<string, unknown>,
+  reported: unknown,
+): string {
+  return (
+    `session ${pyRepr(record.session_id)} committed identity ` +
+    `${pyRepr(record.claude_session_uuid)} before the spawn, but the ` +
+    `child's own ${pyStr(getOwn(event, "type") ?? "?")} event reports ` +
+    `${pyRepr(reported)}. Two processes reporting one id -- or one ` +
+    "process reporting another's -- is the U27 failure shape; " +
+    "this session is impounded, not warned about."
+  );
+}
+
+/**
+ * A finished turn's own prose report, read off the transcript it was written to.
+ *
+ * This is the L4 fact the report ingress turns into a `worker_escalation_raised`
+ * event, and it is a *separate* value from {@link SessionReadout} rather than a
+ * field added to one, for two reasons. The readout answers "where is this
+ * session", which is a question about a session that may still be running; this
+ * answers "what did the turn say when it ended", which only a finished turn has.
+ * And the readout's `providerDetail` is a bag every consumer of every verb
+ * receives, so growing it by a field this size widens what a provider swap has
+ * to reproduce -- the exact cost `test/gate_item11/` measures.
+ *
+ * `generation` rides on the value because the report is *per turn*, not per
+ * session: a resumed session writes a second transcript under a second
+ * generation, and an ingress keyed on the session alone would read the second
+ * turn's report as a restatement of the first.
+ */
+export interface TerminalReport {
+  readonly kind: "report";
+  /** The session this was read from, as the caller named it. */
+  readonly sessionId: string;
+  /** The generation whose transcript it came off -- the turn's identity. */
+  readonly generation: number;
+  /** The `result` event's body, verbatim, guaranteed non-blank. */
+  readonly report: string;
+  /** The child's own last word, and its fallback, as the readout reads them. */
+  readonly terminalReason: string | null;
+  readonly subtype: string | null;
+  /** Python-truthy `is_error`, decided here so no caller re-decides it. */
+  readonly isError: boolean;
+  /** The process disposition, `null` for a session this instance did not spawn. */
+  readonly returncode: number | null;
+}
+
+/**
+ * A turn that has no report to read, and why not.
+ *
+ * A value rather than a `null`, because `Ok(null)` is forbidden (`R4`): a call
+ * that produced nothing is a `Failure` with a reason, and a call that produced
+ * a *definite* nothing -- this one -- owes the same reason in the same breath.
+ * `reason` is diagnosis rather than control flow: a caller's next move is the
+ * same for every one of these, which is why they are one shape and not four.
+ */
+export interface NoTerminalReport {
+  readonly kind: "no-report";
+  /**
+   * Whether a report could still arrive on this generation.
+   *
+   * `true` only for a live child that has not written its terminal line yet:
+   * poll again. `false` for a turn that ended and said nothing usable, which no
+   * amount of polling will change.
+   *
+   * A field and not a sentence, for the same reason `D-0056` decision 2 refuses
+   * to classify a worker's prose: a caller that had to read {@link
+   * NoTerminalReport.reason} to decide whether to retry would be parsing a
+   * diagnostic message for control flow, and would poll forever or stop early
+   * the first time the wording changed.
+   */
+  readonly pending: boolean;
+  /** ASCII, and specific enough to distinguish "not finished" from "said nothing". */
+  readonly reason: string;
+}
+
+/** What {@link ClaudeCliSessionProvider.readTerminalReport} answers with. */
+export type TerminalReportReadout = TerminalReport | NoTerminalReport;
+
 /** The three values `#readSettings` resolves, or the refusal it issues instead. */
 interface ResolvedSettings {
   readonly prompt: string;
@@ -2226,23 +2385,15 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       baseDetail["stderr_tail"] = stderrTail;
     }
 
-    for (const event of events) {
-      const reported = getOwn(event, "session_id");
-      if (reported !== undefined && reported !== null && reported !== record.claude_session_uuid) {
-        const incident =
-          `session ${pyRepr(record.session_id)} committed identity ` +
-          `${pyRepr(record.claude_session_uuid)} before the spawn, but the ` +
-          `child's own ${pyStr(getOwn(event, "type") ?? "?")} event reports ` +
-          `${pyRepr(reported)}. Two processes reporting one id -- or one ` +
-          "process reporting another's -- is the U27 failure shape; " +
-          "this session is impounded, not warned about.";
-        this.#recordIncident(session, incident);
-        return identityIncident(`identity incident: ${incident}`, {
-          ...baseDetail,
-          expected: record.claude_session_uuid,
-          reported,
-        });
-      }
+    const mismatch = identityMismatchIn(events, record.claude_session_uuid);
+    if (mismatch !== null) {
+      const incident = identityIncidentText(record, mismatch.event, mismatch.reported);
+      this.#recordIncident(session, incident);
+      return identityIncident(`identity incident: ${incident}`, {
+        ...baseDetail,
+        expected: record.claude_session_uuid,
+        reported: mismatch.reported,
+      });
     }
 
     if (garbage !== null) {
@@ -2253,25 +2404,9 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       baseDetail["uninterpretable_line"] = garbage;
     }
 
-    // The read-back is positive, not merely non-contradictory: structured
-    // output that never names the session's identity cannot be reconciled with
-    // the one committed before the spawn, and accepting it anyway would let
-    // schema drift quietly defeat the one check U27 makes mandatory. A live
-    // child is given time (below); a finished one is answered loudly.
-    const identityReadBack = events.some((event) => {
-      const reported = getOwn(event, "session_id");
-      return reported !== undefined && reported !== null;
-    });
-    // The **last** result event, which is what `next(... reversed(events) ...)`
-    // finds.
-    let resultEvent: Record<string, unknown> | null = null;
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index] as Record<string, unknown>;
-      if (getOwn(event, "type") === "result") {
-        resultEvent = event;
-        break;
-      }
-    }
+    // A live child is given time (below); a finished one is answered loudly.
+    const identityReadBack = identityReadBackOf(events);
+    const resultEvent = lastResultEvent(events);
     if (resultEvent !== null) {
       if (!identityReadBack) {
         return uninterpretable(
@@ -2748,6 +2883,207 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       }
     }
     return discovered;
+  }
+
+  // -- the report ingress' one read (`D-0056`) ---------------------------
+
+  /**
+   * The prose report the current turn ended with, or `null` if it ended with
+   * none.
+   *
+   * The read that closes `docs/design/minimal-operating-loop.md` section 4.7's
+   * report ingress. The transcript is the only place a worker's own words
+   * reach, the worker has no write into the control plane at all, and the
+   * readout deliberately keeps the body out of `providerDetail` -- so without
+   * this verb the only way to the report is to rebuild this module's private
+   * wire format somewhere else: the state root's layout, the zero-padded
+   * generation in the file name, the complete-lines-only rule, the choice of
+   * the *last* `result` line, and the identity read-back. Each of those is a
+   * rule with a reason, and a second copy of it is a second thing to get wrong.
+   * `D-0056` records the decision; this verb is what makes it a decision rather
+   * than a convention.
+   *
+   * **What it answers, in order.**
+   *
+   * - A session it does not hold, or one whose record cannot be read, refuses
+   *   exactly as {@link ClaudeCliSessionProvider.readState} does -- an
+   *   `UNKNOWN_SESSION` and a `COULD_NOT_OBSERVE` respectively, so a caller
+   *   that already handles the readout's failures handles this one's too.
+   * - An impounded or contradicted identity is an `IDENTITY_INCIDENT`
+   *   {@link Failure}, and the incident is recorded here just as the readout
+   *   records it. A report read off a transcript whose identity does not
+   *   reconcile is a report that might be another process's, and `U27` is the
+   *   reason that is refused rather than flagged.
+   * - A {@link NoTerminalReport} for a turn with **no report to read**: no
+   *   `result` line yet, a `result` line whose `result` field is absent or is
+   *   not a string, or one whose body is blank. These are one shape and not
+   *   four because there is nothing to ingest in any of them. Whether to poll
+   *   again is a different question and is answered by a field:
+   *   {@link NoTerminalReport.pending} is `true` only for a live child that
+   *   has not finished, so no caller has to read a diagnostic sentence to
+   *   decide. A value and not a `null`:
+   *   `R4` forbids `Ok(null)`, and a definite nothing owes a reason exactly as
+   *   a refusal does.
+   * - Otherwise the report, with the turn's terminal words beside it.
+   *
+   * **What it does not do is judge.** `is_error` is reported, not acted on: a
+   * failed turn that still wrote prose has prose, and whether that prose is an
+   * escalation is the ingress' rule (`D-0056` decision 2), not the provider's.
+   * The provider's job here ends at "this is what the turn said".
+   *
+   * **One generation, the current one.** `#parseEvents` reads the record's own
+   * generation and no other, so a resumed session answers about the turn it is
+   * on now and the previous turn's transcript stays on disk unread. That is the
+   * same rule `resume` already depends on, and it is what makes
+   * {@link TerminalReport.generation} a usable dedup key.
+   *
+   * Serialised on the same queue as the verbs (`D-0301` part 3): it reads the
+   * files a spawn and a stop write, so an unserialised read could observe a
+   * generation mid-rotation.
+   *
+   * @internal Not package API (`D-0101`). Never re-exported from
+   *   `src/index.ts`: the ingress takes the report as plain data, because a
+   *   module that knows both this class and the spine is the one thing
+   *   `test/gate_item11/` exists to keep at zero.
+   */
+  readTerminalReport(sessionId: string): Promise<ProviderResult<TerminalReportReadout>> {
+    return this.#serialise(async () => {
+      // D-0301 part 4, as `#readout` does it: `#returncode` below reads a value
+      // libuv publishes on a macrotask turn.
+      await sessionRuntime.settleExits();
+      const session = this.#find(sessionId);
+      if (session === null) {
+        return new Failure(FailureKind.UNKNOWN_SESSION, unknownSessionDetail(sessionId));
+      }
+      if (isBrokenRecord(session)) {
+        return new Failure(FailureKind.UNINTERPRETABLE_RESPONSE, session.reason);
+      }
+      const record = session.record;
+      if (record.incident !== null) {
+        return new Failure(FailureKind.IDENTITY_INCIDENT, `identity incident: ${record.incident}`, {
+          session_id: record.session_id,
+          expected: record.claude_session_uuid,
+        });
+      }
+      const parsed = this.#parseEvents(session);
+      if (isUninterpretable(parsed)) {
+        return new Failure(parsed.failureKind, parsed.detail, parsed.providerDetail);
+      }
+      const { events, garbage } = parsed;
+      const baseDetail: Record<string, unknown> = {
+        pid: record.pid,
+        generation: record.generation,
+        ...session.providerDetail,
+      };
+      const mismatch = identityMismatchIn(events, record.claude_session_uuid);
+      if (mismatch !== null) {
+        const incident = identityIncidentText(record, mismatch.event, mismatch.reported);
+        this.#recordIncident(session, incident);
+        return new Failure(FailureKind.IDENTITY_INCIDENT, `identity incident: ${incident}`, {
+          ...baseDetail,
+          expected: record.claude_session_uuid,
+          reported: mismatch.reported,
+        });
+      }
+      if (garbage !== null) {
+        // A complete line that is not an object. `#readout` never drops one
+        // silently and neither does this: an unparseable line may be the very
+        // event that would have named the identity, so a report read past it
+        // would be a report read past the check that authorises it.
+        return new Failure(FailureKind.UNINTERPRETABLE_RESPONSE, garbage, baseDetail);
+      }
+      const resultEvent = lastResultEvent(events);
+      if (resultEvent === null) {
+        // No terminal line. Whether that is "not yet" or "not ever" is the
+        // difference between polling again and giving up, so it is decided
+        // here rather than left to a caller that cannot see the child.
+        const liveness = await this.#childLiveness(session);
+        if (liveness instanceof Failure) {
+          // Unknowable liveness is an observation-channel failure, reported as
+          // one -- the same reading `#readout` gives it.
+          return new Failure(liveness.kind, liveness.detail, {
+            ...baseDetail,
+            ...liveness.providerDetail,
+          });
+        }
+        if (liveness) {
+          return new Ok({
+            kind: "no-report",
+            pending: true,
+            reason:
+              `session ${pyRepr(record.session_id)} has written no result event on ` +
+              `generation ${String(record.generation)}, so the turn has not ended`,
+          });
+        }
+        // Gone without a terminal line. There is no report and there never will
+        // be one on this generation, and answering "the turn has not ended"
+        // would leave an ingress polling forever for something that cannot
+        // arrive. This is the execution failure `D-0056` decision 2 refuses
+        // rather than absorbs.
+        const returncode = this.#returncode(session);
+        return new Failure(
+          FailureKind.UNINTERPRETABLE_RESPONSE,
+          `the child of session ${pyRepr(record.session_id)} is gone without ` +
+            "writing a result event, so its turn produced no report and cannot " +
+            "produce one; this is an execution failure, not a turn still running",
+          { ...baseDetail, returncode },
+        );
+      }
+      if (!identityReadBackOf(events)) {
+        // The same refusal `#readout` gives a finished child that never named
+        // itself, in this verb's own vocabulary: an outcome is not accepted on
+        // trust, and neither is the report attached to it.
+        return new Failure(
+          FailureKind.UNINTERPRETABLE_RESPONSE,
+          `the child of session ${pyRepr(record.session_id)} finished ` +
+            "without any event naming a session identity, so the " +
+            "identity committed before the spawn cannot be read back " +
+            "and reconciled; its report is not accepted on trust",
+          { ...baseDetail, expected: record.claude_session_uuid },
+        );
+      }
+      const body = getOwn(resultEvent, "result");
+      if (typeof body !== "string") {
+        // Never coerced. `String({})` is `"[object Object]"`, and that string
+        // would go on to become a gate rationale a human is asked to approve.
+        return new Ok({
+          kind: "no-report",
+          pending: false,
+          reason:
+            `the result event of session ${pyRepr(record.session_id)} carries no ` +
+            `report: its 'result' field is ${pyRepr(noneOf(body))}`,
+        });
+      }
+      if (pyStrip(body) === "") {
+        // A turn that ended without saying anything. `pyStrip` and not `trim`:
+        // the blank set is CPython's, so a body of one ideographic space is
+        // blank here exactly as it is on the source side.
+        return new Ok({
+          kind: "no-report",
+          pending: false,
+          reason:
+            `the result event of session ${pyRepr(record.session_id)} carries a ` +
+            "blank report, which is a turn that ended without saying anything",
+        });
+      }
+      const terminalReason = getOwn(resultEvent, "terminal_reason");
+      const subtype = getOwn(resultEvent, "subtype");
+      return new Ok({
+        kind: "report",
+        sessionId: record.session_id,
+        generation: record.generation,
+        // Verbatim, unstripped: the body is quoted into `gate.rationale` and
+        // shown to a human, and trimming it here would make the gate's text and
+        // the transcript's disagree about what the worker wrote.
+        report: body,
+        terminalReason: typeof terminalReason === "string" ? terminalReason : null,
+        subtype: typeof subtype === "string" ? subtype : null,
+        // Python-truthy, the spelling the readout's own `word` fallback uses:
+        // `is_error: 0` and `is_error: ""` are the CLI saying no.
+        isError: pyTruthy(getOwn(resultEvent, "is_error")),
+        returncode: this.#returncode(session),
+      });
+    });
   }
 
   // -- what the source's cases reach through `provider._sessions[...]` ----

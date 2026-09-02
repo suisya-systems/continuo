@@ -38,7 +38,7 @@
       }
     ],
     "target_only_tests": {
-      "count": 15,
+      "count": 17,
       "ids": [
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[cli.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[connection.ts]",
@@ -46,6 +46,7 @@
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[python_json.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[python_repr.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[refusals.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[report_ingress.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[run_admission.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[run_cli.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane module reaches a session backend[run_lifecycle.ts]",
@@ -53,6 +54,7 @@
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[db-cli.test.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[differential-oracle.test.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[lap-run-intent.test.ts]",
+        "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[report-ingress.test.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[run-admission.test.ts]",
         "test/gate_item11/no-provider-detail-leaks.test.ts::no control plane test reaches a session backend[run-lifecycle.test.ts]"
       ],

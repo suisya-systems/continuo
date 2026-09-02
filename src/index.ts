@@ -397,6 +397,23 @@ export {
   unlinkRunPr,
   upsertRepository,
 } from "./control_plane/repo_link.js";
+// The report ingress' writing half. `TerminalReportFact` is the shape the
+// provider's `TerminalReport` satisfies structurally, and the structural match
+// is the point: `test/gate_item11/` keeps the set of modules that know both a
+// session backend and the control plane at zero, so the hand-off happens in a
+// composition root against two independently declared types rather than
+// through an import either package makes of the other.
+export {
+  escalationDedupKey,
+  type IngestedReport,
+  ingestTerminalReport,
+  REPORT_INGRESS_PRODUCER,
+  ReportIngressUsageError,
+  type TerminalReportFact,
+  WORKER_ESCALATION_EVENT_TYPE,
+  WORKER_ESCALATION_GATE_TYPE,
+  WORKER_ESCALATION_SCHEMA_VERSION,
+} from "./control_plane/report_ingress.js";
 // `run_lifecycle.ts` also declares `TERMINAL_RUN_STATUSES`, and it is
 // deliberately not re-exported here: `gates.ts`'s copy above already carries
 // that name, and the two are independent restatements of the G1 adjudication
