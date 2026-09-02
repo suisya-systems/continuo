@@ -111,6 +111,13 @@ That is deliberate. The suite is I/O-bound -- the control plane commits with `sy
 same test take 321ms on one `windows-latest` runner and 13.6s on another, same commit, same
 workflow.
 
+The budget is **60s on a fast runner and 180s on a slow one** (D-0052). "Slow" means
+`process.platform === "win32"`: a green CI job takes a p50 of about 70s on `ubuntu-latest` and about
+640s on `windows-latest`, roughly a 9x gap on byte-identical work. Both configs call
+`runnerTimeoutMs()` from `test/helpers/runner-timeouts.ts`, which is also where the fault-injection
+belt's `PORT_BUDGET_SCALE` (D-0602, D-0604) comes from -- so the runner's budget and the harness's
+watchdogs cannot be scaled apart from each other.
+
 A timeout tuned close to observed timings turns that variance into a red merge gate, and the person
 who investigates learns only that a machine was busy. What protects correctness here is `retry: 0`
 and the double-green rule (D-0005): a test that only passes sometimes stays failed, and it fails for

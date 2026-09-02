@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
+import { RUNNER_TIMEOUT_BASE_MS, runnerTimeoutMs } from "../helpers/runner-timeouts.js";
 import { expectRefusal } from "../testkit/errors.js";
 import * as contract from "./contract.js";
 import { ContractViolation, caseSeed, type FaultCase, resolveSkewMs } from "./contract.js";
@@ -576,6 +577,20 @@ describe("the budgets", () => {
     // finished and races no per-test timeout, so capping it would cut 240s to
     // 50s rather than protect an attributable failure.
     expect(suiteBudgetS(fast)).toBeGreaterThan(RUNNER_BUDGET_CEILING_S);
+
+    // D-0052. The ceiling's whole job is to lose the race to Vitest's own
+    // per-test timeout, and that timeout is no longer a number written twice --
+    // it is `runnerTimeoutMs()`, which is the base on a fast runner and 3x on a
+    // slow one. The base is the smaller of the two and therefore the one the
+    // ceiling must clear; assert against it, so lowering the runner's budget
+    // below a case's is red here rather than red as an unattributable timeout
+    // on a Windows cell.
+    expect(RUNNER_BUDGET_CEILING_S).toBeLessThan(RUNNER_TIMEOUT_BASE_MS / 1000);
+    // and the two layers really do read one scale, which is what makes the
+    // sentence above checkable rather than a hope.
+    expect(runnerTimeoutMs("win32")).toBe(RUNNER_TIMEOUT_BASE_MS * PORT_BUDGET_SCALE);
+    expect(runnerTimeoutMs("linux")).toBe(RUNNER_TIMEOUT_BASE_MS);
+    expect(runnerTimeoutMs("darwin")).toBe(RUNNER_TIMEOUT_BASE_MS);
   });
 
   test("target-only -- no budget in `policy.ts` is read outside the functions that scale it", () => {

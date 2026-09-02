@@ -1,5 +1,7 @@
 import { defineConfig } from "vitest/config";
 
+import { runnerTimeoutMs } from "./test/helpers/runner-timeouts.js";
+
 /**
  * Test runner configuration.
  *
@@ -96,13 +98,16 @@ export default defineConfig({
     // runners -- a 42x spread with no code between them. At the 5s default that
     // spread is the difference between green and a red merge gate.
     //
-    // The budget is deliberately several times the worst figure observed. The
-    // costs are asymmetric: a false red blocks a merge and spends a person's
-    // attention on a machine's bad afternoon, while a genuinely hung test still
-    // fails, just later. Correctness here is protected by `retry: 0` and the
-    // double-green rule (D-0005), not by a stopwatch.
-    testTimeout: 60_000,
-    hookTimeout: 60_000,
+    // 60s on a fast runner, 180s on a slow one (D-0052). The scale, the base
+    // and the definition of "slow" all live in the module below, which is the
+    // same one the fault-injection belt's budgets read -- so the two layers
+    // cannot drift apart the way they had before D-0052. The costs are
+    // asymmetric: a false red blocks a merge and spends a person's attention on
+    // a machine's bad afternoon, while a genuinely hung test still fails, just
+    // later. Correctness here is protected by `retry: 0` and the double-green
+    // rule (D-0005), not by a stopwatch.
+    testTimeout: runnerTimeoutMs(),
+    hookTimeout: runnerTimeoutMs(),
 
     sequence: {
       // Both axes: file order and, within a file, test order.

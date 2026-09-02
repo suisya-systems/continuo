@@ -21,7 +21,7 @@
 import process from "node:process";
 
 import { afterAll, beforeAll } from "vitest";
-
+import { PORT_BUDGET_SCALE as SHARED_PORT_BUDGET_SCALE } from "../helpers/runner-timeouts.js";
 import type { CaseAdapter, FaultCase } from "./contract.js";
 import { ContractViolation, LANE_LINUX, LANE_PORTABLE } from "./contract.js";
 import { loadManifest } from "./manifest.js";
@@ -291,13 +291,12 @@ export function suiteBudgetViolation(
  * How much longer this port's watchdogs run than the numbers the manifest
  * carries (D-0602).
  *
- * interlock's budgets are calibrated on interlock's runners. Continuo's Windows
- * cells are documented -- in this repository's own `vitest.config.ts`, from a
- * measured CI run -- as pathologically slow for exactly the work a case does:
- * the same test took 28ms on linux, 321ms on a healthy windows runner and
- * **13,556ms on a slow one**, same commit, same workflow, no code between them.
- * The control plane runs `synchronous = FULL` (interlock D-0012), so every
- * commit fsyncs.
+ * The constant itself lives in `test/helpers/runner-timeouts.ts`, because since
+ * D-0052 it is not only this belt's: the runner's own `testTimeout` is scaled
+ * by the same number on the same grounds, and one of the two layers silently
+ * keeping an unscaled budget is precisely the defect D-0604 repaired one level
+ * down. Re-exported here so the belt's call sites and its ported cases keep
+ * reading it off the module that uses it.
  *
  * That is not a hypothetical here. On PR #62's windows/node22 cell, two cases
  * failed `CaseTimeout` at the IDENTICAL site -- the first `spawn`, immediately
@@ -310,19 +309,33 @@ export function suiteBudgetViolation(
  * asserts them literally, and moving them would make this port's evidence
  * disagree with its source. The scale is applied where the budget is USED, and
  * only by this port.
+ *
+ * One asymmetry with the runner's timeout is deliberate and is recorded at
+ * D-0052: these watchdogs are scaled on every platform, the runner's only on a
+ * slow one. A harness budget that fires names the case and runs teardown, so
+ * over-generous is cheap here; the runner's timeout has no such consolation and
+ * is widened only where the measurement is.
  */
-export const PORT_BUDGET_SCALE = 3;
+export const PORT_BUDGET_SCALE = SHARED_PORT_BUDGET_SCALE;
 
 /**
  * The ceiling a scaled budget is held under, so the harness always fails first.
  *
- * Vitest's `testTimeout` is 60s (`vitest.config.ts`). If a case's own budget
- * could reach that, the runner would kill the test before the harness noticed --
- * and the two failures are not equivalent: the harness's `CaseTimeout` names the
- * case, carries the `S9-REPRO` line and runs teardown, while the runner's says a
- * test took too long and leaves the role processes to the teardown ladder that
- * never ran. Keeping the harness strictly faster preserves the attributable
- * failure design section 8.2 asks for.
+ * Vitest's `testTimeout` is 60s on a fast runner and longer on a slow one
+ * (D-0052); the fast figure is `RUNNER_TIMEOUT_BASE_MS` and is the one
+ * this ceiling has to clear, because it is the smaller of the two. If a case's
+ * own budget could reach it, the runner would kill the test before the harness
+ * noticed -- and the two failures are not equivalent: the harness's
+ * `CaseTimeout` names the case, carries the `S9-REPRO` line and runs teardown,
+ * while the runner's says a test took too long and leaves the role processes to
+ * the teardown ladder that never ran. Keeping the harness strictly faster
+ * preserves the attributable failure design section 8.2 asks for.
+ *
+ * The value stays the number D-0602 chose rather than becoming an expression
+ * over the runner's: it is also, deliberately, below the `full` profile's own
+ * 60s combination budget, so it answers to two constraints and not one. What
+ * must never break is the ordering, and `manifest.test.ts` asserts it against
+ * `RUNNER_TIMEOUT_BASE_MS` so the pair cannot drift in silence.
  */
 export const RUNNER_BUDGET_CEILING_S = 50;
 
