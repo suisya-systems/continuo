@@ -122,6 +122,7 @@ export const EVENT_TYPES: ReadonlySet<string> = new Set([
   "gate_closed",
   "consumption_skipped",
   "watcher_heartbeat_refused",
+  "run_created",
 ]);
 
 /**

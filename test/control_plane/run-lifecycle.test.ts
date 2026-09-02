@@ -114,8 +114,15 @@ function cpFixture(): SqliteDatabase {
  *
  * Section 4.2's writer table assigns run *creation* no fence, and `D-0046`
  * keeps it that way: what is single-writer is the in-place transition of
- * `status`. So the module has no `createRun`, and a test that wants a row
- * writes one -- exactly as every other suite in this repository does.
+ * `status`. So the lifecycle module has no `createRun`, and a test that wants a
+ * row writes one -- exactly as every other suite in this repository does.
+ *
+ * Not `admitRun` (`run_admission.ts`, `D-0051`), even though that is now the
+ * shipped way a run row comes into existence. These cases are about the
+ * transition writer, and reaching for admission here would make every one of
+ * them fail for a second module's reasons -- and would append a `run_created`
+ * event to a spine no case below reads, which is a fixture writing rows to
+ * hide, not to use. `test/control_plane/run-admission.test.ts` owns admission.
  */
 function addRun(cp: SqliteDatabase, runId = RUN_ID, status: RunStatus = "created"): void {
   cp.prepare(
@@ -449,19 +456,39 @@ describe("the gate cannot be walked around", () => {
     expect(statement).toMatch(/AND EXISTS \(SELECT 1 FROM lease/);
   });
 
-  test("no module under src writes the run table in raw SQL", () => {
+  test("no module under src updates the run table in raw SQL", () => {
     // D-0046 rule 1, stated as a property of this build: there is exactly one
-    // writer because there is exactly one place that can produce the
-    // statement, and that place produces it with a builder rather than writing
-    // it out. A raw `UPDATE run` or `INSERT INTO run` anywhere under `src/` is
-    // the anomaly the rule names, and this is what surfaces it.
-    expect(sourceFilesWritingRun(/\bUPDATE\s+run\b|\bINSERT\s+INTO\s+run\b/i)).toEqual([]);
+    // writer of `run.status` because there is exactly one place that can
+    // produce the statement, and that place produces it with a builder rather
+    // than writing it out. A raw `UPDATE run` anywhere under `src/` is the
+    // anomaly the rule names, and this is what surfaces it.
+    expect(sourceFilesWritingRun(/\bUPDATE\s+run\b/i)).toEqual([]);
 
     // Anti-vacuity: a scanner that matched nothing would report the same
     // empty list for a build full of raw writes. This file is full of them --
     // it is where the unfenced writes under test live -- so the same scan
     // pointed at it must come back non-empty.
     expect(filesWritingRun([fileURLToPath(import.meta.url)], /\bUPDATE\s+run\b/i)).not.toEqual([]);
+  });
+
+  test("exactly one module under src inserts into the run table, and it is admission", () => {
+    // The other half of the same rule, and it is deliberately NOT the same
+    // assertion. `D-0046` rule 4 assigns run *creation* no fence at all --
+    // section 4.2's writer table fences `run.status` and leaves the insert
+    // lease-free -- so an `INSERT INTO run` under `src/` is not an anomaly the
+    // way an `UPDATE run` is. What would be an anomaly is a SECOND one: two
+    // modules bringing run rows into existence is two answers to what a new
+    // run looks like, and the run-created event, the initial status and the
+    // timestamps would drift between them one field at a time.
+    //
+    // So this is an equality against the admission module rather than a
+    // subtraction of `INSERT` from the scan. Dropping the pattern instead
+    // would have made the check pass for any number of creation writers,
+    // including zero -- and zero is what it reads as the day someone deletes
+    // this module, which is exactly when the reader needs to be sent here.
+    expect(sourceFilesWritingRun(/\bINSERT\s+INTO\s+run\b/i)).toEqual([
+      fileURLToPath(new URL("../../src/control_plane/run_admission.ts", import.meta.url)),
+    ]);
   });
 
   test("no module under src deletes a run", () => {

@@ -144,6 +144,8 @@ spaces distinct.
 | D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
 | D-0048 | Windows runs the child-process-spawning tests apart from the rest of the suite | accepted |
 | D-0049 | The runtime surfaces continuo operates -- the fence hook, the default worker prompt and the CLI descriptions -- say `continuo`, not `Interlock` | accepted |
+| D-0050 | The production schema is the control plane the lap runs on, and the spike schema is not a fallback | accepted |
+| D-0051 | A run is created by one writer, `continuo run admit`, which appends `run_created` in the same transaction and refuses a second admission | accepted |
 
 ---
 
@@ -9086,3 +9088,174 @@ changed together. Decision id from the `D-0019`..`D-0099` shared band for cross-
 at the window: this one spans the fencing, session and measurement belts and is owned by none of
 them. (Ids `D-0037`..`D-0042` are left unused, as they have been throughout, because continuo cites
 interlock's decisions of those numbers.)
+---
+
+## D-0050 -- The production schema is the control plane the lap runs on, and the spike schema is not a fallback
+
+**Context.** `docs/design/minimal-operating-loop.md` section 6.1 calls this "the most upstream
+decision in the document", and the reason is structural rather than rhetorical: sections 5.1, 5.4 and
+5.5 all list it as a dependency, and section 4.2 shows the two databases **refuse each other** at
+open. `src/control_plane/spike.ts` declares the spike `application_id` (`ILK5`, `0x494c4b35`) and
+`migrator.ts`'s `verifyProductionDatabase` names it explicitly, so that being handed a spike file
+produces "this is a spike database" rather than "this is some other database" -- and that refusal
+already states, in the shipped message, that "there is no migration from the spike schema and none
+will be written".
+
+So the two schemas are siblings, not a version pair, and nothing in the build will convert one into
+the other. What was missing was not a mechanism but a **recorded choice**: every module was written
+against production, `continuo db create|migrate|verify` was mounted over the production migrator, and
+the measurement harness reads a production database -- yet no entry said that this is the control
+plane, which left "run the lap on the spike schema, it is smaller" as a question a later reader could
+reasonably believe was still open. It is not, and this entry is where that stops being inferable only
+from the code.
+
+**Decision.** **The production schema is the control plane.** `continuo` runs the operating loop on a
+production database -- `application_id` `ILKP`, the forward-only migration ledger in
+`src/control_plane/migrations/`, opened at head through `openProductionControlPlane`. The spike schema
+is not a supported target for it, not a lighter-weight alternative for a small lap, and not a stage
+on the way to production.
+
+Three facts settle it, in the order they mattered:
+
+1. **The spike schema has no `event` table.** It holds six: `run`, `session`, `lease`, `outbox`,
+   `incident` and `action`. Production holds twenty-four, including `event`, `consumer`,
+   `event_consumption`, `gate`, `gate_transition`, `gate_relay`, `run_pr_link` and `ci_observation`.
+   The lap is *defined* by the gate, and the gate's `origin_event_seq` is a foreign key onto a table
+   the spike does not have -- so this is not a matter of the spike being less convenient. The lap
+   cannot be expressed there at all.
+2. **There is no bridge and there will be none.** interlock `D-0013` and `D-0026` put the cutover at
+   the run boundary with no state conversion, and `migrator.ts` enforces that by refusing a spike
+   file outright. A decision to run on the spike would therefore be a decision to have no path back.
+3. **The rest of the build already assumes it.** The event spine, the gates, the leases, the outbox,
+   the repo links, the measurement harness and the `db` verbs are all written against the production
+   DDL. Choosing otherwise now would not be selecting between two supported options; it would be
+   abandoning the implemented one.
+
+**Consequences.**
+
+- Every command in the operating loop opens its database through `openProductionControlPlane`, which
+  is the production standard **plus** the at-head check. A database that is behind is refused rather
+  than migrated in passing: `continuo db migrate` is where a file moves forward, and a write command
+  that quietly migrated the file it was pointed at would make the forward-only ledger a side effect
+  rather than a decision.
+- The spike modules stay. `schema.ts` and `spike.ts` are not deleted by this entry and are not
+  deprecated by it: they are a ported subsystem with its own suite, and `spike.ts`'s constant is what
+  makes the production verifier's diagnosis specific. What this entry removes is their candidacy as
+  the lap's store, not their existence.
+- Section 6.1's other half is already built. The verb set it pairs the recommendation with --
+  `continuo db create|migrate|verify` -- shipped ahead of this entry, mounted under `D-0030`'s rule
+  that the subtree's own module owns its parser. This entry records the schema choice that the mount
+  had already assumed.
+
+**Falsifier.** A control-plane capability the lap needs that production's DDL cannot express while
+the spike's can. Nothing of the sort is known -- the containment runs the other way, production being
+a strict superset in every table the lap touches -- but a concrete instance would mean the two are
+not sibling and superset after all, and would reopen this. A *second* production-shaped schema (a
+future re-baseline of the migration ledger) is not a falsifier of this entry: that is a question about
+the ledger's own history, which the migrator's checksum rules already govern.
+
+**Rejected alternative: run lap 1 on the spike schema and move to production later.** The move is the
+thing that does not exist. With no migration between them and the cutover fixed at the run boundary,
+"later" means re-admitting every run under a new database -- and the lap would have to be rewritten
+first, since its gate cannot be stored in a schema with no `event` table.
+
+**Rejected alternative: leave it unrecorded, since the code already only does one of these.** This is
+what was in place before this entry, and it is the state section 6.1 objected to. A decision that is
+merely implied by which module was written first is one that a reader who has not read every module
+will re-open, and re-opening it costs more than recording it.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-schema-and-run-writer`, on
+`docs/design/minimal-operating-loop.md` section 6.1's recommendation, taken as written. Decision id
+allocated from the `D-0019`..`D-0099` shared band after checking `origin/main` at `9db40bc`, where
+`D-0049` is the highest id in the band.
+
+---
+
+## D-0051 -- A run is created by one writer, `continuo run admit`, which appends `run_created` in the same transaction and refuses a second admission
+
+**Context.** `D-0046` settled who may *transition* a run and deliberately said nothing about who
+creates one: section 4.2's writer table fences `run.status` with the run lease epoch and assigns run
+creation **no** fence, so `run_lifecycle.ts` shipped as the single in-place writer of `status` with a
+docstring saying, in as many words, that a `createRun` there "would be a second writer to the run
+table wearing this module's name". The result was a build that could advance a run it had no way to
+create: nothing under `src/` inserted a `run` row, and every suite that needed one wrote it by hand.
+
+`docs/design/minimal-operating-loop.md` section 6.2 asks for that writer and for the event vocabulary
+the lap emits, `EVENT_TYPES` having no word for anything the lap produces.
+
+**Decision.**
+
+1. **Run creation has exactly one implementation site: `src/control_plane/run_admission.ts`.** Not
+   `run_lifecycle.ts`, which stays the in-place writer of `status` and stays ignorant of events and
+   of the CLI. The two are separate modules because they are separate rules -- one is fenced and
+   one is deliberately lease-free -- and putting both behind one name would make the fence look like
+   a property of the table rather than of the transition.
+2. **The row is inserted at `created`, and admission transitions nothing.** A run inserted directly
+   at `running` would reach `running` without passing through `advanceRunStatus`, which is `D-0046`
+   rule 1 evaded by starting past the gate rather than by writing around it. Every later status is
+   the lifecycle writer's.
+3. **The row and its `run_created` event are one transaction.** `event.run_id` is a foreign key onto
+   `run(run_id)`, so the order is forced: insert, then append. What is not forced is the failure in
+   between, and that is what the shared transaction buys -- a run whose existence has no recorded
+   cause is not a state this build can reach. `txn.ts`'s `transaction` joins an inner block to an
+   outer one, so `appendEvent` runs inside admission's boundary unchanged.
+4. **A second admission of one run identifier is refused, not absorbed.** This is a deliberate
+   difference from the spine underneath, where a re-appended `dedup_key` is an idempotent no-op: a
+   producer restating one observed fact is ordinary, and a second statement that a run *begins* is
+   either a mistaken repeat or two callers believing they own one identifier. Both are things an
+   operator has to see. The refusal is `RunAlreadyAdmitted`, in the `ControlPlaneRefusal` family, so
+   it reaches the operator as one line and exit 2.
+5. **One event type is added: `run_created`.** `EVENT_TYPES` is defined as the vocabulary *this
+   implementation produces*, so a type is registered when its producer is written and not before.
+   `run_created` names an objective fact about the database in the `subject_pastparticiple` form the
+   existing words use (`pr_merged`, `gate_expired`, `consumption_skipped`). Types for producers this
+   lap does not write -- `session_spawned`, `run_completed`, `run_delegated` -- are **not** registered
+   ahead of them, because a vocabulary that lists words nothing emits stops being an answer to "what
+   is worth subscribing to".
+6. **The surface is `continuo run admit --db DB --run-id ID [--now-ms MS]`**, its own subtree under
+   `D-0030`'s rule, declared by `src/control_plane/run_cli.ts` and only mounted by `src/cli.ts`. It
+   opens through `openProductionControlPlane` -- at head required, per `D-0050` -- and it never
+   migrates. The clock is read once and passed down; nothing below the command reads one.
+
+**Consequences.**
+
+- **`D-0046`'s structural check changes shape, and this is where that is said.**
+  `test/control_plane/run-lifecycle.test.ts` asserted that no module under `src/` writes the `run`
+  table in raw SQL, scanning for `UPDATE run` and `INSERT INTO run` together. That conflated two
+  rules `D-0046` states separately. The scan is now two cases: `UPDATE run` stays at **zero** across
+  `src/`, and `INSERT INTO run` must equal **exactly the admission module**. Dropping `INSERT` from
+  the scan instead was rejected: it would pass for any number of creation writers, including zero,
+  and zero is what it would read as the day the module is deleted.
+- **A run row is now creatable from the shipped binary.** Before this, `continuo db create` produced
+  a control plane whose central table no command could write.
+- **No consumer is registered for `run_created`.** The append fans out to nobody and that is not a
+  defect: `D-0046` rule 2 gives the consumer half its own step. `D-0046`'s falsifier -- that the
+  consumer indirection has no reader on the lap -- remains live and is not resolved here.
+- **`D-0046`'s collapse is not taken.** Admission does not observe a fact and transition a run in one
+  motion; it creates a run and records that it did. Section 6.2's conditional requirement to record a
+  collapse therefore does not fire, and nothing here supersedes `D-0046`.
+
+**Falsifier.** A legitimate operation that must create a run *and* leave it un-admitted, or admit a
+run that already exists -- a resumption path, or a re-import of runs from another store. Either would
+mean rule 4's refusal is the wrong shape and that admission needs a separate verb for the case rather
+than a relaxation of this one. And if a second module is ever found to need an `INSERT INTO run`, rule
+1 is wrong rather than the test: the check should not be widened to two files without an entry saying
+which module owns what.
+
+**Rejected alternative: make a repeat admission an idempotent success.** It is the friendlier shape
+for a script that retries, and it is wrong here for the reason rule 4 gives: the two callers it would
+silently reconcile are the case that most needs to be visible. A retrying script can read the run.
+
+**Rejected alternative: create the run inside `appendEvent`'s `sideEffect`.** It is the shape the
+events layer already offers, and it cannot work: the side effect runs *after* the event row is
+inserted, so the foreign key onto `run(run_id)` would have nothing to point at.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-schema-and-run-writer`, on
+`docs/design/minimal-operating-loop.md` section 6.2 and against `D-0046`; the command's shape (rules
+2, 4 and 6) was settled at the gate from a prior design review, and this entry records it. Decision id
+from the `D-0019`..`D-0099` shared band, next after `D-0050`.
+
