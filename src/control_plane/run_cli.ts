@@ -49,6 +49,21 @@
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every string
  * here reaches `--help` on a cp932 console, where a character the console cannot
  * encode is a crash rather than a smudge.
+ *
+ * **What that leaves open, stated rather than glossed.** The report interpolates
+ * two external values, and only one of them is constrained. `--run-id` is
+ * refused unless it is printable ASCII, because admission is where run
+ * identifiers enter the database and it promises to print them back (`D-0051`).
+ * `--db` is **not**: it is echoed verbatim, exactly as `continuo db
+ * create|migrate|verify` has echoed it since that subtree shipped. That is a
+ * deliberate carry rather than an oversight -- an operator chooses a run id and
+ * merely *has* a filesystem path, so narrowing the path would refuse databases
+ * that exist and work. It does mean a path holding a newline or a character the
+ * console cannot encode reaches stdout unaltered, which is the open problem
+ * `docs/cli-output-policy.md` hands to "any code path that echoes external text
+ * to a console". Answering it belongs to whichever entry settles it for every
+ * verb at once, not to this one, which would otherwise leave the two subtrees
+ * printing the same value under two rules.
  */
 
 import type { Namespace, Subparsers } from "../cli/parser.js";
