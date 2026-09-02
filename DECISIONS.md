@@ -147,6 +147,7 @@ spaces distinct.
 | D-0050 | The production schema is the control plane the lap runs on, and the spike schema is not a fallback | accepted |
 | D-0051 | A run is created by one writer, `continuo run admit`, which appends `run_created` in the same transaction and refuses a second admission | accepted |
 | D-0052 | The runner's per-test timeout is scaled on a slow platform, from the same constant the harness budgets use | accepted |
+| D-0053 | The broker belt is declined and discharged rather than ported, and the endpoint moves onto the production schema with the outbox aligned to `cancelled` | accepted |
 
 ---
 
@@ -9373,3 +9374,280 @@ from the `D-0019`..`D-0099` shared band after checking `origin/main` at `454b850
 the highest id in the band: the change straddles `vitest.config.ts` (shared by every lane), the
 gate_item11 belt's nested config and the fault-injection belt's `policy.ts`, so it is a cross-belt
 decision taken at the window rather than one belt's.
+
+---
+
+## D-0053 -- The broker belt is declined and discharged rather than ported, and the endpoint moves onto the production schema with the outbox aligned to `cancelled`
+
+**Context.** `docs/design/minimal-operating-loop.md` section 5.1 opens the last belt whose parity
+status is neither `ported` nor `not-porting`: `broker`, carrying `retarget` over 54 collected cases
+and five uncollected modules. Its verdict is "required -- but not the part the status names", and the
+reason is that the status conflates three questions which have three different answers. Section 7
+puts the answer at step 5 and says what it unblocks in four words: **the human gate. It is unreachable
+until this lands.**
+
+The unreachability is concrete rather than rhetorical, and it is a consequence of `D-0050`. The gate
+lives only in the production schema -- `gate`, `gate_transition` and `gate_relay` are production
+tables and the spike schema has six tables and no `event` at all -- while `src/messagebus/endpoint.ts`
+opened its database through `openControlPlane`, the *spike* opener (`endpoint.ts:10`). The two
+databases refuse each other at open, so the component that delivers the gate's question to a human
+could not be pointed at the database the gate is stored in. `enqueueRelay` writes the `gate_relay`
+row and the outbox row in **one** transaction and gate closure cancels the relay's outbox row in the
+closing transaction, so the "two databases" arrangement is not separable by a smaller edit either:
+section 5.1's option C shows it converting an outbox edit into a distributed-transaction problem.
+
+And the re-point alone would not have been enough, because production head is after
+`migrations/0003_outbox_cancelled_status.sql`, which the delivery module predates. 0003 rebuilds the
+outbox table, adds `cancelled` to the status `CHECK`, rewrites `outbox_status_is_forward_only` from a
+rank comparison into an explicit edge list in which `acked` and `cancelled` are both terminal and
+neither is reachable from the other, and narrows the partial index to
+`outbox_undelivered ... WHERE status IN ('pending', 'delivered')`. `outbox.ts` spelled "unfinished" as
+`status <> 'acked'` in four places. On a production database that means a cancelled relay is still
+returned as due, the next `_MARK_DELIVERED` attempts `cancelled -> delivered`, and the trigger aborts
+it -- **after** `Outbox.attempt` has already run the destination side effect. The effect happens and
+the database denies it ever did. `docs/production-schema.md` section 5.7 states the same lattice from
+the schema's side and names the index rule this entry has to obey.
+
+So this entry answers three questions at once because they are one change, and fixes two scopes that
+a pre-implementation design review found were open in a way that would have been decided by accident.
+
+**Decision.**
+
+1. **The 54 residents cases are declined, on the grounds that the subject does not exist on either
+   side of the port.** `tests/broker/test_residents.py` is process-identity pre-flight detection and
+   reclamation of unmanaged residents; `residents.py:6-16` states that the registry it scans is
+   written by the **consumer**, not by the runtime. Checked here rather than taken on the design's
+   word: `grep -rni resident src/ test/` over this repository returns **zero** hits -- no module, no
+   suite, no fixture reads or writes such a registry -- and the design records that `grep -ri
+   residents` over claude-org-ja returns zero as well. Porting the cases therefore means building
+   both halves of a protocol that has never had either half, and the ~32 KB of `residents.py` plus
+   ~28 KB of test is a belt rather than a task (section 5.1 option B). There is a second, independent
+   ground: the reclamation policy the cases encode contradicts this repository's, since
+   `src/supervisor.ts:699-703` states that no orphan is adopted into a run its binding does not name,
+   so a faithful port would install a rule the supervisor already refuses.
+2. **The five uncollected modules are discharged by the completed messagebus belt, at belt level, not
+   retargeted case by case.** They are `tests/attention/test_broker_journal_contract.py`,
+   `tests/broker/test_control_plane.py`, `tests/broker/test_delivery.py`,
+   `tests/broker/test_notify.py` and `tests/broker/test_store.py`, recorded in
+   `parity/source-inventory.manifest.json` under `collection_time_skips.modules`. Each is quarantined
+   behind a module-level `pytest.importorskip("claude_org_runtime.broker.server")` against a
+   `server.py` that was deleted, and each therefore has **no node ids**: pytest never collected them,
+   so there is nothing to inventory and, by this repository's standing rule, nothing may be invented.
+   A per-case retarget is not merely expensive, it is unavailable -- there are no cases to retarget.
+   What discharges them is that `D-0032` already named the messagebus package as their destination
+   and that belt is complete at 43/43 (`parity/source-inventory.belts.md`, `messagebus` section), so
+   interlock's `Q-0023` -- "re-target onto the MessageBus rewrite" -- is answered by the rewrite
+   existing. `D-0034`'s treatment of the attention file (a metadata-only ledger recording zero
+   entries) stands unchanged; this entry does not convert it into a normal ledger, because the reason
+   it cannot have one is the absence of an inventory to point at, which this entry does not change.
+3. **The endpoint opens the production control plane.** `openControlPlane` becomes
+   `openProductionControlPlane` (`src/messagebus/endpoint.ts`), which is the production standard plus
+   the at-head check, per `D-0050`. Three inputs that were previously served are now refused at
+   startup: a spike database (diagnosed as one by `application_id`, `ILK5`), an absent file, and a
+   production database behind head. **The refusal exits 2**, the code `endpoint.ts` already uses for
+   every startup misconfiguration -- missing env, and a recipient no handler serves -- and not the
+   uncaught-exception 1. A misconfigured database is the same category of operator error as a
+   misconfigured recipient and must not be distinguishable from a crash. The endpoint still never
+   migrates: `continuo db migrate` is where a file moves forward (`D-0050`).
+4. **The outbox's lease resource is one global delivery lease for lap 1.** This is the scope the
+   design left open, and leaving it open would have decided it by accident.
+   `docs/production-schema.md` section 4.2's writer table names the single writer of `outbox.status`
+   as "**the delivery worker holding the outbox lease**", fenced by `writer_epoch` validated inside
+   the write (`docs/production-schema.md:213`). But the outbox row carries **no lease resource
+   column**, and neither of the two passes that select rows is scoped to one: `_DUE_QUERY`
+   (`src/control_plane/outbox.ts:312`) reads every unfinished row regardless of who is asking, and
+   `Outbox.recover` (`:1264`) adopts every unfinished row through `_ADOPT`.
+   `UNOWNED_OUTBOX_QUERY` (`:278`) -- the invariant query, whose whole subject is a row left with no
+   owner -- is likewise over all unfinished rows. Section 4.9's phrase "the endpoint's lease is
+   per-process" fixes a **lifetime**, not a **scope**, and the two are routinely confused. If several
+   per-process resources were admitted, each would hold a live epoch, and one resource's epoch would
+   validate a fenced write against a row another resource's holder believes it owns -- the fence
+   would be checking that *some* lease is live, which is not what a fence is for. So: one resource,
+   globally, for the delivery role on lap 1. Multiple endpoint leases are refused until a later
+   design adds either a scope column to `outbox` or a strict recipient predicate to the due and
+   recovery passes; that is a schema question and it is not decided here.
+5. **Lap 1 keeps the stdio child endpoint.** Section 0's premise 1 raises a host application serving
+   MCP in-process over localhost, and section 5.1's re-check is explicit about what that costs: the
+   isolation that exists today is crude and effective -- one worker, one endpoint process, one
+   recipient pinned by `INTERLOCK_MESSAGEBUS_RECIPIENT` read once into `EndpointConfig`, with
+   `registry.forRecipient` refusing at startup a recipient no handler serves. `poll` is pinned to
+   that recipient, and the module states as a property that a worker cannot pull another recipient's
+   queue through this surface. A shared localhost surface destroys the isolating fact, because the
+   isolating fact **is** the one-process-per-worker environment; every connecting session would reach
+   the same surface and nothing would tell the host which recipient a caller may `poll` or `ack`. That
+   makes per-session authorization a blocker of this same change rather than later work. Lap 1 does
+   not take that on: the endpoint stays a stdio child, and the shared surface is deferred together
+   with the authorization it requires.
+6. **`cancelled` is aligned in two deliberately different spellings, and they are not
+   interchangeable.** The vocabulary itself gets one home: `OUTBOX_STATUSES`, `OutboxStatus`,
+   `TERMINAL_OUTBOX_STATUSES` and `isTerminalOutboxStatus` in `src/control_plane/outbox.ts`, mirrored
+   from 0003's `CHECK` and its edge list, in the shape `run_lifecycle.ts:153-186` already uses for
+   `RUN_STATUSES` / `RunStatus` / `TERMINAL_RUN_STATUSES`. Then:
+   - **The raw-SQL READ queries carry the positive literal.** `UNOWNED_OUTBOX_QUERY` and `_DUE_QUERY`
+     are spelled `status IN ('pending', 'delivered')`, character for character as
+     `events.ts`'s `ORPHANED_OUTBOX_SQL` (`:1625-1636`) and the stalled-relay query
+     (`gates.ts:1283`) already spell it, because SQLite may use a partial index **only** when the
+     query's `WHERE` contains the index's own predicate as a term. The complement
+     (`status NOT IN ('acked', 'cancelled')`) returns exactly the same rows and loses the index --
+     `docs/production-schema.md` section 5.7 says so in as many words, and `events.ts` keeps a named
+     index-losing twin precisely because that regression is invisible in the result set.
+   - **The fenced-builder WRITE statements are spelled as the negation of the terminal set, generated
+     from `TERMINAL_OUTBOX_STATUSES`.** `_COUNT_ATTEMPT`, `_MARK_DELIVERED` and `_ADOPT` go through
+     `src/control_plane/lease.ts`'s fenced-statement builder, whose predicate algebra is
+     `Predicate = Comparison | IsNull | Conjunction` with the operator restricted to `=` or `<>`
+     (`lease.ts:1005`, `:945-949`): it has no `IN` and no disjunction, so the positive form is not
+     expressible there at all. That constraint and the right semantics agree, which is why this is a
+     decision and not a workaround: a write predicate means "**this row is not finished**", and a
+     future *non*-terminal status must stay attemptable, whereas an enumerated positive list would
+     silently stop attempting it. Generating the conjunction from the constant rather than writing it
+     out means a fifth status added to 0003's `CHECK` is picked up by the writes automatically and by
+     the reads only where a human decided it belongs.
+   - `Outbox.attempt` recognises **both** terminal statuses and refuses each with its own message; it
+     stays a loud `OutboxUsageError`, because a direct caller attempting a finished row is a
+     programming error. `Outbox.recordAck` classifies `cancelled` **before** its "has not been
+     delivered" check -- a cancelled-while-pending row has `delivered_at_ms` NULL and would otherwise
+     be reported as evidence of a lost delivery record, which is a wildly misleading diagnosis of a
+     perfectly ordinary gate closure -- narrows its `UPDATE` from `acked_at_ms IS NULL` to
+     `status = 'delivered'`, and on zero rows changed **re-reads** the row to tell a concurrent ack
+     from a cancellation that landed between the read and the write from a genuine anomaly. The
+     pre-existing check could not close that race, because it read one value and wrote against
+     another. `AckOutcome` gains `ackedAtMs: number | null` -- null exactly when the row carries no
+     ack, which 0003's `CHECK ((status='acked') = (acked_at_ms IS NOT NULL))` makes a schema fact --
+     and a `cancelled` flag; a late ack after cancellation returns
+     `{ recorded: false, cancelled: true, ackedAtMs: null }` and is **not** an error, because the
+     module's own contract is that a duplicate or late ack changes nothing rather than being
+     rejected.
+7. **`MessageBus.poll`'s two terminality tests are part of the alignment, and they are above the
+   design's floor.** Section 5.1 enumerates four query predicates and then says to treat the four "as
+   the floor rather than the list" (line 694). This is that floor being exceeded, and it is recorded
+   here as evidence for the framing rather than as an incidental fix: `src/messagebus/bus.ts`'s
+   post-snapshot re-read and its post-exception residual test both decided terminality on their own,
+   and both knew only `acked`. `due()` reads a list once and the loop then attempts the rows one at a
+   time, so every row after the first is attempted against a database that may have moved -- and
+   `pending -> cancelled` and `delivered -> cancelled` are edges a **different** writer, the human
+   gate, takes without consulting the bus. Left alone, a gate closed mid-batch would have failed the
+   whole poll. **A cancelled row is normally finished and is skipped**, exactly like an acked one:
+   nobody is owed the delivery of a message whose gate has closed. Both sites now ask
+   `isTerminalOutboxStatus` rather than comparing a literal. The reason the design's list missed them
+   is worth naming: they live in `src/messagebus/`, so a search of the outbox's SQL does not find
+   them.
+
+**Consequences.**
+
+- **`test/messagebus/_env.ts` moves to `createProductionControlPlane` / `openProductionControlPlane`.**
+  Production has a foreign key from the rows the fixture writes onto `run`, so the fixture's `run`
+  row is now load-bearing rather than decorative. It stays a raw `INSERT`, not a call to `admitRun`:
+  `D-0051` makes `continuo run admit` the one legal writer under `src/`, and the scan that enforces
+  it is over `src/` alone -- every other production suite in this repository inserts the row
+  directly, for the reason `test/control_plane/run-lifecycle.test.ts:110-131` records. The
+  behavioural suites on top of it --
+  drop/resend/ack, recipient isolation, stale writer -- are **not** rewritten: they assert guarantees
+  the production schema also gives, and a suite that had to change to survive a schema swap would
+  have been asserting the schema rather than the behaviour.
+- **`test/control_plane/outbox.test.ts` stays on the spike fixture.** Its 74 cases are a faithful
+  translation of the source suite and `D-0026` makes that translation the durable artifact; a
+  three-state database returns identical results under a positive predicate, so nothing there needs
+  to move. The new `cancelled` cases are a target-only block on the production fixture, adjacent to
+  it rather than merged into it, because a case that cannot exist in the source has no business being
+  numbered among cases that do.
+- **The existing production-schema, gates and events contracts are the side this change conforms to.**
+  Their `cancelled`, gate-cancellation and partial-index tests are unchanged. The new integration is
+  the party that had to move.
+- **The fault-injection belt cannot exercise `cancelled` at all, and this entry does not pretend
+  otherwise.** Verified here rather than assumed: `test/fault_injection/import-graph.test.ts` permits
+  exactly two modules to import `src/` (`ADAPTER_MODULES` = `spike_driver.ts`, `session_driver.ts`),
+  and both import `createControlPlane` / `openControlPlane` from `src/control_plane/schema.ts`
+  (`spike_driver.ts:102`, `session_driver.ts:69`) -- the spike opener. The spike schema has no
+  `cancelled` in its `CHECK` and no gate tables to close, so **the belt has no way to construct a
+  cancelled row**. What section 5.1's "re-measure the kill-window evidence" therefore reduces to on
+  this lap is a regression check: the belt re-uses `UNOWNED_OUTBOX_QUERY` verbatim as its
+  no-unowned-outbox invariant (`spike_driver.ts`'s `INVARIANT_QUERIES`), so turning that constant
+  from `status <> 'acked'` into `status IN ('pending', 'delivered')` changes the belt's invariant
+  text, and the evidence is that the belt stays green under the new text. A real cancelled-aware
+  kill-window measurement requires the belt itself to be moved onto the production schema, which
+  means a third adapter or a re-pointed `spike_driver` and a revision of `D-0601`'s two-adapter rule.
+  **That is named here as follow-on work and is not done.** Claiming the old evidence still covers the
+  new predicates would be the failure this bullet exists to prevent.
+- **The endpoint's lease is still not renewed, and step 4 is still open.** Section 4.9 requires the
+  launcher to hold and renew the endpoint's lease for its whole life, and the launcher is the
+  composition root of step 8, which does not exist. This entry deliberately does not invent a renewal
+  owner; it fixes the *resource* (rule 4) so that whoever eventually renews is renewing one thing.
+- **Publication.** `package.json` is `private: true` at `version 0.0.0`, so no registry consumer has a
+  compatibility claim on this repository yet and nothing here moves a release line; `D-0045`'s
+  publication work is a separate change and is not mixed in. Recorded explicitly all the same, because
+  it will not be true forever: **"the endpoint stops accepting a spike database" is a breaking change
+  in real behaviour terms.** A deployment that pointed the endpoint at a spike file was served before
+  this change and exits 2 after it. Had the package been public, this entry would have carried a major
+  bump.
+- **A bookkeeping fix rides along.** `parity/source-inventory.belts.md`'s broker heading said "4
+  further modules not collected" while its own body and the manifest list five. The heading is
+  corrected to five. It is fixed here rather than separately because this is the entry that names the
+  five and discharges them, and a count that disagrees with the list underneath it is exactly the kind
+  of drift a later reader resolves in the wrong direction.
+
+**Falsifier.** Three observations would show this entry wrong, and each is evaluable from inside this
+repository.
+
+*A second delivery lease resource turning out to be needed on lap 1.* Rule 4 asserts that one global
+resource is sufficient because the lap has one delivery role. If a second concurrent deliverer appears
+-- a second endpoint for a second worker, most plausibly -- then the global resource serialises them,
+and the fix is not to relax rule 4 but to give `outbox` the scope column rule 4 names. An
+implementation that quietly ran two resources against the current row shape would be the failure, not
+the falsification.
+
+*A legitimate reader that must see cancelled rows as due.* The positive predicate is the whole
+alignment, and it assumes no consumer needs a cancelled relay returned as work. An audit or reporting
+path that must enumerate cancelled relays alongside live ones would mean "due" and "of interest" are
+two questions rather than one, and would need its own query rather than a widened `_DUE_QUERY` --
+widening it would return the index to a full scan and hand `Outbox.attempt` rows the trigger will
+abort.
+
+*A residents-registry reader appearing in the port.* Rule 1 rests on the subject being absent, and
+section 0's premise 1 makes it less hypothetical than it looks: under a single host application the
+agent sessions are **the only other processes in the system**, so "an agent process that outlived the
+host, or that no run's binding names" is the one process-identity category the architecture has. **If
+the host application grows a reaper for orphaned agent sessions, the subject exists here and this
+decline is superseded.** Note what does *not* falsify it: someone porting `residents.py` for its own
+sake. The decline is of a belt with no reader, not of an algorithm.
+
+**Rejected alternative: keep the endpoint on the spike database and run gates on a second production
+database (section 5.1 option C).** It is the only option that requires no outbox edit, and it is
+strictly worse than what was done. `enqueueRelay` writes the `gate_relay` row and the outbox row in
+one transaction, and gate closure cancels the relay's outbox row in the closing transaction. Splitting
+the databases splits both transactions, so a change that was an outbox edit becomes a
+distributed-transaction problem with no coordinator -- or else it relaxes the `received -> presented`
+edge, which is the constraint the relay exists to carry.
+
+**Rejected alternative: port the 54 residents cases and keep the five as `retarget` (option B).** The
+highest cost of the three and the lowest lap value. It leaves the schema split unresolved, so the gate
+stays unreachable and step 5 does not get done; it requires inventing the registration half of a
+protocol nobody has used; and the reap rule it would land contradicts `src/supervisor.ts:699-703`. A
+port whose first act is to install a rule the existing supervisor refuses is not a port.
+
+**Rejected alternative: extend `lease.ts`'s fenced-statement builder with an `IN` node so the write
+statements can carry the positive predicate too.** Superficially the tidier answer -- one spelling
+everywhere. It is rejected on two independent grounds. The builder is a faithful port with its own
+suite, and growing its predicate algebra is a change to a ported subsystem made for the convenience of
+a caller, which is the shape of change this repository's translation conventions exist to prevent.
+And it would be tidier in the wrong direction: the two spellings are not an inconsistency to be
+removed, they mean different things. The read asks "which rows are live" and must name them so the
+index applies; the write asks "is this row unfinished" and must stay true of a status nobody has
+invented yet.
+
+**Rejected alternative: make a late ack of a cancelled relay an error.** It is defensible -- the ack
+answers a question that was withdrawn -- and it contradicts the module's own contract, which is that a
+duplicate or late ack changes nothing rather than being rejected. It would also make a routine race
+into an operator-visible failure: a human answering a gate at the instant it closes is exactly the
+timing gate cancellation creates, and there is nothing for an operator to do about it. Rule 6 reports
+it truthfully instead -- `recorded: false`, `cancelled: true`, no ack timestamp, because the schema
+guarantees a cancelled row carries none.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-endpoint-production-repoint`, on
+`docs/design/minimal-operating-loop.md` section 5.1 (recommendation A, taken as written) and section
+7 step 5; rules 4 and 5 were settled at the gate from a pre-implementation design review that raised
+both as blockers, and this entry records them. Step 4 (the endpoint's lease renewal, section 4.9) is
+deliberately not in scope: its implementing component is the composition root of step 8, which does
+not exist yet. Decision id from the `D-0019`..`D-0099` shared band, next after `D-0052`, which the
+parallel task `continuo-test-timeout-scale` took on `origin/main` first.
