@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 
+import { appendEvent, registerConsumer, subscribe } from "../../src/control_plane/events.js";
+import { enqueueRelay, openGate } from "../../src/control_plane/gates.js";
 import {
   CHECKPOINT_AFTER_RECORD_BEFORE_EFFECT,
   CHECKPOINT_BEFORE_DURABLE_WRITE,
@@ -611,5 +613,211 @@ describe("the message bus: drop, resend, exactly one ack", () => {
     env.bus.ack("task-2", { nowMs: T0 + 4_000, recipient: RECIPIENT });
     expect(env.bus.poll(RECIPIENT, { nowMs: T0 + 5_000, epoch: EPOCH })).toEqual([]);
     expect(env.ackedRowCount()).toBe(2);
+  });
+});
+
+/**
+ * A row a producer appended is adopted at the attempt, and only that row.
+ *
+ * Every case here is target-only and runs on the production schema, because
+ * the producers they exercise -- `enqueueRelay` and the event spine's delivery
+ * fan-out -- have no spike-schema existence at all. interlock's own bus never
+ * met either one: its outbox rows all arrive through `Outbox.enqueue`, which
+ * stamps `writer_epoch` from the sender's own lease, so the source suite could
+ * not have carried a case in which a due row has no owner. `D-0054` records the
+ * divergence and `parity/messagebus.bus.ledger.json` names these ids.
+ *
+ * The property under test is one sentence: `writer_epoch` on `outbox` is the
+ * current owner of the delivery-side mutations, not a record of who appended
+ * the row, so a delivery worker takes ownership of the one row it is about to
+ * attempt and of nothing else.
+ */
+describe("a producer's row is adopted at the attempt (target-only, production schema)", () => {
+  /** The gate world `enqueueRelay` needs: a run, its escalation event, a gate. */
+  function aRelay(env: BusEnv, options: { readonly at?: number } = {}): string {
+    const { at = T0 } = options;
+    const cursor = env.connection
+      .prepare<[string, string, string, string, number, number]>(
+        "INSERT INTO event (event_id, event_type, subject_kind, subject_id, run_id," +
+          " producer, dedup_key, occurred_at_ms, ingested_at_ms)" +
+          " VALUES (?, 'worker_escalation_raised', 'run', ?, ?, 'worker', ?, ?, ?)",
+      )
+      .run("evt/gate-1", RUN_ID, RUN_ID, "dk/evt/gate-1", at, at);
+    openGate(env.connection, {
+      gateId: "gate-1",
+      gateType: "worker_escalation",
+      subjectKind: "run",
+      subjectId: RUN_ID,
+      rationale: "the worker cannot decide whether to force-push",
+      originEventSeq: Number(cursor.lastInsertRowid),
+      createdAtMs: at,
+      actorKind: "worker",
+      actorId: "worker-7",
+      options: ["force-push", "abandon"],
+      runId: RUN_ID,
+    });
+    return enqueueRelay(env.connection, {
+      gateId: "gate-1",
+      toStage: "presented",
+      recipient: RECIPIENT,
+      payload: '{"question":"force-push?"}',
+      messageId: "relay-1",
+      enqueuedAtMs: at,
+    });
+  }
+
+  /** One row's `writer_epoch`, which is the whole subject of this block. */
+  function writerEpoch(env: BusEnv, messageId: string): number | null {
+    const row = env.connection
+      .prepare("SELECT writer_epoch FROM outbox WHERE message_id = ?")
+      .get(messageId) as { writer_epoch: number | null } | undefined;
+    if (row === undefined) {
+      throw new Error(`no outbox row ${messageId}`);
+    }
+    return row.writer_epoch;
+  }
+
+  test("a gate's relay is delivered by an ordinary poll, with no hand-run recovery", () => {
+    // The acceptance case for Issue #102, driven end to end on the schema the
+    // lap runs on: a live delivery lease at epoch 1, a relay appended by the
+    // gate under no lease at all, and one `poll` with nothing else in front of
+    // it. Before the adoption line in `MessageBus.poll` this failed at
+    // `_COUNT_ATTEMPT`, whose `writer_epoch = :fence_epoch` conjunct matches no
+    // row when the row's epoch is null -- StaleWriterRefused, on a poll whose
+    // lease was perfectly live, forever. `Outbox.recover` would have fixed it,
+    // and nothing calls `Outbox.recover`.
+    const env = busEnv();
+    const messageId = aRelay(env);
+
+    // The precondition, asserted rather than assumed: the producer really did
+    // append an unowned row. Without this line the case would still pass on a
+    // day `enqueueRelay` started stamping an epoch, and would then be pinning
+    // nothing at all.
+    expect(writerEpoch(env, messageId), "a gate holds no delivery lease to stamp").toBeNull();
+
+    const envelopes = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+
+    expect(envelopes.map((e) => e.messageId)).toEqual([messageId]);
+    expect(envelopes[0]?.payload).toBe('{"question":"force-push?"}');
+    expect(envelopes[0]?.retryCount).toBe(1);
+    // The destination's own ledger, not the outbox's opinion of itself: the
+    // effect is what the human on the other end of the gate actually receives.
+    expect(env.effectCount(`gate/gate-1/presented`)).toBe(1);
+    expect(env.outboxStatus(messageId)).toBe("delivered");
+    expect(writerEpoch(env, messageId), "the delivery worker now owns the row").toBe(EPOCH);
+    // Nothing was refused. A green delivery that also recorded a refusal would
+    // mean the adoption raced its own attempt.
+    expect(env.refusedActionCount()).toBe(0);
+  });
+
+  test("an event fanned out to a delivery consumer is delivered the same way", () => {
+    // The second producer, and the reason the fix belongs in `poll` rather than
+    // in `enqueueRelay`: the event spine's fan-out inserts its outbox rows
+    // directly too, for the same reason (a CI watcher appending `pr_merged`
+    // holds no delivery lease), so a fix that taught one producer to stamp an
+    // epoch would have left this path exactly as broken.
+    const env = busEnv();
+    registerConsumer(env.connection, {
+      consumerId: "notify-consumer",
+      kind: "delivery",
+      leaseResource: "notify-consumer-lease",
+      registeredAtMs: T0,
+      registeredFromSeq: 0,
+    });
+    subscribe(env.connection, {
+      consumerId: "notify-consumer",
+      eventType: "gate_closed",
+      recipient: RECIPIENT,
+      addedAtMs: T0,
+    });
+    appendEvent(env.connection, {
+      eventId: "evt-closed",
+      eventType: "gate_closed",
+      subjectKind: "run",
+      subjectId: RUN_ID,
+      dedupKey: "dk/evt-closed",
+      producer: "dispatcher-core",
+      occurredAtMs: T0,
+      ingestedAtMs: T0,
+      runId: RUN_ID,
+      payload: '{"outcome":"answered"}',
+    });
+    const messageId = "event/evt-closed/notify-consumer";
+    expect(writerEpoch(env, messageId), "the fan-out holds no delivery lease either").toBeNull();
+
+    const envelopes = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+
+    expect(envelopes.map((e) => e.messageId)).toEqual([messageId]);
+    expect(env.outboxStatus(messageId)).toBe("delivered");
+    expect(writerEpoch(env, messageId)).toBe(EPOCH);
+    expect(env.refusedActionCount()).toBe(0);
+  });
+
+  test("an unowned row and an owned one both go out in one poll", () => {
+    // The blast radius, pinned. The adoption is one statement inside a loop
+    // that walks a batch, so the two failures worth ruling out are that it
+    // helps the row it adopts and breaks the batch around it, and that it
+    // re-stamps a healthy row it has no business touching.
+    //
+    // The relay is oldest, so `_DUE_QUERY`'s `ORDER BY enqueued_at_ms` puts the
+    // unowned row FIRST -- the position from which a throw would discard every
+    // envelope built after it (the array in `poll` is local and never
+    // returned). The assertion is one equality over the whole batch, so a poll
+    // that delivered only the healthy row fails as loudly as one that delivered
+    // neither.
+    const env = busEnv();
+    const relayId = aRelay(env);
+    send(env, { messageId: "task-1" });
+
+    const envelopes = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+
+    expect(envelopes.map((e) => e.messageId)).toEqual([relayId, "task-1"]);
+    expect(writerEpoch(env, relayId)).toBe(EPOCH);
+    expect(writerEpoch(env, "task-1"), "a healthy row keeps the epoch it had").toBe(EPOCH);
+    expect(env.refusedActionCount(), "no refusal survives a fully delivered batch").toBe(0);
+  });
+
+  test("a row addressed to another recipient is left unowned", () => {
+    // The authority boundary, and the reason `poll` does not simply call
+    // `Outbox.recover`. Recovery adopts every unowned row in the table; a poll
+    // speaks for one recipient. The second row here is due, unowned and
+    // untouched, and it must stay that way -- an endpoint that owned it could
+    // not deliver it (no handler serves that recipient here) and would have
+    // taken it out from under the endpoint that can.
+    const env = busEnv();
+    const relayId = aRelay(env);
+    env.connection
+      .prepare<[string, string, string, string, string, number]>(
+        "INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key," +
+          " status, retry_count, enqueued_at_ms)" +
+          " VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)",
+      )
+      .run("relay-other", RUN_ID, "someone-else", "{}", "dk/relay-other", T0);
+
+    env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+
+    expect(writerEpoch(env, relayId)).toBe(EPOCH);
+    expect(writerEpoch(env, "relay-other"), "a poll owns one recipient's rows").toBeNull();
+    expect(env.outboxStatus("relay-other")).toBe("pending");
+  });
+
+  test("a poll under a dead epoch adopts nothing and delivers nothing", () => {
+    // Anti-vacuity for the fence. Adoption goes through `_ADOPT`, whose lease
+    // predicate is a clause of the UPDATE rather than a check in front of it,
+    // so a poll whose epoch is not a live lease must change no row -- and the
+    // refusal must still be the loud one `attempt` records, not a silent skip
+    // dressed up as a successful adoption.
+    const env = busEnv();
+    const relayId = aRelay(env);
+
+    expectRefusal(
+      () => env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH + 1 }),
+      StaleWriterRefused,
+    );
+
+    expect(writerEpoch(env, relayId), "a dead epoch takes ownership of nothing").toBeNull();
+    expect(env.outboxStatus(relayId)).toBe("pending");
+    expect(env.effectCount("gate/gate-1/presented"), "and causes no effect").toBe(0);
+    expect(env.refusedActionCount(), "the refusal is durably recorded").toBe(1);
   });
 });

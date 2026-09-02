@@ -210,8 +210,10 @@ event spine unusable — `#64`'s whole point is that several producers write CI 
 | `run` (creation) | append | Secretary | — |
 | `session` binding phase | in-place, forward-only | **Supervisor** | session lease epoch |
 | `lease` | in-place (CAS) | the acquiring claimant | epoch monotonicity trigger |
-| `outbox.status` / `retry_count` | in-place, forward-only | **the delivery worker holding the outbox lease** | `writer_epoch` validated inside the write |
-| `outbox` (enqueue) | append | any producer | `message_id` primary key |
+| `outbox` (enqueue) | append | any producer | `message_id` primary key; `writer_epoch` nullable and left null |
+| `outbox` adopt / `retry_count` / `pending → delivered` | in-place, forward-only | **the delivery worker holding the outbox lease** | live outbox lease **and** `writer_epoch` matching it, inside the write |
+| `outbox` `delivered → acked` | in-place, forward-only | **the recipient-bound ack path** | set-once `acked_at_ms` trigger + a status predicate; deliberately unfenced |
+| `outbox` `pending`\|`delivered → cancelled` | in-place, forward-only | **the gate-closure transaction** | `gate_relay` membership + the forward-only trigger; no delivery fence |
 | `incident` | in-place | **Dispatcher Core** | core lease epoch |
 | `assessment` | append | Dispatcher AI | — |
 | `action` | in-place | **Secretary or a privileged runtime handler** (never the Dispatcher AI — `D-0004`, AC-6) | `writer_epoch` + one-effect-per-key index |
@@ -230,7 +232,7 @@ event spine unusable — `#64`'s whole point is that several producers write CI 
 | `ai_invocation` | append, then one usage fill-in | **the component that invokes the Dispatcher AI** (single by construction: the AI is on-demand and incident-triggered — `D-0003`) | `invocation_id` primary key |
 | `schema_migration` | append, immutable | the migrator | exclusive transaction |
 
-Two rows deserve a sentence each.
+Two rows deserve a sentence each, and the outbox's four deserve a paragraph.
 
 **`run.status` stays exclusively the Secretary's**, and §4.3 says which words it may write. `Q-0001`
 records that v1's 2026-07-20 review
@@ -240,6 +242,36 @@ Interlock. It is restated here. Concretely it means the CI watcher does **not** 
 of that event (§5) — makes the transition. The run-completion-on-merge path in v1
 (`tools/run_complete_on_merge.py`) collapsed those two roles, and the collapse is what let a
 repo-resolution mistake write a foreign PR's metadata onto a run row (§7.1).
+
+**The `outbox` row that used to be one row said something the table has never enforced.** It read:
+
+> | `outbox.status` / `retry_count` | in-place, forward-only | **the delivery worker holding the outbox
+> lease** | `writer_epoch` validated inside the write |
+
+It is recorded here rather than deleted, because the claim was not a typo and the reason it lost is
+the useful part. Taken literally it names one writer for every in-place move the table admits, and
+three of those moves are made by somebody else. Gate closure writes `pending`\|`delivered → cancelled`
+inside the closure transaction (§9.4), guarded by `gate_relay` membership and the forward-only
+trigger and holding no delivery lease at all — a human retiring a question must not have to wait for a
+delivery worker to be alive. The ack writes `delivered → acked` from the recipient-bound path, and it
+is unfenced on purpose: an ack is idempotent and a fence on it would turn a settlement that changed
+nothing into a refusal (`D-0053`). What is left for the delivery worker is real and is what the row
+was reaching for — the retry increment and `pending → delivered` — and the corrected rows say so
+without claiming the other two.
+
+**`writer_epoch` on `outbox` is current ownership of the delivery-side mutations, not the producer's
+provenance.** That is why enqueue's row now says the column is left null. A gate enqueueing a relay
+(§9.5) and the event spine's delivery fan-out (§5.2) both append without one, because neither
+producer holds a delivery lease and requiring one would mean a queue that stops accepting work
+whenever no delivery worker happens to be running — the opposite of what a durable outbox is for. The
+row is therefore born unowned and is **adopted** by the delivery worker immediately before it is
+attempted, one row at a time, after the recipient filter has said the worker is entitled to it.
+Without that adoption the delivery worker's own fence — which asks that the row be owned by the
+attempting epoch, not merely that the epoch be live — matches no row, and a gate's relay is refused
+forever by the one component that was supposed to deliver it. `D-0054` records the adoption, the
+alternatives rejected, and what would falsify the choice. The recovery criterion in §5.6 is unchanged
+by this: it forbids an unowned row *after recovery*, which is a statement about a postcondition and
+never was one about the instant of the insert.
 
 **`gate_transition` is appended through Dispatcher Core even when the actor is a human.** The actor
 is recorded (`actor_kind`, `actor_id`); the *writer* is Core, because the transition's admissibility
