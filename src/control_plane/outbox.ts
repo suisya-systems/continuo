@@ -301,6 +301,42 @@ export const UNOWNED_OUTBOX_QUERY = `
 `;
 
 /**
+ * {@link UNOWNED_OUTBOX_QUERY}'s predicate asked about **one** row.
+ *
+ * Written as its own constant rather than reached by filtering the sweep's
+ * result in TypeScript, and the difference is the whole point of
+ * {@link Outbox.adoptIfUnowned}: the sweep enumerates the entire backlog,
+ * across every recipient, which is exactly the cost and exactly the
+ * ownership over-reach that a per-message adoption exists to avoid. Filtering
+ * its rows down to one would pay the scan anyway and only hide it.
+ *
+ * The `WHERE` is `UNOWNED_OUTBOX_QUERY`'s with `message_id = :message_id`
+ * added and the `ORDER BY` dropped -- one row cannot be out of order. The
+ * `status IN ('pending', 'delivered')` and the null-or-dead-lease
+ * disjunction are reproduced character for character, deliberately: the two
+ * queries answer the same question ("is this row unowned?") and a
+ * paraphrase that drifted would let `adoptIfUnowned` and the recovery
+ * criterion disagree about the same row, which is the one disagreement
+ * neither of them could report.
+ *
+ * The `message_id` equality makes this a primary-key lookup, so the partial
+ * index the sweep is spelled to keep is irrelevant here; the positive
+ * spelling is retained for the character-identity above, not for a plan.
+ */
+const _UNOWNED_ONE_QUERY = `
+    SELECT message_id
+      FROM outbox
+     WHERE message_id = :message_id
+       AND status IN ('pending', 'delivered')
+       AND (writer_epoch IS NULL
+            OR NOT EXISTS (SELECT 1
+                             FROM lease
+                            WHERE lease.resource      = :resource
+                              AND lease.epoch         = outbox.writer_epoch
+                              AND lease.expires_at_ms > :now_ms))
+`;
+
+/**
  * What {@link Outbox.due} reads. Unfinished means `'pending'` or
  * `'delivered'`: a delivered message whose ack never arrived is exactly the
  * resend case, so it stays due.
@@ -1194,10 +1230,33 @@ export class Outbox {
   /**
    * Write one pending outbox row.
    *
-   * The row is written under *epoch* so that it has an owner from the
-   * instant it exists: a row enqueued with no `writer_epoch` would satisfy
-   * {@link UNOWNED_OUTBOX_QUERY} the moment it was committed, which is the
-   * state the recovery criterion forbids.
+   * The row is written under *epoch*, so a row enqueued **through this
+   * method** has an owner from the instant it exists.
+   *
+   * That is a property of this path, not of the table. It used to be stated
+   * as one -- "a row enqueued with no `writer_epoch` would satisfy {@link
+   * UNOWNED_OUTBOX_QUERY} the moment it was committed, which is the state
+   * the recovery criterion forbids" -- and the table has never held it.
+   * `enqueueRelay` in `src/control_plane/gates.ts` and the delivery fan-out
+   * in `src/control_plane/events.ts` both `INSERT INTO outbox` with no
+   * `writer_epoch` at all, and they are right to: `writer_epoch` on this
+   * table is the *current owner of the delivery-side mutations*, not the
+   * producer's provenance, and a gate asking a question has no delivery
+   * lease to stamp. The column is nullable in `0001_initial.sql` precisely
+   * so that it can be, and D-0054 records why the producer must not be made
+   * to hold one -- a queue that only accepts work while a delivery worker is
+   * live is a queue that does not outlive its worker.
+   *
+   * So an unowned row is not a corrupt row; it is a row that has not been
+   * adopted yet, and {@link adoptIfUnowned} is where a delivery worker takes
+   * it. What the recovery criterion forbids is an unowned row *after
+   * recovery*, which is a claim about {@link recover}'s postcondition and
+   * not about the instant of the insert.
+   *
+   * This method keeps stamping because its callers are delivery workers that
+   * already hold the lease -- `MessageBus.send` is the sender-side convenience
+   * on the same endpoint that polls -- and a stamp they can make honestly is
+   * one fewer adoption later.
    *
    * The insert is **fenced**, like every other write here. Enqueueing looks
    * like the one harmless statement -- it only adds a row -- but a stale
@@ -1267,12 +1326,19 @@ export class Outbox {
   }
 
   /**
-   * Everything enqueued and not yet acked, oldest first.
+   * Everything `pending` or `delivered`, oldest first.
    *
    * A *delivered* message with no ack is due again: that is the resend, and
    * it is the correct answer to a lost ack. No interval, backoff or
    * visibility timeout is applied -- see this module's docstring on
    * `Q-0003`.
+   *
+   * The first line used to read "everything enqueued and not yet acked",
+   * which was the whole of the predicate while an ack was the only way out.
+   * Migration `0003` gave the row a second exit: {@link _DUE_QUERY} names
+   * `status IN ('pending', 'delivered')` and so excludes a `cancelled` row
+   * as well, and a docstring that goes on promising every unacked row is a
+   * reader's reason to look for the missing relay in the wrong place.
    */
   due(nowMs: number): readonly OutboxMessage[] {
     return Object.freeze(this._all(_DUE_QUERY, { now_ms: nowMs }).map(OutboxMessage.fromRow));
@@ -1745,6 +1811,82 @@ export class Outbox {
   }
 
   // -- recovery --------------------------------------------------------------
+
+  /**
+   * Take ownership of **one** unowned row, so that it can be attempted.
+   *
+   * Returns whether this call was the one that adopted it. `false` is an
+   * ordinary answer and never an error: the row already had a live owner
+   * (including this epoch, on the second poll of the same message), or a gate
+   * cancelled it between the caller's read and this write, or the caller's own
+   * lease is not live.
+   *
+   * **Why a delivery worker needs this at all.** `writer_epoch` on `outbox` is
+   * the current owner of the *delivery-side* mutations -- the retry increment,
+   * the `pending -> delivered` transition -- and not a record of who appended
+   * the row. Producers append without one: `enqueueRelay`
+   * (`src/control_plane/gates.ts`) and the delivery fan-out
+   * (`src/control_plane/events.ts`) both insert with `writer_epoch` left null,
+   * because a gate asking a human a question holds no delivery lease and must
+   * not have to. So a relay is born unowned, and {@link _COUNT_ATTEMPT}'s
+   * `writer_epoch = :fence_epoch` conjunct -- which asks that the row be owned
+   * by the attempting epoch, not merely that some lease be live -- matches no
+   * row and refuses the attempt as {@link StaleWriterRefused}. Adoption is the
+   * transition that closes that gap, and D-0054 records it.
+   *
+   * **Why it is one row and not a sweep.** {@link recover} adopts every
+   * unowned row in the table, for every recipient. That is right for recovery,
+   * whose postcondition is about the whole table, and wrong for a poll, whose
+   * authority is one recipient's queue: a poll that ran recovery would take
+   * ownership of rows it is not entitled to deliver and would walk the entire
+   * backlog on every pass. This method takes the row the caller has already
+   * decided it is about to attempt, and nothing else.
+   *
+   * **The read and the write are one transaction.** Separately they are
+   * check-then-write, and the window between them is the one in which another
+   * live worker adopts the row and this call then takes it away from them --
+   * `_ADOPT` carries no ownership predicate (deliberately; see its own note),
+   * so nothing downstream would catch the theft. `withImmediate` is joined
+   * rather than nested when a caller already holds a transaction, the same way
+   * {@link _fenced} joins one.
+   *
+   * The write is {@link _ADOPT}, unchanged and still fenced, so an adopter
+   * whose own lease has expired changes no row: the fence is a clause of the
+   * `UPDATE`, not a check in front of it. Nothing is recorded when the answer
+   * is `false` -- an attempt that should be refused is refused loudly by
+   * {@link attempt}'s own fenced statements a moment later, with the durable
+   * refusal row those produce, and a second refusal recorded here would be an
+   * audit entry for a delivery nobody had yet tried to make.
+   */
+  adoptIfUnowned(
+    messageId: string,
+    options: { readonly nowMs: number; readonly epoch: number },
+  ): boolean {
+    const { nowMs, epoch } = options;
+    const adopt = (): boolean => {
+      const candidate = this._one(_UNOWNED_ONE_QUERY, {
+        message_id: messageId,
+        resource: this._resource,
+        now_ms: nowMs,
+      });
+      if (candidate === undefined) {
+        return false;
+      }
+      const info = this._connection.prepare(String.prototype.valueOf.call(_ADOPT) as string).run({
+        message_id: messageId,
+        ...this._fenceParams({ epoch, nowMs }),
+      });
+      return info.changes === 1;
+    };
+    if (this._connection.inTransaction) {
+      return adopt();
+    }
+    let adopted = false;
+    withImmediate(this._connection, () => {
+      adopted = adopt();
+    });
+    return adopted;
+  }
 
   /**
    * Give every unfinished row a live owner, or report that it has none.

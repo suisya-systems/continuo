@@ -309,7 +309,59 @@ export class MessageBus {
       // *destination's* fencing token (StaleTokenRefused), the only party still
       // running. Re-sampling the clock inside the attempt is the outbox's
       // business, not this facade's.
+      //
+      // The adoption below shares this instant rather than sampling a second
+      // one. Two reads of a live clock straddling a lease expiry would let a
+      // poll adopt a row under an epoch that its own attempt then finds dead,
+      // which is a durable ownership write made on behalf of a writer that no
+      // longer exists.
       const attemptNow = clock === undefined ? nowMs : clock();
+      // Take ownership of this one row, if it has none, immediately before
+      // attempting it.
+      //
+      // A relay enqueued by a gate (`enqueueRelay`, src/control_plane/
+      // gates.ts) and an event fanned out to a delivery consumer
+      // (src/control_plane/events.ts) are both written with `writer_epoch`
+      // null: the producer holds no delivery lease, and requiring one would
+      // mean a queue that stops accepting work whenever no delivery worker
+      // happens to be alive. `Outbox.attempt`'s first fenced statement asks
+      // that the row be OWNED by the attempting epoch -- not merely that the
+      // epoch be live -- so without this line every such row is refused as
+      // StaleWriterRefused, forever, and the message the human gate is waiting
+      // on is never delivered. That was the gap; D-0054 records it.
+      //
+      // Three things about where this line is, all of them load-bearing:
+      //
+      // - It is INSIDE the loop, after the recipient test. A poll speaks for
+      //   one recipient (the filter three lines up is that authority), so it
+      //   may take ownership of that recipient's row and no other's. The
+      //   available whole-table verb, `Outbox.recover`, adopts every unowned
+      //   row for every recipient; calling it here would have this endpoint
+      //   own rows it cannot deliver and would walk the entire backlog on
+      //   every poll.
+      // - It is AFTER the terminal re-read. A row cancelled since the due()
+      //   snapshot is finished, and handing a finished row a live owner is the
+      //   adopt-forever failure `Outbox.recover`'s own note describes.
+      // - It is BEFORE `attempt`, and it is the only write this loop makes
+      //   that `Outbox.attempt` does not. That is a real divergence from the
+      //   source's poll, which writes nothing of its own, and it is recorded
+      //   in `parity/messagebus.bus.ledger.json` rather than left to be
+      //   noticed.
+      //
+      // What is due is still read from SQLite and nowhere else. Adoption is
+      // not a source of due-ness: it discovers nothing, adds nothing to the
+      // batch and reorders nothing -- _DUE_QUERY alone decides which rows this
+      // loop sees and in what order. It changes only whether a row SQLite
+      // already returned can now be advanced by this epoch.
+      //
+      // `false` is unremarkable and is not branched on: the row already had a
+      // live owner (this epoch, on the second poll of the same message), or a
+      // gate cancelled it in the last instant, or this poll's own lease is
+      // dead. The first two make the attempt below proceed or skip on their
+      // own merits, and the third must stay loud -- `attempt` refuses it with
+      // a durable refusal row, which is the behaviour a stale poll had before
+      // this line existed and still has.
+      this._outbox.adoptIfUnowned(message.messageId, { nowMs: attemptNow, epoch });
       let outcome: AttemptOutcome;
       try {
         outcome = this._outbox.attempt(message.messageId, { nowMs: attemptNow, epoch });

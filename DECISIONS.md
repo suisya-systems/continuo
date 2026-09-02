@@ -9998,3 +9998,150 @@ change; record the gap with its cost and take it head-on in a following task.** 
 not an oversight that nobody noticed -- it was found, reproduced, investigated, escalated and left
 open deliberately, and what this entry adds is the cost of leaving it open, written down where the
 next task will read it.
+
+## D-0054 -- `writer_epoch` on `outbox` is delivery-side ownership, not producer provenance: the delivery worker adopts one row immediately before it attempts it
+
+**Context.** `D-0053` shipped the endpoint onto the production schema and, in the same entry, recorded
+that the human gate was still unreachable: a relay `enqueueRelay` appends carries no `writer_epoch`,
+`_COUNT_ATTEMPT` asks that the attempting epoch *own* the row rather than merely be live, and so the
+first relay a gate ever enqueues is refused as `StaleWriterRefused` by the one component that exists
+to deliver it -- forever, at the head of `due()`, poisoning every subsequent poll for that recipient.
+That entry set out four candidates, ruled on none of them, and said which shape the answer would have
+to take: *"A narrowed form -- adopt only the unowned rows for this recipient that this poll is about to
+attempt -- is the least-bad single change that would make the gate reachable on this lap, and it would
+still have to be taken as an explicit parity divergence with its own D- entry, never slipped in."*
+This is that entry.
+
+`D-0053` also identified what has to be settled *before* the code: **which half of the writer table is
+the rule.** `docs/production-schema.md` §4.2 carried two outbox rows that cannot both be true --
+`outbox` (enqueue) is "any producer", while `outbox.status` / `retry_count` is "the delivery worker
+holding the outbox lease". The second is false as written and was false before this task: gate closure
+moves `pending`\|`delivered → cancelled` from inside the closure transaction with no delivery fence
+(§9.4), and the ack moves `delivered → acked` from the recipient-bound path deliberately unfenced
+(`D-0053` rule 6). So the contradiction is not between the two rows; it is inside the second one,
+which names one writer for four transitions that have three writers between them.
+
+**Decision.**
+
+*1. The column's meaning is fixed, and it is the one the enqueue row implies.* `writer_epoch` on
+`outbox` is **the current owner of the delivery-side mutations** -- the retry increment and
+`pending → delivered` -- and **not** a record of which producer appended the row. A producer appends
+with the column null. It is nullable in `0001_initial.sql` precisely so that it can be, and the
+enqueue row's "any producer" is therefore the rule: a queue that only accepts work while a delivery
+worker happens to be alive is a queue that does not outlive its worker, which inverts what an outbox
+is for.
+
+*2. The writer table is corrected by splitting the losing row, not by deleting it.*
+`docs/production-schema.md` §4.2 now carries four outbox rows -- enqueue (any producer, `message_id`
+PK, `writer_epoch` left null); adopt / `retry_count` / `pending → delivered` (delivery worker, live
+outbox lease **and** matching `writer_epoch`, inside the write); `delivered → acked` (the
+recipient-bound ack path, set-once trigger and status predicate, unfenced); and
+`pending`\|`delivered → cancelled` (the gate-closure transaction, `gate_relay` membership and the
+forward-only trigger). The old row is quoted in the prose beneath the table together with the reason
+it lost, because the claim was not a typo: it was reaching for something real -- the two transitions
+that *are* the delivery worker's -- and a deletion would leave the next reader to rediscover both the
+error and the part of it that was right.
+
+*3. `Outbox.adoptIfUnowned(messageId, {nowMs, epoch})` adopts exactly one row.* Its candidate
+predicate is `UNOWNED_OUTBOX_QUERY`'s, character for character, with `message_id = :message_id` added:
+non-terminal, and either `writer_epoch IS NULL` or no live lease on the resource carries the row's
+epoch. The write is `_ADOPT`, unchanged and still fenced, so an adopter whose own lease is dead
+changes no row. The read and the write are **one transaction** (`withImmediate`, joined rather than
+nested when a caller already holds one): apart they are check-then-write, and `_ADOPT` carries no
+ownership predicate, so the window between them is one in which this call takes a row away from
+another live worker with nothing downstream to catch it. The method returns whether it adopted, and
+`false` is an ordinary answer -- the row already had a live owner (including this epoch, on the second
+poll of the same message), a gate cancelled it in the last instant, or the caller's lease is dead.
+Nothing is recorded on `false`: an attempt that deserves a refusal gets a loud one from `attempt`'s own
+fenced statements a moment later, and a refusal row written here would be an audit entry for a
+delivery nobody had yet tried to make.
+
+*4. `MessageBus.poll` calls it once per message, after the recipient filter and the terminal re-read,
+immediately before `attempt`.* All three positions are load-bearing. **After the recipient filter**,
+because a poll's authority is one recipient's queue: `Outbox.recover` adopts every unowned row for
+every recipient, and calling it here would have this endpoint own rows it cannot deliver and walk the
+whole backlog on every pass, making steady-state poll cost a function of outbox depth. **After the
+terminal re-read**, because handing a live owner to a finished row is the adopt-forever failure
+`Outbox.recover`'s own note describes. **Before `attempt`**, because that is the statement the
+ownership is for. Adoption shares the attempt's instant rather than sampling the clock a second time:
+two reads straddling an expiry would let a poll adopt under an epoch its own attempt then finds dead.
+
+*5. This is a target-only divergence from the source facade, and it is recorded as one.* `poll`'s
+docstring states *"What is due is read from SQLite and nowhere else"*, and that sentence survives
+intact: adoption is **not** a source of due-ness. It discovers nothing, adds nothing to the batch and
+reorders nothing -- `_DUE_QUERY` alone decides which rows the loop sees and in what order -- it changes
+only whether a row SQLite already returned can be advanced by this epoch. What it *does* add is a
+write the source's `poll` does not make, on a ported facade whose ledger is complete at 43/43. **No
+existing parity entry or disposition changes**; the five new cases are declared in
+`parity/messagebus.bus.ledger.json` as `target_only_tests`, which is the mechanism this repository
+already uses for behaviour the source could not have carried.
+
+*6. Nothing else moves.* `lease.ts`'s predicate grammar is untouched (`_COUNT_ATTEMPT`'s ownership
+conjunct is the property, not the obstacle). `enqueueRelay` and the event fan-out are untouched, and
+keep appending without an epoch. `Outbox.enqueue` keeps stamping, because its callers are delivery
+workers that already hold the lease; only its docstring's claim that *every* outbox row is owned from
+birth is corrected, since the table never held it. No lease is acquired or renewed anywhere on this
+path, no lease row is read to mint a token, and no recovery loop or renewal timer is added to the
+endpoint -- those are step 4 and step 8, and `D-0053` rule 4's warning about deciding them by accident
+applies to this entry as much as to that one.
+
+**Consequences.**
+
+- **The gate is reachable.** A relay a gate enqueues is delivered by an ordinary poll with nothing in
+  front of it, and `test/messagebus/messagebus.test.ts` drives exactly that on the production schema:
+  live lease at epoch 1, `enqueueRelay`, an asserted `writer_epoch IS NULL` precondition, one `poll`,
+  then envelope, destination effect, `retry_count = 1`, `status = 'delivered'`, `writer_epoch = 1`, and
+  no refusal row. Four of the five new cases fail on `origin/main`.
+- **Both producers are fixed by one change.** The event spine's delivery fan-out appends unowned rows
+  for the same reason `enqueueRelay` does, and has its own case. This is the strongest argument
+  against candidate (c): a fix that taught one producer to stamp an epoch would have left the other
+  exactly as broken.
+- **The blast radius is pinned, not assumed.** One poll over an oldest unowned relay and a younger
+  healthy row delivers **both** -- asserted as one equality over the batch, because the unowned row
+  sits where a throw would discard every envelope built behind it -- and leaves no refusal row, and the
+  healthy row keeps the epoch it already had.
+- **`UNOWNED_OUTBOX_QUERY` is satisfied between polls, not at birth**, which is the row `D-0053`'s
+  table gives candidate (b), and the qualification that table attaches to (b) and (c) alike still
+  holds: ownership lasts while the adopting lease stays live, and keeping it live is step 4.
+- **The fault-injection belt's invariant is unchanged in force and in meaning.** It forbids an unowned
+  row *after recovery* -- a postcondition of `Outbox.recover` -- and a freshly appended relay awaiting
+  its first poll was never what it was about. What was wrong was the enqueue docstring reading that
+  postcondition as a claim about the instant of the insert.
+- **The loud failure `D-0053` deliberately preserved is preserved.** A poll under a dead epoch adopts
+  nothing, delivers nothing, causes no effect and records exactly one refusal -- the behaviour a stale
+  poll had before this line existed. That case is green on `origin/main` too, on purpose: it pins that
+  the fix did not buy delivery by weakening the fence.
+
+**Falsifier.** Three observations would show this entry wrong.
+
+*More than one delivery resource, or a `outbox` partitioned by recipient or worker.* Adoption here
+takes ownership on behalf of *the* delivery lease, singular, exactly as `D-0053` rule 4 assumes. The
+per-message narrowing means a second deliverer would not have its rows stolen wholesale, which is why
+this is safer than a sweep -- but the resource is still global, and the moment `outbox` grows a scope
+column or a second resource is admitted, "the row's epoch is live on this resource" stops being the
+same question as "somebody is entitled to deliver this row", and adoption has to be re-derived against
+whatever the partition is.
+
+*Ownership being required before the poll rather than at it.* The whole design rests on ownership
+being needed only by `attempt`, so acquiring it one statement earlier is sufficient. If anything comes
+to depend on a due row having a live owner *while it waits* -- a dashboard reading `writer_epoch` as
+"who will deliver this", an alert on `Outbox.unowned` firing on healthy backlog, a scheduler assigning
+rows to workers in advance -- then adoption at attempt time is too late by construction, and the answer
+moves toward candidate (c) with the step-4 question that comes with it.
+
+*A second writer of `writer_epoch` on the delivery path.* Rule 1's meaning holds only while the
+delivery-side mutations have one owner at a time. A component that stamps the column for any other
+purpose -- attribution, routing, an audit of who appended -- makes the column mean two things, and the
+first symptom would be an adoption that is correct by rule 1 overwriting something a second reader
+depended on. `_ADOPT` carrying no ownership predicate is what makes that overwrite silent.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-102-adoption-gap`, Issue `#102`; the candidate set, the four
+axes and the instruction that the narrowed (b) be taken as an explicit parity divergence are
+`D-0053`'s, under **"The four candidates for the adoption gap, and what each costs"**. Candidates (a),
+(c) and (d) are rejected there and rejected again here on the same grounds -- (a) does not fix the
+mid-life enqueue that is the only enqueue the lap actually makes, (c) decides step 4 by accident and
+makes opening a human gate fail when the delivery endpoint is down, (d) deletes the ownership half of
+`_COUNT_ATTEMPT`'s fence and needs a disjunction node in `lease.ts`'s ported grammar. Decision id from
+the `D-0019`..`D-0099` shared band, next after `D-0053`.
