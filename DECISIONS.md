@@ -151,6 +151,7 @@ spaces distinct.
 | D-0054 | `writer_epoch` on `outbox` is delivery-side ownership, not producer provenance: the delivery worker adopts one row immediately before it attempts it | accepted |
 | D-0055 | The lap's execution intent is fixed at admission as `LapRunIntent`, written with the run in one transaction, and carries no authority | accepted |
 | D-0056 | The report ingress reads the transcript: the provider gains a terminal-report read API, and the escalation event and its gate are written in one transaction | accepted |
+| D-0217 | `FencedSpawner` splits into `prepare` and `execute`, and the single-spawn-path obligation is restated over both with a provenance check | accepted |
 
 ---
 
@@ -10531,3 +10532,206 @@ and it is there for that.
 section 7 step 9 (the order and what it unblocks). Decision id from the `D-0019`..`D-0099` shared
 band; `D-0055` was taken concurrently by the delegation-record lane, so this entry takes the next
 free id after it rather than after `D-0054`.
+
+---
+
+## D-0217 -- `FencedSpawner` splits into `prepare` and `execute`, and the single-spawn-path obligation is restated over both with a provenance check
+
+**Context.** `D-0205` re-expressed interlock#71's canary acceptance for an ESM module graph as two
+obligations: the production spawn path calls the precondition directly, and a target-only test
+asserts the injected spawner's call count is exactly zero on a broken configuration. In the port,
+that was carried by shape: `FencedSpawner.spawn` called a `#private` `#admit` and only then the
+spawner, and `#admit` being private meant no caller could reach a `SpawnPlan` any other way.
+
+Step 7 of the minimal operating loop breaks that shape. It materialises the fence and does **not**
+spawn -- the spawn is step 8. `#admit` does everything step 7 needs: render, battery, the two-file
+all-or-nothing publication with its rollback, and the `spawn-admitted` ledger append. Reaching it
+required one of two things, and both are worse than a split:
+
+- **Call `renderFence` and `writeFence` directly.** That skips the battery, the settings file, the
+  rollback and the admission record -- which is to say it skips everything that makes published bytes
+  an *admitted* fence, while producing files indistinguishable from an admitted one's.
+- **Call `spawn` with a no-op spawner.** `spawn`'s contract is that a child was started. It would be
+  saying so falsely, and the outcome would carry a `result` from a callable that did nothing.
+
+`D-0205`'s falsifier anticipates exactly this: "the production spawn path gaining a **second entry
+point that does not route through the precondition** -- at that moment the module-graph dependency
+stops being equivalent to the obligation, and the assertion has to be restated over both entry points
+(or the second one removed)."
+
+**Decision.**
+
+1. **`#admit` becomes the public `prepare(role, ctx)`, unchanged in behaviour.** It renders, proves,
+   publishes and records, and returns a refusing `SpawnOutcome` rather than throwing, exactly as
+   before. It is now a production entry point, because step 7 calls it and nothing else.
+
+2. **`execute(outcome, spawner)` is the only call site of the injected spawner**, and `spawn` becomes
+   the composition `prepare` then `execute` -- so interlock's ported cases drive the same code the lap
+   drives, not a parallel path kept in step by hand.
+
+3. **`execute` asks two questions, of the two things that can answer them.** This is the rule that
+   was got wrong three times before it was got right, and the shape of the mistake is worth more
+   than the rule.
+
+   `prepare` records each plan it admits in a per-instance `WeakSet`, before the ledger append
+   rather than after, so no ordering exists in which a durable `spawn-admitted` names a plan
+   `execute` would refuse. That record answers exactly two questions, and they are the two an
+   in-memory record **can** answer: *did this spawner issue this plan* (provenance), and *has it
+   started a child already* (single use, by removing the plan before calling the spawner).
+
+   It does **not** answer whether the artifacts on disk are still the plan's, and earlier revisions
+   of this entry tried to make it. Three reviews found three failures: the record answered "was this
+   issued" rather than "may this start now"; keyed by plan identity it could not see two plans
+   competing for one fence path; keyed by path string it treated two spellings of one file as two
+   files. Those were not three bugs. They were **one approximation failing at rising resolution -- a
+   name held in memory being asked a question about bytes on disk.** Sharpening the key (a canonical
+   path, a `(device, inode)` pair) moves the failure without removing it, and no key of any kind can
+   see an overwrite from outside this process.
+
+   So `execute` asks the disk, and compares what it finds against a **snapshot taken at admission**
+   rather than against the plan the caller is holding. `Fence` freezes itself but stores `settings`
+   by reference, so `plan.fence.settings` is mutable after `prepare` returns: a caller could delete
+   the `hooks` block from it, rewrite both published files from the mutated object, and a comparison
+   against `plan.fence` would find them in perfect agreement and start an unfenced child. The
+   snapshot is taken before the plan is ever exposed, so the expectation is not reachable from the
+   value the caller holds.
+
+   The comparison is canonical JSON of `fenceToJson` -- the same projection `writeFence` publishes --
+   and not `diffFences`, which was used first and is not enough: it reports added and removed rule
+   *ids*, a settings change and a permission-mode change, so a rule whose id stayed the same while
+   its spec was rewritten to allow more reads as identical. Missing, unreadable, or different is a refusal in every branch. **Both artifacts, because
+   the fence is what the deny hook reads but the settings file is what carries the hooks block to
+   the CLI** -- a child launched with a settings file that lost its `hooks` entry runs with no deny
+   hook at all, and its fence sits on disk pristine and unread.
+
+   Two consequences worth stating because they change earlier behaviour. An **identical**
+   re-admission no longer invalidates the earlier plan, and refusing it was wrong: two `prepare`
+   calls for one role and one context publish the same bytes, so the child would run under exactly
+   the fence its plan describes. And an overwrite **from outside this process** is now caught, which
+   no version of the in-memory record could do.
+
+   This is the load-bearing rule and it is stated as a pair: **a public `execute` opens a second door
+   to the child, and the provenance check is what closes it.** `SpawnPlan`'s constructor is public and
+   stays public -- interlock's cases construct one, and narrowing it would turn ported cases into
+   target-only ones under `D-0101`'s reasoning -- so having a plan is not evidence of admission. A
+   plan is admissible because `prepare` issued it. That is the same sentence `spawn` used to make true
+   by keeping `#admit` private, restated as data now that the two halves can be called apart.
+
+4. **`D-0205`'s zero-call canary is restated over both stages**, in a target-only file of its own
+   (`test/fencing/spawn-two-stage.test.ts`) rather than inside the ported suite, so no parity ledger's
+   totals move: every brokenness class refuses in `prepare` and yields no plan; a hand-built plan and a
+   plan admitted by a *different* spawner are both refused by `execute` with the spawner never
+   invoked; and each refusal is paired with its accepted input so the file cannot pass vacuously.
+
+5. **`D-0205` is not superseded.** Its two obligations remain true as written -- the production path
+   calls the precondition directly, and the canary asserts a zero call count on a broken
+   configuration. What changes is the number of stages they are stated over, which is what its own
+   falsifier instructs.
+
+**Consequences.**
+
+- **The admission record is written at step 7, not step 8.** `spawn-admitted` means the fence was
+  rendered, proved and published, which is what happened; it has never meant a child started. The
+  event named for admission stays a record of admission.
+- **A plan does not survive its process.** The `WeakSet` is per-instance and not persisted, which is
+  correct rather than a limitation: the fence on disk can have been replaced since, and re-admitting
+  is how a caller finds that out.
+- **The window is narrowed, not closed, and no in-process check can close it.** The child reads the
+  fence when it runs a tool, which is after `execute` has returned -- so a replacement landing in
+  that gap is still applied. What the verification rules out is the far larger window from admission
+  to spawn, during which a materialisation step may do arbitrary other work. Anyone reading this
+  entry as "the fence cannot change under the child" is reading it wrong.
+- **The cost is one file read per spawn**, of a file this process wrote moments earlier, outside the
+  ledger transaction. That is what the three earlier attempts were trying to avoid paying, and it
+  was not worth avoiding.
+- **One admission, one child.** `execute` consumes the plan from the record before calling the
+  spawner, so a second `execute` on the same outcome is refused by rule 3's own check. Two children
+  under one `spawn-admitted` line would make the durable record an undercount of what started, which
+  is the direction this module never goes -- and a retry loop reaches it without doing anything
+  exotic. Consumed *before* the callable rather than after, so a spawner that throws also consumes
+  it: a failed start is still a start attempted under this admission, and the retry is a fresh
+  `prepare` -- which re-renders, re-proves and re-publishes, and is how a caller finds out the fence
+  moved underneath it.
+- **Step 8 cannot smuggle a fence past the precondition.** The composition root receives a plan it did
+  not build, from a spawner it must hold to execute it.
+- **The materialisation result is minted, not merely returned.** `MaterializedWorkspace`'s whole
+  claim is that its `workspace` names a checkout git made and artifacts this step published -- that
+  is the evidence half of `M2`, the thing a step-8 lifecycle observer keys its `create-workspace`
+  veto on. A class anyone can construct for an arbitrary directory is evidence of nothing, and an
+  observer keyed on it would be admitting bare directories while believing it had ruled them out.
+  So the constructor demands a module-private token, the way `src/session/provider.ts`'s `ENUM_MINT`
+  does: a TypeScript `private constructor` is erased at runtime, and the check has to be one the
+  runtime makes.
+- **A step that admits must hand back the admitting instance, and step 7 does.** This is the
+  consequence that is easy to get wrong, and it was got wrong first: `materializeWorkspace`
+  constructed a `FencedSpawner` locally, published through it and returned only the plan -- which
+  under rule 3 is a plan nobody can spawn, because any spawner step 8 built would refuse it. The
+  provenance check turns "who admitted this" into a real question, so every caller that admits on
+  another's behalf now has to answer it. `MaterializedWorkspace` carries the spawner.
+- **Handing the spawner back is not the same as taking one in, and the difference cost three review
+  rounds to see.** The first repair let the request supply a `FencedSpawner`, so a composition root
+  could own the object. That gave step 7 an object whose *write paths* it did not control --
+  `settingsName` and `ledger.path` are both public -- while leaving it responsible for the invariant
+  that no artifact lands inside the worktree. Successive reviews found an absolute `settingsName`, a
+  traversing one, a `settingsName` aliasing `fence.json`, and a ledger inside the checkout: not four
+  bugs but one design, enumerated. The request now takes a *path* for the one thing a caller has a
+  real reason to move, and the spawner is constructed here from paths this module derived and
+  checked. **The general form, worth keeping: a module that owns an invariant about where files go
+  cannot accept an object that decides where files go.**
+
+**Falsifier.** A child observed running under a fence different from the one `execute` verified --
+which would mean an in-process read-back is not enough, and the fence would have to be handed to the
+child directly rather than left on disk for it to read. Also falsified by a third way to reach the
+spawner callable, or by a `SpawnPlan` becoming acceptable to `execute` on any ground other than
+having been issued by that spawner and matching the artifacts on disk -- a serialised plan, a
+registry, a static factory. Also falsified by `prepare` ceasing to publish, which would make step 7's
+artifacts unadmitted again and put rule 1's "unchanged in behaviour" wrong.
+
+**Rejected alternative: keep `#admit` private and expose a separate `materializeFence` in
+`fencing/`.** A second function doing render-battery-publish-record is a second implementation of the
+precondition, and the failure mode `D-0205` names is precisely two implementations drifting while both
+stay green.
+
+**Rejected alternative: sharpen the in-memory key -- `(device, inode)` instead of the path string.**
+It closes the two-spellings residual and, because `writeFence` publishes by rename, a re-`stat` at
+`execute` would even catch an external overwrite. It was rejected because it is the same
+approximation one step further along: it still answers a question about the file's *content* with a
+fact about the file's *identity*, it depends on inode numbers a filesystem may not supply (Windows
+reports `0`), and it costs a `stat` -- at which point reading the file and comparing it is barely
+dearer and is the actual question.
+
+**Rejected alternative: make the fence ledger the authority -- an admission id written to the ledger
+and checked there.** It would survive process boundaries, which is the one thing the in-memory
+record cannot do. Rejected because it changes the ledger's role from *record* to *permission*, and
+`D-0206` explicitly accepts that the ledger takes no cross-process lock and that publish-then-record
+can interleave. Stacking a fail-closed precondition on a foundation whose looseness is a recorded
+decision makes the guarantee worse than the one it replaces, and it would require a scan of the
+JSONL on every spawn.
+
+**Rejected alternative: brand `SpawnPlan` so only `prepare` can construct one.** A private
+constructor or a module-private symbol would make provenance a type property rather than a runtime
+check. It was rejected because interlock's spawn cases construct a `SpawnPlan` directly, and
+`D-0101`'s rule is that a source case reaching a private name gets the name exposed rather than the
+case rewritten -- rewriting is what turns a ported case into a target-only one. The `WeakSet` gives
+the same guarantee without touching what the ported suite can build.
+
+**Rejected alternative: move the `spawn-admitted` append into `execute`.** It would make the ledger
+say "admitted" only when a child started, which sounds tidier and is wrong: a refusal is recorded at
+admission time, so recording the admission later would put the two halves of one decision at two
+different moments, and step 7 -- which admits and does not spawn -- would leave no durable record of
+having admitted anything at all.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-workspace-materialize`, on
+`docs/design/minimal-operating-loop.md` steps 7 and 8, and on `D-0205`'s own falsifier. Decision id
+from the `D-02xx` fencing and settings band, next after `D-0216`, checked against `origin/main` at
+`ac284a8`.
+
+**Landed ahead of its caller, deliberately.** Step 7's materialiser is what needs a `prepare` that
+does not spawn, and it is the reason this decision exists -- but the split, the provenance record
+and the read-back are `src/fencing/`'s own, they are testable without a workspace, and the record
+went through seven review rounds and one redesign on the way here. So it ships first and alone, and
+the materialiser follows against it. Nothing here imports the workspace layer; `prepare` and
+`execute` are equally usable by the composition root of step 8 and by `spawn`, which is still their
+composition and is what interlock's ported cases drive.

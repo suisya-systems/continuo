@@ -26,29 +26,39 @@
  *
  * Ported from interlock `src/claude_org_runtime/fencing/spawn.py` at `65f36c5`.
  *
- * ## How the negative shape is expressed in an ESM module graph (D-0205)
+ * ## How the negative shape is expressed in an ESM module graph (D-0205, D-0217)
  *
  * interlock#71's canary acceptance is not satisfied by a precondition that
  * exists; it asks for one that is WIRED into the production spawn path. In
  * Python that wiring is a property of the module -- `FencedSpawner.spawn` calls
  * `self._admit(...)` and nothing else reaches the spawner -- and it is written
  * down nowhere a test can read. D-0205 re-expresses it as two obligations, and
- * this file carries the half that is source code:
+ * this file carries the half that is source code.
  *
- * - {@link FencedSpawner.spawn} is the ONLY exported way to reach the injected
- *   spawner callable, and it calls the admission step directly rather than
- *   through a registry, a configuration key or an import-time side effect. The
- *   dependency is therefore visible in the import graph and survives being
- *   read.
- * - The admission step is a `#private` method. A caller cannot reach a
- *   {@link SpawnPlan} without going through it, and a later refactor that adds
- *   a second way to start a child cannot quietly bypass it -- there is no
- *   exported entry point to bypass it WITH.
+ * **The path is two stages, and D-0217 is why.** Step 7 of
+ * `docs/design/minimal-operating-loop.md` materialises the fence without
+ * spawning; step 8 spawns. So admission is {@link FencedSpawner.prepare}, the
+ * child is {@link FencedSpawner.execute}, and {@link FencedSpawner.spawn} is
+ * the composition of the two that interlock's cases still drive. What D-0205
+ * asks for holds over both:
  *
- * The other half is a target-only test that drives this entry point with a
+ * - {@link FencedSpawner.execute} is the ONLY place in this build that calls
+ *   the injected spawner callable, and it is unreachable except with a
+ *   {@link SpawnPlan}. The dependency stays visible in the import graph and
+ *   survives being read.
+ * - A plan is evidence of admission because {@link FencedSpawner.prepare}
+ *   issued it, not because it has the right type. `SpawnPlan`'s constructor is
+ *   public -- interlock's cases construct one -- so `execute` consults the
+ *   spawner's own record of what it admitted and refuses anything else. That
+ *   check is what keeps the split from being the "second entry point that does
+ *   not route through the precondition" D-0205's falsifier names: a public
+ *   `execute` opens the door, and the provenance check is what closes it.
+ *
+ * The other half is a target-only test that drives BOTH entry points with a
  * deliberately broken configuration and asserts the spawner's call count is
- * exactly zero, plus a static check on the import graph. It lands with this
- * lane's ported cases and is recorded as target-only in the parity ledger.
+ * exactly zero, plus a static check on the import graph -- the ported cases in
+ * `test/fencing/spawn-precondition.test.ts` and the two-stage restatement in
+ * `test/fencing/spawn-two-stage.test.ts`.
  */
 
 import {
@@ -87,7 +97,14 @@ import {
   renderFence,
 } from "./renderer.js";
 import type { Fence } from "./rules.js";
-import { PyKeyError, writeAllSync, writeFence } from "./state.js";
+import {
+  FenceStateError,
+  fenceToJson,
+  PyKeyError,
+  readFence,
+  writeAllSync,
+  writeFence,
+} from "./state.js";
 
 /**
  * Best effort: not every platform lets a directory be opened for fsync.
@@ -202,6 +219,36 @@ export function defaultHookScript(): string {
 
 /** One `(code, detail)` pair as the ledger records it. */
 export type SpawnReason = readonly [string, string];
+
+/**
+ * The bytes a plan was admitted with, taken at admission and never re-derived.
+ *
+ * Strings rather than objects, deliberately: a snapshot that held references
+ * into the fence would be mutable through the same door it exists to close.
+ */
+interface AdmittedBytes {
+  readonly fence: string;
+  readonly settings: string;
+}
+
+/**
+ * A fence as one canonical string, for comparing an admission with a file.
+ *
+ * `fenceToJson` is the same projection `writeFence` publishes, so this compares
+ * exactly what is on disk rather than a parallel notion of fence equality.
+ * `diffFences` was used here first and is not enough: it reports added and
+ * removed rule *ids*, a settings change and a permission-mode change, so a rule
+ * whose id stayed the same while its spec was rewritten -- widening what it
+ * allows -- reads as identical.
+ */
+function canonicalFenceJson(fence: Fence): string {
+  return pyJsonDumps(fenceToJson(fence), { sortKeys: true });
+}
+
+/** The settings payload as one canonical string. See {@link canonicalFenceJson}. */
+function canonicalSettingsJson(settings: unknown): string {
+  return pyJsonDumps(settings, { sortKeys: true });
+}
 
 /**
  * Append-only JSONL record of spawn admissions and refusals.
@@ -506,6 +553,57 @@ export class FencedSpawner {
   readonly document: RoleDocument | undefined;
   readonly settingsName: string;
 
+  /**
+   * Every {@link SpawnPlan} this spawner issued and has not spent, and **the
+   * bytes it was admitted with**.
+   *
+   * Half of `D-0217`'s mechanism. It answers the two questions an in-memory
+   * record can answer correctly, and carries the one piece of evidence that
+   * must not be re-read from a mutable object:
+   *
+   * 1. **Provenance -- did this spawner issue this plan?** Splitting `spawn`
+   *    into {@link prepare} and {@link execute} makes the plan a value that
+   *    crosses a caller's hands, and a public `execute` is on its face the
+   *    "second entry point that does not route through the precondition"
+   *    `D-0205`'s falsifier names: hand-build a `SpawnPlan` -- its constructor
+   *    is public, and stays public because interlock's cases construct one --
+   *    and a child starts under a fence nothing rendered, proved or published.
+   *    A plan absent from this map was not issued here.
+   * 2. **Single use -- has it started a child already?** {@link execute}
+   *    removes the entry before calling the spawner, so a second `execute` on
+   *    one outcome is refused. The ledger records one `spawn-admitted` per
+   *    admission; two children under one line would make the durable record an
+   *    undercount of what started.
+   * 3. **The admitted bytes, snapshotted at admission.** `Fence` freezes
+   *    itself but not `settings`, which is a nested object it stores by
+   *    reference -- so `plan.fence.settings` is mutable after `prepare`
+   *    returns. A caller could delete the `hooks` block from it, rewrite both
+   *    published files from the mutated object, and a verification that
+   *    compared the files against `plan.fence` would find them in perfect
+   *    agreement and start an unfenced child. Comparing against strings taken
+   *    *before* the plan was ever exposed removes that: the expectation is not
+   *    reachable from the value the caller holds.
+   *
+   * It does **not** answer whether the artifacts on disk are still the plan's,
+   * and that separation is the whole of the design. Three successive reviews
+   * found this record wrong in three places -- it answered "was this issued"
+   * rather than "may this start now"; keyed by plan identity it could not see
+   * two plans competing for one fence path; keyed by path string it treated two
+   * spellings of one file as two files. They were not three bugs. They were
+   * **one approximation failing at rising resolution: a name held in memory
+   * being asked a question about bytes on disk.** Sharpening the key -- to a
+   * canonical path, to a `(device, inode)` pair -- moves the failure without
+   * removing it, and no key of any kind can see an overwrite from outside this
+   * process.
+   *
+   * So the question about the bytes is asked of the bytes, in
+   * {@link FencedSpawner.verifyArtifactsUnchanged}, against the snapshot held
+   * here. A `WeakMap` because it holds no plan alive and lookup is identity,
+   * which is exactly what is being asked; it is per-instance and not persisted,
+   * because a plan does not survive the process that admitted it.
+   */
+  readonly #admitted = new WeakMap<SpawnPlan, AdmittedBytes>();
+
   // NOT PORTED: the source declares `_last_battery: BatteryReport | None` with
   // `init=False, repr=False` and then never reads or writes it, anywhere in
   // interlock. A field nothing observes has no behaviour to reproduce, and
@@ -533,30 +631,45 @@ export class FencedSpawner {
    * one thing that must never wait.
    */
   spawn(role: string, ctx: FenceContext, spawner: (plan: SpawnPlan) => unknown): SpawnOutcome {
-    const outcome = this.#admit(role, ctx);
+    const outcome = this.prepare(role, ctx);
     if (!outcome.admitted) {
       return outcome;
     }
-    const plan = outcome.plan;
-    if (plan === null) {
-      // Unreachable: `#admit` returns `admitted: true` only alongside a plan.
-      // A non-null assertion would silence the compiler and, on the day that
-      // stops being true, hand the spawner a `null` plan -- a child started
-      // with no fence, which is the exact outcome this module exists to make
-      // impossible. Raising is the fail-closed direction.
-      throw new Error("internal: admitted outcome carries no plan");
-    }
-    return new SpawnOutcome({
-      admitted: true,
-      role: outcome.role,
-      fence: outcome.fence,
-      plan,
-      result: spawner(plan),
-      battery: outcome.battery,
-    });
+    return this.execute(outcome, spawner);
   }
 
-  #admit(role: string, ctx: FenceContext): SpawnOutcome {
+  /**
+   * Render, prove, publish and record -- everything but the child (`D-0217`).
+   *
+   * This is `#admit` under a public name, unchanged in behaviour. It exists as
+   * a separate verb because step 7 of `docs/design/minimal-operating-loop.md`
+   * materialises the fence and settings artifacts and does **not** spawn; the
+   * spawn is step 8. The two ways to reach that without this split are both
+   * worse:
+   *
+   * - **Call `renderFence` / `writeFence` directly.** That bypasses the
+   *   battery, the two-file publication rollback and the admission record --
+   *   which is to say it bypasses everything that makes a published fence an
+   *   admitted one, while producing files that look exactly like an admitted
+   *   one's.
+   * - **Call `spawn` with a no-op spawner.** The ledger would then read
+   *   `spawn-admitted` for a child that was never started, and the outcome
+   *   would carry a `result` from a callable that did nothing. The event is
+   *   named for admission and admission is what happened, so it is not the
+   *   record that is wrong -- it is that `spawn`'s contract says a child was
+   *   started, and it would be saying so falsely.
+   *
+   * What `D-0205` asked for is unchanged and is why the split stops here: the
+   * spawner callable is still injected, is still called from exactly one place,
+   * and is still unreachable on a broken configuration -- a refused outcome
+   * carries no plan and {@link execute} refuses it. The half that is new is
+   * that a plan is now a value with a lifetime, and {@link execute} therefore
+   * checks its provenance rather than its type.
+   *
+   * Returns a refusing {@link SpawnOutcome} rather than throwing, exactly as
+   * before: a refusal is a recorded outcome, not an exception.
+   */
+  prepare(role: string, ctx: FenceContext): SpawnOutcome {
     return this.ledger.transaction(() => {
       let fence: Fence;
       try {
@@ -669,6 +782,17 @@ export class FencedSpawner {
       }
 
       const plan = new SpawnPlan({ role, fence, settingsPath, fencePath, context: ctx });
+      // Recorded BEFORE the ledger append, so there is no ordering in which a
+      // durable `spawn-admitted` exists for a plan `execute` would then refuse.
+      // The reverse order would make a crash-free process disagree with its own
+      // ledger, which is the one thing the ledger is read to settle.
+      //
+      // Snapshotted here, before the plan is returned and therefore before any
+      // caller can reach `fence.settings` to mutate it. See the field's note.
+      this.#admitted.set(plan, {
+        fence: canonicalFenceJson(fence),
+        settings: canonicalSettingsJson(fence.settings),
+      });
       this.ledger.append(EVENT_ADMITTED, {
         role,
         rules: fence.rules.length,
@@ -678,6 +802,172 @@ export class FencedSpawner {
       });
       return new SpawnOutcome({ admitted: true, role, fence, plan, battery });
     });
+  }
+
+  /**
+   * Start the child for a plan **this spawner admitted**, and only then.
+   *
+   * The second half of the `D-0217` split. It takes the admitted
+   * {@link SpawnOutcome} rather than a bare {@link SpawnPlan}, so that the
+   * outcome it returns carries the same fence and battery report `spawn`
+   * always returned -- a caller that had to rebuild those from a plan would be
+   * reconstructing an admission record from its own materials, which is the
+   * shape of every divergence this module exists to prevent.
+   *
+   * **Two checks, because the question is two questions.** `#admitted` answers
+   * the half memory can be right about -- this spawner issued this plan and has
+   * not spent it -- and {@link verifyArtifactsUnchanged} answers the half only
+   * the disk can: the published fence and settings are still the ones this plan
+   * describes. Without the first, making `execute` public would open precisely
+   * the second entry point `D-0205`'s falsifier names. Without the second, a
+   * plan could start a child under artifacts something else has since replaced,
+   * which is the same downgraded spawn wearing a valid-looking plan.
+   *
+   * @throws {Error} if the outcome is not an admitted one, carries a plan this
+   *   spawner did not issue, or carries one that has already been executed or
+   *   superseded by a later admission at the same fence path.
+   *   Throwing rather than returning a refusal:
+   *   a refusal is a recorded fact about a *fence*, and there is no fence here
+   *   to record one against -- this is a caller using the API wrongly, and
+   *   fail-closed means it stops rather than being minuted.
+   */
+  execute(outcome: SpawnOutcome, spawner: (plan: SpawnPlan) => unknown): SpawnOutcome {
+    if (!outcome.admitted) {
+      throw new Error("cannot execute a refused spawn outcome: no child may be started from it");
+    }
+    const plan = outcome.plan;
+    if (plan === null) {
+      // Unreachable: `prepare` returns `admitted: true` only alongside a plan.
+      // A non-null assertion would silence the compiler and, on the day that
+      // stops being true, hand the spawner a `null` plan -- a child started
+      // with no fence, which is the exact outcome this module exists to make
+      // impossible. Raising is the fail-closed direction.
+      throw new Error("internal: admitted outcome carries no plan");
+    }
+    const admitted = this.#admitted.get(plan);
+    if (admitted === undefined) {
+      // One message for two states -- never issued here, or already used --
+      // because the caller's next move is the same for both: call `prepare`
+      // again. Distinguishing them would report this spawner's bookkeeping
+      // rather than a fact about the fence.
+      throw new Error(
+        "refusing to execute a spawn plan this spawner did not admit, or that has " +
+          "already started a child; a plan is admissible because prepare() issued it " +
+          "and has not spent it, not because it has the right shape",
+      );
+    }
+    this.verifyArtifactsUnchanged(plan, admitted);
+    // One admission, one child. The plan is consumed BEFORE the spawner is
+    // called, so a second `execute` on the same outcome -- a retry loop, a
+    // duplicated composition root -- is refused by the check above rather than
+    // starting a second child against one `spawn-admitted` record. The ledger
+    // says a fence was admitted once; two children under it would make that
+    // record an undercount of what actually started, which is the direction
+    // this module never goes.
+    //
+    // Consumed before rather than after, so a spawner that THROWS also consumes
+    // it: a failed start is still a start that was attempted under this
+    // admission, and the fence on disk may have been read by then. The retry is
+    // a fresh `prepare`, which is not a formality -- it re-renders, re-proves
+    // and re-publishes, and that is how a caller finds out the fence was
+    // replaced underneath it.
+    this.#admitted.delete(plan);
+    return new SpawnOutcome({
+      admitted: true,
+      role: outcome.role,
+      fence: outcome.fence,
+      plan,
+      result: spawner(plan),
+      battery: outcome.battery,
+    });
+  }
+
+  /**
+   * Are the published artifacts still the ones `plan` describes?
+   *
+   * The half of `D-0217` that memory cannot answer, asked of the bytes instead.
+   * A plan names two files it does not own after `prepare` returns: between the
+   * admission and the spawn, a second `prepare` in this process, another
+   * process, or an operator's hand can replace either of them. Every in-process
+   * record that has been tried here -- a set of plans, a map keyed by path, and
+   * the `(device, inode)` variant that was considered -- is a *proxy* for this
+   * question, and each one failed somewhere the proxy and the file disagreed.
+   * This does not use a proxy.
+   *
+   * **Both artifacts, not just the fence.** The fence is what the deny hook
+   * reads, but `settings.local.json` is what carries the hooks block to the CLI
+   * in the first place -- a child launched with a settings file that lost its
+   * `hooks` entry runs with no deny hook at all, and its fence would be
+   * pristine and unread. The expected settings bytes are re-derived from
+   * `plan.fence.settings` exactly as {@link writeSettings} derives them, so this
+   * needs no contract the publication side does not already have.
+   *
+   * Compared through {@link diffFences} for the fence and through canonical JSON
+   * for the settings, rather than byte-for-byte: what matters is that the
+   * *content* is the same fence, and a comparison that also failed on
+   * re-serialisation whitespace would refuse spawns for a difference no child
+   * can observe.
+   *
+   * **This narrows the window; it does not close it, and no in-process check
+   * can.** The child reads the fence when it runs a tool, which is after this
+   * returns -- so a replacement landing in between is still applied. What this
+   * rules out is the far larger window from admission to spawn, during which a
+   * materialisation step may do arbitrary other work.
+   *
+   * @throws {Error} if either artifact is missing, unreadable, or no longer the
+   *   one the plan describes. Fail-closed in every branch: a fence that cannot
+   *   be read back is not a fence that was verified.
+   */
+  verifyArtifactsUnchanged(plan: SpawnPlan, admitted: AdmittedBytes): void {
+    let published: Fence;
+    try {
+      published = readFence(plan.fencePath);
+    } catch (exc) {
+      if (exc instanceof FenceStateError) {
+        throw new Error(
+          `refusing to spawn: the fence admitted at ${plan.fencePath} cannot be read ` +
+            `back (${describe(exc)}), so it cannot be confirmed to be the fence this ` +
+            "plan was admitted under",
+        );
+      }
+      throw exc;
+    }
+    if (canonicalFenceJson(published) !== admitted.fence) {
+      throw new Error(
+        `refusing to spawn: the fence at ${plan.fencePath} is no longer the one this ` +
+          "plan was admitted under -- something has been published over it since. " +
+          "Call prepare() again, which re-renders, re-proves and re-publishes",
+      );
+    }
+
+    let settingsText: string;
+    try {
+      settingsText = readFileSync(plan.settingsPath, "utf8");
+    } catch (exc) {
+      throw new Error(
+        `refusing to spawn: the settings admitted at ${plan.settingsPath} cannot be ` +
+          `read back (${describe(exc)})`,
+      );
+    }
+    // `pyJsonLoads` then a canonical re-dump on both sides, so the comparison is
+    // about content. A raw text comparison would additionally pin the indent and
+    // the trailing newline, which nothing downstream reads.
+    let onDisk: unknown;
+    try {
+      onDisk = pyJsonLoads(settingsText);
+    } catch (exc) {
+      throw new Error(
+        `refusing to spawn: the settings at ${plan.settingsPath} are not readable as ` +
+          `JSON (${describe(exc)})`,
+      );
+    }
+    if (canonicalSettingsJson(onDisk) !== admitted.settings) {
+      throw new Error(
+        `refusing to spawn: the settings at ${plan.settingsPath} are no longer the ones ` +
+          "this plan was admitted under -- a child started with them could be running " +
+          "with no deny hook. Call prepare() again",
+      );
+    }
   }
 
   /**
