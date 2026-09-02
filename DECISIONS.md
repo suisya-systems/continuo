@@ -9715,14 +9715,22 @@ a pre-implementation design review found were open in a way that would have been
   are internally coherent and together they contradict, so the gap is **a documented contradiction
   surfacing, not a missing line of code**, and it has to be decided against that table rather than
   around it. Rule 4 fixed the delivery *resource*; the *stamp* is the question rule 4 did not reach.
-  Four candidates are on the table and **under human review, and this entry deliberately does not pick
-  one**: adopt at endpoint startup; adopt inside `poll`; stamp the epoch at enqueue; or relax
-  `_COUNT_ATTEMPT` to claim an unowned row. The recommendation carried into that review is
-  `Outbox.recover()` in `main()` before serving, **paired with this correction and explicitly labelled
-  insufficient on its own** -- it is the only candidate decidable inside step 5 and it restores the
-  recovery criterion at process start, but the relay that matters is enqueued mid-life by a running
+  Four candidates were identified, costed against each other, and put to the **human gate, which chose
+  to implement none of them in this change**: adopt at endpoint startup; adopt inside `poll`; stamp the
+  epoch at enqueue; or relax `_COUNT_ATTEMPT` to claim an unowned row. The block **"The four candidates
+  for the adoption gap, and what each costs"** below the Consequences list records all four at the
+  granularity that lets whoever re-takes this decision skip the investigation. The reason the gate gave
+  is the reason the investigation gave against its own recommendation. The candidate this task carried
+  into the gate was `Outbox.recover()` in `main()` before serving, and it was carried in **explicitly
+  labelled insufficient on its own**: it is the only candidate decidable inside step 5 and it restores
+  the recovery criterion at process start, but the relay that matters is enqueued mid-life by a running
   lap while the endpoint is already serving, so shipping it alone would buy a green suite and a still
-  unreachable gate, which is worse than the visible failure because it looks like a fix.
+  unreachable gate, which is worse than the visible failure because it looks like a fix. The gate
+  declined to take a partial fix at that price and directed that the gap be **recorded here with its
+  cost and solved head-on in a following task**, against `docs/production-schema.md:207`'s writer table
+  rather than around it. So the state this entry ships is that block's last table row, the one that
+  does nothing: the gate is **not** reachable when this lands, the failure is loud rather than silent,
+  and the reason it is loud is written down here rather than discovered again.
 - **The fault-injection belt cannot exercise `cancelled` at all, and this entry does not pretend
   otherwise.** Verified here rather than assumed: `test/fault_injection/import-graph.test.ts` permits
   exactly two modules to import `src/` (`ADAPTER_MODULES` = `spike_driver.ts`, `session_driver.ts`),
@@ -9770,6 +9778,107 @@ a pre-implementation design review found were open in a way that would have been
   accepted decision, and that contradiction is exactly the drift a later reader resolves in the wrong
   direction -- most plausibly by believing the roll-up table, which is the half that is easier to
   read and, here, the half that would be wrong.
+
+**The four candidates for the adoption gap, and what each costs.** This sits here, as its own block
+after the Consequences list rather than inside the adoption-gap bullet, for one reason: the comparison
+that decided it is a four-axis table, and a table nested inside a list item is indentation-fragile in
+exactly the way a record meant to be re-read years later should not be. The bullet above points
+forward to this block and this block reports back to it; nothing here is new evidence, it is the cost
+sheet the human gate ruled on, written down at the granularity that lets whoever re-takes the decision
+avoid repeating the investigation.
+
+The four are not four spellings of one fix. Each answers a *different* question about who owns an
+outbox row, and each therefore commits the project to a different thing.
+
+*(a) Call `Outbox.recover()` once in `main()` before serving.* Three lines, no new concept, no ported
+module touched; `recover` is already fenced and already covered by the outbox belt (`outbox.test.ts`
+covers the successor, the impostor and the report). It commits the project to nothing it has not
+already said -- it is what the recovery criterion says should happen at process start, and it puts the
+fault-injection belt's no-unowned-outbox invariant back in force on the production side at that one
+instant. **It does not fix the relay that matters.** The gate is opened by a running lap while the
+endpoint is already serving (section 7 puts the launcher at step 8, ahead of steps 9-10), so the relay
+is enqueued *mid-life* and startup-only recovery fixes approximately the case that never happens. This
+was the candidate recommended into the gate and **the human gate rejected shipping it alone**, on the
+ground the recommendation itself stated: alone it buys a green suite and a still-unreachable gate,
+which is worse than the visible failure because it looks like a fix. Where the loud
+`StaleWriterRefused` tells an operator the truth, a half-fix would leave the same gate unreachable
+with nothing on fire.
+
+*(b) Adopt at the top of every `MessageBus.poll`.* This one does fix mid-life relays -- it is the only
+candidate that does so without leaving step 5 -- and the price is parity. `MessageBus` is a **ported
+facade** (`parity/messagebus.bus.ledger.json`, complete at 43/43 under rule 2 above), and its `poll`
+docstring (`src/messagebus/bus.ts:229-257`) states the current semantics as a property: *"What is due
+is read from SQLite and nowhere else."* An adoption pass makes `poll` a **writer of `writer_epoch` on
+rows it did not select**, which is a semantic the source facade does not have; every ported case
+asserting what `poll` does to the database would then be asserting something about a *different*
+function, and the ledger entry would stop describing the source. That is the same shape of change as
+the `lease.ts` `IN` node this entry rejects below -- growing a ported module for a caller's
+convenience -- one size larger, because it is a new write on a hot path rather than a grammar node.
+There is a second, non-parity cost: `recover()` is one `UPDATE` per unowned row, a loop and not a set
+update, so putting it at the head of every poll makes the endpoint's **steady-state cost a function of
+outbox backlog**, and adopts rows this recipient may never poll. A narrowed form -- adopt only the
+unowned rows for *this* recipient that this poll is about to attempt -- is the least-bad single change
+that would make the gate reachable on this lap, and it would still have to be taken as an explicit
+parity divergence with its own D- entry, never slipped in.
+
+*(c) Have `enqueueRelay` stamp the delivery lease's epoch at enqueue.* Architecturally this is where
+the row's owner *should* be decided -- `Outbox.enqueue` already believes that -- and it is **the only
+candidate that leaves `UNOWNED_OUTBOX_QUERY` true at every instant**, because the row is never unowned,
+not even for a poll interval. It is also **not decidable here.** `enqueueRelay`
+(`src/control_plane/gates.ts:542-551`) takes no lease, no epoch and no resource, and runs in the
+Secretary's transaction rather than the delivery worker's, so it would have to learn the delivery
+lease's identity -- `gates.ts` naming `outbox-delivery` or importing `DELIVERY_LEASE_RESOURCE` from
+`src/messagebus/endpoint.ts`, a control-plane module importing the messagebus endpoint, which inverts
+the dependency direction and re-opens the import-graph argument -- and, decisively, it would have to
+read a **live** delivery lease at gate-open time, since a stamped epoch that is not live is refused
+again for a subtly different reason. That makes **opening a human gate fail when the delivery endpoint
+is down**, which inverts the outbox's own design, where the queue outlives the worker. That is step 4's
+renewal-ownership question arriving from the other side, and answering it inside step 5 would be
+deciding step 4 by accident -- the exact failure mode rule 4 was written to prevent. It would also
+**delete `docs/production-schema.md:207`'s "any producer" rule** for enqueue and need a new writer-table
+row and a D- entry saying so, and it would need the same treatment at the event fan-out
+(`src/control_plane/events.ts:441-445`), where "any registered producer" is stated more strongly still.
+
+*(d) Relax `_COUNT_ATTEMPT` to admit a NULL `writer_epoch` (`writer_epoch IS NULL OR = :fence_epoch`).*
+The smallest-looking and the most expensive in properties. `lease.ts`'s predicate algebra is
+`Comparison | IsNull | Conjunction` (`src/control_plane/lease.ts:1005`) with no disjunction node and a
+renderer that throws on anything else, so (d) requires growing the ported builder with an `Or` node --
+**the exact change this entry already records as a rejected alternative below**, which would have to be
+revisited in writing rather than silently overridden. What it weakens is worse than where it is
+written: `writer_epoch = :fence_epoch` *is* the "owned by the writing epoch, not merely written while
+some lease is live" property, said in as many words at `src/control_plane/outbox.ts:388-394`, and
+admitting NULL means the first live lease to touch an unowned row claims it with no recovery pass
+having decided that claiming was safe. Under rule 4's single global resource there is only one
+claimant, so on lap 1 it is arguably harmless -- but it is precisely the property rule 4's falsifier
+turns on, and it converts a loud refusal into a silent race inside the statement whose own comment
+exists to prevent that. It is also **the only candidate that leaves the fault-injection belt's own
+invariant false on a healthy database**: the symptom disappears while every fresh gate relay still
+violates `UNOWNED_OUTBOX_QUERY`, and `Outbox.recover`'s report becomes decorative on the enqueue path.
+
+The four axes that decided it:
+
+| candidate | fixes mid-life relays | touches a ported module | needs a step-4 / step-8 decision | leaves `UNOWNED_OUTBOX_QUERY` true |
+|---|---|---|---|---|
+| (a) `recover()` in `main()` | **no** | no | no | no -- violated again at the next enqueue |
+| (b) adopt inside `poll` | yes | **yes (`MessageBus`, a ported facade)** | no | yes, between polls |
+| (c) stamp the epoch at enqueue | yes | no, but couples `gates.ts` and `events.ts` to the delivery lease | **yes (lease liveness and ownership)** | **yes, at every instant** |
+| (d) relax `_COUNT_ATTEMPT` | yes | **yes (`lease.ts`'s grammar)** | **yes (weakens rule 4's fence)** | **no** |
+| none (what ships here) | **no** | no | no | **no** |
+
+**And what happens if nothing is done, which is the row this change ships.** The gate stays
+unreachable and it stays unreachable *loudly*. The first relay a human gate ever enqueues is committed
+unowned, `_COUNT_ATTEMPT` refuses it, and `MessageBus.poll` re-throws `StaleWriterRefused` out of the
+whole batch; because `_DUE_QUERY` orders by `enqueued_at_ms`, that one row sits at the head of `due()`
+and **poisons every subsequent poll for that recipient, discarding the healthy deliveries queued
+behind it and writing another `'refused'` action row on each pass**, and a restart does not clear it
+because a restart adopts nothing either. The endpoint surfaces it as an `isError` tool response.
+`Outbox.unowned` names the offending row, so the diagnosis is one query away for whoever meets it.
+That is the cost of doing nothing, it is worse per-poll than any of (a)-(d), and it was accepted
+deliberately in preference to a fix that would have hidden it: **a failure that announces itself is a
+better thing to hand the next task than a green suite over an unreachable gate.** The follow-on task
+takes the gap head-on, and the first thing it has to settle is not which of (a)-(d) to write but which
+half of `docs/production-schema.md:207`'s writer table is the rule -- because, as the adoption-gap
+bullet establishes, this is a **documented contradiction surfacing, not a missing line of code**.
 
 **Falsifier.** Four observations would show this entry wrong, and each is evaluable from inside this
 repository.
@@ -9827,10 +9936,11 @@ distributed-transaction problem with no coordinator -- or else it relaxes the `r
 edge, which is the constraint the relay exists to carry.
 
 **Rejected alternative: port the 54 residents cases and keep the five as `retarget` (option B).** The
-highest cost of the three and the lowest lap value. It leaves the schema split unresolved, so the gate
-stays unreachable and step 5 does not get done; it requires inventing the registration half of a
-protocol nobody has used; and the reap rule it would land contradicts `src/supervisor.ts:699-703`. A
-port whose first act is to install a rule the existing supervisor refuses is not a port.
+highest cost of the three and the lowest lap value. It leaves the schema split unresolved, so the
+*schema* obstacle to the gate stays in place and step 5 does not get done at all -- note that step 5
+getting done is not the same as the gate becoming reachable, per the adoption-gap bullet; it requires
+inventing the registration half of a protocol nobody has used; and the reap rule it would land
+contradicts `src/supervisor.ts:699-703`. A port whose first act is to install a rule the existing supervisor refuses is not a port.
 
 **Rejected alternative: extend `lease.ts`'s fenced-statement builder with an `IN` node so the write
 statements can carry the positive predicate too.** Superficially the tidier answer -- one spelling
@@ -9869,3 +9979,13 @@ fixed the delivery resource without saying who would enforce it, and asked the t
 once because the second asking is visible only from inside the implementation. That is worth knowing
 because it says what kind of review found them: reading the code against the rule, not reading the
 rule.
+
+A fourth thing post-dates the gate and is the reason for the adoption-gap bullet, the four-candidate
+block and the fourth falsifier: an independent review of the implemented diff found, and a probe on a
+real production plane at head confirmed, that a gate relay is enqueued with `writer_epoch = NULL` and
+that nothing under `src/` adopts it, so **the human gate is still not reachable when this lands**. The
+four candidates were costed and escalated, and the human gate ruled: **implement none of them in this
+change; record the gap with its cost and take it head-on in a following task.** The gap is therefore
+not an oversight that nobody noticed -- it was found, reproduced, investigated, escalated and left
+open deliberately, and what this entry adds is the cost of leaving it open, written down where the
+next task will read it.
