@@ -159,28 +159,39 @@ export interface AdmittedRun {
 }
 
 /**
- * Control characters, which a run identifier may not carry.
+ * What a run identifier may be made of: printable ASCII, and nothing else.
  *
- * The identifier is interpolated verbatim into two things a person reads: the
- * one-line success report and the `RunAlreadyAdmitted` message, both of which
- * `run_cli.ts` terminates with a single `\n`. An identifier holding its own
- * newline splits that line in two, so an operator -- or anything parsing the
- * output -- reads a second line the command never wrote, and `error: ` is a
- * prefix worth forging. An escape sequence is the same problem with a terminal
- * doing the rendering.
+ * A positive rule rather than a list of characters to reject, because the
+ * question it answers is asked from two directions and a rejection list only
+ * ever answers the direction someone thought of.
  *
- * Refused rather than escaped at the print site, because escaping would put the
- * rule in the CLI while the value went to the database unexamined: the row and
- * the event would then hold an identifier no report can quote back faithfully.
- * There is also no legitimate identifier this excludes -- a run id is a name a
- * caller chooses, and none of these characters can appear in one on purpose.
+ * - **A newline splits the report.** The identifier is interpolated verbatim
+ *   into the one-line success report and into the `RunAlreadyAdmitted` message,
+ *   both of which `run_cli.ts` terminates with a single `\n`. An identifier
+ *   carrying its own newline makes the command appear to print a second line it
+ *   never wrote, and `error: ` is a prefix worth forging. An escape sequence is
+ *   the same problem with a terminal doing the rendering, and a zero-width
+ *   joiner is the same problem with two identifiers that look identical.
+ * - **A non-ASCII character can crash the console it is printed to.**
+ *   `docs/cli-output-policy.md` governs what continuo *authors* and explicitly
+ *   leaves external values out -- "any code path that echoes external text to a
+ *   console has to deal with encoding on its own terms -- that problem is real,
+ *   and it is not this policy". This is that code path dealing with it. A cp932
+ *   console cannot encode `U+1F600`, and `D-0003` puts Windows on the merge
+ *   path, so a run id that is only ever discovered to be unprintable at the
+ *   moment an operator asks about it is a run id that cannot be reported.
  *
- * `\p{C}` rather than a hand-written range: it covers C0, DEL, C1, and the
- * format characters (a zero-width joiner in an identifier is the same class of
- * surprise), and it says which Unicode category is meant rather than which
- * code points someone remembered.
+ * Refused at the writer rather than escaped at the print site, so that the row,
+ * the event and every report about them quote the same string. Escaping in the
+ * CLI would let the database hold an identifier no report can quote back
+ * faithfully, which trades a visible refusal for an invisible divergence.
+ *
+ * This is narrower than the `run` table's own `CHECK`, which asks only for
+ * non-empty text, and deliberately so: the column has to hold every identifier
+ * ever admitted by any writer, and this is the rule for the one writer that
+ * puts identifiers there **and** promises to print them back.
  */
-const CONTROL_CHARACTERS = /\p{C}/u;
+const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 
 /** The one identity a `run_created` event has, derived from the run it is about. */
 function runCreatedFactId(runId: string): string {
@@ -223,9 +234,12 @@ export function admitRun(
   if (typeof runId !== "string" || runId.trim() === "") {
     throw new RunAdmissionUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
   }
-  if (CONTROL_CHARACTERS.test(runId)) {
+  if (!PRINTABLE_ASCII.test(runId)) {
     throw new RunAdmissionUsageError(
-      `run_id must not contain control characters, got ${pythonRepr(runId)}`,
+      `run_id must be printable ASCII (U+0020..U+007E), got ${pythonRepr(runId)}; ` +
+        "the identifier is printed back verbatim in this command's report and in " +
+        "its refusals, so a character that cannot be printed is one that cannot " +
+        "be reported",
     );
   }
   if (typeof nowMs !== "number" || !Number.isInteger(nowMs)) {

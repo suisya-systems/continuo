@@ -396,18 +396,25 @@ describe("a malformed argument is refused before anything is written", () => {
     ["a carriage return", "run-1\rerror: forged"],
     ["an escape sequence", "run-\u001b[31m1"],
     ["a zero-width joiner", "run-\u200d1"],
+    // Non-ASCII is refused for the second reason the rule states: a cp932
+    // console cannot encode it, and `D-0003` puts Windows on the merge path.
+    // Constructed rather than typed, per `docs/cli-output-policy.md` -- this
+    // source file stays ASCII, the value at runtime does not.
+    ["an emoji", `run-${String.fromCodePoint(0x1f600)}`],
+    ["a Japanese character", `run-${String.fromCodePoint(0x3042)}`],
   ])("refuses a run id carrying %s", (_label, runId) => {
     // The identifier is quoted verbatim into the one-line report and into the
-    // re-admission refusal, both of which end at a single newline. One inside
-    // the identifier makes the command appear to print a second line -- `error: `
-    // included -- and refusing here is what keeps the row, the event and the
+    // re-admission refusal, both of which end at a single newline. A newline
+    // inside the identifier makes the command appear to print a second line --
+    // `error: ` included -- and a character the console cannot encode makes it
+    // print none at all. Refusing here is what keeps the row, the event and the
     // report all quoting the same string.
     const { connection } = cpFixture();
 
     expectRefusal(
       () => admitRun(connection, { runId, nowMs: T0 }),
       RunAdmissionUsageError,
-      /must not contain control characters/,
+      /must be printable ASCII/,
     );
 
     expect(runRows(connection)).toEqual([]);

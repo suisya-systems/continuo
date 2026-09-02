@@ -9230,11 +9230,19 @@ the lap emits, `EVENT_TYPES` having no word for anything the lap produces.
   and zero is what it would read as the day the module is deleted.
 - **A run row is now creatable from the shipped binary.** Before this, `continuo db create` produced
   a control plane whose central table no command could write.
-- **A run identifier may not carry control characters.** The identifier is quoted verbatim into the
-  one-line success report and into the `RunAlreadyAdmitted` message, both of which end at a single
-  newline, so an identifier holding one would make the command appear to print a second line that it
-  never wrote -- with `error: ` a prefix worth forging. It is refused at the writer rather than
-  escaped at the print site, so that the row, the event and the report all quote the same string.
+- **A run identifier is printable ASCII (U+0020..U+007E).** Narrower than the `run` table's own
+  `CHECK`, which asks only for non-empty text, and narrower on purpose: the column holds every
+  identifier any writer ever admits, while this is the rule for the one writer that puts identifiers
+  there **and** promises to print them back. It is quoted verbatim into the one-line success report
+  and into the `RunAlreadyAdmitted` message, both of which end at a single newline, so an identifier
+  carrying its own newline would make the command appear to print a second line it never wrote --
+  with `error: ` a prefix worth forging -- and one carrying a character a cp932 console cannot encode
+  would make it print none at all, on a platform `D-0003` puts on the merge path.
+  `docs/cli-output-policy.md` governs what continuo authors and leaves external values to "any code
+  path that echoes external text to a console" to handle "on its own terms"; this is that path
+  handling it. Refused at the writer rather than escaped at the print site, so that the row, the
+  event and every report about them quote the same string -- escaping in the CLI would trade a
+  visible refusal for a database holding an identifier no report can quote back faithfully.
 - **No consumer is registered for `run_created`.** The append fans out to nobody and that is not a
   defect: `D-0046` rule 2 gives the consumer half its own step. `D-0046`'s falsifier -- that the
   consumer indirection has no reader on the lap -- remains live and is not resolved here.
@@ -9242,7 +9250,10 @@ the lap emits, `EVENT_TYPES` having no word for anything the lap produces.
   motion; it creates a run and records that it did. Section 6.2's conditional requirement to record a
   collapse therefore does not fire, and nothing here supersedes `D-0046`.
 
-**Falsifier.** A legitimate operation that must create a run *and* leave it un-admitted, or admit a
+**Falsifier.** A run identifier that a real caller must use and this rule refuses -- an upstream id
+carrying a non-ASCII label, say. That would mean the identifier and its printable form are two things
+rather than one, and admission would need to store the first and report the second, rather than
+narrowing the first. Also: a legitimate operation that must create a run *and* leave it un-admitted, or admit a
 run that already exists -- a resumption path, or a re-import of runs from another store. Either would
 mean rule 4's refusal is the wrong shape and that admission needs a separate verb for the case rather
 than a relaxation of this one. And if a second module is ever found to need an `INSERT INTO run`, rule
