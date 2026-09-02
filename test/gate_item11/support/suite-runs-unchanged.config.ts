@@ -1,5 +1,7 @@
 import { defineConfig } from "vitest/config";
 
+import { runnerTimeoutMs } from "../../helpers/runner-timeouts.js";
+
 /**
  * The double-run config `suite-runs-unchanged.test.ts` spawns as a subprocess.
  *
@@ -53,8 +55,13 @@ export default defineConfig({
     passWithNoTests: false,
     retry: 0,
     globals: false,
-    testTimeout: 60_000,
-    hookTimeout: 60_000,
+    // The same per-test budget the main config installs, from the same source
+    // (D-0052): this nested run executes `test/control_plane/**` on whatever
+    // runner the outer suite is on, so a Windows cell's 3x applies here too.
+    // Writing the number again is how the outer config's 60s and this one drift
+    // apart.
+    testTimeout: runnerTimeoutMs(),
+    hookTimeout: runnerTimeoutMs(),
     sequence: {
       concurrent: false,
     },

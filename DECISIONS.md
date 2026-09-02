@@ -146,6 +146,7 @@ spaces distinct.
 | D-0049 | The runtime surfaces continuo operates -- the fence hook, the default worker prompt and the CLI descriptions -- say `continuo`, not `Interlock` | accepted |
 | D-0050 | The production schema is the control plane the lap runs on, and the spike schema is not a fallback | accepted |
 | D-0051 | A run is created by one writer, `continuo run admit`, which appends `run_created` in the same transaction and refuses a second admission | accepted |
+| D-0052 | The runner's per-test timeout is scaled on a slow platform, from the same constant the harness budgets use | accepted |
 
 ---
 
@@ -9275,3 +9276,100 @@ inserted, so the foreign key onto `run(run_id)` would have nothing to point at.
 2, 4 and 6) was settled at the gate from a prior design review, and this entry records it. Decision id
 from the `D-0019`..`D-0099` shared band, next after `D-0050`.
 
+---
+
+## D-0052 -- The runner's per-test timeout is scaled on a slow platform, and the scale has one home
+
+**Context.** `D-0602` and `D-0604` scaled this port's *harness* budgets -- the fault-injection
+per-case, per-barrier and suite watchdogs -- by `PORT_BUDGET_SCALE = 3`, because interlock's numbers
+are calibrated on interlock's runners and continuo's Windows cells are not those runners. One layer
+above them, Vitest's own `testTimeout` and `hookTimeout` stayed a flat `60_000`, written into
+`vitest.config.ts` and copied verbatim into
+`test/gate_item11/support/suite-runs-unchanged.config.ts`. Nothing chose that; it is the same
+omission `D-0604` repaired one level down, sitting one level up.
+
+It is not theoretical. On continuo#99 the `windows-latest` / node 24 cell failed with
+
+    Test timed out in 60000ms.
+
+in `test/canary/audit.test.ts` and `test/control_plane/gates.test.ts` -- two files that PR touched by
+zero lines. A re-run went 8/8 green. The failure was the machine, and the merge gate charged it to
+the change.
+
+**The measurement.** Workflow `tests` (id `339613836`), every job execution, all attempts,
+2026-08-21..2026-08-30, `cancelled` excluded -- 195 runs, 1580 job executions
+(`notes/continuo-windows-flake-measurements-2026-08-31.md`, taken *before* `56a964c` landed, so the
+failure-rate column is historical and the duration ratio is the durable fact):
+
+    green job wall time, p50:   ubuntu-latest ~70s     windows-latest ~640s   (~9x)
+    windows p90 ~930s, max 1864s
+
+Byte-identical work, a nine-fold gap. Against that, `60_000` on Windows is the same budget the fast
+cell gets, and the largest single-test figure this repository has ever measured on a slow Windows
+runner is 13,556ms -- 4.4x of headroom where linux has 2000x.
+
+**Decision.**
+
+1. **One home for the scale.** `test/helpers/runner-timeouts.ts` owns `PORT_BUDGET_SCALE = 3`,
+   `RUNNER_TIMEOUT_BASE_MS = 60_000` and `runnerTimeoutMs(platform)`. Both Vitest configs call
+   `runnerTimeoutMs()`; `test/fault_injection/policy.ts` re-exports the constant from there rather
+   than declaring its own. There is now no second place to raise the number and forget the first.
+2. **The predicate is the platform**, `process.platform === "win32"`, and not `CI`, and not an
+   environment variable. The evidence above is a property of the OS -- NTFS plus a scanner against an
+   fsync on every commit -- and the workload does not vary by cell. Keying on `CI` would make the
+   machine a developer reproduces a Windows failure on behave differently from the machine that
+   failed, which is the one occasion the budget matters. An environment variable has to be set by
+   every workflow, every nested run and every local shell, and forgetting it fails silently -- the
+   failure mode this entry exists to remove.
+3. **The harness budgets keep their unconditional scale.** `PORT_BUDGET_SCALE` is applied on every
+   platform where `D-0602` applied it, and this entry does not narrow it. The asymmetry is
+   deliberate: a harness budget that fires names the case, prints the `S9-REPRO` line and runs the
+   teardown ladder, so being generous there costs a slower failure and nothing else, while the
+   runner's timeout produces an unattributable one. `RUNNER_BUDGET_CEILING_S = 50` still holds every
+   case budget below the *fast* runner's 60s, which is the smaller of the two and therefore the
+   binding one; `manifest.test.ts` now asserts that ordering against `RUNNER_TIMEOUT_BASE_MS`, so
+   the two layers cannot drift into a race where the runner kills a case before its watchdog does.
+   Nothing is scaled twice: the runner's timeout and a harness budget are separate numbers compared
+   against separate clocks, and the scale is applied exactly once to each.
+
+`fast`'s suite budget, the per-case watchdogs and every number in `manifest.json` are untouched.
+
+**The trade, stated plainly.** On Windows a genuinely hung test is now reported after 180s instead of
+60s. That is paid only on the platform that earned it; linux and macOS keep the 60s backstop
+unchanged, so a real hang introduced by a change still fails at the original latency on the cells
+that run first and fastest. The double-green rule (`D-0005`) means every change runs on ubuntu as
+well as Windows, and `retry: 0` means a test that only passes sometimes still stays failed. A late
+failure is the cheaper mistake than a false red, which costs a merge and a person's afternoon and
+teaches them only that a machine was busy.
+
+The extra 120s per hung test is bounded and affordable against the job's own cap: `timeout-minutes`
+is 40 (2400s) and the Windows job's p90 wall time after `D-0048` is 1017s, so a failing run reports
+the hang and still finishes well inside the cap rather than being cut off without a report.
+
+**Alternatives.**
+
+- **Scale unconditionally, on every platform.** Rejected. It buys nothing on ubuntu -- where the
+  worst green job is 375s for the *whole suite* -- and triples how long a hung test hangs on the
+  cells that are otherwise the fast feedback path.
+- **Raise the flat number to 180s everywhere.** The same objection, plus it invents a threshold
+  rather than deriving one, which is the move `D-0029` and `D-1003` both anti-recommend.
+- **Key on `CI`, or on a `CONTINUO_SLOW_RUNNER` variable.** Rejected on decision 2's grounds. Both
+  were considered specifically because they are more explicit; both make the budget depend on
+  something other than the thing that is actually slow.
+- **Leave it and make the tests faster.** Out of scope here and not obviously available: the failing
+  files were not the changed ones, and the cost is `synchronous = FULL` (`D-0012`), which is a
+  correctness choice this port carries deliberately.
+
+**Falsifier.** If `Test timed out in` keeps appearing on the Windows cells at a similar rate after
+this lands, the budget was not the binding constraint and the starvation hypothesis needs a
+different remedy (the measurement to redo is the one above, re-run against the post-`56a964c`
+history). Conversely, if a hung test on the Windows cell is ever found to have been reported so late
+that the job hit the workflow's own limit, the 3x is too generous for the runner layer and the
+scale, not the base, is what to revisit.
+
+**Source.** Task `continuo-test-timeout-scale`, on continuo#99's `windows-latest` / node 24 failure
+(2026-09-02) and `notes/continuo-windows-flake-measurements-2026-08-31.md`. Decision id allocated
+from the `D-0019`..`D-0099` shared band after checking `origin/main` at `454b850`, where `D-0051` is
+the highest id in the band: the change straddles `vitest.config.ts` (shared by every lane), the
+gate_item11 belt's nested config and the fault-injection belt's `policy.ts`, so it is a cross-belt
+decision taken at the window rather than one belt's.
