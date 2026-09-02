@@ -9230,6 +9230,11 @@ the lap emits, `EVENT_TYPES` having no word for anything the lap produces.
   and zero is what it would read as the day the module is deleted.
 - **A run row is now creatable from the shipped binary.** Before this, `continuo db create` produced
   a control plane whose central table no command could write.
+- **A run identifier may not carry control characters.** The identifier is quoted verbatim into the
+  one-line success report and into the `RunAlreadyAdmitted` message, both of which end at a single
+  newline, so an identifier holding one would make the command appear to print a second line that it
+  never wrote -- with `error: ` a prefix worth forging. It is refused at the writer rather than
+  escaped at the print site, so that the row, the event and the report all quote the same string.
 - **No consumer is registered for `run_created`.** The append fans out to nobody and that is not a
   defect: `D-0046` rule 2 gives the consumer half its own step. `D-0046`'s falsifier -- that the
   consumer indirection has no reader on the lap -- remains live and is not resolved here.

@@ -158,6 +158,30 @@ export interface AdmittedRun {
   readonly eventSeq: number;
 }
 
+/**
+ * Control characters, which a run identifier may not carry.
+ *
+ * The identifier is interpolated verbatim into two things a person reads: the
+ * one-line success report and the `RunAlreadyAdmitted` message, both of which
+ * `run_cli.ts` terminates with a single `\n`. An identifier holding its own
+ * newline splits that line in two, so an operator -- or anything parsing the
+ * output -- reads a second line the command never wrote, and `error: ` is a
+ * prefix worth forging. An escape sequence is the same problem with a terminal
+ * doing the rendering.
+ *
+ * Refused rather than escaped at the print site, because escaping would put the
+ * rule in the CLI while the value went to the database unexamined: the row and
+ * the event would then hold an identifier no report can quote back faithfully.
+ * There is also no legitimate identifier this excludes -- a run id is a name a
+ * caller chooses, and none of these characters can appear in one on purpose.
+ *
+ * `\p{C}` rather than a hand-written range: it covers C0, DEL, C1, and the
+ * format characters (a zero-width joiner in an identifier is the same class of
+ * surprise), and it says which Unicode category is meant rather than which
+ * code points someone remembered.
+ */
+const CONTROL_CHARACTERS = /\p{C}/u;
+
 /** The one identity a `run_created` event has, derived from the run it is about. */
 function runCreatedFactId(runId: string): string {
   return `${RUN_CREATED_EVENT_TYPE}/${runId}`;
@@ -198,6 +222,11 @@ export function admitRun(
 
   if (typeof runId !== "string" || runId.trim() === "") {
     throw new RunAdmissionUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
+  }
+  if (CONTROL_CHARACTERS.test(runId)) {
+    throw new RunAdmissionUsageError(
+      `run_id must not contain control characters, got ${pythonRepr(runId)}`,
+    );
   }
   if (typeof nowMs !== "number" || !Number.isInteger(nowMs)) {
     throw new RunAdmissionUsageError(

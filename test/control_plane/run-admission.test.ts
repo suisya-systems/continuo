@@ -391,6 +391,57 @@ describe("a malformed argument is refused before anything is written", () => {
     expect(eventRows(connection)).toEqual([]);
   });
 
+  test.each([
+    ["a newline", "run-1\nerror: forged"],
+    ["a carriage return", "run-1\rerror: forged"],
+    ["an escape sequence", "run-\u001b[31m1"],
+    ["a zero-width joiner", "run-\u200d1"],
+  ])("refuses a run id carrying %s", (_label, runId) => {
+    // The identifier is quoted verbatim into the one-line report and into the
+    // re-admission refusal, both of which end at a single newline. One inside
+    // the identifier makes the command appear to print a second line -- `error: `
+    // included -- and refusing here is what keeps the row, the event and the
+    // report all quoting the same string.
+    const { connection } = cpFixture();
+
+    expectRefusal(
+      () => admitRun(connection, { runId, nowMs: T0 }),
+      RunAdmissionUsageError,
+      /must not contain control characters/,
+    );
+
+    expect(runRows(connection)).toEqual([]);
+    expect(eventRows(connection)).toEqual([]);
+  });
+
+  test("the refusal reaches the operator through the mounted command", () => {
+    const path = productionTemplate.copyInto(caseRoot("run-admit-control-char"));
+    const streams = captureStreams();
+    const usage: string[] = [];
+    patchSeam(topLevelSeams, "err", (text: string) => {
+      usage.push(text);
+    });
+
+    // A usage error is NOT in the ControlPlaneRefusal family, so it is not
+    // flattened into one `error: ` line -- it escapes as a defect with its
+    // stack, which is the distinction this module draws deliberately. What
+    // matters here is that nothing was printed as though the run had been
+    // admitted.
+    expect(() =>
+      main([
+        "run",
+        "admit",
+        "--db",
+        path,
+        "--run-id",
+        "run-1\nadmitted forged",
+        "--now-ms",
+        String(T0),
+      ]),
+    ).toThrow(RunAdmissionUsageError);
+    expect(streams.out()).toBe("");
+  });
+
   test("refuses a clock that is not an integer of epoch milliseconds", () => {
     const { connection } = cpFixture();
 
