@@ -1044,8 +1044,21 @@ authority and permission modelling -- not the lap's field list.
 persisted through the existing `appendEvent` as an event row with `subject_kind = 'run'`, so the work
 statement is durable rather than living only in the child's transcript. The entry must state that it
 is lap-scoped, that `holder` is a lease claimant and **not** an authority, and that it is superseded by
-G2 rather than promoted into it. Note the field list is read off `StartRequest`, which is provisional
-scaffold (5.5), so an S1 promotion can move it.
+G2 rather than promoted into it.
+
+> **Correction, made when the record was built (`D-0055`).** The sentence that stood here said the
+> field list "is read off `StartRequest`, which is provisional scaffold (5.5), so an S1 promotion can
+> move it". That is wrong in a way that would have shaped the implementation, so it is struck rather
+> than footnoted. `StartRequestFields` is `sessionId`, `workspace`, `role` and `settings` and nothing
+> else -- section 4.6 above says so, four hundred lines earlier in this same document -- so of the
+> eight fields listed, exactly **two** are `StartRequest`'s. `runId` is the admission command's and
+> this database's; `holder` reaches `acquireRunLease` through `SessionOrchestratorOptions` and never
+> touches a `StartRequest`; `prompt` and `cliArgs` are string keys inside `StartRequest.settings`'s
+> opaque bag, read one layer further down by `claude_cli_provider.ts`; `baseBranch` and `topicBranch`
+> have no reader anywhere in `src/` yet. The sentence as written created a dependency the code does
+> not have -- that an S1 promotion moves the record as a unit -- when in fact each field's provenance
+> and provisionality is its own. `D-0055` records them one by one, and that per-field table is what a
+> later reader should use rather than this paragraph.
 
 **Band: continuo, paired with the cadenza-band condition replacement in 5.4.**
 
