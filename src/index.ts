@@ -287,6 +287,39 @@ export {
   STEP_FILENAME,
   verifyProductionDatabase,
 } from "./control_plane/migrator.js";
+// The outbox status vocabulary (`OUTBOX_STATUSES`, `OutboxStatus`,
+// `TERMINAL_OUTBOX_STATUSES`, `isTerminalOutboxStatus`) is on the surface;
+// the fenced write predicates the same change generates from it are not. The
+// line between them is the one this file already draws everywhere else, and
+// it is worth stating once because the four names arrived together with
+// several that look like them.
+//
+// The vocabulary is public for the reason `RUN_STATUSES` / `type RunStatus`
+// (`run_lifecycle.ts`, re-exported below) and `GATE_STAGES` / `GATE_OUTCOMES`
+// / `TERMINAL_RUN_STATUSES` (`gates.ts`, above) are: a closed enumeration the
+// DDL installs, restated as a value because SQLite will not hand a `CHECK`
+// clause over at compile time, plus the one predicate that reads it. A
+// consumer holding an `OutboxMessage` -- already exported here -- has to be
+// able to ask whether its `status` is finished without either hard-coding
+// `'acked' | 'cancelled'` or re-deriving the lattice from migration 0003, and
+// after the endpoint's move onto the production schema `'cancelled'` is a word
+// that reaches such a consumer through the gate-closure path rather than only
+// through our own writes. `isTerminalOutboxStatus` is exported for the same
+// reason `isDestination` is: the predicate, not its backing tuple, is what a
+// caller should be spelling.
+//
+// What stays off the surface is anything the module names with a leading
+// underscore -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_PENDING_ACTION`, and
+// the `_DUE_QUERY` family. Those are module-internal by this repo's naming
+// convention and are exported from `outbox.ts` for the **suite**, which
+// imports them from the module directly and can, because `knip.json` lists
+// `test/**/*.test.ts` as entry points; nothing here has ever re-exported one
+// and this change does not start. `UNOWNED_OUTBOX_QUERY` is not the
+// counter-example it looks like: it carries no underscore because it is the
+// invariant query an operator or an external auditor is meant to run against
+// a control plane they did not write, which is exactly the kind of name the
+// package exists to hand out (D-0002 -- `.` is the only export path, so a
+// name withheld here is unreachable for an installed consumer).
 export {
   AckOutcome,
   ActionHandler,
@@ -299,10 +332,14 @@ export {
   HandlerRegistry,
   HandlerRejected,
   HumanGateRequired,
+  isTerminalOutboxStatus,
+  OUTBOX_STATUSES,
   Outbox,
   OutboxMessage,
+  type OutboxStatus,
   OutboxUsageError,
   RecoveryReport,
+  TERMINAL_OUTBOX_STATUSES,
   UNOWNED_OUTBOX_QUERY,
   UNSUPPORTED_MECHANISMS,
 } from "./control_plane/outbox.js";

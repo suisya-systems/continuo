@@ -235,6 +235,234 @@ describe("the message bus: drop, resend, exactly one ack", () => {
     expect(statuses).toEqual({ "task-1": "delivered", "task-2": "pending" });
   });
 
+  // ------------------------------- target-only: the gate's `cancelled` status
+  //
+  // Everything below is **target-only**: interlock's
+  // `tests/messagebus/test_messagebus.py` has no counterpart for any of it,
+  // because the outbox it drove had three statuses and this one has four.
+  // Migration `0003_outbox_cancelled_status.sql` added `cancelled`, and
+  // `closeGate` (`src/control_plane/gates.ts`) writes it -- a **second writer**
+  // moving rows this bus is mid-flight over, taking the `pending -> cancelled`
+  // and `delivered -> cancelled` edges without consulting the bus and without
+  // holding the bus's lease.
+  //
+  // These cases are what makes that writer's existence a tested fact here rather
+  // than a fact only `test/control_plane/gates.test.ts` knows. They cancel
+  // through `BusEnv.cancelRelay`, which reproduces closure's own UPDATE
+  // statement (see `_env.ts`) rather than inventing a cancellation shape -- a
+  // test written against a shape the product never writes would keep passing
+  // after the product's guard was lost.
+  //
+  // Note that these run against a **production** fixture, which is the whole
+  // reason `_env.ts` moved: `cancelled` is not in the spike schema's CHECK
+  // constraint, so on the old fixture every one of these cases would have failed
+  // at the cancellation rather than at the behaviour it is about.
+
+  test("a message cancelled while pending is never delivered", () => {
+    // The case that matters most, and the one with an external cost.
+    //
+    // Before the fix, a row cancelled between the send and the poll was NOT
+    // skipped: `Outbox.attempt` had no terminal guard for `cancelled`, so the
+    // row ran the entire delivery path -- retry_count incremented, action row
+    // written, and **the handler called, performing the external side effect**
+    // -- and only then reached `_MARK_DELIVERED`, whose write the forward-only
+    // trigger aborts because `cancelled` has no outgoing edge. The worst
+    // possible ordering: the effect happens at the destination, and the database
+    // then denies it ever did. A relay whose human gate has closed is a question
+    // nobody is waiting for, and asking it anyway is the failure this whole
+    // change exists to prevent.
+    //
+    // So the assertion is not merely "poll did not return it". It is that the
+    // destination's own ledger holds nothing for it -- the only evidence that
+    // distinguishes "skipped" from "delivered and then disowned".
+    const env = busEnv("cancel-pending");
+    send(env, { messageId: "task-1" });
+    send(env, { messageId: "task-2" });
+    expect(env.cancelRelay("task-1"), "the cancellation must have moved a row").toBe(1);
+
+    const envelopes = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+    expect(envelopes.map((e) => e.messageId)).toEqual(["task-2"]);
+    expect(
+      env.effectCount("dk-task-1"),
+      "a cancelled relay must reach the destination zero times",
+    ).toBe(0);
+    expect(env.outboxStatus("task-1")).toBe("cancelled");
+    // Cancellation is a normal ending, not a fault: nothing about it belongs in
+    // the refusal audit trail, which exists to record fence violations.
+    expect(env.refusedActionCount()).toBe(0);
+    // And it stays gone. `due()` is the resend engine; a cancelled row that
+    // stayed due would be re-presented on every poll forever.
+    expect(env.bus.outbox.due(T0 + 10_000).map((m) => m.messageId)).toEqual(["task-2"]);
+  });
+
+  test("a late ack for a cancelled message is a no-op, not a refusal", () => {
+    // The recipient answered; the gate closed while the answer was in flight.
+    //
+    // Nothing the recipient did was wrong and nothing it could have done would
+    // have avoided the race, so the ack is reported as changing nothing rather
+    // than thrown at whoever sent it -- the same contract a duplicate ack has
+    // already had. `ackedAtMs` is `null` and that is a statement, not a gap:
+    // 0003's `CHECK ((status = 'acked') = (acked_at_ms IS NOT NULL))` makes it
+    // impossible for a cancelled row to carry an ack instant, so `null` here
+    // means "no ack exists and none ever will", distinct from the late-duplicate
+    // shape where `recorded: false` comes back with a real instant.
+    //
+    // Two failure modes are pinned at once. Without `recordAck`'s cancelled
+    // branch the row would fall through to the *undelivered* check -- a row
+    // cancelled while pending has a null `delivered_at_ms` -- and be refused as
+    // "evidence of a lost delivery record", a wildly wrong account of a gate
+    // closure. And without the UPDATE's narrowing to `status = 'delivered'`, the
+    // statement would reach SQLite and be aborted by
+    // `outbox_status_is_forward_only` as a constraint error out of a method
+    // whose entire contract is that a late ack does not fail.
+    const env = busEnv("cancel-after-delivery");
+    send(env, { messageId: "task-1" });
+    const delivered = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+    expect(delivered.map((e) => e.messageId)).toEqual(["task-1"]);
+    expect(env.outboxStatus("task-1")).toBe("delivered");
+    expect(env.cancelRelay("task-1"), "the cancellation must have moved a row").toBe(1);
+
+    const outcome = env.bus.ack("task-1", { nowMs: T0 + 2_000, recipient: RECIPIENT });
+    expect({
+      recorded: outcome.recorded,
+      cancelled: outcome.cancelled,
+      ackedAtMs: outcome.ackedAtMs,
+    }).toEqual({ recorded: false, cancelled: true, ackedAtMs: null });
+
+    expect(env.outboxStatus("task-1"), "a late ack must not move a terminal row").toBe("cancelled");
+    expect(env.ackedRowCount()).toBe(0);
+    // The one effect is the delivery that really happened, before the gate
+    // closed. The ack adds nothing, and neither does a second one.
+    expect(env.effectCount("dk-task-1")).toBe(1);
+    const again = env.bus.ack("task-1", { nowMs: T0 + 3_000, recipient: RECIPIENT });
+    expect(again.recorded).toBe(false);
+    expect(again.cancelled).toBe(true);
+    expect(env.effectCount("dk-task-1")).toBe(1);
+    expect(env.refusedActionCount()).toBe(0);
+  });
+
+  test("a cancellation after the due snapshot does not fail the whole poll", () => {
+    // A gate closing inside a poll must cost one message, not the batch.
+    //
+    // `Outbox.due` reads its list once and `MessageBus.poll` then walks it one
+    // attempt at a time, so every row after the first is attempted against a
+    // database that may have moved. Before the fix the post-snapshot re-read
+    // tested for `acked` alone, so a row cancelled in that window fell through
+    // into `attempt()` -- which refuses a terminal row with an
+    // `OutboxUsageError` that leaves `poll` entirely. `poll` builds its
+    // envelopes in a local array and returns it only at the end, so the throw
+    // discards every envelope already built, including messages that were
+    // delivered successfully and whose effects had already happened. One
+    // recipient's closed gate would have failed that recipient's other work.
+    //
+    // Reproduced deterministically rather than by timing: the cancellation is
+    // fired from inside task-1's `before_durable_write` checkpoint, which is the
+    // first thing `Outbox.attempt` does -- so it lands after `due()` took its
+    // snapshot of both rows and before task-2 is re-read.
+    //
+    // The assertion is positive on the survivor. "Did not throw" would be
+    // satisfied by a poll that skipped everything and returned an empty list,
+    // which is the failure with a lost message in it.
+    const state = { armed: false, fired: 0 };
+    const cancelTask2MidPoll = (name: string): void => {
+      if (state.armed && name === CHECKPOINT_BEFORE_DURABLE_WRITE && state.fired === 0) {
+        state.fired = env.cancelRelay("task-2");
+      }
+    };
+
+    const env = makeBusEnv(createTempDir("cancel-mid-poll"), "cancel-mid-poll", {
+      checkpoint: cancelTask2MidPoll,
+    });
+    try {
+      send(env, { messageId: "task-1" });
+      send(env, { messageId: "task-2" });
+      state.armed = true;
+      const envelopes = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+      expect(state.fired, "the checkpoint must actually have cancelled a row").toBe(1);
+      expect(
+        envelopes.map((e) => e.messageId),
+        "the surviving message must come back from the same poll the cancellation landed in",
+      ).toEqual(["task-1"]);
+      expect(env.outboxStatus("task-1")).toBe("delivered");
+      expect(env.outboxStatus("task-2")).toBe("cancelled");
+      expect(env.effectCount("dk-task-1")).toBe(1);
+      expect(env.effectCount("dk-task-2"), "the cancelled row's effect never happened").toBe(0);
+      // Skipped before `attempt()` was entered, so nothing was written on
+      // task-2's behalf: no fenced attempt-count update, hence no refusal row.
+      expect(env.refusedActionCount()).toBe(0);
+      // The survivor settles normally afterwards -- the poll was not left in a
+      // half-state by the cancellation it walked past.
+      expect(env.bus.ack("task-1", { nowMs: T0 + 2_000, recipient: RECIPIENT }).recorded).toBe(
+        true,
+      );
+    } finally {
+      env.close();
+    }
+  });
+
+  test("a cancellation inside the attempt itself is skipped, not raised", () => {
+    // The residual window the pre-attempt re-read cannot close.
+    //
+    // The case above cancels between the snapshot and the attempt, where the
+    // re-read catches it. This one cancels once the attempt has already begun,
+    // which no amount of checking first can prevent: the gate is a separate
+    // writer and a gap always exists. The attempt then fails on its own fenced
+    // write, and `poll`'s post-exception residual test is what decides whether
+    // that failure is a skip or an error escaping the whole batch. That test
+    // used to ask only whether the row was `acked`, so a cancelled row re-threw
+    // and took the batch with it.
+    //
+    // This is the second of the two sites `docs/design/minimal-operating-loop.md`
+    // section 5.1 does not enumerate (it calls its four predicates "the floor
+    // rather than the list"); both live in `src/messagebus/bus.ts`, invisible to
+    // a search of the outbox's SQL. Being un-enumerated is exactly why it gets
+    // its own case rather than being folded into the one above.
+    //
+    // Fired on the SECOND `before_durable_write` of the armed poll, which is
+    // task-2's own: task-1 is attempted and delivered first, task-2 is then
+    // re-read as still pending, enters `attempt()`, and is cancelled from
+    // inside it.
+    const state = { armed: false, seen: 0, fired: 0 };
+    const cancelTask2InsideItsAttempt = (name: string): void => {
+      if (state.armed && name === CHECKPOINT_BEFORE_DURABLE_WRITE) {
+        state.seen += 1;
+        if (state.seen === 2) {
+          state.fired = env.cancelRelay("task-2");
+        }
+      }
+    };
+
+    const env = makeBusEnv(createTempDir("cancel-in-attempt"), "cancel-in-attempt", {
+      checkpoint: cancelTask2InsideItsAttempt,
+    });
+    try {
+      send(env, { messageId: "task-1" });
+      send(env, { messageId: "task-2" });
+      state.armed = true;
+      const envelopes = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+      expect(state.fired, "the checkpoint must actually have cancelled a row").toBe(1);
+      expect(
+        envelopes.map((e) => e.messageId),
+        "task-1 was delivered before the cancellation and must still be returned",
+      ).toEqual(["task-1"]);
+      expect(env.outboxStatus("task-2")).toBe("cancelled");
+      // The point of the terminal guard inside `attempt()`: the fenced
+      // attempt-count update excludes terminal rows, so the delivery path stops
+      // there -- before the handler is called. The destination never hears about
+      // a relay whose gate closed.
+      expect(env.effectCount("dk-task-2")).toBe(0);
+      // The known cost of the residual window, pinned so it stays known: the
+      // fenced update that matched no row is recorded as a refusal before the
+      // skip is recognised. Audit noise, not a delivery fault -- the same one
+      // "a message settled mid poll is skipped, not an error" pins for a late
+      // ack, and MessageBus.poll's own comment explains why eliminating it is
+      // out of scope.
+      expect(env.refusedActionCount()).toBe(1);
+    } finally {
+      env.close();
+    }
+  });
+
   test("two tasks settle independently", () => {
     const env = busEnv();
     send(env, { messageId: "task-1" });

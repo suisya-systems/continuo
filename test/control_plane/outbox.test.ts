@@ -65,6 +65,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import Database from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
 import * as destinationModule from "../../src/control_plane/destination.js";
@@ -87,9 +88,15 @@ import {
 } from "../../src/control_plane/handlers.js";
 import * as leaseModule from "../../src/control_plane/lease.js";
 import { FencedStatement } from "../../src/control_plane/lease.js";
+import {
+  createProductionControlPlane,
+  openProductionControlPlane,
+} from "../../src/control_plane/migrator.js";
 import * as outboxModule from "../../src/control_plane/outbox.js";
 import {
   _COUNT_ATTEMPT,
+  _DEGRADED_DUE_QUERY,
+  _DUE_QUERY,
   _MARK_DELIVERED,
   _PENDING_ACTION,
   ActionHandler,
@@ -102,11 +109,13 @@ import {
   HandlerRegistry,
   HandlerRejected,
   HumanGateRequired,
+  OUTBOX_STATUSES,
   Outbox,
   type OutboxMessage,
   OutboxUsageError,
   outboxSeams,
   StaleWriterRefused,
+  TERMINAL_OUTBOX_STATUSES,
   UNOWNED_OUTBOX_QUERY,
   UNSUPPORTED_MECHANISMS,
 } from "../../src/control_plane/outbox.js";
@@ -2359,5 +2368,673 @@ describe("seam liveness (target-only)", () => {
     expect(actionsOf(cp, { status: "refused" })[0]?.action_id).toBe(
       "refused-0123456789abcdef0123456789abcdef",
     );
+  });
+});
+
+// --------------------------------------------------------------------------
+// migration 0003's fourth status (target-only, production schema)
+//
+// Everything above this line runs on the S5 spike table, which has a
+// three-word status vocabulary and no `'cancelled'` at all. Those 74 cases are
+// the faithful translation of `tests/control_plane/test_outbox.py` and they
+// stay on `createControlPlane` / `openControlPlane` (D-0026): the predicate
+// rewrite this section exists for is *extensionally identical* on a three-word
+// vocabulary -- `status <> 'acked'` and `status IN ('pending', 'delivered')`
+// pick out the same rows when those are the only three words -- so the source
+// suite is the evidence that the rewrite changed nothing it was not meant to
+// change, and it is only evidence while it is left alone.
+//
+// The cases below are the other half, and none of them is expressible up
+// there: they are about a status the spike table's `CHECK` would refuse. So
+// they take a **production** control plane at head, built from the shipped
+// migrations, and they are target-only -- there is no source node for any of
+// them, because the source has no 0003.
+//
+// What they pin, in the order the failure would be met:
+//
+// * the status vocabulary and its terminal set are the *database's*, not two
+//   hand-kept lists that agree today;
+// * `Outbox.due` reads through `outbox_undelivered`, the partial index 0003
+//   wrote to serve exactly this predicate -- asserted against the statement
+//   traced out of the driver, never against a copy pasted here;
+// * every path that used to decide "finished" by asking whether a row was
+//   acked -- `due`, `unowned` / `recover`, `attempt`, `recordAck` -- treats a
+//   cancellation as the end of the message, and does so *without* performing
+//   the effect, incrementing the count, adopting the row, or reporting an
+//   ack that never happened.
+// --------------------------------------------------------------------------
+
+/**
+ * The production database's name inside a case root.
+ *
+ * A different name from {@link DATABASE_NAME}, and deliberately so: several
+ * cases in this file put a dropbox beside the database in the same directory,
+ * and a spike and a production database sharing one name in one root would be
+ * a copy silently overwriting a copy.
+ */
+const PRODUCTION_DATABASE_NAME = "production.sqlite3";
+
+/**
+ * The production database this section starts from, built once for this file.
+ *
+ * The same four-line declaration `production-schema.test.ts`, `gates.test.ts`
+ * and `events.test.ts` all carry (D-0027): create one at `T0`, at head, with
+ * no `migrationsDir` override, and hand each case a copy. Creating a migrated
+ * database is the expensive fixture in this repository -- it is fsyncs and
+ * four migration steps, not DDL -- and every case below wants a byte-identical
+ * one.
+ */
+const productionTemplate = suiteTemplate(PRODUCTION_DATABASE_NAME, (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/** A fresh copy of {@link productionTemplate}, in the caller's case root. */
+function productionDbPath(root: string): string {
+  return productionTemplate.copyInto(root, PRODUCTION_DATABASE_NAME);
+}
+
+/**
+ * {@link cpFixture}'s production twin: the same one run and one lease, on a
+ * database at migration head.
+ *
+ * Opened with `openProductionControlPlane` rather than created, for D-0027's
+ * reason and for one more that only applies to the production opener: opening
+ * *verifies the copy is at head against the ledger*, so a template that built
+ * the wrong thing -- or a migration added without its checksum -- is a typed
+ * refusal at the first case rather than a suite quietly asserting things about
+ * a schema nobody shipped.
+ *
+ * The run row is not decoration here. `outbox.run_id REFERENCES run(run_id)`
+ * is enforced on the production schema, so an enqueue with no run behind it is
+ * a foreign-key failure rather than a row.
+ */
+function productionCpFixture(dbPath: string): SqliteDatabase {
+  const connection = openProductionControlPlane(dbPath);
+  closeWhenFinished(connection);
+  connection
+    .prepare(
+      "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms)" +
+        " VALUES ('run-1', 'running', ?, ?)",
+    )
+    .run(T0, T0);
+  connection
+    .prepare(
+      "INSERT INTO lease (resource, holder, epoch, acquired_at_ms, expires_at_ms)" +
+        " VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(RESOURCE, HOLDER, EPOCH, T0, T0 + TTL_MS);
+  return connection;
+}
+
+/**
+ * Retire a relay the way a gate closure retires it.
+ *
+ * **This is `gates.ts`'s own statement, not an invented one.** `closeGate`
+ * ends by running, in the same transaction as the closure:
+ *
+ *     UPDATE outbox
+ *        SET status = 'cancelled'
+ *      WHERE status IN ('pending', 'delivered')
+ *        AND message_id IN (SELECT message_id FROM gate_relay WHERE gate_id = ?)
+ *
+ * and the two halves of that `WHERE` are both load-bearing for what the cases
+ * below claim. The `status IN ('pending', 'delivered')` guard is why a second
+ * close sweep is idempotent rather than an integrity error -- there is no edge
+ * out of a terminal status in 0003's lattice -- and it is why a cancellation
+ * can never reach an **acked** row, which is the schema's own statement of the
+ * rule that the evidence an answer arrived is never deleted.
+ *
+ * The one substitution is the relay lookup: the subquery over `gate_relay` is
+ * replaced by the message id the case names. Standing up a real gate would
+ * mean a gate row, a stage, a relay row, an actor kind and a policy revision,
+ * none of which any assertion below reads -- and the substitution is in the
+ * half of the statement that *chooses* rows, never in the half that decides
+ * what a cancellation is allowed to do. `gates.test.ts` owns the case that the
+ * relay lookup finds the right messages.
+ *
+ * The `changes` assertion is anti-vacuity, and it has caught the obvious
+ * mistake: a helper that silently cancelled nothing would make every case
+ * below pass for the reason that nothing had happened.
+ */
+function closeTheGateOver(cp: SqliteDatabase, messageId: string): void {
+  const info = cp
+    .prepare(
+      `
+        UPDATE outbox
+           SET status = 'cancelled'
+         WHERE status IN ('pending', 'delivered')
+           AND message_id IN (:message_id)
+        `,
+    )
+    .run({ message_id: messageId });
+  expect(
+    info.changes,
+    `the gate closure cancelled no row for ${messageId}; the case that follows would ` +
+      "then be asserting about a message that was never retired",
+  ).toBe(1);
+}
+
+/** The query plan SQLite chose for `sql`, flattened for substring assertions. */
+function explainPlan(cp: SqliteDatabase, sql: string, params?: Record<string, unknown>): string {
+  const planRows =
+    params === undefined
+      ? cp.prepare<[], unknown[]>(`EXPLAIN QUERY PLAN ${sql}`).raw().all()
+      : cp
+          .prepare<Record<string, unknown>, unknown[]>(`EXPLAIN QUERY PLAN ${sql}`)
+          .raw()
+          .all(params);
+  return planRows.map((row) => JSON.stringify(row)).join(" ");
+}
+
+/**
+ * The statement {@link Outbox.due} really ran, from the driver.
+ *
+ * Traced rather than pasted into the test or read out of `_DUE_QUERY`: the
+ * plan assertion below is only worth anything if it is made against the text
+ * SQLite was actually handed. `events.test.ts`'s `executedOutboxSql` is the
+ * same helper for the same reason, and that reason is a regression that
+ * happened -- the pasted form sat in the source suite and stayed green while
+ * the shipped predicate was rewritten into the degraded arithmetic. A test
+ * that EXPLAINs its own copy asserts a property of its own copy.
+ *
+ * Adapted the same way: Python installs the trace on the connection with
+ * `set_trace_callback` and removes it afterwards, while better-sqlite3's
+ * `verbose` logger can only be given at construction. So the traced connection
+ * is a second handle on the same file and the `tracing` flag reproduces the
+ * install/remove window exactly. The statement captured is still the one
+ * `due` executed, which is the whole property. `verbose` hands back the
+ * statement with its parameters already expanded, which `EXPLAIN QUERY PLAN`
+ * accepts unchanged.
+ */
+function executedDueSql(path: string, dropbox: Destination, nowMs: number): string {
+  const seen: string[] = [];
+  let tracing = false;
+  const traced = new Database(path, {
+    fileMustExist: true,
+    verbose: (message?: unknown) => {
+      if (tracing) {
+        seen.push(String(message));
+      }
+    },
+  });
+  closeWhenFinished(traced);
+
+  const outbox = makeOutbox(traced, dropbox);
+  tracing = true;
+  try {
+    outbox.due(nowMs);
+  } finally {
+    tracing = false;
+  }
+  const outboxStatements = seen.filter((sql) => sql.includes("FROM outbox"));
+  expect(outboxStatements, JSON.stringify(outboxStatements)).toHaveLength(1);
+  return outboxStatements[0] as string;
+}
+
+/**
+ * One outbox row in a named status, written straight past the module.
+ *
+ * The two vocabulary cases below are about what the **DDL** admits, so they
+ * must be able to put a row into a status the module would never write it into
+ * -- `Outbox` has no path that produces an `'acked'` row without a delivery
+ * before it, and none at all that produces `'archived'`. Going around the
+ * module is the point rather than a shortcut.
+ *
+ * The companion columns are the ones 0003's `CASE` requires of each status: a
+ * `'pending'` row must claim no delivery, `'delivered'` and `'acked'` must
+ * carry one, `'acked'` must carry an ack and nothing else may, and
+ * `'cancelled'` is admitted either way (this writes the cancelled-while-pending
+ * shape). Getting them right is what keeps a refusal attributable: a case that
+ * fed SQLite an illegal companion column would see a CHECK failure and could
+ * not tell it from the constraint it meant to test.
+ */
+function insertRawOutbox(cp: SqliteDatabase, messageId: string, status: string): void {
+  const deliveredAtMs = status === "delivered" || status === "acked" ? T0 + 1 : null;
+  const ackedAtMs = status === "acked" ? T0 + 2 : null;
+  cp.prepare(
+    "INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key, status," +
+      " retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms, acked_at_ms)" +
+      " VALUES (?, 'run-1', ?, '{}', ?, ?, 0, ?, ?, ?, ?)",
+  ).run(
+    messageId,
+    NOTIFY_RECIPIENT,
+    `dk/${messageId}`,
+    status,
+    EPOCH,
+    T0,
+    deliveredAtMs,
+    ackedAtMs,
+  );
+}
+
+describe("the status vocabulary is the tables own (target-only, production schema)", () => {
+  test("OUTBOX_STATUSES is the enumeration the production CHECK declares", () => {
+    // The constant is a second, hand-kept copy of a DDL enumeration, and this
+    // is the case that makes keeping it by hand safe. The vocabulary is read
+    // **out of the database** -- `sqlite_master` holds the text SQLite itself
+    // stored for the table that migration 0003 rebuilt -- rather than pasted
+    // here, because a paste would drift in step with the constant it is
+    // checking and a migration that widened the CHECK would leave both of them
+    // wrong and the suite green.
+    //
+    // `run-lifecycle.test.ts`'s "the mirrored vocabulary is the table's own"
+    // is the same guard for `RUN_STATUSES`, and the behavioural half below is
+    // taken from it directly.
+    const cp = productionCpFixture(productionDbPath(caseRoot("s7")));
+    const rawDdl = String(
+      cp
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'outbox'")
+        .pluck()
+        .get(),
+    );
+    // The `--` comment lines are stripped first, and they have to be: SQLite
+    // stores the CREATE TABLE text **verbatim**, comments and all, and 0003's
+    // rebuild explains itself by quoting the constraint it replaced --
+    //     --     CHECK ((status IN ('delivered', 'acked')) = ...)
+    // -- so a scan over the raw text finds two enumerations and cannot tell
+    // the live one from the one being described as gone.
+    const ddl = rawDdl
+      .split("\n")
+      .filter((line) => !/^\s*--/.test(line))
+      .join("\n");
+    const enumerations = [...ddl.matchAll(/status IN \(([^)]*)\)/g)];
+    // Anti-vacuity, and it is not theoretical: a regex that matched nothing
+    // would leave `declared` empty, and an empty list compared against an
+    // empty list is a test that passes because it asked nothing. More than one
+    // match would mean the table grew a second status enumeration, which the
+    // extraction below would then be silently choosing between.
+    expect(
+      enumerations,
+      `the outbox DDL holds ${enumerations.length} 'status IN (...)' enumerations, not one:\n${ddl}`,
+    ).toHaveLength(1);
+    const declared = String(enumerations[0]?.[1])
+      .split(",")
+      .map((word) => word.trim().replace(/^'|'$/g, ""));
+    expect(declared.length).toBeGreaterThan(0);
+
+    // Sorted on both sides: the DDL lists the words in lifecycle order and the
+    // constant follows it, but SQLite promises nothing about the order it
+    // stores the text in and a CHECK is a set. What must not differ is the
+    // membership -- a status the database admits and this module has never
+    // heard of, or the reverse.
+    expect([...declared].sort()).toEqual([...OUTBOX_STATUSES].sort());
+
+    // ...and the words really are writable, which no amount of string
+    // comparison shows. Each one is inserted with the companion columns 0003's
+    // CASE requires of it, and a word outside the enumeration is refused.
+    for (const status of OUTBOX_STATUSES) {
+      insertRawOutbox(cp, `msg-${status}`, status);
+      expect(
+        cp.prepare("SELECT status FROM outbox WHERE message_id = ?").pluck().get(`msg-${status}`),
+      ).toBe(status);
+    }
+    expectSqliteError(() => insertRawOutbox(cp, "msg-invented", "archived"), {
+      code: CONSTRAINT,
+    });
+  });
+
+  test("TERMINAL_OUTBOX_STATUSES is the set the lattice trigger leaves with no exit", () => {
+    // 0003 replaced 0001's total order over three statuses with a lattice:
+    //
+    //     pending   -> delivered | cancelled
+    //     delivered -> acked     | cancelled
+    //     acked     -> (nothing)
+    //     cancelled -> (nothing)
+    //
+    // "Terminal" is a property of that trigger and of nothing else, so it is
+    // asked of the trigger, one ordered pair at a time, rather than compared
+    // against a second list. `run-lifecycle.test.ts`'s "the terminal set is
+    // the trigger's terminal set" is the same case for `run`.
+    //
+    // The UPDATE sets **status alone** and touches no companion column, which
+    // is what isolates `outbox_status_is_forward_only` from its neighbours. An
+    // update that also cleared `acked_at_ms` to keep the row legal would be
+    // refused by `outbox_ack_is_set_once` instead, and every `acked -> *` pair
+    // would then be reported as terminal by the wrong trigger -- terminality
+    // that the lattice did not enforce and that a later migration could repeal
+    // without this case noticing. Isolating it costs a `CHECK` failure on the
+    // admitted steps (`pending -> delivered` leaves `delivered_at_ms` null),
+    // and that is exactly the signal wanted: SQLite runs BEFORE triggers ahead
+    // of constraint checking, so reaching the CHECK at all proves the lattice
+    // let the step through.
+    const cp = productionCpFixture(productionDbPath(caseRoot("s7")));
+    const lattice = /acked and cancelled are terminal/;
+
+    const admitted = new Map<string, string[]>();
+    for (const from of OUTBOX_STATUSES) {
+      admitted.set(from, []);
+      for (const to of OUTBOX_STATUSES) {
+        if (to === from) {
+          // The trigger's WHEN clause never fires for NEW.status = OLD.status,
+          // so a self-update says nothing about terminality either way.
+          continue;
+        }
+        const messageId = `msg-${from}-to-${to}`;
+        insertRawOutbox(cp, messageId, from);
+        try {
+          cp.prepare("UPDATE outbox SET status = ? WHERE message_id = ?").run(to, messageId);
+          admitted.get(from)?.push(to);
+        } catch (error) {
+          if (!lattice.test(String((error as Error).message))) {
+            // Some other constraint spoke first -- which means the lattice had
+            // already let the step past it. That is an admitted edge.
+            admitted.get(from)?.push(to);
+          }
+        }
+      }
+    }
+
+    const terminal = OUTBOX_STATUSES.filter((status) => admitted.get(status)?.length === 0);
+    expect([...terminal].sort()).toEqual([...TERMINAL_OUTBOX_STATUSES].sort());
+    // ...and the complement is not empty, so "every status is terminal" -- the
+    // way this case would pass if the UPDATE were malformed and always threw
+    // -- fails instead.
+    expect(
+      OUTBOX_STATUSES.filter((status) => !terminal.includes(status)),
+      `no status has an outgoing edge, which cannot be right: ${JSON.stringify([...admitted])}`,
+    ).not.toEqual([]);
+  });
+});
+
+describe("the due query uses the partial index written to serve it (target-only)", () => {
+  test("the plan of the statement due actually ran names outbox_undelivered", () => {
+    // 0003 ships `CREATE INDEX outbox_undelivered ON outbox(enqueued_at_ms)
+    // WHERE status IN ('pending', 'delivered')`, and the whole reason
+    // `_DUE_QUERY` spells its predicate as that positive `IN` list rather than
+    // as the negation of the terminal set is that SQLite may use a partial
+    // index only when the query's WHERE carries the index's own predicate as a
+    // term. The two forms return the same rows, so nothing but the PLAN can
+    // tell them apart -- and outbox rows are never deleted
+    // (`outbox_rows_are_never_deleted`), so a scan here grows without bound
+    // for as long as the database lives.
+    //
+    // This EXPLAINs the statement the METHOD executed, traced from the driver,
+    // not a copy pasted here. See {@link executedDueSql}.
+    const root = caseRoot("s7");
+    const path = productionDbPath(root);
+    const cp = productionCpFixture(path);
+    const dropbox = dropboxFixture(root);
+    enqueue(makeOutbox(cp, dropbox));
+
+    const plan = explainPlan(cp, executedDueSql(path, dropbox, T0 + 1));
+    expect(plan).toContain("SEARCH");
+    expect(plan).toContain("outbox_undelivered");
+    expect(plan).not.toContain("SCAN");
+
+    // The algebraically identical form does not, because the column is inside
+    // an expression and no b-tree can seek on one. Asserting this half is what
+    // makes the half above mean something: without it, a database on which
+    // every plan says SEARCH would also pass.
+    expect(_DEGRADED_DUE_QUERY).not.toBe(_DUE_QUERY);
+    const degraded = explainPlan(cp, _DEGRADED_DUE_QUERY, { now_ms: T0 + 1 });
+    // SQLite still names outbox_undelivered here -- it reads the partial index
+    // as a narrower covering table, and it satisfies the ORDER BY from it --
+    // but the verb is SCAN, not SEARCH: every unfinished row ever enqueued is
+    // visited and the age arithmetic is evaluated per row. So the assertion is
+    // on the VERB, never on the index name.
+    expect(degraded).not.toContain("SEARCH");
+    expect(degraded).toContain("SCAN");
+  });
+
+  test("the two forms the plan test separates return the same rows", () => {
+    // If they disagreed on rows, the plan comparison would be comparing two
+    // different questions and the index claim above would be vacuous.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    enqueue(outbox, { messageId: "msg-1", dedupKey: "dk-1" });
+    enqueue(outbox, { messageId: "msg-2", dedupKey: "dk-2", at: T0 + 1 });
+    outbox.attempt("msg-2", { nowMs: T0 + 2, epoch: EPOCH });
+    enqueue(outbox, { messageId: "msg-3", dedupKey: "dk-3", at: T0 + 3 });
+    closeTheGateOver(cp, "msg-3");
+
+    const params = { now_ms: T0 + 10 };
+    const shipped = cp.prepare<typeof params, unknown[]>(_DUE_QUERY).raw().all(params);
+    expect(shipped).toEqual(
+      cp.prepare<typeof params, unknown[]>(_DEGRADED_DUE_QUERY).raw().all(params),
+    );
+    expect(shipped).not.toEqual([]);
+  });
+});
+
+describe("cancelled is terminal on every path (target-only, production schema)", () => {
+  test("due does not offer a message cancelled while it was pending", () => {
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    enqueue(outbox, { messageId: "msg-live", dedupKey: "dk-live" });
+    enqueue(outbox, { messageId: "msg-doomed", dedupKey: "dk-doomed" });
+    expect(
+      outbox
+        .due(T0 + 1)
+        .map((message) => message.messageId)
+        .sort(),
+    ).toEqual(["msg-doomed", "msg-live"]);
+
+    closeTheGateOver(cp, "msg-doomed");
+
+    // The gate withdrew the question. Offering the message again would put a
+    // withdrawn relay back on the delivery worker's list on every pass, which
+    // is the whole failure 0003 was written to end.
+    expect(outbox.due(T0 + 1).map((message) => message.messageId)).toEqual(["msg-live"]);
+    expect(outbox.load("msg-doomed").status).toBe("cancelled");
+  });
+
+  test("due does not offer a message cancelled after it was delivered", () => {
+    // The second shape, and the one the old `status <> 'acked'` predicate got
+    // most wrong: a delivered-but-unacked row is exactly the resend case, so
+    // it stays due forever until something terminates it -- and after 0003 a
+    // cancellation is one of the two things that can.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    const message = enqueue(outbox);
+    outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH });
+    expect(outbox.load(message.messageId).status).toBe("delivered");
+    expect(outbox.due(T0 + 20).map((due) => due.messageId)).toEqual([message.messageId]);
+
+    closeTheGateOver(cp, message.messageId);
+
+    expect(outbox.due(T0 + 20)).toEqual([]);
+    // The cancellation retired the message; it did not erase what happened to
+    // it. `outbox_delivery_is_set_once` is what guarantees that, and the
+    // delivery instant is still on the row.
+    expect(outbox.load(message.messageId).deliveredAtMs).toBe(T0 + 10);
+  });
+
+  test("recovery neither adopts a cancelled row nor names it unowned forever", () => {
+    // The "alarms forever" case, one table over from where 0003's own comment
+    // describes it. Before the fix, `UNOWNED_OUTBOX_QUERY` matched a cancelled
+    // row -- its writer_epoch belongs to a lease that has long expired and
+    // nobody will ever take a live one on its behalf -- so every recovery pass
+    // for the rest of the database's life would adopt it and every pass would
+    // find it again.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    enqueue(outbox, { messageId: "msg-live", dedupKey: "dk-live" });
+    enqueue(outbox, { messageId: "msg-doomed", dedupKey: "dk-doomed" });
+    closeTheGateOver(cp, "msg-doomed");
+
+    const later = T0 + TTL_MS + 1; // epoch 1's lease has expired
+    // The criterion as a query anyone can run (D-0001), read positionally the
+    // way the source reads it: the cancelled row is not in the answer at all.
+    const rows = cp
+      .prepare(UNOWNED_OUTBOX_QUERY)
+      .raw()
+      .all({ resource: RESOURCE, now_ms: later }) as unknown[][];
+    expect(rows.map((row) => row[0])).toEqual(["msg-live"]);
+    expect([...outbox.unowned(later)]).toEqual(["msg-live"]);
+
+    cp.prepare("UPDATE lease SET holder = ?, epoch = 2, expires_at_ms = ? WHERE resource = ?").run(
+      "writer-b",
+      later + TTL_MS,
+      RESOURCE,
+    );
+    const successor = makeOutbox(cp, dropbox, { holder: "writer-b" });
+    const report = successor.recover({ nowMs: later, epoch: 2 });
+
+    expect(report.adopted).toEqual(["msg-live"]);
+    expect(report.stillUnowned).toEqual([]);
+    // ...and the cancelled row was left exactly as the gate left it. `_ADOPT`
+    // excluding it is the difference between "recovery is finished" and
+    // "recovery hands a live owner to a message that will never be advanced".
+    const doomed = outbox.load("msg-doomed");
+    expect(doomed.status).toBe("cancelled");
+    expect(doomed.writerEpoch).toBe(EPOCH);
+  });
+
+  test("attempt refuses a cancelled message before it performs the effect", () => {
+    // **The most important case in this file.**
+    //
+    // The refusal is not the interesting half -- the old code refused too,
+    // eventually. It refused at `_MARK_DELIVERED`, which is step 4 of
+    // `Outbox.attempt`, and steps 1 to 3 are a durable retry_count increment,
+    // a pending action row, and **the handler running and the external effect
+    // landing at the destination**. A relay whose gate was closed firing its
+    // side effect at the destination anyway and only then reporting a problem
+    // is the worst outcome the whole change exists to prevent, so what is
+    // asserted here is the *absence* of every one of those three marks, read
+    // from the destination's own ledger as ACCEPTANCE.md section 2 requires.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    const message = enqueue(outbox);
+    closeTheGateOver(cp, message.messageId);
+    const before = outbox.load(message.messageId);
+
+    const refused = expectRefusal(
+      () => outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH }),
+      OutboxUsageError,
+      /is cancelled/,
+    );
+    // The two terminal words get opposite messages on purpose: the reader of
+    // this refusal is being told what happened to their message, and "already
+    // acked" would be a false account of a cancellation.
+    expect(refused.message).not.toMatch(/already acked/);
+
+    // 1. The destination's ledger -- the only evidence that counts.
+    expect(dropbox.effectCount(keyFor("dk-1"))).toBe(0);
+    // 2. The durable count, which is what an operator reads to decide whether
+    //    a destination is refusing. An increment here would inflate it for a
+    //    message no attempt is ever made on again.
+    expect(outbox.load(message.messageId).retryCount).toBe(before.retryCount);
+    expect(before.retryCount).toBe(0);
+    // 3. The record of intent. No action row at all, of any status.
+    expect(actionsOf(cp)).toEqual([]);
+    // ...and the row itself is untouched, still terminal.
+    expect(outbox.load(message.messageId).status).toBe("cancelled");
+  });
+
+  test("recordAck answers a cancelled while pending row instead of crying lost delivery", () => {
+    // A row cancelled while still pending keeps a null `delivered_at_ms` --
+    // 0003 declines to invent a delivery instant for a message that was never
+    // delivered -- so it satisfies the undelivered branch's test exactly. That
+    // branch's refusal calls an undelivered ack *evidence of a lost delivery
+    // record*, which is a wildly wrong account of what happened here: nothing
+    // was lost, the gate withdrew the question. Classifying cancelled first is
+    // what keeps that branch's own meaning intact.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    const message = enqueue(outbox);
+    closeTheGateOver(cp, message.messageId);
+
+    const outcome = outbox.recordAck(message.messageId, { nowMs: T0 + 20 });
+    expect(outcome.recorded).toBe(false);
+    expect(outcome.cancelled).toBe(true);
+    expect(outcome.ackedAtMs).toBeNull();
+    expect(outcome.clockClamped).toBe(false);
+
+    const settled = outbox.load(message.messageId);
+    expect(settled.status).toBe("cancelled");
+    expect(settled.ackedAtMs).toBeNull();
+    expect(settled.deliveredAtMs).toBeNull();
+  });
+
+  test("recordAck answers a delivered then cancelled row and writes nothing", () => {
+    // The ordinary shape of the race the recipient could not have avoided: the
+    // message really was delivered, the recipient really did answer, and the
+    // gate closed in between. ACCEPTANCE.md section 2 says a late ack *changes
+    // nothing* -- not that it is rejected -- and this is a late ack.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    const message = enqueue(outbox);
+    outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH });
+    closeTheGateOver(cp, message.messageId);
+
+    const outcome = outbox.recordAck(message.messageId, { nowMs: T0 + 20 });
+    expect(outcome.recorded).toBe(false);
+    expect(outcome.cancelled).toBe(true);
+    // `null` is a fact, not an absence of information: under 0003's
+    // `CHECK ((status = 'acked') = (acked_at_ms IS NOT NULL))` a cancelled row
+    // can never carry an ack, so there is no instant to report and inventing
+    // one would record an acknowledgement that never happened.
+    expect(outcome.ackedAtMs).toBeNull();
+
+    const settled = outbox.load(message.messageId);
+    expect(settled.status).toBe("cancelled");
+    expect(settled.ackedAtMs).toBeNull();
+    expect(settled.deliveredAtMs).toBe(T0 + 10);
+  });
+
+  test("a cancellation between recordAcks read and its write is answered not thrown", () => {
+    // The race the narrowed UPDATE closes, and the reason the pre-check above
+    // is not sufficient on its own: a gate can close in the gap between the
+    // read and the write, and no amount of checking first removes a gap.
+    //
+    // The old predicate was `acked_at_ms IS NULL`, which is true of a
+    // cancelled row as well as an unacked one. So against a row cancelled in
+    // this gap it did not merely fail to match -- it MATCHED, the statement
+    // reached SQLite, and `outbox_status_is_forward_only` aborted it, because
+    // `cancelled -> acked` is not an edge. A constraint error out of a method
+    // whose entire contract is that a late ack changes nothing. And in the
+    // reading where the row was lost instead, the zero-rows branch answered
+    // "another writer acked", which is a plain false statement about it.
+    //
+    // The gap is driven through the seam the method itself uses: `recordAck`
+    // reads the row with `this.load(...)`, so an own property shadowing the
+    // prototype method lets the case cancel the row after the read has
+    // returned and before the UPDATE is prepared. `outboxSeams` is the wrong
+    // instrument here -- it holds `uuid4Hex` and nothing on this path -- and
+    // better-sqlite3 exposes no update hook, so the dispatch site is the seam
+    // that exists. The first load only is intercepted: `recordAck`'s zero-rows
+    // branch loads a second time to classify, and that read must see the
+    // database as it really is.
+    const root = caseRoot("s7");
+    const cp = productionCpFixture(productionDbPath(root));
+    const dropbox = dropboxFixture(root);
+    const outbox = makeOutbox(cp, dropbox);
+    const message = enqueue(outbox);
+    outbox.attempt(message.messageId, { nowMs: T0 + 10, epoch: EPOCH });
+
+    const realLoad = outbox.load.bind(outbox);
+    let cancelledYet = false;
+    outbox.load = (messageId: string): OutboxMessage => {
+      const loaded = realLoad(messageId);
+      if (!cancelledYet) {
+        cancelledYet = true;
+        closeTheGateOver(cp, messageId);
+      }
+      return loaded;
+    };
+
+    const outcome = outbox.recordAck(message.messageId, { nowMs: T0 + 20 });
+    expect(cancelledYet, "the seam was never reached, so no race was driven").toBe(true);
+    expect(outcome.recorded).toBe(false);
+    expect(outcome.cancelled).toBe(true);
+    expect(outcome.ackedAtMs).toBeNull();
+
+    const settled = realLoad(message.messageId);
+    expect(settled.status).toBe("cancelled");
+    expect(settled.ackedAtMs).toBeNull();
   });
 });

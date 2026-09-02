@@ -447,7 +447,7 @@ translation itself).
 | `tests/gate_item2/test_mediated_real_provider.py` | 5 | `parity/gate_item2.mediated-real-provider.ledger.json` |
 | `tests/gate_item2/test_session_driver_harness.py` | 6 | `parity/gate_item2.session-driver-harness.ledger.json` |
 
-### `broker` -- `retarget` -- 54 cases collected, 4 further modules not collected
+### `broker` -- `retarget` -- 54 cases collected, 5 further modules not collected
 
 The only subsystem where the inventory and the source directory disagree in size.
 
