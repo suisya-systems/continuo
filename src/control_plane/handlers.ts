@@ -8,12 +8,31 @@ import { pythonRepr } from "./python_repr.js";
 /**
  * S7 -- the one action handler, and the mechanism it names.
  *
- * **Spike scaffold, throwaway by default (D-0026).** At spike time `Q-0001`
- * was open and nothing here answered it; D-0029 has since resolved it (the
- * per-item single-writer table is `docs/production-schema.md` section 4.2,
- * the DDL is `control_plane/migrations/0001_initial.sql`), but this module
- * still sits on the throwaway S5 schema and was never updated to the
- * production one. The durable half of Issue `#14` is the suite.
+ * **The database underneath is the production one; the counterparty is
+ * still a stand-in.** This paragraph used to say, flatly, that the module was
+ * spike scaffold (D-0026) because it "still sits on the throwaway S5 schema",
+ * and half of that has stopped being true. `src/messagebus/endpoint.ts` opens
+ * its control plane through `openProductionControlPlane` and builds its
+ * {@link Outbox} on that connection before handing it the registry
+ * {@link spikeRegistry} assembles (`src/messagebus/endpoint.ts:557-558`), so the
+ * rows this handler set is dispatched against are production `outbox` rows
+ * under migration 0003's four-status lattice -- `'cancelled'` included, a
+ * word a gate closure writes and that no S5 database could hold. `Q-0001` is
+ * likewise answered rather than open: D-0029 put the per-item single-writer
+ * table in `docs/production-schema.md` section 4.2 and its DDL in
+ * `control_plane/migrations/0001_initial.sql`.
+ *
+ * **What the repoint did not touch is the destination side, and that side is
+ * still scaffold, throwaway by default (D-0026).** {@link spikeRegistry}'s one
+ * delivering handler applies its effect to a {@link Destination} that is a
+ * directory of files (`KeyedDropbox`, `src/control_plane/destination.ts`), and
+ * a directory of files is not a transport. It models exactly one property of a
+ * real destination -- that the *destination*, not the sender, refuses the
+ * duplicate, decided by `O_EXCL` rather than by any row of ours -- and that
+ * module's own docstring is explicit that nothing else about one is modelled.
+ * Replacing it with a real keyed destination is the next thing on this path;
+ * moving the database did not do it and must not be read as having done it.
+ * The durable half of Issue `#14` is the suite.
  *
  * Issue `#14` asks for **one** handler, and is specific about what makes it
  * count:
@@ -83,12 +102,16 @@ import { pythonRepr } from "./python_repr.js";
 
 /** The `outbox.recipient` value {@link NotifyDestinationHandler} serves.
  *
- * A recipient name, not a role name. Which component sends to which
+ * A recipient name, not a role name -- and it stays one even now that the
+ * database beneath is the production schema. Which component sends to which
  * recipient was the per-item writer assignment `Q-0001` left open at spike
  * time (S5 kept every role out of the DDL for the same reason), and D-0029
- * has since answered it in the production schema -- but this spike scaffold
- * was never migrated onto it, so the recipient name here is still a name,
- * not a role.
+ * has since answered it (`docs/production-schema.md` section 4.2). Nothing
+ * here consults that answer: this constant is matched against
+ * `outbox.recipient` as a literal string, and the endpoint pins one recipient
+ * per process from `INTERLOCK_MESSAGEBUS_RECIPIENT` rather than deriving one
+ * from a role. Reading the writer assignment instead of naming a queue is work
+ * the real transport will do; it is not work the repoint did.
  */
 export const NOTIFY_RECIPIENT = "external-notify";
 

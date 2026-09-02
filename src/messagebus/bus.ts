@@ -3,7 +3,9 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import {
   type AckOutcome,
   type AttemptOutcome,
+  CancellationRaced,
   type HandlerRegistry,
+  isTerminalOutboxStatus,
   Outbox,
   type OutboxMessage,
   OutboxUsageError,
@@ -261,11 +263,43 @@ export class MessageBus {
       if (message.recipient !== recipient) {
         continue;
       }
-      if (this._outbox.load(message.messageId).status === "acked") {
-        // Settled since the due() snapshot -- the common shape of a late ack
-        // (an endpoint restart overlapping its predecessor's unflushed ack).
-        // Re-reading here keeps the ordinary race out of attempt() entirely, so
-        // no refusal is durably recorded for what is simply a settled message.
+      if (isTerminalOutboxStatus(this._outbox.load(message.messageId).status)) {
+        // Finished since the due() snapshot -- skip it, whichever way it
+        // finished. There are two ways, and until migration 0003 this test knew
+        // only one of them:
+        //
+        // - `acked`: the common shape of a late ack (an endpoint restart
+        //   overlapping its predecessor's unflushed ack).
+        // - `cancelled`: gate closure wrote the row off between `Outbox.due`'s
+        //   snapshot and this attempt. `due()` reads a list once and this loop
+        //   then walks it one attempt at a time, so *every* row in the batch
+        //   after the first is being attempted against a database that may have
+        //   moved -- and the 0003 lattice makes `pending -> cancelled` and
+        //   `delivered -> cancelled` legal edges that a *different* writer (the
+        //   human gate, not this bus) takes without consulting us.
+        //
+        // A cancelled row is NORMALLY FINISHED, exactly like an acked one, and
+        // is skipped rather than raised: nobody is owed a delivery of a message
+        // whose gate has closed. Falling through instead would be materially
+        // worse than a lost envelope, because Outbox.attempt runs the
+        // *destination side effect first* and only then writes
+        // `_MARK_DELIVERED`; on a cancelled row the forward-only trigger
+        // (`outbox_status_is_forward_only`, no outgoing edge from `cancelled`)
+        // aborts that write -- so the effect would have happened and the
+        // database would deny it ever did.
+        //
+        // Terminality is asked of `isTerminalOutboxStatus` rather than compared
+        // against a literal here, so a fifth status added to 0003's CHECK is
+        // classified in one place (`src/control_plane/outbox.ts`) instead of
+        // being missed in this package.
+        //
+        // Note this site is NOT one of the four predicates
+        // `docs/design/minimal-operating-loop.md` section 5.1 enumerates; it is
+        // one of the two the design's own list misses (the other is the
+        // post-exception residual test below). Section 5.1 line 694 says to
+        // treat those four "as the floor rather than the list", and these two
+        // are what is above the floor: they live in `src/messagebus/`, not in
+        // the outbox, so a search of the outbox's SQL does not find them.
         continue;
       }
       // One instant per attempt, by the outbox's own contract: Outbox.attempt
@@ -293,8 +327,52 @@ export class MessageBus {
         // never a delivery fault -- eliminating it would need the outbox itself
         // to classify why the fenced update moved no row, which interlock Issue
         // #19 keeps out of scope (the outbox API is used as found).
-        const residual = error instanceof OutboxUsageError || error instanceof StaleWriterRefused;
-        if (residual && this._outbox.load(message.messageId).status === "acked") {
+        //
+        // "Settled" here means *any* terminal status, not `acked` alone. Since
+        // migration 0003 a row can also finish as `cancelled`, written by gate
+        // closure while this attempt was in flight, and the outbox surfaces that
+        // the same two ways: `Outbox.attempt` refuses a terminal row
+        // (OutboxUsageError) and the fenced `_MARK_DELIVERED` finds no row to
+        // move. Testing for `acked` alone made a gate-cancelled row re-throw
+        // here, and the blast radius of that re-throw is the reason this is not
+        // a cosmetic difference: the throw leaves `poll` entirely, so every
+        // envelope already built in this batch is discarded (the array is
+        // local and is never returned), and the failure reaches the worker as
+        // an `isError` tool response (`src/messagebus/endpoint.ts:319-331`).
+        // One relay whose human gate closed must not fail a poll that is
+        // carrying other recipients' -- and this recipient's other -- work.
+        //
+        // Like the post-snapshot re-read above, this site is NOT among the four
+        // predicates `docs/design/minimal-operating-loop.md` section 5.1
+        // enumerates. Section 5.1 line 694 calls those four "the floor rather
+        // than the list"; these two `src/messagebus/bus.ts` tests are the part
+        // above the floor, invisible to a search of the outbox's SQL because
+        // they are written in TypeScript against `load().status`.
+        //
+        // `CancellationRaced` is the *third* shape, and it is the one the
+        // outbox raises deliberately rather than as a side effect of a
+        // predicate missing its row. Its two members are the two sides of the
+        // one act this loop cannot take back: `CancelledBeforeEffect`, raised
+        // when `Outbox.attempt` re-reads the status immediately before
+        // `handler.apply()` and finds the gate closed with the effect not yet
+        // performed; and `CancelledAfterEffect`, raised when the cancellation
+        // won the other race and `_MARK_DELIVERED` found no row to move, in
+        // which case the effect DID land and a `'refused'` action row records
+        // that it did. The base is what is tested here, not either member: this
+        // site asks only whether the delivery ended, and a later third window
+        // -- there have already been two -- must not need this line found and
+        // widened again. It is admitted here for exactly the same
+        // reason the other two are -- the row is terminal, so the delivery is
+        // finished and nobody is owed it -- and omitting it would make the
+        // guard that prevents the side effect cost the whole batch instead,
+        // which is a worse outcome than the one it was added to prevent. The
+        // re-read below is still what decides: the class says only *how* the
+        // attempt stopped, never that the row is in fact settled.
+        const residual =
+          error instanceof OutboxUsageError ||
+          error instanceof StaleWriterRefused ||
+          error instanceof CancellationRaced;
+        if (residual && isTerminalOutboxStatus(this._outbox.load(message.messageId).status)) {
           continue;
         }
         throw error;
@@ -326,7 +404,12 @@ export class MessageBus {
    * Otherwise delegates to {@link Outbox.recordAck} unchanged: exactly one ack
    * is ever recorded per message, later acks are no-ops, and an ack for a
    * message never marked delivered is refused as evidence of a lost delivery
-   * record.
+   * record. Since migration 0003 there is one more no-op: an ack that arrives
+   * after gate closure cancelled the row reports
+   * `{ recorded: false, cancelled: true, ackedAtMs: null }` rather than
+   * refusing, because a late ack changing nothing is this module's contract and
+   * a cancelled row is a row that finished -- it is `Outbox.recordAck`'s
+   * judgement to make, and this facade keeps passing it through unchanged.
    */
   ack(
     messageId: string,

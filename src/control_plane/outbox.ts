@@ -25,15 +25,27 @@ import { pythonRepr, pythonTuple } from "./python_repr.js";
  * S7 -- the outbox: resend, ack, dedup, and handlers that name their
  * mechanism.
  *
- * **Spike scaffold, throwaway by default (D-0026).** This module sits on the
- * S5 spike schema, which carries the marking in `spike_schema.sql` itself: no
- * migration path is promised from it, and being depended on by S7 promotes
- * nothing. `Q-0001` (the real DDL, keys, indices and the per-item
- * single-writer table) was open when this module was written, and nothing
- * below answers it; D-0029 has since resolved it in the production schema
- * (`docs/production-schema.md` section 4.2, `migrations/0001_initial.sql`),
- * but this module was never migrated onto it. The durable half of Issue
- * `#14` is the test suite.
+ * **On the production schema, at migration head.** This module was written
+ * against the S5 spike schema and marked throwaway by default (D-0026),
+ * because `Q-0001` -- the real DDL, its keys, indices and the per-item
+ * single-writer table -- was open at the time and nothing here answered it.
+ * D-0029 answered it (`docs/production-schema.md` section 4.2,
+ * `migrations/0001_initial.sql`), and the module has since been re-pointed
+ * onto that schema: the DDL below it is the migrated production one, and the
+ * constraints it obeys are that schema's constraints rather than the spike
+ * table's. `spike_schema.sql` and `schema.ts`'s reconstruction queries stay
+ * as they are -- faithful spike artifacts, and no longer what this module
+ * runs on.
+ *
+ * The visible consequence is a fourth status. Migration
+ * `0003_outbox_cancelled_status.sql` added `'cancelled'` to the `CHECK` and
+ * to the forward-only trigger's lattice, as `docs/production-schema.md`
+ * section 5.7 sets out: it is what a gate closure writes onto a relay
+ * nobody is waiting for any more, and it is **terminal**, like `'acked'` and
+ * for an entirely different reason. Every place this module used to decide
+ * "finished" by asking whether a row was acked now asks
+ * {@link isTerminalOutboxStatus} instead. The durable half of Issue `#14`
+ * remains the test suite.
  *
  * What this module is responsible for, in the words of `ACCEPTANCE.md`
  * section 2's outbox rows:
@@ -81,9 +93,9 @@ import { pythonRepr, pythonTuple } from "./python_repr.js";
  * inside its own writes, which is the coupling S5's DDL comment already
  * specifies. Naming the resource is the caller's job precisely because
  * *which component may hold which resource* was the per-item writer
- * assignment `Q-0001` left open on this spike schema (the question is
- * answered in the production schema by D-0029, section 4.2, but this module
- * still runs against the S5 spike table that does not carry the answer); a
+ * assignment `Q-0001` left open (`docs/production-schema.md` section 4.2
+ * answers it for the schema, and section 5's delivery rule names the single
+ * writer of `outbox` as *the delivery worker holding the outbox lease*); a
  * default here would still be wrong, because the caller -- not this module
  * -- is who states its own identity as resource holder.
  *
@@ -119,6 +131,78 @@ export const EXACTLY_ONCE_MECHANISMS = Object.freeze([
   "transactional_with_record",
   "human_gate",
 ] as const);
+
+// --------------------------------------------------------------------------
+// the status vocabulary and its terminal set, mirrored from the DDL
+// --------------------------------------------------------------------------
+
+/**
+ * The closed status vocabulary, mirrored from `outbox`'s own `CHECK` as
+ * migration `0003_outbox_cancelled_status.sql` restates it -- `CHECK (status
+ * IN ('pending', 'delivered', 'acked', 'cancelled'))` -- and from
+ * `docs/production-schema.md` section 5.7, which names `'cancelled'` as the
+ * word a gate closure writes onto a relay nobody is waiting for any more.
+ *
+ * **This is a second, hand-kept declaration of the DDL's `CHECK`**, and it is
+ * one deliberately: the same treatment `run_lifecycle.ts` gives `run`'s
+ * vocabulary in {@link "./run_lifecycle.js".RUN_STATUSES}, and the same
+ * treatment {@link EXACTLY_ONCE_MECHANISMS} above gives `ACCEPTANCE.md`'s
+ * clause. A module that decides "is this row finished?" in TypeScript needs
+ * the vocabulary as a *value* -- SQLite will not hand it over at compile
+ * time -- and the alternative, re-deriving it by parsing the migration at
+ * import time, would make a startup dependency out of a four-word list. The
+ * obligation that comes with the duplication is the same one those two
+ * carry: the suite asserts this tuple equals the enumeration the DDL
+ * installs, so the two cannot drift.
+ */
+export const OUTBOX_STATUSES = Object.freeze([
+  "pending",
+  "delivered",
+  "acked",
+  "cancelled",
+] as const);
+
+/** One word of {@link OUTBOX_STATUSES}. */
+export type OutboxStatus = (typeof OUTBOX_STATUSES)[number];
+
+/**
+ * The terminal set, in the strong sense `outbox_status_is_forward_only`
+ * gives it: migration 0003's lattice is `pending -> delivered | cancelled`
+ * and `delivered -> acked | cancelled`, and it gives **neither** `'acked'`
+ * nor `'cancelled'` an outgoing edge. A row in one of these is finished, and
+ * the trigger -- not this constant -- is what enforces that.
+ *
+ * The two are terminal for genuinely different reasons, and the difference
+ * is why the messages below never collapse into one: an ack is *evidence the
+ * work was done*, while a cancellation says *nobody wants it any more*. What
+ * they share is the only thing the delivery path needs from them -- there is
+ * no further attempt to make, so a delivery worker that keeps offering,
+ * counting, adopting or reporting such a row is doing work against a
+ * question that has already been answered.
+ *
+ * **This is the single place the module decides "finished".** Before 0003
+ * the decision was spelled `status <> 'acked'` at six independent sites, and
+ * adding a fourth status meant finding all six; the point of naming the set
+ * once is that the next status is picked up by every site at once. The
+ * fenced write predicates below are *generated* from this tuple for exactly
+ * that reason -- see the note on {@link _COUNT_ATTEMPT}.
+ */
+export const TERMINAL_OUTBOX_STATUSES = Object.freeze(["acked", "cancelled"] as const);
+
+/**
+ * The module's one terminality decision, in function form.
+ *
+ * Takes a bare `string` rather than an {@link OutboxStatus} on purpose: its
+ * callers read `status` off a row, and a database is free to hold a word
+ * this build has never heard of (an older binary meeting a newer schema).
+ * Narrowing at the call site would turn that into a cast; asking the
+ * question of the raw word answers it honestly -- an unknown status is not
+ * terminal, so the row keeps being offered rather than being silently
+ * retired by a build that does not understand it.
+ */
+export function isTerminalOutboxStatus(status: string): boolean {
+  return (TERMINAL_OUTBOX_STATUSES as readonly string[]).includes(status);
+}
 
 /**
  * Mechanisms that are part of the vocabulary but that **this** outbox cannot
@@ -178,11 +262,35 @@ export const CHECKPOINTS = Object.freeze([
  * or does not match a live lease on the resource -- that is, when no living
  * claimant is entitled to advance it. Recovery's job is to make this query
  * return nothing.
+ *
+ * **What "unfinished" means changed with migration 0003.** The predicate
+ * used to read `status <> 'acked'`, which was the whole of "unfinished"
+ * while an ack was the only way out. It is not any more: a `'cancelled'` row
+ * is finished ({@link TERMINAL_OUTBOX_STATUSES}), and nobody is ever going
+ * to own it again. Left unfixed, {@link Outbox.recover} would keep adopting
+ * cancelled rows on every pass and {@link RecoveryReport.stillUnowned} would
+ * name them for the rest of the database's life -- the *alarms forever*
+ * failure `docs/production-schema.md` section 5.7 introduced `'cancelled'`
+ * to end, reproduced one table over by the module that reads it.
+ *
+ * The predicate is spelled as the **positive** `IN` list rather than as the
+ * negation of the terminal set, character-for-character matching the
+ * `outbox_undelivered` partial index's own `WHERE`. SQLite will only use a
+ * partial index when the query's `WHERE` carries the index predicate as a
+ * literal term, so the positive spelling is what keeps this an index scan
+ * instead of a table scan -- the same reason {@link
+ * "./events.js".ORPHANED_OUTBOX_SQL} and `gates.ts`'s orphaned-relay sweep
+ * are spelled that way.
+ *
+ * This constant is **exported and read by the fault-injection belt** as the
+ * no-unowned-outbox invariant, run by hand against a recovered database. The
+ * fix therefore reaches that belt too: before it, a kill inside a gate
+ * closure left evidence the belt would have called a violation.
  */
 export const UNOWNED_OUTBOX_QUERY = `
     SELECT message_id, status, retry_count, writer_epoch, enqueued_at_ms
       FROM outbox
-     WHERE status <> 'acked'
+     WHERE status IN ('pending', 'delivered')
        AND (writer_epoch IS NULL
             OR NOT EXISTS (SELECT 1
                              FROM lease
@@ -193,18 +301,73 @@ export const UNOWNED_OUTBOX_QUERY = `
 `;
 
 /**
- * What {@link Outbox.due} reads. Unfinished means *not acked*: a delivered
- * message whose ack never arrived is exactly the resend case, so it stays
- * due.
+ * What {@link Outbox.due} reads. Unfinished means `'pending'` or
+ * `'delivered'`: a delivered message whose ack never arrived is exactly the
+ * resend case, so it stays due.
+ *
+ * It used to say *not acked*, and that sentence is now false. Migration 0003
+ * gave the table a second terminal word: a `'cancelled'` message is
+ * finished, and nobody is going to send it -- the gate that enqueued it
+ * withdrew the question. Offering it as due would put a withdrawn relay back
+ * on the delivery worker's list on every pass, which is precisely what the
+ * cancellation was written to stop.
+ *
+ * The predicate is spelled as the positive `IN` list, character-for-character
+ * matching the `outbox_undelivered` partial index
+ * (`... WHERE status IN ('pending', 'delivered')`). SQLite uses a partial
+ * index only when the query's `WHERE` carries the index predicate as a term,
+ * so the negation of {@link TERMINAL_OUTBOX_STATUSES} -- algebraically the
+ * same rows on today's four-word vocabulary -- would silently turn this into
+ * a full table scan. The suite asserts the query plan actually names
+ * `outbox_undelivered`, so the spelling is checked and not merely intended.
+ *
+ * **Exported for that assertion, and for nothing else.** The underscore keeps
+ * it out of the module's ordinary vocabulary, exactly as {@link
+ * _COUNT_ATTEMPT} and {@link _MARK_DELIVERED} are exported for the suite's
+ * fence cases. The reason it must be a module-level constant rather than a
+ * string built inside {@link Outbox.due} is the one {@link
+ * "./events.js".ORPHANED_OUTBOX_SQL} states in full: a plan test that pastes
+ * the query into itself asserts a property of the paste, and that form was in
+ * the source suite and stayed green while the shipped predicate was rewritten
+ * into the degraded arithmetic below. Nothing else may hold a second copy of
+ * this text; the constant is the only copy, and the suite EXPLAINs the
+ * statement it traces out of the driver rather than this identifier.
  */
-const _DUE_QUERY = `
+export const _DUE_QUERY = `
     SELECT message_id, run_id, recipient, payload, dedup_key, status,
            retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms, acked_at_ms
       FROM outbox
-     WHERE status <> 'acked'
+     WHERE status IN ('pending', 'delivered')
        AND enqueued_at_ms <= :now_ms
      ORDER BY enqueued_at_ms, message_id
 `;
+
+/**
+ * The algebraically identical, index-losing form of {@link _DUE_QUERY} -- the
+ * same rows, with `enqueued_at_ms` buried inside an expression no b-tree can
+ * seek on (`:now_ms - enqueued_at_ms >= 0` says exactly what `enqueued_at_ms
+ * <= :now_ms` says, and SQLite cannot use an index on a column that appears
+ * only under arithmetic).
+ *
+ * It exists so that the plan assertion on the shipped form is not vacuous.
+ * "The due query uses `outbox_undelivered`" would also pass on a database
+ * where *every* plan reports a search; the claim only becomes a claim once
+ * some algebraically equal form is shown to lose the index on this same
+ * database, with this same data, in this same test. That is the whole job of
+ * this constant, and it is the same job {@link
+ * "./events.js".DEGRADED_ORPHANED_OUTBOX_SQL} does one module over -- written
+ * here as its twin so a reader who has met one recognises the other.
+ *
+ * **Never executed by the product.** The only caller is the suite, which runs
+ * it twice: once under `EXPLAIN QUERY PLAN` to show the degradation, and once
+ * for real to show the two forms return the same non-empty rows -- because a
+ * plan comparison between two queries that disagree about rows is a comparison
+ * of two different questions.
+ */
+export const _DEGRADED_DUE_QUERY = _DUE_QUERY.replace(
+  "AND enqueued_at_ms <= :now_ms",
+  "AND :now_ms - enqueued_at_ms >= 0",
+);
 
 const _LOAD_QUERY = `
     SELECT message_id, run_id, recipient, payload, dedup_key, status,
@@ -244,15 +407,77 @@ const _ENQUEUE: FencedStatement = fencedInsert("outbox", {
   },
 });
 
+/**
+ * The two spellings of "unfinished", and why they are deliberately not the
+ * same spelling.
+ *
+ * The **read** queries above carry the positive `status IN ('pending',
+ * 'delivered')` because that literal text is what makes SQLite use the
+ * `outbox_undelivered` partial index. The **write** statements here and at
+ * {@link _ADOPT} carry the *negation of the terminal set*, generated from
+ * {@link TERMINAL_OUTBOX_STATUSES} by the helper below rather than written
+ * out by hand.
+ *
+ * Two reasons, and both matter:
+ *
+ * - **The builder cannot express the positive form.** `lease.ts`'s fenced
+ *   statement builder is a faithful port with a deliberately tiny predicate
+ *   grammar -- `Predicate = Comparison | IsNull | Conjunction`, and a
+ *   `Comparison`'s operator is only `'='` or `'<>'`. There is no `IN` and no
+ *   disjunction, so `status IN ('pending', 'delivered')` has no rendering.
+ *   Growing the grammar to get one is a change to a ported module and out of
+ *   this change's scope; a conjunction of `<>` says the same thing today.
+ * - **"Not terminal" is the right semantics for a write anyway.** These
+ *   statements mean *the row is not finished, so it may still be advanced*.
+ *   A future status that is **not** terminal -- a hold, a deferral -- should
+ *   keep its row attemptable, and the negation says so on its own, while an
+ *   allow-list would have to be edited to let it through. Generating the
+ *   conjunction from the constant closes the other half: a future *terminal*
+ *   status is excluded here the moment it is added to the tuple, with no
+ *   second site to remember.
+ *
+ * The index is not lost by this: these are `UPDATE`s selected by
+ * `message_id`, the primary key, so the status conjunct is a filter on one
+ * already-located row and never a scan predicate.
+ */
+const _notTerminal = () => TERMINAL_OUTBOX_STATUSES.map((status) => ne("status", value(status)));
+
 export const _COUNT_ATTEMPT: FencedStatement = fencedUpdate("outbox", {
   set: { retry_count: increment("retry_count"), writer_epoch: fenceEpoch },
   where: and_(
     eq("message_id", param("message_id")),
-    ne("status", value("acked")),
+    // Was `ne("status", value("acked"))`, which matches a cancelled row: a
+    // delivery worker would go on incrementing `retry_count` on a relay a
+    // gate had already retired, and the durable count -- which ACCEPTANCE.md
+    // section 2 reads as a record of attempts made -- would grow for a
+    // message no attempt is ever made on again.
+    ..._notTerminal(),
     eq("writer_epoch", fenceEpoch),
   ),
 });
 
+/**
+ * The transition to `'delivered'`, and why its `delivered_at_ms IS NULL`
+ * test stopped being sufficient on its own.
+ *
+ * Under `0001_initial.sql` the column carried an *iff* CHECK -- pending had
+ * a null `delivered_at_ms` and every other status had one -- so
+ * `delivered_at_ms IS NULL` and `status = 'pending'` picked out the same
+ * rows and either could stand for the other. Migration 0003 broke that
+ * equivalence in exactly one direction: a row cancelled **while pending**
+ * keeps its null `delivered_at_ms` (a message never delivered has no
+ * delivery instant to invent), so the null test is now true for a finished
+ * row, while a row cancelled after delivery keeps its timestamp.
+ *
+ * Without the added `status = 'pending'` conjunct the statement therefore
+ * still *matches* a cancelled-while-pending row, reaches SQLite, and is
+ * aborted by `outbox_status_is_forward_only` -- `cancelled -> delivered` is
+ * not an edge in 0003's lattice. That is a constraint error thrown out of
+ * the middle of {@link Outbox.attempt}, after the effect has already been
+ * performed, in place of the ordinary zero-rows-changed refusal the fenced
+ * path is written to produce. The conjunct keeps the disagreement in the
+ * `WHERE` clause, where the module can answer for it.
+ */
 export const _MARK_DELIVERED: FencedStatement = fencedUpdate("outbox", {
   set: {
     status: value("delivered"),
@@ -261,6 +486,7 @@ export const _MARK_DELIVERED: FencedStatement = fencedUpdate("outbox", {
   },
   where: and_(
     eq("message_id", param("message_id")),
+    eq("status", value("pending")),
     isNull("delivered_at_ms"),
     eq("writer_epoch", fenceEpoch),
   ),
@@ -299,10 +525,16 @@ const _RECORD_RESULT: FencedStatement = fencedUpdate("action", {
  * No ownership predicate, deliberately: adoption re-stamps whatever epoch
  * the row carried, including one whose lease row was itself lost -- see
  * {@link Outbox.recover}.
+ *
+ * The status conjunct is the generated negation of
+ * {@link TERMINAL_OUTBOX_STATUSES}, for the reasons set out on
+ * {@link _COUNT_ATTEMPT}. It was `ne("status", value("acked"))`, which let
+ * recovery adopt a cancelled row: recovery would hand a live owner to a
+ * message that will never be advanced again, on every pass, forever.
  */
 const _ADOPT: FencedStatement = fencedUpdate("outbox", {
   set: { writer_epoch: fenceEpoch },
-  where: and_(eq("message_id", param("message_id")), ne("status", value("acked"))),
+  where: and_(eq("message_id", param("message_id")), ..._notTerminal()),
 });
 
 // --------------------------------------------------------------------------
@@ -371,6 +603,167 @@ export class HumanGateRequired extends Error {
     super(message, options);
     this.name = "HumanGateRequired";
     Object.setPrototypeOf(this, HumanGateRequired.prototype);
+  }
+}
+
+/**
+ * The row was retired by another writer while this attempt was running.
+ *
+ * The base of a two-member family, and the family exists because the race it
+ * names has two halves that an operator must not confuse. `Outbox.attempt`
+ * reads the row once at step 0, and everything after that runs on a reading
+ * that goes stale the instant it is taken: gate closure takes `pending ->
+ * cancelled` and `delivered -> cancelled` without consulting this module
+ * (migration 0003's lattice), and a human answering a gate while a delivery
+ * worker is mid-attempt on its relay is the ordinary timing the human gate
+ * creates (`docs/design/minimal-operating-loop.md` section 5.1), not an exotic
+ * interleaving. The attempt can meet that cancellation on either side of the
+ * external effect, and {@link effectApplied} is which.
+ *
+ * **Why a shared base with a field rather than two unrelated siblings.** Two
+ * questions get asked of this exception and they want different shapes. A
+ * *catch site* asks "is the row finished, so is this attempt's failure a
+ * normal end rather than a fault" -- one question, one `instanceof`, and
+ * `MessageBus.poll`'s residual test (`src/messagebus/bus.ts`) is the caller
+ * that asks it; siblings would make every such site enumerate the members and
+ * be edited again the day a third window is found, which is the same
+ * find-all-six failure {@link TERMINAL_OUTBOX_STATUSES} exists to prevent one
+ * layer down. An *operator* asks the other question -- did the side effect
+ * happen -- because that, and only that, decides whether the destination's own
+ * ledger has to be reconciled (`ACCEPTANCE.md` section 2). A boolean on a
+ * shared base answers the second without splitting the first. Reusing one
+ * class for both halves was rejected for the same reason from the other end:
+ * `CancelledBeforeEffect` naming a cancellation that won *after* the effect
+ * would put the wrong word in front of the only reader who has work to do.
+ *
+ * Both members keep {@link StaleWriterRefused}'s discipline where there is
+ * evidence to keep: what is durable is written *before* the throw, so a
+ * refusal nobody catches is still readable out of the `action` table
+ * afterwards. What differs is whether there is anything to record at all --
+ * see {@link CancelledAfterEffect}, whose subclass docstring says when there
+ * is not.
+ *
+ * Not {@link StaleWriterRefused} and not {@link OutboxUsageError}, for either
+ * member. Nothing is stale about this writer -- its lease is live and its
+ * epoch owns the row -- so "stale writer" would send an operator to look at
+ * lease expiry and holder identity, the two things that were fine; and
+ * `OutboxUsageError` is the module's programming-error class (the source's
+ * bare `ValueError`), while nobody made a mistake here.
+ */
+export class CancellationRaced extends Error {
+  /**
+   * Whether the destination was written to before the cancellation was seen.
+   *
+   * `false` -- {@link CancelledBeforeEffect} -- means the effect never left:
+   * nothing to reconcile, and the row is exactly as the cancelling writer left
+   * it. `true` -- {@link CancelledAfterEffect} -- means it did: the
+   * destination holds an effect for a message the outbox will never record as
+   * delivered, and reconciling that against the destination's ledger is the
+   * operator's work.
+   */
+  readonly effectApplied: boolean;
+
+  constructor(
+    message: string,
+    options: { readonly effectApplied: boolean; readonly cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "CancellationRaced";
+    this.effectApplied = options.effectApplied;
+    Object.setPrototypeOf(this, CancellationRaced.prototype);
+  }
+}
+
+/**
+ * The row went terminal after the attempt began, and before the effect.
+ *
+ * `Outbox.attempt`'s step 0 guard refuses a message that is *already*
+ * finished, and it runs once. This is the other half: the row was live when
+ * the guard read it and had been retired -- gate closure writing
+ * `'cancelled'`, most plausibly, since 0003 makes `pending -> cancelled` and
+ * `delivered -> cancelled` edges a *different* writer takes without
+ * consulting us -- by the time the attempt reached the destination. The
+ * re-read beside the fence sees it and stops there, so the external effect
+ * is never performed.
+ *
+ * A member of the {@link CancellationRaced} family and not a class standing
+ * on its own: the base's docstring argues why the family is a base plus a
+ * field, and it carries the "not StaleWriterRefused, not OutboxUsageError"
+ * reasoning that applies to both halves. What is specific to this half is
+ * that {@link effectApplied} is `false` -- the guard ran in time, so **there
+ * is nothing at the destination to reconcile**, which is the single fact that
+ * separates this from {@link CancelledAfterEffect} for the person reading it.
+ *
+ * Like {@link StaleWriterRefused}, the refusal is **durable before this is
+ * thrown**: an `action` row in status `'refused'` records it, so the
+ * evidence `ACCEPTANCE.md` section 2 asks for exists whether or not anyone
+ * catches this. The row itself is left exactly as the cancelling writer left
+ * it -- terminal, and this module writes nothing more to it.
+ *
+ * `MessageBus.poll` admits this class on its residual path
+ * (`src/messagebus/bus.ts`) and skips the row, which is right: the row is
+ * terminal, so the delivery is finished and nobody is owed it.
+ */
+export class CancelledBeforeEffect extends CancellationRaced {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, { ...options, effectApplied: false });
+    this.name = "CancelledBeforeEffect";
+    Object.setPrototypeOf(this, CancelledBeforeEffect.prototype);
+  }
+}
+
+/**
+ * The row went terminal after the effect had already been performed.
+ *
+ * The residue {@link CancelledBeforeEffect}'s guard admits it cannot remove.
+ * Nothing of this module's runs between that guard's `load` and
+ * `handler.apply`, so a cancellation landing inside that gap is invisible
+ * until {@link _MARK_DELIVERED} tries to move the row and matches nothing --
+ * and by then the destination has been written to. {@link effectApplied} is
+ * `true`, and it is the whole difference: the outbox row is terminal with no
+ * delivery instant and will never carry one (`cancelled` has no outgoing edge
+ * in 0003's lattice), so **the only place the effect is written down is the
+ * destination's own ledger and the `action` row that names the idempotency key
+ * it was keyed with**. Reconciling those two is real operator work, and it is
+ * work {@link CancelledBeforeEffect} never creates.
+ *
+ * **Recorded and then thrown, where the previous shape recorded and
+ * returned.** Both halves are needed and they answer different obligations:
+ *
+ * - *Recorded*, because the effect really did land. An `action` row in
+ *   `'refused'` is written before the throw -- {@link StaleWriterRefused}'s
+ *   discipline -- for the same reason it is written on the pre-effect half:
+ *   the evidence must survive nobody catching this.
+ * - *Thrown*, because returning normally handed `MessageBus.poll` an
+ *   {@link AttemptOutcome}, and `poll` appends an envelope for every outcome
+ *   it gets back. That put the payload of a message whose gate had closed in
+ *   front of the worker, which is exactly what `D-0053` rule 7 forbids: a
+ *   cancelled row is normally finished and is skipped, and nobody is owed the
+ *   delivery of a message whose gate has closed. The outcome would have been
+ *   a true statement about the attempt and a false one about the message.
+ *
+ * The cost that argument used to be weighed against no longer exists, and the
+ * correction matters because `D-0053` still states it: a throw was said to
+ * cost `MessageBus.poll` its whole batch. `poll`'s residual handler admits a
+ * terminal row's exception and continues with the batch it was building
+ * (`src/messagebus/bus.ts`), so the choice is between an envelope that must
+ * not be sent and a skip that is already implemented.
+ *
+ * **`MessageBus.poll` must name this class, or its base, to keep that
+ * property.** `instanceof` is not satisfied by a sibling: the residual test
+ * naming {@link CancelledBeforeEffect} alone is *false* for this class, since
+ * neither is an ancestor of the other. Widening it to
+ * {@link CancellationRaced} covers both halves and every later member, and is
+ * `src/messagebus/bus.ts`'s change to make rather than this module's. Until it
+ * is made, a poll meeting this race re-throws and loses its batch -- loud and
+ * recoverable (the rows stay due), where the bug this class replaces was
+ * silent and delivered.
+ */
+export class CancelledAfterEffect extends CancellationRaced {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, { ...options, effectApplied: true });
+    this.name = "CancelledAfterEffect";
+    Object.setPrototypeOf(this, CancelledAfterEffect.prototype);
   }
 }
 
@@ -512,10 +905,34 @@ export class AckOutcome {
    */
   readonly recorded: boolean;
   /**
-   * The instant stored on the row. Equal to the caller's clock unless it had
-   * to be clamped -- see {@link clockClamped}.
+   * The instant stored on the row, or `null` when the row carries no ack at
+   * all. Equal to the caller's clock unless it had to be clamped -- see
+   * {@link clockClamped}.
+   *
+   * `null` is not "unknown"; it is a fact, and under migration 0003's
+   * `CHECK ((status = 'acked') = (acked_at_ms IS NOT NULL))` it is a fact
+   * with exactly one cause: the row is `'cancelled'`, and a cancelled row
+   * never carries an ack. Every other outcome -- the ack this call
+   * recorded, a duplicate, a concurrent writer's -- names a real instant.
+   * Widening the field was preferred to inventing a number for the
+   * cancelled case, because a caller writing the value into a log would
+   * then be recording an acknowledgement that never happened.
    */
-  readonly ackedAtMs: number;
+  readonly ackedAtMs: number | null;
+  /**
+   * `true` when the row was `'cancelled'` -- retired by its gate -- so there
+   * is nothing to acknowledge and nothing was written.
+   *
+   * A late ack arriving after a cancellation is **not** an error. It is the
+   * ordinary shape of a race the recipient could not have avoided: the
+   * message really was delivered, the recipient really did answer, and the
+   * gate closed in between. `ACCEPTANCE.md` section 2's clause is that a
+   * duplicate or late ack *changes nothing*, not that it is rejected, and
+   * this is a late ack. The outcome reports `recorded: false`,
+   * `ackedAtMs: null`, and this flag, so a caller that wants to distinguish
+   * "someone else acked first" from "the question was withdrawn" can.
+   */
+  readonly cancelled: boolean;
   /**
    * `true` when the caller's clock ran **behind** the delivery instant and
    * the recorded value was clamped forward to it. `ACCEPTANCE.md` section 2
@@ -531,12 +948,14 @@ export class AckOutcome {
   constructor(options: {
     readonly messageId: string;
     readonly recorded: boolean;
-    readonly ackedAtMs: number;
+    readonly ackedAtMs: number | null;
+    readonly cancelled: boolean;
     readonly clockClamped: boolean;
   }) {
     this.messageId = options.messageId;
     this.recorded = options.recorded;
     this.ackedAtMs = options.ackedAtMs;
+    this.cancelled = options.cancelled;
     this.clockClamped = options.clockClamped;
     Object.freeze(this);
   }
@@ -891,7 +1310,35 @@ export class Outbox {
    * 3. **The effect**, through the handler, keyed so the destination can
    *    refuse a duplicate.
    * 4. **The record**, and then the outbox row's transition to
-   *    `'delivered'`.
+   *    `'delivered'` -- which, under migration 0003's forward-only lattice,
+   *    is an edge only from `'pending'`. A row that reached a terminal
+   *    status has no such edge and is refused at step 0 below, not here.
+   *
+   * **Step 0: a terminal row is refused before any of it runs.** The guard
+   * is the first thing the method does, and it has to be, because every one
+   * of the four steps above is a step this method takes *on the caller's
+   * word*. `'acked'` and `'cancelled'` are both terminal
+   * ({@link TERMINAL_OUTBOX_STATUSES}) and the refusal is loud -- an
+   * {@link OutboxUsageError}, the module's programming-error class -- rather
+   * than a quiet return, because a direct caller presenting a finished
+   * message is a bug in the caller. `MessageBus.poll` (`src/messagebus/bus.ts`) is what is
+   * responsible for never arriving here with such a row; this guard exists
+   * for everything that is not it.
+   *
+   * **Step 0 is asked twice, and the second asking is a different
+   * question.** Step 0 answers *was this message finished when I picked it
+   * up*, which is about the caller. The re-read in front of step 3 answers
+   * *is it finished now*, which is about a race: gate closure writes
+   * `'cancelled'` from another writer entirely, and steps 1 and 2 are two
+   * committed transactions' worth of time for it to do so. That refusal is
+   * a {@link CancelledBeforeEffect}, not an {@link OutboxUsageError} --
+   * nobody made a mistake -- and it is recorded durably before it is
+   * thrown. Step 4 then covers the remainder: a cancellation that lands
+   * after the effect cannot be prevented, so it is *recorded and then
+   * refused* -- a {@link CancelledAfterEffect}, whose two halves answer two
+   * obligations. The effect cannot be unmade, so the evidence is written
+   * down; the message is nonetheless finished, so it must not become an
+   * envelope (`D-0053` rule 7). See {@link _markDelivered}.
    *
    * The ack is deliberately *not* here. Delivery and acknowledgement are
    * separate events with a kill window between them, and collapsing them
@@ -903,7 +1350,33 @@ export class Outbox {
   ): AttemptOutcome {
     const { nowMs, epoch } = options;
     const message = this.load(messageId);
-    if (message.status === "acked") {
+    // The terminal check is the first statement in the method, and its
+    // position is the load-bearing part.
+    //
+    // It is not the only one. A row that got past this line goes on to
+    // increment `retry_count` durably and write a pending action row, and a
+    // status re-read stands beside the fence re-read further down, in front
+    // of the effect, because this reading of the row goes stale the instant
+    // it is taken (gate closure is a different writer and does not consult
+    // us). What the *first* check buys is that a caller presenting an
+    // already-finished message is refused before any of the four steps runs
+    // at all -- no attempt count, no action row, no effect -- and what the
+    // second buys is that a message retired *during* those steps still never
+    // reaches the destination. Neither subsumes the other, and only the
+    // second is a race; this one is a caller bug.
+    //
+    // Both terminal words get their own sentence rather than one shared
+    // "already finished": the reader of this error is being told what
+    // happened to their message, and *acked* and *cancelled* are opposite
+    // stories about it.
+    if (isTerminalOutboxStatus(message.status)) {
+      if (message.status === "cancelled") {
+        throw new OutboxUsageError(
+          `${pythonRepr(messageId)} is cancelled; a cancelled message was retired by the gate ` +
+            "that enqueued it, and presenting it would be delivering a question nobody is " +
+            "waiting for",
+        );
+      }
       throw new OutboxUsageError(
         `${pythonRepr(messageId)} is already acked; an acked message is not resent`,
       );
@@ -978,6 +1451,63 @@ export class Outbox {
         "before the effect was attempted";
       const refusal = this._recordRefusal(message, handler, reason, { nowMs, epoch });
       throw new StaleWriterRefused(reason, refusal);
+    }
+
+    // The status, re-read at the same point and for the same reason.
+    //
+    // Step 0's guard above reads the row once, at the top of the method, and
+    // everything between there and here happens on that reading: the fenced
+    // retry-count increment, the pending action row, and -- one line below --
+    // the external effect. The guard answers "was this message finished when
+    // I picked it up"; it cannot answer "is it finished now", and since
+    // migration 0003 those are different questions, because `pending ->
+    // cancelled` and `delivered -> cancelled` are edges a *different* writer
+    // takes without consulting us. Gate closure is that writer, and a human
+    // answering a gate while a delivery worker is mid-attempt on its relay is
+    // not an exotic interleaving -- it is the ordinary timing the human gate
+    // creates (`docs/design/minimal-operating-loop.md` section 5.1).
+    //
+    // Without this, the attempt ran the effect and then met
+    // {@link _MARK_DELIVERED}'s `status = 'pending'` conjunct, which matches
+    // nothing on a cancelled row; {@link _markDelivered} passes `allowNoRow`,
+    // so the miss was *silent*, and `MessageBus.poll` counted the row as an
+    // ordinary skip. The destination had been written to, and neither an
+    // envelope nor a delivery record said so anywhere. Refusing here is the
+    // only place that outcome can be prevented, because one line further on
+    // it has already happened.
+    //
+    // The same honest admission the fence re-read above makes, and it is not
+    // rhetorical here either: **this narrows the window, it does not close
+    // it.** No statement of ours runs during the pause between this `load`
+    // and `handler.apply` below, so a cancellation landing inside that pause
+    // is invisible to us and the effect goes out. The irreducible residue is
+    // exactly that gap, and what makes it acceptable is the second half of
+    // the guard -- the same second half the fence comment argues for the
+    // epoch. The effect carries the handler's idempotency key, so a
+    // destination that already refused or recorded that key does not double
+    // anything; what is left over is a *first* effect for a message retired
+    // microseconds earlier, which is a delivery the gate was one instant too
+    // late to stop and is indistinguishable, from the destination's side,
+    // from one it was two instants too late to stop. Making that gap smaller
+    // is possible (re-read under the same transaction as the effect); making
+    // it zero is not, because the effect is outside the database.
+    //
+    // Terminality is asked of {@link isTerminalOutboxStatus} rather than
+    // compared against `'cancelled'`, so a fifth terminal status added to
+    // 0003's CHECK is classified in the one place this module keeps that
+    // judgement.
+    const beforeEffect = this.load(messageId);
+    if (isTerminalOutboxStatus(beforeEffect.status)) {
+      const reason =
+        `refused to apply the effect for ${pythonRepr(messageId)}: the row reached ` +
+        `${pythonRepr(beforeEffect.status)} after this attempt began, so the message the effect ` +
+        "would deliver had been retired before the effect was attempted";
+      // Durable first, then thrown -- {@link StaleWriterRefused}'s discipline
+      // on the branch above, kept here because the evidence obligation is the
+      // same one: a refusal nobody catches must still be readable out of the
+      // `action` table afterwards.
+      this._recordRefusal(message, handler, reason, { nowMs, epoch });
+      throw new CancelledBeforeEffect(reason);
     }
 
     // (3) the effect itself -- attempted every time, including when our own
@@ -1075,6 +1605,14 @@ export class Outbox {
    * a resend of an effect that is already present. The fence protects
    * writes that drive effects, and this one drives none -- S5's
    * `outbox_ack_is_set_once` trigger is what keeps it single-valued.
+   *
+   * An ack for a **cancelled** row is one more shape of "changes nothing".
+   * The gate withdrew the question after the recipient had already answered
+   * it -- a race the recipient could not have avoided and did nothing wrong
+   * in -- so the outcome reports it ({@link AckOutcome.cancelled}) instead
+   * of throwing. Migration 0003 makes the row's silence on the point
+   * unambiguous: a cancelled row can never carry an `acked_at_ms`, so the
+   * outcome's `ackedAtMs` is `null` and says so.
    */
   recordAck(messageId: string, options: { readonly nowMs: number }): AckOutcome {
     const { nowMs } = options;
@@ -1084,6 +1622,24 @@ export class Outbox {
         messageId,
         recorded: false,
         ackedAtMs: message.ackedAtMs,
+        cancelled: false,
+        clockClamped: false,
+      });
+    }
+    // Cancelled is classified **before** the undelivered check, and the
+    // order is not cosmetic. A row cancelled while still pending has a null
+    // `delivered_at_ms` -- 0003 keeps the column null for a message that was
+    // never delivered -- so it would otherwise fall into the branch below
+    // and be reported as *"evidence of a lost delivery record"*, which is a
+    // wildly wrong account of what happened: nothing was lost, the gate
+    // withdrew the question. The branch below keeps its meaning only if the
+    // one legitimate way to be undelivered-and-finished is taken out first.
+    if (message.status === "cancelled") {
+      return new AckOutcome({
+        messageId,
+        recorded: false,
+        ackedAtMs: null,
+        cancelled: true,
         clockClamped: false,
       });
     }
@@ -1097,38 +1653,93 @@ export class Outbox {
     const deliveredAtMs = message.deliveredAtMs;
     const ackedAtMs = Math.max(nowMs, deliveredAtMs);
 
+    // The `WHERE` says `status = 'delivered'`, not `acked_at_ms IS NULL`,
+    // and the change closes a race the pre-checks above cannot.
+    //
+    // `acked_at_ms IS NULL` is true of a **cancelled** row as well as an
+    // unacked one -- 0003's `CHECK ((status = 'acked') = (acked_at_ms IS NOT
+    // NULL))` guarantees a cancelled row never carries an ack. So against a
+    // row cancelled between the read a few lines up and this statement, the
+    // old predicate did not merely fail to match: it *matched*, the
+    // statement reached SQLite, and `outbox_status_is_forward_only` aborted
+    // it -- `cancelled -> acked` is not an edge -- as a constraint error
+    // thrown out of a method whose entire contract is that a late ack
+    // changes nothing rather than failing. And in the reading where it lost
+    // the row instead, the zero-rows branch below would have answered
+    // "another writer acked", which is a plain false statement about a
+    // cancelled row.
+    //
+    // Narrowing to `status = 'delivered'` makes the statement match exactly
+    // the one state an ack is an edge out of, so a cancellation turns it
+    // into an ordinary zero-rows outcome instead of a constraint error. The
+    // pre-check alone could not have done this: a gate can close in the gap
+    // between the read and the write, and no amount of checking first
+    // removes a gap. That is why both exist -- the pre-check answers the
+    // common case with the right story, and the narrowed `WHERE` plus the
+    // re-read below answer the racing one.
     const info = this._connection
       .prepare(
         `
                 UPDATE outbox
                    SET status = 'acked', acked_at_ms = :acked_at_ms
-                 WHERE message_id = :message_id AND acked_at_ms IS NULL
+                 WHERE message_id = :message_id AND status = 'delivered'
                 `,
       )
       .run({ message_id: messageId, acked_at_ms: ackedAtMs });
     const recorded = info.changes === 1;
 
     if (!recorded) {
-      // Another writer acked between the read and the write. Same answer
-      // as a duplicate ack, which it is.
+      // The row moved between the read and the write. Re-read it and say
+      // which way it moved, rather than assuming: there are now two ways to
+      // leave `'delivered'` and they mean opposite things.
       const settled = this.load(messageId);
-      // `||`, not `??`: the source's `settled.acked_at_ms or acked_at_ms` is a
-      // Python truthiness test (D-0021 lesson: do not narrow `or` into `??`),
-      // and `||` reproduces it exactly -- an `acked_at_ms` of `0` would fall
-      // through to `ackedAtMs` under both, and neither runtime treats a
-      // present zero specially here.
-      return new AckOutcome({
-        messageId,
-        recorded: false,
-        ackedAtMs: settled.ackedAtMs || ackedAtMs,
-        clockClamped: false,
-      });
+      if (settled.ackedAtMs !== null) {
+        // Another writer acked between the read and the write. Same answer
+        // as a duplicate ack, which it is.
+        //
+        // `||`, not `??`: the source's `settled.acked_at_ms or acked_at_ms` is a
+        // Python truthiness test (D-0021 lesson: do not narrow `or` into `??`),
+        // and `||` reproduces it exactly -- an `acked_at_ms` of `0` would fall
+        // through to `ackedAtMs` under both, and neither runtime treats a
+        // present zero specially here.
+        return new AckOutcome({
+          messageId,
+          recorded: false,
+          ackedAtMs: settled.ackedAtMs || ackedAtMs,
+          cancelled: false,
+          clockClamped: false,
+        });
+      }
+      if (settled.status === "cancelled") {
+        // A gate closed in the gap. The recipient's answer is real and
+        // arrived; nobody is waiting for it any more. Reported, not thrown.
+        return new AckOutcome({
+          messageId,
+          recorded: false,
+          ackedAtMs: null,
+          cancelled: true,
+          clockClamped: false,
+        });
+      }
+      // Neither acked nor cancelled, and yet the UPDATE matched nothing.
+      // Under 0003's lattice there is no third way out of `'delivered'`, so
+      // this is not a race with a legitimate writer -- it is a row that was
+      // moved backwards, deleted, or written by something that does not obey
+      // the schema. Loud, because a silent `recorded: false` here would
+      // report a lost ack as an idempotent no-op.
+      throw new OutboxUsageError(
+        `${pythonRepr(messageId)} could not be acked and is neither acked nor cancelled ` +
+          `(status ${pythonRepr(settled.status)}): the ack UPDATE matched no row, which under ` +
+          "migration 0003's forward-only lattice has no legitimate cause -- a concurrent writer " +
+          "moved the row outside the vocabulary this module and the DDL share",
+      );
     }
 
     return new AckOutcome({
       messageId,
       recorded: true,
       ackedAtMs,
+      cancelled: false,
       clockClamped: ackedAtMs !== nowMs,
     });
   }
@@ -1262,12 +1873,103 @@ export class Outbox {
   }
 
   /**
-   * Move the row to `'delivered'` once, fenced.
+   * Move the row to `'delivered'` once, fenced -- and account for the miss.
    *
    * Idempotent by predicate rather than by trigger-catching: a resend of an
    * already delivered message must leave the original delivery instant
    * alone, and S5's `outbox_delivery_is_set_once` would abort the whole
-   * transaction if we tried to rewrite it.
+   * transaction if we tried to rewrite it. That is what `allowNoRow` was
+   * added for, and it is the *only* thing it was added for: the statement
+   * matching nothing because the row is already `'delivered'` is a resend
+   * doing exactly what a resend should do, and it must stay tolerated --
+   * source-translated cases depend on it (the deduplicated-resend cases in
+   * `test/control_plane/outbox.test.ts`).
+   *
+   * Under migration 0003 that is no longer the only way to match nothing,
+   * and the other ways are not benign. `_MARK_DELIVERED` now requires
+   * `status = 'pending'`, so a row cancelled *after* the effect went out --
+   * inside the window the pre-effect re-read in {@link attempt} admits it
+   * cannot close -- also matches nothing, and `allowNoRow` swallowed it. The
+   * result was the failure this method now exists to prevent: the external
+   * effect had happened, and every durable trace of it disagreed. No
+   * delivery record (the transition never landed) and nothing but an `action`
+   * row in `'applied'` that no one is looking for -- while the attempt
+   * returned normally, so `MessageBus.poll` appended an envelope for it and
+   * the worker was handed the payload of a message whose gate had closed.
+   * (An earlier shape of this comment claimed there was no envelope either,
+   * on the grounds that `poll` skips a terminal row. `poll` asks that
+   * question *before* the attempt and not after it, so the claim was false,
+   * and the delivery it hid is what `D-0053` rule 7 forbids.)
+   *
+   * So the miss is classified rather than tolerated wholesale, on the same
+   * three-way shape {@link recordAck}'s zero-rows branch uses, and for the
+   * same reason -- there is more than one way to leave a status now and they
+   * mean different things. The discriminator is **not terminality on its
+   * own**, and that distinction is the whole of the branch below:
+   *
+   * - **`'delivered'`**: the resend case above. Tolerated silently.
+   * - **terminal with a delivery instant** (`delivered_at_ms IS NOT NULL`):
+   *   also a resend, of a row that has since been acked or cancelled.
+   *   Tolerated silently, exactly like the plain resend, because the row
+   *   already carries the delivery this statement was trying to record --
+   *   there is no disagreement between the effect and the ledger to write
+   *   down. Discriminating on terminality alone made this write a refusal
+   *   claiming the delivery could not be recorded while the row's own
+   *   `delivered_at_ms` (and, on the acked branch, its ack) said the
+   *   opposite, and an ack landing concurrently with an ordinary resend is
+   *   ordinary traffic, so the audit trail refusals live in would have
+   *   accumulated false entries at the rate the system does its normal work.
+   * - **terminal with no delivery instant**: retired mid-flight, on this
+   *   attempt's own first delivery. The effect is real and the ledger has no
+   *   room to say so, so it is written down where refusals are written down
+   *   -- an `action` row in `'refused'` naming what happened -- and then
+   *   {@link CancelledAfterEffect} is thrown.
+   * - **anything else** -- `'pending'` still, most plausibly with a
+   *   `writer_epoch` that is no longer ours: loud. The fence was live when
+   *   this ran, so under 0003's lattice there is no legitimate way for a
+   *   pending row owned by a live epoch to refuse this update, and a silent
+   *   return would report a lost delivery record as an idempotent no-op.
+   *
+   * **`delivered_at_ms` is the discriminator, and migration 0003's CHECK is
+   * what makes it exact.** `0003_outbox_cancelled_status.sql` writes
+   *
+   *     CHECK (CASE status
+   *              WHEN 'pending'   THEN delivered_at_ms IS NULL
+   *              WHEN 'delivered' THEN delivered_at_ms IS NOT NULL
+   *              WHEN 'acked'     THEN delivered_at_ms IS NOT NULL
+   *              WHEN 'cancelled' THEN 1
+   *            END)
+   *
+   * and says in its own comment why `'cancelled'` is the row that constrains
+   * nothing: *cancellation is terminal but it is NOT an erasure*, so a
+   * cancelled row carries a delivery instant if it was cancelled after being
+   * sent and none if it was cancelled while pending. Both are true statements,
+   * and they are the two cases this branch has to tell apart. The column is
+   * trustworthy as a record of the past because
+   * `outbox_delivery_is_set_once` refuses to clear or rewrite it, so a
+   * non-null value here means *a delivery was recorded before this statement
+   * ran* -- and it cannot have been recorded by this statement, which matched
+   * nothing. `'acked'` needs no separate test: the CHECK above makes an acked
+   * row's instant non-null unconditionally, so the ack race lands in the
+   * second bullet by construction rather than by a status comparison.
+   *
+   * **Which path a resend of a delivered-then-cancelled row takes, and why.**
+   * It takes the silent one for the refusal (its delivery is recorded, so
+   * bullet two applies), and it still **throws** -- because the caller must
+   * not be handed an outcome for a cancelled row. Those are two independent
+   * questions and the branch answers them separately: *is there evidence to
+   * write down* (no -- the delivery instant is there) and *may this message be
+   * put in front of the worker* (no -- `D-0053` rule 7: a cancelled row is
+   * normally finished and is skipped, nobody is owed the delivery of a message
+   * whose gate has closed). An acked row is the case where both answers are
+   * "nothing to do": the ack is evidence the work was done, the presentation
+   * was legitimate when it was made, and `MessageBus.poll`'s own contract
+   * already accepts that a just-acked message can be presented once more
+   * (at-least-once to the wire; the recipient deduplicates on `dedupKey`).
+   *
+   * The throw itself is argued on {@link CancelledAfterEffect}, including the
+   * `D-0053` sentence it corrects and the widening `src/messagebus/bus.ts`
+   * needs so that a poll skips the row instead of losing its batch.
    */
   private _markDelivered(
     messageId: string,
@@ -1279,7 +1981,7 @@ export class Outbox {
     },
   ): void {
     const { nowMs, epoch, message, handler } = options;
-    this._fenced(
+    const moved = this._fenced(
       _MARK_DELIVERED,
       {
         message_id: messageId,
@@ -1296,6 +1998,84 @@ export class Outbox {
         what: "record the delivery",
         allowNoRow: true,
       },
+    );
+    if (moved) {
+      return;
+    }
+
+    const settled = this.load(messageId);
+    if (settled.status === "delivered") {
+      // The resend, delivered already. The original instant stands.
+      return;
+    }
+    if (isTerminalOutboxStatus(settled.status)) {
+      if (settled.deliveredAtMs !== null) {
+        // A resend of a row that was already delivered, which has since been
+        // acked or cancelled. The delivery this statement could not write is
+        // already written, so there is nothing to record and nothing to
+        // reconcile -- treated exactly like the `'delivered'` return above,
+        // which is what it is, only observed a moment later.
+        //
+        // The cancelled half still may not become an envelope, so it does not
+        // return here: falling through to the throw below is what keeps
+        // `D-0053` rule 7 true for it. See the docstring for why those are two
+        // questions and not one.
+        //
+        // The word is compared directly here, unlike every *terminality*
+        // decision in this module, because this is not one: terminality has
+        // already been decided one line up by {@link isTerminalOutboxStatus},
+        // and what is left is which terminal word it was --
+        // `attempt`'s step 0 guard tells the two apart by name for the same
+        // reason. A fifth terminal word added to 0003's CHECK therefore lands
+        // on the throw rather than on the return, which is the safe side: a
+        // status this build has never heard of does not get to authorise an
+        // envelope.
+        if (settled.status !== "cancelled") {
+          return;
+        }
+      } else {
+        // Retired between the pre-effect re-read and here, on this attempt's
+        // own first delivery: the row has no delivery instant and 0003's
+        // lattice gives it no edge on which to acquire one. The effect is out
+        // and cannot be recalled; what is still in our power is to stop the
+        // database from being silent about it. `_recordRefusal` is reused
+        // rather than a new table invented: the `action` row it writes already
+        // carries the run, the action kind, the idempotency key the effect was
+        // keyed with, the mechanism and a reason string, which is the whole of
+        // what an operator needs to reconcile this against the destination's
+        // own ledger -- and reconciling against the destination is what
+        // `ACCEPTANCE.md` section 2 says the evidence is for.
+        this._recordRefusal(
+          message,
+          handler,
+          `applied the effect for ${pythonRepr(messageId)} and could not record the delivery: ` +
+            `the row reached ${pythonRepr(settled.status)} while the effect was in flight, so ` +
+            "it was retired after the destination had already been written to -- the effect is " +
+            "real and the outbox row will never say so",
+          { nowMs, epoch },
+        );
+      }
+
+      // Durable first, then thrown, on the branch that had something to make
+      // durable -- {@link StaleWriterRefused}'s discipline, kept here for the
+      // same evidence obligation. The throw is not about the evidence though:
+      // it is about the envelope. Returning normally handed the caller an
+      // {@link AttemptOutcome}, and `MessageBus.poll` turns every outcome into
+      // an envelope without asking the row again, so the payload of a message
+      // whose gate had closed reached the worker.
+      throw new CancelledAfterEffect(
+        `applied the effect for ${pythonRepr(messageId)} and will not present it: the row ` +
+          `reached ${pythonRepr(settled.status)} while the effect was in flight, so the message ` +
+          "is finished and is not delivered to anyone -- the effect at the destination is real " +
+          "and is reconciled from the action row, not from this message",
+      );
+    }
+
+    throw new OutboxUsageError(
+      `${pythonRepr(messageId)} could not be marked delivered and is neither delivered nor ` +
+        `terminal (status ${pythonRepr(settled.status)}): the fence was live, so under migration ` +
+        "0003's forward-only lattice this update had no legitimate reason to match no row -- a " +
+        "concurrent writer moved the row outside the vocabulary this module and the DDL share",
     );
   }
 
@@ -1325,6 +2105,15 @@ export class Outbox {
    * statement's own change count alone, so when zero rows change and the
    * caller allows it, the fence is re-read on its own: if it is live,
    * nothing was refused and the statement was simply a no-op.
+   *
+   * Returns whether the statement actually moved its row. A stale writer
+   * still throws, so the `false` return has exactly one meaning: *the fence
+   * was live and the `WHERE` matched nothing*, which is the outcome
+   * `allowNoRow` exists to permit. The caller is the only party that knows
+   * which no-ops are legitimate for its own predicate -- this method cannot,
+   * since it is handed the statement already rendered -- so it is handed the
+   * fact rather than the judgement. Callers that pass no `allowNoRow` can
+   * ignore the result: it is `true` on every path that returns.
    */
   private _fenced(
     statement: FencedStatement,
@@ -1337,7 +2126,7 @@ export class Outbox {
       readonly what: string;
       readonly allowNoRow?: boolean;
     },
-  ): void {
+  ): boolean {
     const { nowMs, epoch, message, handler, what, allowNoRow = false } = options;
     const bound = { ...params, ...this._fenceParams({ epoch, nowMs }) };
 
@@ -1355,11 +2144,13 @@ export class Outbox {
     // Joined rather than nested when the caller already holds a transaction:
     // `withImmediate` refuses an open one, and several callers wrap this.
     let refused = false;
+    let changed = false;
     const attempt = (): void => {
       const info = this._connection
         .prepare(String.prototype.valueOf.call(statement) as string)
         .run(bound);
       if (info.changes >= 1) {
+        changed = true;
         return;
       }
       if (allowNoRow && this._fenceIsLive({ epoch, nowMs })) {
@@ -1373,7 +2164,7 @@ export class Outbox {
       withImmediate(this._connection, attempt);
     }
     if (!refused) {
-      return;
+      return changed;
     }
 
     const reason =

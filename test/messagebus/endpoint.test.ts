@@ -1,12 +1,19 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, onTestFinished, test } from "vitest";
 
-import { Endpoint, EndpointConfig } from "../../src/messagebus/endpoint.js";
+import { createProductionControlPlane, MIGRATIONS_DIR } from "../../src/control_plane/migrator.js";
+import { createControlPlane } from "../../src/control_plane/schema.js";
+import {
+  DELIVERY_LEASE_RESOURCE,
+  Endpoint,
+  EndpointConfig,
+} from "../../src/messagebus/endpoint.js";
 import { createTempDir } from "../helpers/tmp.js";
+import { writeStep } from "../testkit/cases.js";
 import { type BusEnv, EPOCH, HOLDER, makeBusEnv, RECIPIENT, RESOURCE, RUN_ID } from "./_env.js";
 
 /**
@@ -121,6 +128,111 @@ function requireBuiltEndpoint(): void {
     "dist/messagebus/endpoint.js is missing: this case drives the built endpoint as a " +
       "subprocess, and `npm run pretest` builds it",
   ).toBe(true);
+}
+
+/**
+ * Start the built endpoint against `dbPath` and report how it died.
+ *
+ * The startup-refusal cases have no `BusEnv` to draw on -- three of the four
+ * databases they point the endpoint at are ones `makeBusEnv` would refuse to
+ * build (absent, spike, behind head) -- so the env is assembled here instead of
+ * through `childEnv`. Everything except the database path is a *valid*
+ * configuration: the resource, holder, epoch and recipient are the suite's own,
+ * and the recipient is one the spike registry serves. That is deliberate. It
+ * leaves the database as the only thing wrong, so a case that goes green has
+ * nowhere else the refusal could have come from.
+ *
+ * `overrides` is how the lease-resource cases spoil exactly one more field. It
+ * is deliberately applied *last*, over a configuration that is otherwise whole:
+ * the same one-thing-wrong discipline, extended to a second thing that can be
+ * wrong. With `stdio` stdin at `ignore` the child sees end-of-input at once, so
+ * a configuration the endpoint *accepts* serves nothing and exits 0 -- which is
+ * what lets one helper express both the refusal and its anti-vacuity twin.
+ */
+function startAgainst(
+  dbPath: string,
+  destinationDir: string,
+  overrides: Readonly<Record<string, string>> = {},
+): { status: number | null; stderr: string } {
+  const done = spawnSync(process.execPath, [ENDPOINT_ENTRY], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      INTERLOCK_MESSAGEBUS_DB: dbPath,
+      INTERLOCK_MESSAGEBUS_RESOURCE: RESOURCE,
+      INTERLOCK_MESSAGEBUS_HOLDER: HOLDER,
+      INTERLOCK_MESSAGEBUS_EPOCH: String(EPOCH),
+      INTERLOCK_MESSAGEBUS_RECIPIENT: RECIPIENT,
+      INTERLOCK_MESSAGEBUS_DESTINATION_DIR: destinationDir,
+      ...overrides,
+    },
+    timeout: 30_000,
+    encoding: "utf-8",
+  });
+  return { status: done.status, stderr: done.stderr };
+}
+
+/**
+ * A refused startup, asserted on both halves.
+ *
+ * Status **and** text, never one alone. Status 2 by itself is satisfied by any
+ * exit the endpoint takes for a *different* misconfiguration -- missing env and
+ * an unserved recipient both return 2 -- and a crash could plausibly produce it
+ * too; a text match by itself is satisfied by a process that printed the line
+ * and then carried on serving. Together they say the endpoint recognised this
+ * particular database, refused it, and stopped.
+ *
+ * The `FATAL:` prefix is asserted separately from the cause because it is the
+ * part an operator's log grep keys on, and it is the part that changed: before
+ * this cutover the refusal escaped `main()` to the entry-point handler and left
+ * status 1, the code that means "this program crashed" rather than "this
+ * database was never prepared for it" (`src/messagebus/endpoint.ts`, the
+ * `openProductionControlPlane` catch in `main`).
+ */
+function expectRefusedStartup(
+  result: { status: number | null; stderr: string },
+  cause: string | RegExp,
+): void {
+  expect(result.status, `stderr was:\n${result.stderr}`).toBe(2);
+  expect(result.stderr).toContain("FATAL:");
+  if (typeof cause === "string") {
+    expect(result.stderr).toContain(cause);
+  } else {
+    expect(result.stderr).toMatch(cause);
+  }
+}
+
+/**
+ * A production database holding only the first migration step.
+ *
+ * Built from a **prefix ledger of the real step files**, copied byte for byte
+ * out of `MIGRATIONS_DIR`. A hand-written stand-in would be refused as an
+ * *edited* step (the checksums are verified on every open) and the case would
+ * then be green for a refusal it is not about. The same idiom, for the same
+ * reason, is written out in `test/control_plane/db-cli.test.ts`
+ * (`databaseBehindHead`), `test/control_plane/run-admission.test.ts` and
+ * `test/control_plane/run-lifecycle.test.ts`; it is repeated rather than shared
+ * because those are file-local helpers in suites this one must not reach into,
+ * and `test/testkit/` exposes only `writeStep`.
+ *
+ * The head-count guard is what keeps the case from going vacuous: on a build
+ * whose ledger had shrunk to one step, the "behind head" database would be *at*
+ * head and the endpoint would open it happily.
+ */
+function databaseBehindHead(root: string): string {
+  const steps = readdirSync(MIGRATIONS_DIR)
+    .filter((name) => /^\d{4}_.*\.sql$/.test(name))
+    .sort();
+  expect(
+    steps.length,
+    "this case needs a ledger with more than one step for a prefix of it to be behind head",
+  ).toBeGreaterThan(1);
+  const first = steps[0] as string;
+  const prefix = join(root, "ledger-at-0001");
+  writeStep(prefix, first, readFileSync(join(MIGRATIONS_DIR, first), "utf8"));
+  const path = join(root, "behind-head.sqlite3");
+  createProductionControlPlane(path, { nowMs: nowMs(), migrationsDir: prefix }).close();
+  return path;
 }
 
 /** A minimal line-delimited JSON-RPC client over a child's stdio. */
@@ -395,6 +507,145 @@ describe("the worker-outbound MCP endpoint", () => {
     });
     expect(done.status).toBe(2);
     expect(done.stderr).toContain("no registered handler");
+  });
+
+  // ------------------------------------- target-only: the refused open (lap 1)
+  //
+  // The endpoint used to open the SPIKE schema (`openControlPlane`), which
+  // creates the database if it is not there and asks nothing about what it
+  // found. It now opens the PRODUCTION control plane at migration head
+  // (`openProductionControlPlane`, `src/control_plane/migrator.ts`), which
+  // never migrates and never creates -- so "which database am I attached to"
+  // became a question with wrong answers, and these three cases are the wrong
+  // answers being refused.
+  //
+  // They are target-only: interlock's `tests/messagebus/test_endpoint.py` has
+  // no counterpart, because the spike opener it drove had no refusals to
+  // exercise. What is at stake is not tidiness. A silently created empty spike
+  // database is an endpoint that starts, polls forever, and reports nothing
+  // wrong while the run's real outbox sits in a file nobody opened -- the
+  // failure this belt is least able to notice from the inside, since every
+  // observation it could make would be made against the wrong database.
+  //
+  // Each case runs the real child process rather than calling `main()` in
+  // process, because the exit status is half of what is being asserted and a
+  // status only exists for a process.
+
+  test("a database that does not exist refuses to start", () => {
+    // An absent database is not an empty one.
+    //
+    // The old opener would have created a spike file here and served it. The
+    // production opener refuses, and it must: the run whose outbox this endpoint
+    // is supposed to drain was created by somebody else, so a missing file means
+    // this endpoint was pointed somewhere wrong -- never that there is no work.
+    requireBuiltEndpoint();
+    const root = createTempDir("ep-absent-db");
+    const missing = join(root, "there-is-no-such-database.sqlite3");
+    expect(existsSync(missing), "the case is about a path with nothing at it").toBe(false);
+    expectRefusedStartup(
+      startAgainst(missing, join(root, "dest-absent")),
+      "does not exist; refusing to open",
+    );
+    expect(
+      existsSync(missing),
+      "opening must never create: a refused start that left a database behind would be served " +
+        "by the next start",
+    ).toBe(false);
+  });
+
+  test("a spike database refuses to start", () => {
+    // The cutover case, and the reason the fixture in `_env.ts` had to move.
+    //
+    // A spike database is recognised by its `application_id` and refused as
+    // CorruptStateRefused. There is no migration from the spike schema to
+    // production and none will be written, so this is a permanent refusal rather
+    // than a "run the migrator" prompt -- which is exactly why it has to be
+    // loud: the spike schema has no `cancelled` outbox status and no gate tables
+    // at all, so an endpoint served from one could never see a gate closure and
+    // would deliver relays whose human gate had already closed.
+    requireBuiltEndpoint();
+    const root = createTempDir("ep-spike-db");
+    const spikePath = join(root, "spike.sqlite3");
+    // Importing the spike opener is fine *here*: the file confinement
+    // `import-graph.test.ts` enforces is on `stale-readout.test.ts`, which may
+    // not reach the control plane at all. This file already imports it through
+    // `_env.ts`.
+    createControlPlane(spikePath).close();
+    expectRefusedStartup(startAgainst(spikePath, join(root, "dest-spike")), "is a spike database");
+  });
+
+  test("a production database behind migration head refuses to start", () => {
+    // Behind head is refused, not quietly migrated (D-0029).
+    //
+    // The endpoint is a reader of a database somebody else brought forward. An
+    // opener that migrated as a side effect would make every worker's endpoint a
+    // writer of DDL -- and, during a rolling deploy, would let whichever
+    // endpoint happened to start first decide the schema every other process is
+    // then running against. The refusal names both versions so an operator can
+    // see it is a migration that is owed and not a corrupt file.
+    requireBuiltEndpoint();
+    const root = createTempDir("ep-behind-head");
+    const behind = databaseBehindHead(root);
+    expectRefusedStartup(
+      startAgainst(behind, join(root, "dest-behind")),
+      /is at version 1 and this build knows steps up to \d+/,
+    );
+  });
+
+  // ------------------------ target-only: the one delivery resource (lap 1)
+  //
+  // D-0053 rule 4 fixes the outbox's lease resource at ONE GLOBAL DELIVERY
+  // LEASE for lap 1, and until now that was a statement in a docstring while
+  // `INTERLOCK_MESSAGEBUS_RESOURCE` accepted any non-empty string. The two
+  // cases below are the difference between a constraint that is described and
+  // one that holds: the first shows a second resource name refused, the second
+  // shows the admitted name still starting, because a refusal that refuses
+  // everything proves nothing about what it is refusing.
+  //
+  // Why this matters more than a tidy config check: `writer_epoch` records a
+  // number and not a resource, so two endpoints under two resources at equal
+  // epochs are indistinguishable in an outbox row -- and neither `_DUE_QUERY`
+  // nor `Outbox.recover` narrows to a resource, so each holder ranges over the
+  // other's rows while its own fence reports everything is in order.
+  //
+  // Target-only, like the refused-open cases above: interlock's
+  // `tests/messagebus/test_endpoint.py` has no counterpart, because the
+  // resource was a free string there too.
+
+  test("a delivery resource other than the admitted one refuses to start", () => {
+    // Everything is valid except the resource name -- the same one-thing-wrong
+    // shape the refused-open cases use, so a green case has nowhere else the
+    // exit 2 could have come from. The database is the suite's own production
+    // control plane, built and migrated to head by `makeBusEnv`.
+    requireBuiltEndpoint();
+    const { env, root } = rtEnv("ep-second-resource");
+    const other = `${DELIVERY_LEASE_RESOURCE}-of-run-1`;
+    expect(other, "the case is about a name the endpoint must not admit").not.toBe(
+      DELIVERY_LEASE_RESOURCE,
+    );
+    expectRefusedStartup(
+      startAgainst(env.dbPath, join(root, "dest-second-resource"), {
+        INTERLOCK_MESSAGEBUS_RESOURCE: other,
+      }),
+      "is not the one delivery lease resource lap 1 admits",
+    );
+  });
+
+  test("the admitted delivery resource starts, which is what makes that refusal mean something", () => {
+    // The anti-vacuity half.
+    //
+    // With stdin at `ignore` the child reaches end-of-input immediately and
+    // `main()` returns 0, so "started" is observable as a clean exit rather
+    // than by keeping a process alive. A refusal that also fired here would be
+    // a check on nothing -- and, worse, one that no case above could tell apart
+    // from the database refusals, since all four exit 2 with a FATAL line.
+    requireBuiltEndpoint();
+    const { env, root } = rtEnv("ep-admitted-resource");
+    const result = startAgainst(env.dbPath, join(root, "dest-admitted-resource"), {
+      INTERLOCK_MESSAGEBUS_RESOURCE: DELIVERY_LEASE_RESOURCE,
+    });
+    expect(result.status, `stderr was:\n${result.stderr}`).toBe(0);
+    expect(result.stderr).not.toContain("FATAL:");
   });
 
   test("the acceptance sequence end to end over stdio", async () => {

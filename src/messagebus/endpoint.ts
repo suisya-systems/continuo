@@ -3,20 +3,37 @@ import process from "node:process";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import type { Database as SqliteDatabase } from "better-sqlite3";
+
 import { KeyedDropbox } from "../control_plane/destination.js";
 import { NOTIFY_RECIPIENT, spikeRegistry } from "../control_plane/handlers.js";
+import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { pythonJsonDocumentSorted } from "../control_plane/python_json.js";
 import { pythonRepr } from "../control_plane/python_repr.js";
-import { openControlPlane } from "../control_plane/schema.js";
 import { type DeliveredEnvelope, MessageBus } from "./bus.js";
 
 /**
  * S8 -- the worker-outbound MCP endpoint over one {@link MessageBus}.
  *
- * **Spike scaffold, throwaway by default (interlock D-0026).** The MCP surface
- * here is the minimum that makes "worker-outbound" a demonstrated fact rather
- * than a diagram: a stdio server a worker connects to as a client, exposing
- * exactly the two verbs a recipient has -- `poll` and `ack`.
+ * **The surface is still minimal; the database underneath no longer is.** The
+ * MCP surface here remains the minimum that makes "worker-outbound" a
+ * demonstrated fact rather than a diagram: a stdio server a worker connects to
+ * as a client, exposing exactly the two verbs a recipient has -- `poll` and
+ * `ack`. What changed is the storage: this endpoint used to open the spike
+ * schema (`openControlPlane` in `src/control_plane/schema.ts`, throwaway by
+ * default under interlock D-0026), and now opens the **production control
+ * plane at migration head** via {@link openProductionControlPlane}. That is
+ * what makes the human gate reachable from here at all: gate closure lives in
+ * `src/control_plane/gates.ts` and writes the `cancelled` outbox status that
+ * migration `0003_outbox_cancelled_status.sql` added, and neither the gate
+ * tables nor that status exist in the spike schema.
+ *
+ * {@link openProductionControlPlane} **never migrates** (D-0029), so the
+ * endpoint is a reader of a database somebody else created and moved forward,
+ * never a writer of DDL: an absent file, a spike database, a behind-head
+ * database and an ahead-of-head database are each refused at startup rather
+ * than served -- see {@link main}, which turns every one of those refusals into
+ * exit status 2.
  *
  * Ported from interlock `src/claude_org_runtime/messagebus/endpoint.py` at
  * `65f36c5`.
@@ -32,6 +49,19 @@ import { type DeliveredEnvelope, MessageBus } from "./bus.js";
  * line). Unlike a push channel this server *does* declare tools -- it is a tool
  * surface.
  *
+ * **Lap 1 keeps this a stdio child: one per worker, recipient pinned by env**
+ * (pre-implementation design review, Blocker B2). A shared localhost host
+ * serving many workers over one socket was considered and rejected *for lap 1*,
+ * not on taste: the isolation between workers here rests entirely on the shape
+ * "one worker, one endpoint process, one fixed `INTERLOCK_MESSAGEBUS_RECIPIENT`
+ * env". There is no caller identity on the wire and nothing in `handle()` asks
+ * who is calling, because with a private child process the answer is structural.
+ * The moment several workers share a host, "who may `poll` or `ack` which
+ * recipient's queue" becomes a question the transport has to answer, and
+ * session authorization would become a blocker of the very same change that
+ * moves the storage to production -- two hard problems landing together. So the
+ * transport stays as it is and only the database moves.
+ *
  * **Configuration is env-driven** (no argument parser; the worker's MCP config
  * sets env), all ASCII. The variable names are interlock's, unchanged, for the
  * reason `STATE_FILE_ENV` in `src/session/stub_provider.ts` keeps its
@@ -39,11 +69,33 @@ import { type DeliveredEnvelope, MessageBus } from "./bus.js";
  * configuration, and renaming it would be a divergence that buys nothing.
  *
  * - `INTERLOCK_MESSAGEBUS_DB` -- path to the control-plane SQLite database.
+ *   It must be a **production** control plane **at migration head**. A spike
+ *   database (recognised by its `application_id`), an absent file, a database
+ *   behind head and a database ahead of this build are all refused at startup
+ *   rather than served; see {@link main}. Opening never migrates, so pointing
+ *   this at a fresh path does not create anything.
  * - `INTERLOCK_MESSAGEBUS_RESOURCE` / `INTERLOCK_MESSAGEBUS_HOLDER` /
  *   `INTERLOCK_MESSAGEBUS_EPOCH` -- the lease identity this endpoint's writes
  *   are fenced under. The endpoint does not acquire or renew the lease; lease
  *   orchestration is the control plane's, and a stale epoch surfaces as
  *   `StaleWriterRefused` out of `poll`, refused durably.
+ *
+ *   **`INTERLOCK_MESSAGEBUS_RESOURCE` admits exactly one value on lap 1: the
+ *   string {@link DELIVERY_LEASE_RESOURCE}**, which is the one global delivery
+ *   lease of D-0053 rule 4 (pre-implementation design review, Blocker B1). The
+ *   variable is not deleted, because it is a wire contract with a worker's MCP
+ *   configuration; what changed is that it stopped being a choice. {@link main}
+ *   refuses any other value at startup with exit status 2, alongside its other
+ *   startup refusals. The whole argument for the restriction -- and the two
+ *   schema changes that would lift it -- is written out on the constant, which
+ *   is where a reader who is about to widen this will be standing.
+ *
+ *   Renewing that lease is deliberately **not** this module's job and is not
+ *   implemented anywhere yet: it belongs to the launcher (the composition root)
+ *   that owns the endpoint's whole lifetime, and that launcher does not exist.
+ *   Until it does, an endpoint outliving its lease dies loudly at its next write
+ *   rather than quietly delivering under a dead one, which is the safe direction
+ *   for the gap.
  * - `INTERLOCK_MESSAGEBUS_RECIPIENT` -- the one recipient this endpoint serves.
  *   `poll` is pinned to it; a worker cannot pull another recipient's queue
  *   through this surface.
@@ -137,6 +189,42 @@ function parseEpoch(raw: string): number | null {
   const value = Number(text.replace(/_/g, ""));
   return Number.isSafeInteger(value) ? value : null;
 }
+
+/**
+ * The name of the one delivery lease resource lap 1 admits (D-0053 rule 4).
+ *
+ * **This is a constraint, not a preference, and it is enforced rather than
+ * described** -- see the refusal in {@link main}. The value is deliberately not
+ * a per-run or per-worker name (contrast the suites' `session-run:${runId}` and
+ * `outbox-of-run-1`): a name with a run or a recipient in it would advertise a
+ * partitioning of the outbox that does not exist, and the whole point of rule 4
+ * is that no such partitioning exists yet.
+ *
+ * **Why one resource.** `docs/production-schema.md` section 4.2 names the single
+ * writer of `outbox.status` as "the delivery worker holding the outbox lease",
+ * fenced by `writer_epoch` validated inside the write (`:213`). But an outbox
+ * row carries **no lease or resource column**, and neither pass that selects
+ * rows is scoped to one: `_DUE_QUERY` in `src/control_plane/outbox.ts` reads
+ * every unfinished row regardless of who is asking, and `Outbox.recover` adopts
+ * every unfinished row through `_ADOPT`. Section 4.9's "the endpoint's lease is
+ * per-process" therefore fixes a **lifetime** and says nothing about a
+ * **scope**, and the two are routinely confused. Admit two resources and each
+ * holder holds a live epoch of its own; each one's fenced write then validates
+ * against a live lease while touching rows the other believes it owns, because
+ * `writer_epoch` records a number and not a resource, so equal epoch numbers
+ * under different resources are indistinguishable in the row. The fence would
+ * be intact and would be proving only that *some* lease is live, which is not
+ * what a fence is for -- the exclusion it exists to provide would be gone.
+ *
+ * **What would lift this, so a later reader knows it is dated and not a law.**
+ * Either a scope column on `outbox` (a resource or partition the due and
+ * recovery passes filter on), or a strict recipient predicate applied to both
+ * of those passes so that a resource's holder can only ever see its own
+ * recipient's rows. Both are schema-and-query questions that D-0053 leaves open
+ * on purpose; neither is unlocked by configuring a second resource string here,
+ * which is exactly why configuring one is refused instead of trusted.
+ */
+export const DELIVERY_LEASE_RESOURCE = "outbox-delivery";
 
 /** The env contract, read once and validated loudly. */
 export class EndpointConfig {
@@ -234,6 +322,21 @@ export class Endpoint {
     return {
       message_id: outcome.messageId,
       recorded: outcome.recorded,
+      // `null` here is a *statement*, not a gap: it means the row carries no
+      // ack at all, which since migration 0003 happens for exactly one reason
+      // -- the row is `cancelled`, and 0003's
+      // `CHECK ((status = 'acked') = (acked_at_ms IS NOT NULL))` makes it
+      // impossible for a cancelled row to carry an ack instant. It never means
+      // "acked at an instant we could not read". A worker seeing
+      // `recorded: false` with a non-null `acked_at_ms` was late to an ack that
+      // exists; one seeing `recorded: false` with a null one was late to a gate
+      // closure, and no ack will ever exist for that message.
+      //
+      // `pythonJsonDocumentSorted` renders `null` as the JSON literal `null`
+      // (`src/control_plane/python_json.ts:115-117`, where `null` and
+      // `undefined` share the branch), so this needs no wire-side special case;
+      // the key stays present rather than vanishing, which is what keeps a
+      // client's `"acked_at_ms" in response` test honest.
       acked_at_ms: outcome.ackedAtMs,
       clock_clamped: outcome.clockClamped,
     };
@@ -452,7 +555,74 @@ export async function main(
     fail(`FATAL: missing env: ${gaps.join(", ")}`);
     return 2;
   }
-  const connection = openControlPlane(config.dbPath);
+  if (config.resource !== DELIVERY_LEASE_RESOURCE) {
+    // The one delivery resource of D-0053 rule 4, **enforced here** rather than
+    // stated in a docstring. A constraint that only a comment knows is a
+    // constraint two endpoints can be started in violation of, each fenced under
+    // a live lease of its own and each free to advance the other's rows -- the
+    // scenario {@link DELIVERY_LEASE_RESOURCE} argues cannot be allowed to be
+    // reachable by configuration.
+    //
+    // The env var stays, and stays required by `missing()` above: it is a wire
+    // contract with a worker's MCP configuration, exactly as
+    // `INTERLOCK_MESSAGEBUS_DB` and `INTERLOCK_MESSAGEBUS_RECIPIENT` are, and
+    // deleting it would break every config that sets it while silently changing
+    // what the endpoint fences under. What changes is only that exactly one
+    // value is admitted -- so an operator who spells a second resource gets a
+    // refusal naming the admitted one, not a running endpoint that quietly
+    // shares the outbox.
+    //
+    // **Here and not in `EndpointConfig`**, on two grounds. First, `missing()`
+    // answers a different question -- "what did the operator fail to set" -- and
+    // an unset resource must keep being reported as missing rather than as "not
+    // the admitted name", which is a different fix. Second, `config.resource` is
+    // read at exactly one place in this module, the `new MessageBus` below, so
+    // the admission sits immediately above its only use; welding it into the
+    // constructor would instead make `EndpointConfig` unable to *describe* a
+    // configuration, which the in-process tests construct directly (they build
+    // `Endpoint(bus, config)` around a bus they made themselves, and `Endpoint`
+    // never reads `config.resource` at all).
+    //
+    // Order matters: after `missing()`, so an unset value is reported as unset;
+    // before the database is opened, so a refused configuration never gets as
+    // far as touching a file.
+    fail(
+      `FATAL: INTERLOCK_MESSAGEBUS_RESOURCE=${pythonRepr(config.resource)} is not the one` +
+        ` delivery lease resource lap 1 admits (${pythonRepr(DELIVERY_LEASE_RESOURCE)})`,
+    );
+    return 2;
+  }
+  let connection: SqliteDatabase;
+  try {
+    connection = openProductionControlPlane(config.dbPath);
+  } catch (error) {
+    // Every way this can fail is a startup **misconfiguration**, so it gets the
+    // same exit status 2 that missing env and an unserved recipient already get
+    // above and below, and the same `FATAL:` line on stderr. The refusals
+    // openProductionControlPlane can raise, all from
+    // `src/control_plane/migrator.ts`, are: `MissingStateRefused` (the file is
+    // not there -- an absent database is not an empty one, and opening never
+    // creates); `CorruptStateRefused` (not a regular file, unreadable, failing
+    // `integrity_check`, or -- the interesting one during this cutover -- "is a
+    // spike database", recognised by its `application_id`, for which no
+    // migration exists and none will be written); the base `ControlPlaneRefusal`
+    // (the file is *behind* head, and opening never migrates as a side effect,
+    // D-0029, so somebody must run `migrateControlPlane` explicitly); and
+    // `DatabaseAheadOfCodeRefused` (the file carries a migration this build does
+    // not know, refused rather than downgraded because there are no down
+    // migrations).
+    //
+    // Catching them here rather than letting them out is the point of the
+    // change: without this the refusal escaped `main()` to the entry-point
+    // handler at the bottom of this file, which prints an *uncaught* FATAL and
+    // sets exit code 1 -- the status for "this program crashed", which reads to
+    // an operator (and to any supervisor scripting a restart) as a bug in the
+    // endpoint rather than as a database that was never prepared for it. The
+    // message keeps the path, because "which database" is the first thing the
+    // operator needs and `config.dbPath` is the only place it is written down.
+    fail(`FATAL: INTERLOCK_MESSAGEBUS_DB=${pythonRepr(config.dbPath)}: ${describeError(error)}`);
+    return 2;
+  }
   const dropbox = new KeyedDropbox(config.destinationDir, "messagebus-endpoint");
   const registry = spikeRegistry(dropbox);
   try {

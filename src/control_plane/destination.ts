@@ -7,13 +7,28 @@ import { pythonRepr } from "./python_repr.js";
 /**
  * S7 -- the destination, and the idempotency record that is **not ours**.
  *
- * **Spike scaffold, throwaway by default (D-0026).** Like the S5 schema it sits
- * on, nothing in this module is promoted by being depended on, by being
- * imported, or by having survived a gate run. `Q-0001` was open when this
- * module was written; D-0029 has since resolved it in the production schema
+ * **Spike scaffold, throwaway by default (D-0026), and unchanged by the
+ * endpoint's move onto the production schema.** Nothing in this module is
+ * promoted by being depended on, by being imported, or by having survived a
+ * gate run. That sentence used to open with "like the S5 schema it sits on",
+ * and that clause has stopped being true: `src/messagebus/endpoint.ts` opens
+ * its control plane through `openProductionControlPlane`, so the outbox whose
+ * handler reaches this destination is a production one under migration 0003's
+ * status lattice. `Q-0001` was open when this module was written and D-0029
+ * has since resolved it in the production schema
  * (`docs/production-schema.md` section 4.2,
- * `control_plane/migrations/0001_initial.sql`), but this module still sits on
- * the S5 spike schema that predates that answer.
+ * `control_plane/migrations/0001_initial.sql`).
+ *
+ * The database moving does not promote what is here, because the two were
+ * never provisional for the same reason. The S5 schema was a *draft* of a
+ * thing we now have; {@link KeyedDropbox} is a *stand-in* for a thing we do
+ * not -- a directory of files is not a transport, and the section below on
+ * what the filesystem implementation stands in for is deliberate about which
+ * single property of a real destination it models and how little else. So the
+ * destination side is now the scaffold left on this path, and replacing it
+ * with a real keyed destination is the next thing to do. Until that happens
+ * the honest reading of a green gate run is that the *mechanism* holds against
+ * a counterparty chosen to be small, not that delivery is built.
  *
  * Why this module exists at all, and why it is a separate file from the
  * handler that uses it.

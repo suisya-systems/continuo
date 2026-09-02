@@ -4,12 +4,39 @@ import { onTestFinished } from "vitest";
 
 import { KeyedDropbox } from "../../src/control_plane/destination.js";
 import { NOTIFY_RECIPIENT, spikeRegistry } from "../../src/control_plane/handlers.js";
-import { createControlPlane } from "../../src/control_plane/schema.js";
+import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
+import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { type DeliveredEnvelope, MessageBus } from "../../src/messagebus/index.js";
 import { createTempDir } from "../helpers/tmp.js";
 
 /**
- * The one place this suite knows the control plane's vocabulary.
+ * The one place this suite knows the control plane's vocabulary -- and, since
+ * the endpoint moved to production storage, the one place it chooses a
+ * **schema**.
+ *
+ * Every database this suite runs against is built by
+ * {@link createProductionControlPlane} (`src/control_plane/migrator.ts`), which
+ * creates a production control plane migrated to head. It used to be
+ * `createControlPlane` from `src/control_plane/schema.ts`, the spike schema, and
+ * the move is forced rather than tidy-minded: `src/messagebus/endpoint.ts` now
+ * opens its database with `openProductionControlPlane`, which refuses a spike
+ * database outright (`CorruptStateRefused`, recognised by `application_id`), so
+ * a spike fixture cannot produce a running endpoint at all. Underneath that is
+ * the reason the endpoint moved: the human gate closes by writing the outbox
+ * status `cancelled` (`closeGate` in `src/control_plane/gates.ts`), a status
+ * added by migration `0003_outbox_cancelled_status.sql` -- and neither the gate
+ * tables nor that status exist in the spike schema. A suite that keeps building
+ * spike databases can only test a delivery path whose cancellation edge is
+ * unreachable, which is to say it can only test the half that was never in
+ * doubt.
+ *
+ * The `run` and `lease` rows below stay **raw inserts** across that move, and
+ * they are valid verbatim: production's `run.status` CHECK admits `'running'`,
+ * migration `0004` adds only a nullable `run.writer_epoch`, and the `lease`
+ * table is character-identical between the two schemas. Fixtures in this
+ * repository seed rows directly rather than through `admitRun` -- see
+ * `test/control_plane/run-lifecycle.test.ts:110-131` for why admission is the
+ * subject of its own tests and not the tool other suites build state with.
  *
  * Ported from interlock `tests/messagebus/_env.py` and `tests/messagebus/
  * conftest.py` at `65f36c5`, merged into one module because Vitest has no
@@ -32,7 +59,24 @@ import { createTempDir } from "../helpers/tmp.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
 export const T0 = 1_700_000_000_000;
-export const RESOURCE = "messagebus-of-run-1";
+/**
+ * The delivery lease resource, taken from the product rather than spelled here.
+ *
+ * It used to be the literal `"messagebus-of-run-1"` -- a name shaped like one
+ * lease *per run*, which is precisely the illusion D-0053 rule 4 forbids: the
+ * outbox row carries no resource column and neither the due pass nor the
+ * recovery pass is scoped to one, so a per-run name would advertise a
+ * partitioning the schema does not have, and this suite would have been the
+ * document a later reader consulted for it.
+ *
+ * Imported rather than re-spelled so the fixture and the endpoint cannot drift:
+ * `main()` now admits exactly this string and refuses any other
+ * (`src/messagebus/endpoint.ts`, {@link DELIVERY_LEASE_RESOURCE}), so a suite
+ * carrying its own copy would keep passing on the day the product's name
+ * changed and would leave the subprocess cases failing for a reason no
+ * assertion here explained.
+ */
+export const RESOURCE = DELIVERY_LEASE_RESOURCE;
 export const HOLDER = "bus-writer";
 export const EPOCH = 1;
 export const TTL_MS = 300_000;
@@ -83,6 +127,45 @@ export class BusEnv {
     return row === undefined ? null : row.status;
   }
 
+  /**
+   * Cancel one relay the way gate closure cancels it.
+   *
+   * This is deliberately a **copy of closure's own statement**, not a
+   * convenience `UPDATE outbox SET status = 'cancelled' WHERE message_id = ?`.
+   * The original lives at the end of `_closeGate` in
+   * `src/control_plane/gates.ts` (around line 1657) and reads:
+   *
+   * ```sql
+   * UPDATE outbox
+   *    SET status = 'cancelled'
+   *  WHERE status IN ('pending', 'delivered')
+   *    AND message_id IN (SELECT message_id FROM gate_relay WHERE gate_id = ?)
+   * ```
+   *
+   * Only the row *selector* changes here -- this suite has no gates, so a
+   * message id stands in for the `gate_relay` subquery. The `SET` and the
+   * `status IN ('pending', 'delivered')` guard are reproduced character for
+   * character, and reproducing them is the point: a test that cancelled with a
+   * looser predicate would be pinning the bus's behaviour against a cancellation
+   * shape **the product never writes**, and would keep passing if the product's
+   * own guard were lost. The guard is also what makes this idempotent in the
+   * same way closure is -- a second call moves no row rather than tripping
+   * `outbox_status_is_forward_only`, which has no edge out of a terminal status.
+   *
+   * Returns the number of rows moved, so a case can assert it cancelled
+   * something rather than assuming it did; a cancellation that silently matched
+   * nothing would make every assertion after it vacuous.
+   */
+  cancelRelay(messageId: string): number {
+    const info = this.connection
+      .prepare(
+        "UPDATE outbox SET status = 'cancelled'" +
+          " WHERE status IN ('pending', 'delivered') AND message_id = ?",
+      )
+      .run(messageId);
+    return info.changes;
+  }
+
   /** Rows the outbox durably refused. The audit trail, as a number. */
   refusedActionCount(): number {
     const row = this.connection
@@ -113,7 +196,14 @@ export interface BusEnvOptions {
 export function makeBusEnv(root: string, tag: string, options: BusEnvOptions = {}): BusEnv {
   const { nowMs = T0, ttlMs = TTL_MS, checkpoint } = options;
   const dbPath = join(root, `control-plane-${tag}.sqlite3`);
-  const connection = createControlPlane(dbPath);
+  // `nowMs` is required and must be an integer: `createProductionControlPlane`
+  // stamps it into every `schema_migration.applied_at_ms` row it writes and
+  // refuses a non-integer outright (`requireEpochMs`,
+  // `src/control_plane/migrator.ts`). The fixture's own instant is passed so the
+  // ledger, the run and the lease all agree on when this world began -- the
+  // endpoint cases hand in wall-clock time here for the same reason they hand it
+  // to the run row.
+  const connection = createProductionControlPlane(dbPath, { nowMs });
   connection
     .prepare(
       "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms) VALUES (?, 'running', ?, ?)",
