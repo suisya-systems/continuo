@@ -33,7 +33,7 @@
  *   becomes a permission model.
  */
 
-import { resolve } from "node:path";
+import { resolve, win32 } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -333,8 +333,41 @@ describe("the workspace is an absolute path", () => {
     expectRefusal(
       () => new LapRunIntent(fields({ workspace })),
       LapRunIntentUsageError,
-      /workspace must be an absolute path/,
+      /workspace must be a fully qualified absolute path/,
     );
+  });
+
+  test("refuses a path that is rooted but not qualified", () => {
+    // `path.win32.isAbsolute("\\worktree")` is TRUE, and the path is still
+    // drive-relative: it resolves against whichever drive the reading process
+    // is on. Admission on `D:` and a materialise step on `C:` would read one
+    // recorded string as two directories -- exactly the failure requiring an
+    // absolute path exists to rule out, arriving through the check meant to
+    // rule it out. On POSIX the same string is not absolute at all, so it is
+    // refused there too, and the message is the same one either way.
+    //
+    // Both branches also assert what the platform MUST accept, because a rule
+    // that only ever refuses is satisfied by refusing everything, and the shape
+    // a rejection-only case would let through is a record that cannot hold an
+    // ordinary path on the platform it is running on.
+    const rooted = `${win32.sep}worktree${win32.sep}run-1`;
+
+    expectRefusal(
+      () => new LapRunIntent(fields({ workspace: rooted })),
+      LapRunIntentUsageError,
+      /workspace must be a fully qualified absolute path/,
+    );
+
+    const accepted =
+      process.platform === "win32"
+        ? [
+            `C:${win32.sep}worktree${win32.sep}run-1`,
+            `${win32.sep}${win32.sep}server${win32.sep}share${win32.sep}wt`,
+          ]
+        : ["/worktree/run-1"];
+    for (const workspace of accepted) {
+      expect(new LapRunIntent(fields({ workspace })).workspace).toBe(workspace);
+    }
   });
 
   test("does not require the path to exist", () => {
@@ -386,6 +419,23 @@ describe("cli args are a list of strings, in order", () => {
       () => new LapRunIntent(fields({ cliArgs: "--verbose" as unknown as string[] })),
       LapRunIntentUsageError,
       /cli_args must be a list of strings/,
+    );
+  });
+
+  test("refuses a control character in an element, naming its index", () => {
+    // The rule every field but `prompt` gets, applied to each element rather
+    // than to the list. An argv element is the part of this record most likely
+    // to arrive from a shell that did the quoting for someone, and one carrying
+    // an escape sequence is a value no later report can quote back as the
+    // string the database holds.
+    expectRefusal(
+      () =>
+        new LapRunIntent({
+          ...fields(),
+          cliArgs: ["--verbose", `--message=a${String.fromCodePoint(0x0a)}b`],
+        }),
+      LapRunIntentUsageError,
+      /cli_args\[1\] must not contain a control character/,
     );
   });
 

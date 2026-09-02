@@ -10286,15 +10286,21 @@ design document itself; the table is here.
   printed back verbatim (`D-0051`). `prompt` is held to nothing but non-emptiness, because it is
   prose and this organization writes prose in Japanese -- `docs/cli-output-policy.md` governs what
   continuo *authors*, and says in as many words that values it receives from outside "may of course
-  be non-ASCII". The remaining fields refuse control characters only: a branch name that ends a line
-  is a value no later report can quote back as the string the database holds, while a non-ASCII role
-  or workspace path is ordinary here.
-- **`workspace` must be absolute.** The one shape rule imposed on a path, and it follows from the
-  record being durable: the value is read back by a different process whose working directory is its
-  own, so a relative path is one whose meaning depends on who reads it. Absoluteness is all that is
-  checked -- the path is not normalised, and its existence is not tested. Normalising would mean the
-  record holds a string the operator did not type, and stat'ing would make admission depend on a
-  filesystem state that decision 1 says does not exist yet.
+  be non-ASCII". The remaining fields -- and each element of `cliArgs` -- refuse control
+  characters only: a branch name or an argv element that ends a line is a value no later report can
+  quote back as the string the database holds, while a non-ASCII role or workspace path is ordinary
+  here. An empty string stays a legal `cliArgs` element, because an empty argv element is legal and
+  refusing it would be a rule this record invented.
+- **`workspace` must be fully qualified.** The one shape rule imposed on a path, and it follows from
+  the record being durable: the value is read back by a different process whose working directory is
+  its own, so a path whose meaning depends on who reads it is one this record cannot fix.
+  `isAbsolute` alone is **not** that rule on Windows -- `path.win32.isAbsolute("\worktree")` is
+  `true` and the path is still drive-relative, so admission on `D:` and a materialise step on `C:`
+  would read one recorded string as two directories -- so the check is the path's *root*: a drive
+  letter or a UNC share on `win32`, and `isAbsolute` alone on POSIX, where the two cannot disagree.
+  Being resolvable is all that is checked -- the path is not normalised, and its existence is not
+  tested. Normalising would mean the record holds a string the operator did not type, and stat'ing
+  would make admission depend on a filesystem state that decision 1 says does not exist yet.
 - **The payload is `json.dumps(..., sort_keys=True)`, in the schema's `snake_case`.** It is a parity
   surface: the differential oracle compares stored TEXT, so `pythonJsonDocumentSorted` is used rather
   than `JSON.stringify`, and a Japanese prompt is stored ASCII-escaped exactly as CPython would write

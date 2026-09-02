@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, parse as parsePath } from "node:path";
 
 import { pythonJsonDocumentSorted } from "./python_json.js";
 import { pythonRepr } from "./python_repr.js";
@@ -112,7 +112,8 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 
 /**
  * The C0 and C1 control characters, which no field but {@link
- * LapRunIntent.prompt} may carry.
+ * LapRunIntent.prompt} may carry -- including each element of {@link
+ * LapRunIntent.cliArgs}, which is text this record quotes back like any other.
  *
  * A narrow rule with a narrow reason, and deliberately not the printable-ASCII
  * rule above. A workspace path, a role, a lease claimant and a branch name are
@@ -165,6 +166,37 @@ function requireQuotableText(field: string, value: unknown): string {
 }
 
 /**
+ * Is this a path that means the same thing to every process that reads it?
+ *
+ * `isAbsolute` alone is not that question on Windows, and the gap is not
+ * theoretical on a platform `D-0003` puts on the merge path.
+ * `path.win32.isAbsolute("\\worktree")` is `true`, but that path is
+ * **drive-relative**: it resolves against whichever drive the reading process
+ * happens to be on, so admission on `D:` and a materialise step on `C:` would
+ * read one recorded string as two directories. That is precisely the failure
+ * requiring an absolute path exists to rule out, arriving through the check
+ * meant to rule it out.
+ *
+ * So the rule is the root, not the leading separator: `parse` gives `"C:\\"`
+ * for a drive-qualified path and `"\\\\server\\share\\"` for a UNC one, and a bare
+ * `"\\"` or `"/"` for the drive-relative form. On POSIX the root of an absolute
+ * path is always `"/"`, so the length test would reject every path there --
+ * which is why `isAbsolute` is asked first and the root is only examined where
+ * the two can disagree.
+ */
+function isFullyQualified(path: string): boolean {
+  if (!isAbsolute(path)) {
+    return false;
+  }
+  if (process.platform !== "win32") {
+    return true;
+  }
+  // A drive-relative root is exactly one separator. Anything qualified -- a
+  // drive letter or a UNC share -- has more.
+  return parsePath(path).root.length > 1;
+}
+
+/**
  * The payload keys, which are the record's durable spelling.
  *
  * `snake_case` rather than the record's own `camelCase`, because the payload is
@@ -210,14 +242,15 @@ export class LapRunIntent {
    * The path this lap has chosen to materialise its workspace **into**, not one
    * that exists.
    *
-   * Required to be absolute, which is the one shape rule this record imposes on
-   * a path and follows from the record being durable rather than from taste: it
-   * is read back later, by a different process, whose working directory is its
-   * own. A relative path recorded here is a path whose meaning depends on who
-   * reads it, which is exactly the thing an intent fixed at admission exists to
-   * rule out.
+   * Required to be **fully qualified** -- absolute, and on Windows carrying a
+   * drive or a UNC share rather than a bare leading separator (see {@link
+   * isFullyQualified}). That is the one shape rule this record imposes on a
+   * path, and it follows from the record being durable rather than from taste:
+   * it is read back later, by a different process, whose working directory is
+   * its own. A path whose meaning depends on who reads it is exactly the thing
+   * an intent fixed at admission exists to rule out.
    *
-   * Absolute is all that is checked. Whether the path is normalised, whether
+   * Being resolvable is all that is checked. Whether the path is normalised, whether
    * its parent exists, and what is eventually created there belong to the task
    * that materialises it, and that task states what it made in its own event.
    */
@@ -270,12 +303,12 @@ export class LapRunIntent {
     this.runId = runId;
     this.leaseClaimantId = requireQuotableText("lease_claimant_id", fields.leaseClaimantId);
     this.workspace = requireQuotableText("workspace", fields.workspace);
-    if (!isAbsolute(this.workspace)) {
+    if (!isFullyQualified(this.workspace)) {
       throw new LapRunIntentUsageError(
-        `workspace must be an absolute path, got ${pythonRepr(this.workspace)}; ` +
+        `workspace must be a fully qualified absolute path, got ${pythonRepr(this.workspace)}; ` +
           "this record is read back by a later process with a working directory " +
-          "of its own, so a relative path is one whose meaning depends on who " +
-          "reads it",
+          "of its own, so a path whose meaning depends on who reads it is one " +
+          "this record cannot fix",
       );
     }
     this.role = requireQuotableText("role", fields.role);
@@ -290,11 +323,23 @@ export class LapRunIntent {
       );
     }
     for (const [index, argument] of cliArgs.entries()) {
+      // Each element by itself, because a list that is a list of the wrong
+      // things fails at the element the caller has to go and look at.
       if (typeof argument !== "string") {
-        // Each element by itself, because a list that is a list of the wrong
-        // things fails at the element the caller has to go and look at.
         throw new LapRunIntentUsageError(
           `cli_args[${index}] must be a string, got ${pythonRepr(argument)}`,
+        );
+      }
+      // The same rule the other fields get, and NOT `requireQuotableText`: an
+      // empty string is a legal argv element and refusing it would be a rule
+      // this record invented. What is refused is the control character, for the
+      // reason {@link CONTROL_CHARACTERS} gives -- an argument carrying an
+      // escape sequence is one no later report can quote back as the string the
+      // database holds, and it is the element of this record most likely to
+      // arrive from a shell that did the quoting for someone.
+      if (CONTROL_CHARACTERS.test(argument)) {
+        throw new LapRunIntentUsageError(
+          `cli_args[${index}] must not contain a control character, got ` + pythonRepr(argument),
         );
       }
     }
