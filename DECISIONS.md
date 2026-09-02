@@ -148,6 +148,7 @@ spaces distinct.
 | D-0051 | A run is created by one writer, `continuo run admit`, which appends `run_created` in the same transaction and refuses a second admission | accepted |
 | D-0052 | The runner's per-test timeout is scaled on a slow platform, from the same constant the harness budgets use | accepted |
 | D-0053 | The broker belt is declined and discharged rather than ported, and the endpoint moves onto the production schema with the outbox aligned to `cancelled` | accepted |
+| D-0054 | `writer_epoch` on `outbox` is delivery-side ownership, not producer provenance: the delivery worker adopts one row immediately before it attempts it | accepted |
 
 ---
 
@@ -10085,6 +10086,47 @@ path, no lease row is read to mint a token, and no recovery loop or renewal time
 endpoint -- those are step 4 and step 8, and `D-0053` rule 4's warning about deciding them by accident
 applies to this entry as much as to that one.
 
+**Alternatives.** The four candidates are `D-0053`'s, set out in full there with a four-axis cost
+table. They are not repeated here; what this section records is the ruling, because `D-0053`
+deliberately made none.
+
+*(a) Call `Outbox.recover()` once in `main()` before serving.* **Rejected, as it was there.** The gate
+is opened by a running lap while the endpoint is already serving, so the relay that matters is
+enqueued *mid-life* and startup-only recovery fixes approximately the case that never happens. It
+would buy a green suite over a still-unreachable gate, which `D-0053` judged worse than the visible
+failure -- and this entry has no reason to disagree, because the case that fails on `origin/main`
+here is exactly a mid-life enqueue.
+
+*(b) Adopt inside `MessageBus.poll`.* **Taken, in the narrowed form `D-0053` names**: not a pass over
+the unowned set at the top of the poll, but one row -- the row this iteration has already decided to
+attempt -- after the recipient filter and the terminal re-read. The broad form was rejected on two
+grounds this entry keeps: it takes ownership of rows the polling endpoint has no authority to deliver,
+and it makes steady-state poll cost a function of outbox backlog. Its price, paid openly, is the
+parity divergence rule 5 registers.
+
+*(c) Have the producers stamp the delivery lease's epoch at enqueue.* **Rejected.** It is where a
+row's owner architecturally *should* be decided, and it is still not decidable here: `enqueueRelay`
+would have to learn the delivery lease's identity -- inverting the dependency direction between the
+control plane and the messagebus endpoint -- and read a *live* one at gate-open time, which makes
+opening a human gate fail when the delivery endpoint is down and inverts the outbox's own design,
+where the queue outlives the worker. That is step 4's renewal-ownership question answered by accident.
+This task added one argument `D-0053` did not have: the event spine's delivery fan-out appends unowned
+rows for the same reason, so (c) is not one change but two, in two modules, each acquiring a delivery
+dependency it has no other use for -- and the target-only case for the fan-out is what makes that
+concrete rather than predicted.
+
+*(d) Relax `_COUNT_ATTEMPT` to admit a null `writer_epoch`.* **Rejected.** `writer_epoch =
+:fence_epoch` *is* the "owned by the writing epoch, not merely written while some lease is live"
+property; admitting null deletes it, so the first live lease to touch a row claims it with nothing
+having decided that claiming was safe. It also needs a disjunction node in `lease.ts`'s ported
+predicate grammar, which `D-0053` already records as a rejected alternative in its own right. Adoption
+reaches the same delivered row while leaving the fence exactly as strong, and the dead-epoch case
+above is what holds that claim to account.
+
+*Doing nothing, which is what `D-0053` shipped.* **No longer available**, and that is this entry's
+whole occasion: the failure announced itself loudly, as intended, and the follow-on task it was
+handed to is this one.
+
 **Consequences.**
 
 - **The gate is reachable.** A relay a gate enqueues is delivered by an ordinary poll with nothing in
@@ -10137,11 +10179,8 @@ depended on. `_ADOPT` carrying no ownership predicate is what makes that overwri
 
 **Status.** accepted
 
-**Source.** Human gate, task `continuo-102-adoption-gap`, Issue `#102`; the candidate set, the four
+**Source.** Human gate, task `continuo-102-adoption-gap`, Issue `#102`. The candidate set, the four
 axes and the instruction that the narrowed (b) be taken as an explicit parity divergence are
-`D-0053`'s, under **"The four candidates for the adoption gap, and what each costs"**. Candidates (a),
-(c) and (d) are rejected there and rejected again here on the same grounds -- (a) does not fix the
-mid-life enqueue that is the only enqueue the lap actually makes, (c) decides step 4 by accident and
-makes opening a human gate fail when the delivery endpoint is down, (d) deletes the ownership half of
-`_COUNT_ATTEMPT`'s fence and needs a disjunction node in `lease.ts`'s ported grammar. Decision id from
-the `D-0019`..`D-0099` shared band, next after `D-0053`.
+`D-0053`'s, under **"The four candidates for the adoption gap, and what each costs"**; the
+Alternatives section above reports which of them this entry takes and which stay rejected. Decision id
+from the `D-0019`..`D-0099` shared band, next after `D-0053`.
