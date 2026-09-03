@@ -343,7 +343,7 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
       LapRefused,
       /did not finish its turn within 1000ms/,
     );
-    expect(refusal.message).toContain("Nothing is rolled back");
+    expect(refusal.message).toContain("left exactly as they are");
   });
 
   test("a poll interval longer than the budget does not extend it", async () => {

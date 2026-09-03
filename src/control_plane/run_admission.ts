@@ -442,6 +442,16 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
   if (typeof runId !== "string" || runId === "") {
     throw new RunAdmissionUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
   }
+  // Quoted, not interpolated raw, and this is the one place in this module where
+  // that distinction has teeth. Every other message here names a run that
+  // reached the table through `LapRunIntent`, which holds the identifier to
+  // printable ASCII (`D-0055`). This path is the opposite by construction: it
+  // runs precisely when the identifier matched no row, so it is an operator's
+  // `--run-id` that nothing has validated, on its way into a one-line refusal
+  // that ends at a single newline. `pythonRepr` escapes a newline or a control
+  // character rather than letting it forge a second line of output
+  // (`docs/cli-output-policy.md`).
+  const quoted = pythonRepr(runId);
   const row = connection
     .prepare<{ event_id: string }, { payload: string }>(
       "SELECT payload FROM event WHERE event_id = :event_id",
@@ -449,7 +459,7 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
     .get({ event_id: factId(RUN_DELEGATION_RECORDED_EVENT_TYPE, runId) });
   if (row === undefined) {
     throw new RunNotAdmitted(
-      `run ${runId} has no ${RUN_DELEGATION_RECORDED_EVENT_TYPE} event on the spine, ` +
+      `run ${quoted} has no ${RUN_DELEGATION_RECORDED_EVENT_TYPE} event on the spine, ` +
         "so there is no record of what it was admitted to do; 'run admit' is what " +
         "writes one",
     );
@@ -460,13 +470,13 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
     fields = JSON.parse(row.payload);
   } catch (error) {
     throw new RunNotAdmitted(
-      `run ${runId}'s delegation payload is not readable JSON: ${String(error)}`,
+      `run ${quoted}'s delegation payload is not readable JSON: ${String(error)}`,
       { cause: error },
     );
   }
   if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {
     throw new RunNotAdmitted(
-      `run ${runId}'s delegation payload is ${pythonRepr(fields)}, not a JSON object`,
+      `run ${quoted}'s delegation payload is ${pythonRepr(fields)}, not a JSON object`,
     );
   }
   const payload = fields as Record<string, unknown>;
@@ -489,7 +499,7 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
     });
   } catch (error) {
     throw new RunNotAdmitted(
-      `run ${runId}'s delegation payload is not a valid execution intent: ${String(error)}`,
+      `run ${quoted}'s delegation payload is not a valid execution intent: ${String(error)}`,
       { cause: error },
     );
   }

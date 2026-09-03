@@ -56,7 +56,7 @@ import {
   MCP_CONFIG_FILENAME,
   WORKSPACE_MATERIALIZED_EVENT_TYPE,
 } from "../../src/workspace/materializer.js";
-import { fakeCli, fakeEnv } from "../session/helpers/fake-cli.js";
+import { fakeCli, fakeEnv, fakeMode } from "../session/helpers/fake-cli.js";
 import { caseRoot } from "../testkit/cases.js";
 import { patchSeams } from "../testkit/seams.js";
 
@@ -429,6 +429,48 @@ describe("what the verb refuses, and what it leaves behind", () => {
     const connection = inspect(f.databasePath);
     expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
     expect(connection.prepare("SELECT count(*) AS n FROM gate").get()).toEqual({ n: 0 });
+  });
+
+  test("an unadmitted run id cannot forge a second line of output", async () => {
+    // This refusal path is the only one in the module that names an identifier
+    // nothing has validated: it fires precisely because the id matched no row,
+    // so `LapRunIntent`'s printable-ASCII rule never saw it. A raw
+    // interpolation would let `--run-id $'x\nerror: approved'` write a second
+    // line that reads like continuo's own.
+    const f = lap("lap-forged-line");
+    expect(await f.perform({ "--run-id": "x\nerror: approved" })).toBe(2);
+    const written = f.err.join("");
+    // One line, and the newline is escaped inside the quoted value rather than
+    // ending it.
+    expect(written.trimEnd().split("\n")).toHaveLength(1);
+    expect(written).toContain("\\n");
+  });
+
+  test("a timed-out turn refuses and the verb still returns", async () => {
+    // The bound has to be a bound. The provider holds a referenced child
+    // handle, so a lap that printed a timeout and left the child running would
+    // keep this process's event loop alive and the command would not exit until
+    // the child felt like it -- a `--turn-timeout-ms` in the help text and
+    // nowhere else. `performLap` stops the session on every path out for that
+    // reason, and this case is green only if the verb actually returns.
+    const f = lap("lap-timeout");
+    // A real clock, replacing the fixture's frozen one: a budget is measured
+    // against a clock that moves, and every other case wants a fixed instant.
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    // A child that emits its events and then hangs for far longer than the
+    // budget: there is no terminal line to read, so the poll runs out of time
+    // rather than finding anything, and the child is still alive when it does.
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+
+    expect(await f.perform({ "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })).toBe(2);
+    expect(f.err.join("")).toContain("did not finish its turn within 300ms");
+
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+    // The workspace and the fence stay: the refusal is about the turn, and
+    // deleting a checkout the worker may have written into is not a rollback.
+    expect(existsSync(join(f.workspace, "README.md"))).toBe(true);
   });
 
   test("a second perform of one run is refused rather than re-run", async () => {

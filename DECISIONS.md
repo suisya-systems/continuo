@@ -11215,18 +11215,36 @@ This is that component, and the question is now answerable rather than deferred.
    accept whatever the next read returned -- a one-second timeout with a two-second interval would
    have accepted a report that arrived at two seconds.
 
-5. **After the gate is open, the verb stops the session.** The turn's durable outcome -- the
-   escalation event and the gate over it -- has committed by then, so the stop cannot affect it. It
-   is there because a process that has finished its work must not be kept alive by a subprocess
-   handle it no longer needs, and because a child left running after its report is an orphan nothing
-   is supervising. `stop` is the provider's supervised ladder, not a signal, and its outcome is
-   deliberately not checked: a teardown that went badly cannot un-open a gate.
+5. **The session's life is the lap's, and `performLap` stops it on every path out** -- after a gate
+   is opened, and after every refusal from the poll onward. Two reasons, and the second is the one
+   that makes the timeout real rather than nominal:
+   - a child left running after its turn is a fenced worker nobody is polling, which is the state
+     the gate exists to prevent;
+   - the provider holds a **referenced** Node child handle, so a running child keeps its process's
+     event loop alive. A `--turn-timeout-ms` that printed a refusal and then hung until the child
+     felt like exiting would be a bound in the help text and nowhere else. The case
+     `a timed-out turn refuses and the verb still returns` runs a child that would sleep two minutes
+     and finishes in about a second.
+
+   It is safe in a `finally` because it is after everything durable: the escalation event and its
+   gate have committed on the successful path, and a refusal has nothing to commit. `stop` is the
+   provider's supervised ladder rather than a signal, and its answer is unread and its failures
+   swallowed -- an exception thrown from a `finally` would REPLACE the outcome the lap was carrying,
+   and a teardown that reported itself instead of the gate that was just opened is the one way this
+   call could do harm.
 
 **Alternatives.** **Waiting for the child to exit (rejected.)** A `claude -p` child's exit is not the
 turn's end: it can outlive the terminal line by however long its MCP servers take to shut down, and
 it can fail to arrive at all -- a wedged child would hold the lap open with a complete report already
 on disk, and the gate would never be asked. Stopping at the report makes the lap's duration a
 property of the worker's work rather than of its teardown.
+
+**What the budget bounds, stated because it is a real limit and not an oversight.** It bounds the
+**waiting**, not the reading. A report that exists when a read returns is the turn's outcome and is
+never discarded, however long that read took -- throwing away a report in hand would leave the
+worker's own words unescalated and the gate unopened for a turn that did finish, which is the exact
+failure this step exists to remove, arriving by way of a stopwatch. What the cap guarantees is that
+no new read is *started* after the deadline.
 
 **Consequences.** A turn that somehow wrote two terminal lines has its first read and its second
 ignored. That is the safe direction -- a report is escalated once, to one gate, and `D-0056`'s dedup

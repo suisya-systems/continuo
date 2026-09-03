@@ -404,6 +404,12 @@ export async function awaitTerminalReport(
   const deadline = nowMs() + timeoutMs;
 
   for (;;) {
+    // A read is started only while there is budget left. What the budget bounds
+    // is the WAITING; a report that exists when a read returns is the turn's
+    // outcome and is never discarded, however long that read took. Throwing away
+    // a report in hand would leave the worker's own words unescalated and the
+    // gate unopened for a turn that did finish -- which is the failure this
+    // whole step exists to remove, arriving by way of a stopwatch.
     const result = await reader.readTerminalReport(sessionId);
     if (Failure.is(result)) {
       // Not retried. A refusal here is the provider saying it cannot read this
@@ -429,8 +435,10 @@ export async function awaitTerminalReport(
     if (nowMs() >= deadline) {
       throw new LapRefused(
         `session ${sessionId} did not finish its turn within ${timeoutMs}ms; the last ` +
-          `answer was ${readout.reason}. Nothing is rolled back: the workspace, the ` +
-          "fence and the child are as they were, and the run can be polled again",
+          `answer was ${readout.reason}. The workspace and the fence are left exactly ` +
+          "as they are -- the refusal is about the turn, and deleting a checkout the " +
+          "worker may have written into is not a rollback -- and the session is stopped " +
+          "on the way out",
       );
     }
     // Capped at what is left of the budget, not the bare interval. An interval
@@ -571,39 +579,75 @@ export async function performLap(
   }
   const orchestration = await walk;
 
-  // 5. The turn. Awaited out here, outside every transaction, because
-  //    `transaction()` joins rather than nests and refuses an async body.
-  const report = await awaitTerminalReport(
-    reader,
-    orchestration.sessionId,
-    request.completion,
-    request.nowMs,
-  );
+  try {
+    // 5. The turn. Awaited out here, outside every transaction, because
+    //    `transaction()` joins rather than nests and refuses an async body.
+    const report = await awaitTerminalReport(
+      reader,
+      orchestration.sessionId,
+      request.completion,
+      request.nowMs,
+    );
 
-  // 6. The settled value, into the one transaction the event and its gate share.
-  const ingested = ingestTerminalReport(connection, {
-    runId: intent.runId,
-    report: {
-      sessionId: report.sessionId,
-      generation: report.generation,
-      report: report.report,
-      terminalReason: report.terminalReason,
-      subtype: report.subtype,
-      isError: report.isError,
-      returncode: report.returncode,
-    },
-    nowMs: request.nowMs(),
-    actorId: request.actorId ?? LAP_ACTOR_ID,
-    ...(request.deadlineAtMs === undefined ? {} : { deadlineAtMs: request.deadlineAtMs }),
-    ...(request.gateOptions === undefined ? {} : { gateOptions: request.gateOptions }),
-  });
+    // 6. The settled value, into the one transaction the event and its gate share.
+    const ingested = ingestTerminalReport(connection, {
+      runId: intent.runId,
+      report: {
+        sessionId: report.sessionId,
+        generation: report.generation,
+        report: report.report,
+        terminalReason: report.terminalReason,
+        subtype: report.subtype,
+        isError: report.isError,
+        returncode: report.returncode,
+      },
+      nowMs: request.nowMs(),
+      actorId: request.actorId ?? LAP_ACTOR_ID,
+      ...(request.deadlineAtMs === undefined ? {} : { deadlineAtMs: request.deadlineAtMs }),
+      ...(request.gateOptions === undefined ? {} : { gateOptions: request.gateOptions }),
+    });
 
-  return Object.freeze({
-    intent,
-    materialized,
-    orchestration,
-    spawn,
-    report,
-    ingested,
-  });
+    return Object.freeze({
+      intent,
+      materialized,
+      orchestration,
+      spawn,
+      report,
+      ingested,
+    });
+  } finally {
+    // 7. The session's life is the lap's, and it ends here on every path.
+    //
+    //    **On the refusal paths this is not tidiness, it is what makes the
+    //    refusal reach anyone.** The provider holds a referenced Node child
+    //    handle, so a running child keeps its process's event loop alive: a
+    //    `--turn-timeout-ms` that printed a refusal and then hung until the
+    //    child felt like exiting would be a bound in the help text and nowhere
+    //    else. And a lap that has given up must not leave a fenced worker
+    //    running with nobody polling it.
+    //
+    //    It is safe here because it is after everything durable. The escalation
+    //    event and its gate have committed by the time the successful path
+    //    reaches this, and on a refusal there is nothing to commit -- so a stop
+    //    that goes badly cannot un-open a gate or lose a report.
+    await stopSession(provider, orchestration.sessionId);
+  }
+}
+
+/**
+ * Stop the session, and never let the stop become the lap's outcome.
+ *
+ * `stop` is the provider's supervised ladder -- terminate, wait, escalate --
+ * and not a signal, so a child that is already finishing is simply reaped. Its
+ * answer is deliberately unread and its failures are swallowed: this runs in a
+ * `finally`, and an exception thrown from there would REPLACE whatever the lap
+ * was returning or throwing. A teardown that reported itself instead of the
+ * gate that was just opened is the one way this call could do real harm.
+ */
+async function stopSession(provider: SessionProvider, sessionId: string): Promise<void> {
+  try {
+    await provider.stop(sessionId);
+  } catch {
+    // Deliberately empty. See above.
+  }
 }

@@ -276,9 +276,8 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
 
   try {
     const connection = openProductionControlPlane(path);
-    let outcome: LapOutcome;
     try {
-      outcome = await performLap(connection, provider, provider, {
+      const outcome = await performLap(connection, provider, provider, {
         runId: String(args["run_id"]),
         repository: String(args["repository"]),
         artifactRoot: String(args["artifact_root"]),
@@ -313,13 +312,6 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
       // committed by the time the report line is printed.
       connection.close();
     }
-    // The turn is over -- the terminal report is on the spine and the gate is
-    // open (`D-0060`) -- so the child has nothing left to do, and a process
-    // that has finished its durable work must not be left holding a subprocess
-    // handle that keeps this one alive. `stop` is the supervised ladder rather
-    // than a signal, and its outcome is deliberately not checked: the lap's
-    // result is the gate, and a teardown that went badly cannot un-open it.
-    await provider.stop(outcome.orchestration.sessionId);
   } catch (error) {
     if (isOperatorRefusal(error)) {
       refuse(error);
