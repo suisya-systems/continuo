@@ -171,6 +171,11 @@ spaces distinct.
 | D-0073 | The delivery lease's TTL is chosen against its renewal interval; a tick latches rather than throwing, and never re-acquires | accepted |
 | D-0074 | The endpoint's three lease values are all determinate, and `--endpoint-epoch` is removed rather than demoted | accepted |
 | D-0075 | Lap 1 requires the endpoint, and the delivery lease row is what records that it ran under one | accepted |
+| D-0076 | Both of a gate's relays address `external-notify`, and the operator reads the dropbox | accepted |
+| D-0077 | A privileged publisher is lap 2's deferred work, not a missing piece of lap 1 | accepted |
+| D-0078 | The gate verbs, and why the ack closes the gate rather than a ninth verb | accepted |
+| D-0079 | The reconcile pass is its own verb, the operator owns its cadence, and it pronounces no verdicts | accepted |
+| D-0080 | After the lap there is no endpoint, so a verb drives delivery: `gate deliver` | accepted |
 
 ---
 
@@ -12374,3 +12379,248 @@ is what it records.
 **What would falsify it.** Section 0 premise 1's in-process host, where the endpoint dissolves as a
 component -- at which point "requires the endpoint" stops being the right sentence, while the
 epoch-fenced writes and the renewal requirement survive it unchanged (section 5.1).
+
+## D-0076 -- Both of a gate's relays address `external-notify`, and the operator reads the dropbox
+
+**Context.** `docs/design/minimal-operating-loop.md` section 4.10 requires this to be recorded rather
+than left implicit: *"either both relays address `external-notify` and the operator reads the
+dropbox, or a third handler is written. This is a decision, not a detail."* The endpoint refuses at
+startup a recipient no handler serves (`src/messagebus/endpoint.ts`), and `spikeRegistry` supplies
+exactly two: `NotifyDestinationHandler` on `external-notify`, whose effect is a write into a
+`KeyedDropbox` directory, and `HumanGatedHandler`, which by design delivers nothing and raises if it
+is ever applied.
+
+**Decision. Both relays address `external-notify`; the operator reads the dropbox directory.** The
+constant lives in one place -- `GATE_RELAY_RECIPIENT` in `src/gate/operator.ts` re-exports
+`NOTIFY_RECIPIENT` rather than spelling the string again -- so a package that compiled against a
+renamed handler could not keep addressing a queue nothing serves.
+
+**And it is a constant rather than a flag, which is a decision the first implementation got wrong.**
+`enqueueRelay` writes the recipient onto the `outbox` row, and `(gate_id, to_stage)` then makes that
+row final: a re-enqueue returns the id already in force rather than re-addressing it. A
+`--recipient` an operator could mistype was therefore a way to wedge a gate permanently --
+`answerGate` commits the `answered` transition first, so a forward relay addressed to a queue no
+handler serves leaves a gate that is answered, undeliverable and unfixable, with the answer already
+recorded. One recipient is what this entry decides; the enqueue sites now read it rather than being
+told it. `deliverRelays` still takes one -- it polls with it after checking the registry serves it
+and persists nothing -- and so does `ackRelay`, which compares it rather than writing it.
+
+**Why not a third handler.** Not because writing one is hard, but because it would answer a question
+nobody asked yet. In lap 1 the reader of both relays is a person (section 4.10 assigns the operator
+both the publisher's and the acker's role), and a third handler would deliver into the same class of
+place under a new name -- a directory, or something else this repository has no transport for.
+Section 3.1 defers every automated PR and CI path, so the counterparty a real handler would address
+does not exist to be addressed. What a third handler *would* add today is a second recipient name
+that the endpoint must be configured with, i.e. one more way to start an endpoint that serves the
+wrong queue.
+
+**What the two relays mean, given one recipient.** They are not two audiences; they are two moments.
+The `presented` relay is the question, and its ack is the operator saying it is in front of them; the
+`forwarded` relay carries the answer onward, and its ack is what section 9.3 lets the gate close on.
+Both land in the dropbox as separate keys (`gate/<gateId>/presented` and `gate/<gateId>/forwarded`),
+so "the question was seen" and "the answer was passed on" stay separately observable even though one
+directory holds both.
+
+**What records it.** `test/gate/endpoint-relay.test.ts` puts the built `dist/messagebus/endpoint.js`
+on the wire and pulls both relays through it. An in-process case cannot discharge this: it builds the
+registry itself and would stay green against a recipient the shipped endpoint refuses at startup.
+
+**What would falsify it.** A real transport, or a second party who must receive the forward relay
+without seeing the question. Either makes "one recipient, two keys" the wrong shape, and the change
+is then a handler plus a `--recipient` per relay rather than a rewrite: the relays already carry
+their recipient per row.
+
+## D-0077 -- A privileged publisher is lap 2's deferred work, not a missing piece of lap 1
+
+**Context.** The second item section 4.10 requires to be recorded alongside the concession: *"that a
+privileged publisher is the deferred work, not a missing piece nobody noticed."*
+
+**Decision. Recorded as deferred, with the reason it is better answered later.** After the approval,
+no component in the successor stack can push a branch, open a PR, or merge one: the worker is fenced
+from publishing -- which is the whole reason the gate is worth having -- and continuo executes no git
+and no GitHub call anywhere. Lap 1's answer is that the operator is the publisher, runs push / PR /
+merge with their own credentials, and records the ack with `continuo gate ack`.
+
+**Why it is deferred rather than open.** The publisher's substantive design question is its
+permission posture -- it may push, the worker may not -- and that is a question about a threat model
+this repository can only guess at until a lap has actually run. It is also the component that turns
+`run_pr_link` and `ci_observation` from ingestion APIs into something with a producer, so designing
+it now would fix a producer's shape against two tables nothing has written to in anger.
+
+**What lap 1 keeps regardless.** The durable decision record: who asked, what was answered, verbatim,
+when, and that the answer was forwarded and acknowledged. The concession is about *execution* after
+the approval, not about the record.
+
+**What would falsify it.** A lap 2 whose publisher turns out to need a schema change rather than a
+component -- for instance if "may push" has to be a fenced capability on the run row rather than a
+property of a process. That is the shape this entry expects to be corrected by, and it is why nothing
+in step 10 pretends to reserve a place for it.
+
+## D-0078 -- The gate verbs, and why the ack closes the gate rather than a ninth verb
+
+**Context.** continuo#108 decision 2: the verb set, and what `withdrawn` and deadline expiry look like
+from the CLI.
+
+**Decision. Eight verbs under one `gate` subtree** (`src/gate/cli.ts`, mounted by `src/cli.ts` under
+`D-0030`'s rule), over one domain module (`src/gate/operator.ts`):
+
+- `list` / `show` -- read only.
+- `present` -- enqueue the `presented` relay. Enqueues only: the stage moves on the ack, never on the
+  send, which is what keeps "the question never arrived" distinguishable from "nobody has answered".
+- `deliver` -- one delivery pass under the one delivery lease (`D-0080`).
+- `ack` -- record the ack, take the advance it justifies, and for a `forwarded` relay close the gate.
+- `answer` -- record the human answer (`answered`) **and** enqueue the `forwarded` relay.
+- `close` -- `withdrawn`, `expired` or `unanswerable`, and nothing else.
+- `reconcile` -- the idle pass (`D-0079`).
+
+**Why `ack` closes the gate instead of a ninth verb.** Section 9.3 gives the close out of `forwarded`
+to actor `system` alone, *because that close is the consequence of the forward relay's ack and nobody
+decides it*. A verb an operator had to type would be a decision with no content, and forgetting to
+type it would leave a gate that was answered and forwarded open for ever -- the permanently alarming
+row section 9.4's taxonomy exists to remove. Each of the three writes is its own transaction and each
+is idempotent, so a kill between them is finished by `reconcile` rather than by re-typing.
+
+**Why `answer` also enqueues.** `enqueueRelay` admits a `forwarded` relay only from `answered` (the
+direct-predecessor rule that stops an early ack being accepted against an answer it predates), so the
+two are one operator intent -- *this is my answer, pass it on*. Split, an operator who typed the first
+half and stopped would leave a gate answered and never forwarded, which no detector reports.
+
+**What `withdrawn` and expiry look like.** `withdrawn` is `gate close --outcome withdrawn`, available
+from `received`, `presented` and `answered`. A passed deadline is **not** closed by anything
+automatically: `reconcile` lists it as a candidate and stops, because section 9.4 makes expiry
+conditional on a policy the time-base document does not decide, and closing it here would be deciding
+that policy in code (`D-0008`). The operator closes it with `gate close --outcome expired`, recorded
+with actor `human` for the same reason -- attributing it to `system` would credit a judgement to a
+pass that refuses to make one.
+
+**A replay is a success case in every step.** An ack of an earlier stage's relay -- a `presented` ack
+repeated after the gate reached `answered`, or after it closed -- records its no-op ack and stops: the
+advance is skipped when that stage has already been advanced to (the predicate `gatesNeedingAdvance`
+uses), and a closed gate is settled rather than advanced or re-closed. Without those two conditions a
+harmless duplicate came back as `InadmissibleTransitionRefused` or `GateClosedRefused`, which is the
+opposite of what this verb promises.
+
+**Two guards the first implementation lacked, both found by review.** The forward relay carries the
+answer the *transition* holds, never the argument the call was given: the advance and the enqueue are
+two transactions, so a retry after a kill between them finds the advance already committed, has its
+own body dropped by `advanceOnAck`, and would otherwise forward an answer no transition records --
+the recipient acting on B while the durable history says A. A retry offering a different body is
+refused (`AnswerAlreadyRecorded`) rather than absorbed, because correcting a recorded answer is
+`recordCorrection`'s edge and no verb writes it yet. And a close as `expired` requires the gate to
+carry a deadline that has passed (half-open, as `gatesPastDeadline` reads it): the operator decides
+*whether* a passed deadline expires the gate -- that is the policy `D-0008` keeps out of code -- but
+not whether it passed, and a `gate_expired` event for a deadline that did not pass is a durable false
+statement.
+
+**What the verbs may not write.** `answered_and_forwarded` (the ack's consequence), `subject_gone`
+(`reconcile`'s sweep) and `superseded` (written by the gate that supersedes this one) are refused
+twice over: by `choices` on `--outcome`, and by `closeOpenGate` itself, because the rule belongs to
+the domain rather than to a parser.
+
+**What would falsify it.** A second actor who forwards the answer -- a publisher (`D-0077`) that acks
+the forward relay itself. Then the close stays the ack's consequence but the acker is no longer the
+operator, and `gate ack` becomes a recovery verb rather than the ordinary path.
+
+## D-0079 -- The reconcile pass is its own verb, the operator owns its cadence, and it pronounces no verdicts
+
+**Context.** continuo#108 decision 3: whether the five idle detectors in `src/control_plane/gates.ts`
+(`relayGaps`, `stalledRelays`, `gatesNeedingAdvance`, `gatesPastDeadline`, `sweepSubjectGone`) run
+inside a verb, inside the endpoint, or as their own verb -- and who owns the cadence. They had zero
+callers under `src/`.
+
+**Decision. Its own verb, `continuo gate reconcile`, whose cadence is the operator's.** Lap 1 has no
+daemon and no scheduler, and inventing one to hold a cadence would be a component the design does not
+ask for. The verb is the caller `gates.ts`'s own docstrings say those detectors are missing.
+
+**Rejected: inside the endpoint.** It dies with the lap, and it speaks for exactly one recipient -- so
+the pass would run only while a worker happened to be alive, and only over that worker's queue, which
+is the opposite of an idle pass.
+
+**Rejected: inside every verb.** It would make `gate show` a writer. An operator could then not look
+at a gate without changing it, and a read that closes gates as a side effect is a read nobody can use
+while diagnosing.
+
+**What it settles, and what it only reports.** It settles what is already justified by a fact:
+`sweepSubjectGone` closes gates whose subject run reached a terminal status (an absorbing state), and
+`gatesNeedingAdvance` completes the advance a durable ack justified -- the section 9.5 kill-point-4
+recovery, and the reason each step of `gate ack` may be its own transaction. A `forwarded` advance
+completed here also closes the gate, so the recovery cannot leave a gate in a state the ordinary path
+never leaves it in. It **reports** relay gaps, stalled relays and passed deadlines and acts on none of
+them: the remedies differ per row and per owner (section 9.6), and the expiry rule is undecided policy
+(`D-0008`).
+
+**The completions run before the sweep, and that ordering is load-bearing.** `subject_gone` is
+reachable from every stage (`CLOSE_OUTCOME_STAGES`), so `sweepSubjectGone` closes an open gate at
+`forwarded` as readily as one at `received`. Run first, it closes a gate whose forward relay was
+acked in the window a kill interrupted -- the very state the completions exist to finish -- as
+`subject_gone`, and that is permanent: both `gatesNeedingAdvance` and the forwarded-and-acked query
+exclude closed gates, and `closeGate` refuses to change an outcome already recorded. A human's
+answer, delivered and acknowledged, would be filed for ever under the outcome that means nobody
+answered. Completed first, the same gate closes `answered_and_forwarded` and the sweep then finds
+nothing open; a gate still waiting for an answer is swept exactly as before, because a terminal run
+is still a fact about it. `test/gate/operator.test.ts`'s *an answered gate whose run then ended
+still closes as answered_and_forwarded* is the regression, and it fails against the other order.
+
+**`--stalled-tolerance-ms` has no default.** A default would be an invented tolerance, which is what
+`D-0031` requires to be data rather than code. Omitted, the stalled query does not run and the report
+says `not asked` -- `null` rather than an empty list, because "nobody asked" and "nothing is stalled"
+are different facts and printing them the same way reports a clean delivery queue nobody looked at.
+
+**What would falsify it.** A supervisor process that outlives the lap. It would own the cadence, and
+the verb would stay as the operator's manual entry point into the same pass.
+
+## D-0080 -- After the lap there is no endpoint, so a verb drives delivery: `gate deliver`
+
+**Context.** Step 10's implementation found a gap neither #102 nor #108 names, and it is the kind a
+green suite hides best. The `poll`/`ack` endpoint is worker-facing, pinned to one recipient, and
+launched by `lap perform` as the worker's stdio child. The gate over a turn's escalation is opened
+*after* that turn has ended (`ingestTerminalReport`, `D-0056`), and `lap perform` releases the
+delivery lease and returns immediately afterwards. So at the instant the first relay exists there is
+no endpoint alive to poll it and no worker to ack it: every relay would sit `pending` for ever, and
+every row, table and test would look correct.
+
+This is a different defect from the adoption gap (`D-0054`), which is closed: rows are adopted one at
+a time immediately before the attempt. Adoption answers *may this epoch advance the row*; this
+answers *does anything poll at all*.
+
+**Decision. `continuo gate deliver` is the operator's delivery worker.** It takes the one delivery
+lease (`DELIVERY_LEASE_RESOURCE`, `D-0053` rule 4), builds the same `spikeRegistry` over the same
+`KeyedDropbox` the endpoint builds, runs one `MessageBus.poll`, and releases the lease in a `finally`.
+It is the same code path the endpoint drives, so a relay delivered by either applies the same effect
+under the same idempotency key, and a message delivered by both still applies once -- the destination
+is what deduplicates it.
+
+**Why the lease is taken and released rather than held.** This is a one-shot pass. Holding it would
+need a renewal timer for no benefit, and `LeaseHeld` from a running lap or a live endpoint is the
+right answer rather than a race between two writers of one outbox -- the serialisation the single
+delivery resource exists to buy. Releasing in a `finally` matters for the refusal path: a refused
+delivery that left the resource claimed would refuse the operator's own next attempt for a whole TTL.
+
+**The pass re-reads the clock, and it is the one verb that does.** `MessageBus.poll` takes a `clock`
+and the endpoint hands it one, because an attempt must be fenced at the instant it writes rather than
+at the instant the pass began: a pass that outlives its 60-second lease would otherwise keep
+validating against the acquisition timestamp and go on writing rows and applying destination effects
+under a lease it no longer holds. The verb passes `gateCliSeams.nowMs` -- unless `--now-ms` was
+given, in which case the operator meant the instant they gave and the pass keeps the single read.
+
+**Known limitation, recorded rather than carried silently.** The dropbox's identity is the directory
+it is given, and the directory is an argument of every pass. Two passes over one unacked relay with
+different `--destination-dir` values apply the effect twice, once per directory, and nothing notices:
+the outbox row carries no destination. This is a property of the `KeyedDropbox` stand-in rather than
+of the verb -- the endpoint takes the same directory from its environment and has it too -- and
+`D-0026` already records the destination side as scaffold. A real keyed destination has one address,
+not one per invocation. Until there is one, the operator uses one directory per control plane, and
+the exactly-once claim holds per destination, which is the scope `ACCEPTANCE.md` section 2 states it
+in.
+
+**Why the verb does not also ack.** A delivery worker acking on the recipient's behalf would make the
+ack evidence of nothing: section 9.5 makes the stage advance on the ack precisely so that "delivered"
+and "acknowledged" stay different facts. The operator reads the dropbox and runs `gate ack`.
+
+**What records it.** `test/gate/operator.test.ts` drives the pass and asserts the destination's own
+effect count; `test/gate/endpoint-relay.test.ts` shows the other half -- a real endpoint process
+delivering and acking the same relays -- so the two delivery paths are demonstrated over one gate.
+
+**What would falsify it.** An endpoint that outlives its lap, or the supervisor `D-0079` names. Either
+makes this verb a manual fallback rather than the only driver, and nothing about it needs to change
+for that: it already refuses when somebody else holds the lease.

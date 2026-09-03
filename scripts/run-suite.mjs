@@ -97,6 +97,7 @@ const SPAWNING_TESTS = [
   "test/fault_injection/conformance.test.ts", // 33 + sync
   "test/fault_injection/protocol.test.ts", // 8 + sync
   "test/fencing/deny-hook.test.ts", // sync
+  "test/gate/endpoint-relay.test.ts", // 1, the built endpoint over real stdio
   "test/gate_item11/no-provider-detail-leaks.test.ts", // sync, via registry.ts
   "test/gate_item11/registry-availability.test.ts", // sync, via registry.ts
   "test/gate_item11/substitution-scenarios.test.ts", // 16
