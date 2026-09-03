@@ -108,13 +108,22 @@ const ENDPOINT_DB_HELP =
   "spelling of --db (a symlink). Derived from --db when omitted, which is the " +
   "shape to prefer: a path naming a different database starts an endpoint the " +
   "run's messages never reach.";
-const ENDPOINT_MODULE_HELP = "the endpoint module the worker's MCP server launches.";
-const NODE_HELP = "the interpreter the endpoint module is launched with.";
+const ENDPOINT_MODULE_HELP =
+  "the endpoint module the worker's MCP server launches. Must be absolute.";
+const NODE_HELP =
+  "the interpreter the endpoint module is launched with. Must be absolute: the " +
+  "MCP configuration is read by the worker's Claude, whose working directory is " +
+  "the worktree, and a bare name would be resolved through PATH.";
 const INTERLOCK_ROOT_HELP = "the path substituted for {interlock_root} in the role document.";
 const CLAUDE_ORG_PATH_HELP = "the path substituted for {claude_org_path} in the role document.";
 const HOOK_SCRIPT_HELP =
-  "the deny hook substituted for {hook_script}. The bundled hook when omitted.";
-const PYTHON_HELP = "the interpreter substituted for {python}. This build's own when omitted.";
+  "the deny hook substituted for {hook_script}. The bundled hook when omitted. " +
+  "Must be absolute, and must live outside the worktree: it is the file that " +
+  "enforces the fence, and it does not protect its own path.";
+const PYTHON_HELP =
+  "the interpreter substituted for {python}. This build's own when omitted. " +
+  "Must be absolute, for the same reason as --hook-script: whoever runs the hook " +
+  "decides what the hook does.";
 const POLL_INTERVAL_MS_HELP =
   "milliseconds between transcript reads while waiting for the turn to end.";
 const TURN_TIMEOUT_MS_HELP =

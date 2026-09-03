@@ -84,6 +84,7 @@ import {
 } from "../../src/workspace/git.js";
 import {
   FENCE_FILENAME,
+  isInside,
   type MaterializationRequest,
   MaterializedWorkspace,
   MCP_CONFIG_FILENAME,
@@ -819,6 +820,245 @@ describe("the MCP launcher is validated too", () => {
       WorkspaceMaterializationUsageError,
       /must be a fully qualified absolute path/,
     );
+  });
+});
+
+describe("nothing the fence depends on may live inside the worktree (D-0069)", () => {
+  // The artifact list above states this rule over what materialisation
+  // *creates*. These are the paths it does not create and the fence depends on
+  // anyway, and every one of them is a value an operator hands in on the
+  // command line. The question each case asks is the one that decides the rule:
+  // can the worker influence this file? Everything inside its own worktree it
+  // can rewrite between one tool call and the next.
+  //
+  // **Every case here was mutation-checked**, which is what makes the list
+  // worth its length: with the containment loop deleted, each of these
+  // materialisations SUCCEEDS and records `workspace_materialized` for a fence
+  // resting on a file its own subject may edit. A case that merely failed
+  // differently would not have shown that.
+  //
+  // Not covered, and recorded rather than glossed: **the control plane
+  // database**. It is on the warded list because it is where the gate this lap
+  // exists to open is stored, but it cannot be reached through this function --
+  // the database must already exist to be opened, the workspace must NOT exist
+  // for `git worktree add`, and no path can be inside a directory that is not
+  // there. The entry is a statement of the rule over a value that has no
+  // reachable violation today, not a claim of coverage.
+
+  test("a deny hook inside the worktree is refused", () => {
+    // The worst of the list and the reason it exists: this is the file that
+    // ENFORCES the fence, and the hook does not protect its own path. `git`
+    // puts `README.md` in the checkout, so without the guard this exact request
+    // renders a fence whose PreToolUse command names a file the worker may
+    // rewrite -- the hole, reproduced, rather than a different failure. A path
+    // that merely did not exist would be refused by the older
+    // `hook-unresolvable` guard and prove nothing.
+    const f = fixture("materialize-hook-inside");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          fence: { ...f.request.fence, hookScript: join(f.workspace, "README.md") },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the deny hook is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+    expect(branchExists(TOPIC_BRANCH, f.git)).toBe(false);
+  });
+
+  test("a deny hook reaching into the worktree through `..` is refused", () => {
+    // Concatenated rather than `join`ed, for the reason the fence ledger's
+    // traversal case gives: `join` normalises, and building the path that way
+    // would produce the already-safe spelling. This is what the `resolve` in
+    // front of the lexical comparison is for.
+    const f = fixture("materialize-hook-traverse");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          fence: {
+            ...f.request.fence,
+            hookScript: `${f.artifactDir}${sep}..${sep}worktree${sep}README.md`,
+          },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the deny hook is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("the hook's interpreter inside the worktree is refused", () => {
+    // One step out from the hook and the same hole: whoever runs the hook
+    // decides what the hook does.
+    const f = fixture("materialize-python-inside");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          fence: { ...f.request.fence, python: join(f.workspace, "python") },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the hook's interpreter is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("the endpoint module inside the worktree is refused", () => {
+    // The module runs holding the messagebus lease and the control plane's
+    // path, which is more authority than the worker has through its fence.
+    const f = fixture("materialize-module-inside");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          endpoint: { ...f.request.endpoint, endpointModule: join(f.workspace, "endpoint.js") },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the endpoint module is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("the endpoint's interpreter inside the worktree is refused", () => {
+    const f = fixture("materialize-node-inside");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          endpoint: { ...f.request.endpoint, node: join(f.workspace, "node") },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the endpoint's interpreter is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("an interlock root that IS the worktree is refused", () => {
+    // The equality branch of `isInside`, and the substitution that makes it
+    // matter: `{interlock_root}` is interpolated into the fence's own deny
+    // rules, so a `denyRead` of `{interlock_root}/.secrets` pointed here denies
+    // a directory holding no secrets while the real one stays readable. The
+    // fence would render, publish and pass every later check.
+    const f = fixture("materialize-interlock-inside");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          fence: { ...f.request.fence, interlockRoot: f.workspace },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the fence's interlock root is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a claude-org path inside the worktree is refused", () => {
+    const f = fixture("materialize-claude-org-inside");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          fence: { ...f.request.fence, claudeOrgPath: join(f.workspace, "claude-org") },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the fence's claude-org path is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a relative deny hook is refused before it can be resolved by anyone", () => {
+    // The second half of the rule, and the half containment alone cannot carry.
+    // A relative path is not inside the workspace *here* -- it is not anywhere
+    // until somebody resolves it, and the somebody is Claude, running the
+    // PreToolUse command with the WORKTREE as its working directory. So
+    // `./hook.py`, which looks safe from the operator's shell, is
+    // `<workspace>/hook.py` when it is finally executed. The lap already
+    // learned this on the worker's own command: remove the resolution rather
+    // than reimplement whoever else's rules would have performed it.
+    //
+    // **The spelling matters, and a plain `./hook.py` would have been a weaker
+    // case.** With the rule removed, a relative path naming nothing is refused
+    // by the older `hook-unresolvable` guard -- a failure, but not this one, and
+    // one that would let the rule be deleted while the case still went red for
+    // the wrong reason. So the path names a file that really is there *from
+    // this process's directory*: without the rule the fence renders, publishes,
+    // and records a successful materialisation whose PreToolUse command is a
+    // relative string the worker's Claude will resolve inside its own worktree.
+    const f = fixture("materialize-hook-relative");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          fence: {
+            ...f.request.fence,
+            hookScript: relative(process.cwd(), join(f.repository, "README.md")),
+          },
+        }),
+      WorkspaceMaterializationUsageError,
+      /fence\.hook_script must be a fully qualified absolute path/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a relative hook interpreter is refused, however real it is from here", () => {
+    // The interpreter decides what the hook does, so it is the same rule one
+    // step out -- and the same trap in the case that carries it. The renderer
+    // already refuses a launcher it cannot execute, but it asks that question
+    // from THIS process's directory, which is precisely the directory the
+    // command will not be run from. So the spelling here is a real, executable
+    // file named relatively: without the rule the launcher check passes, the
+    // fence publishes a relative interpreter, and the worker's Claude resolves
+    // it inside the worktree.
+    //
+    // A bare `python3` would have been the weaker case for the same reason the
+    // hook's was -- refused, but by the wrong guard. The bare-name half of the
+    // rule is carried by the endpoint interpreter below, where nothing else
+    // looks at the value at all.
+    const f = fixture("materialize-python-relative");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          fence: { ...f.request.fence, python: relative(process.cwd(), process.execPath) },
+        }),
+      WorkspaceMaterializationUsageError,
+      /fence\.python must be a fully qualified absolute path/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a bare endpoint interpreter is refused too", () => {
+    // `endpoint.node` was the one launcher field validated only for being
+    // quotable text, and nothing downstream looks at it at all -- so without
+    // the rule this materialisation SUCCEEDS and writes `"command": "node"`
+    // into `mcp.json`. That is a name resolved through a `PATH` this process
+    // does not own and cannot inspect, whose entries may be relative and whose
+    // EMPTY entry means the current directory on POSIX -- and the current
+    // directory, for the process that runs this command, is the worktree.
+    const f = fixture("materialize-node-bare");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          endpoint: { ...f.request.endpoint, node: "node" },
+        }),
+      WorkspaceMaterializationUsageError,
+      /endpoint\.node must be a fully qualified absolute path/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("the defaults are outside the worktree (the anti-vacuity half)", () => {
+    // Without this, every refusal above is satisfied by a materialiser that
+    // refuses unconditionally -- and, more usefully, it pins that the BUNDLED
+    // hook and this build's own interpreter still pass the rule the overrides
+    // are judged by. A guard that refused the shipped default would be found
+    // here rather than in production.
+    const f = fixture("materialize-warded-defaults");
+    const materialized = materializeWorkspace(f.connection, f.request);
+    expect(isInside(materialized.plan.settingsPath, f.workspace)).toBe(false);
+    expect(existsSync(join(f.workspace, "README.md"))).toBe(true);
   });
 });
 

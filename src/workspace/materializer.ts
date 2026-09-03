@@ -775,6 +775,10 @@ function renderMcpConfig(
 ): {
   readonly document: unknown;
   readonly env: Record<string, string>;
+  /** The interpreter the MCP server is launched with, normalised. */
+  readonly node: string;
+  /** The module it is launched on, normalised. */
+  readonly endpointModule: string;
 } {
   const env: Record<string, string> = {
     INTERLOCK_MESSAGEBUS_DB: databasePath,
@@ -827,7 +831,14 @@ function renderMcpConfig(
   // entirely -- it validates the *environment*, not the launcher -- so an
   // empty override would sail through `missing()` and be recorded as a
   // successful materialisation whose MCP child cannot start.
-  const node = requireQuotableText("endpoint.node", binding.node ?? process.execPath);
+  // `requireAbsolute`, not `requireQuotableText`, and the difference is the
+  // whole of `D-0067` applied to this one field (`D-0069`). The string returned here is
+  // written into `mcp.json` verbatim and then executed by the fenced worker's
+  // Claude, whose working directory is **the worktree** -- so a relative
+  // `--node ./node` names a file the worker itself may write, and a bare `node`
+  // is resolved through a `PATH` this process does not own. Neither is a value
+  // materialisation can judge, and both are values it can refuse.
+  const node = requireAbsolute("endpoint.node", binding.node ?? process.execPath);
   const endpointModule = requireAbsolute(
     "endpoint.endpoint_module",
     binding.endpointModule ?? defaultEndpointModule(),
@@ -843,6 +854,13 @@ function renderMcpConfig(
       },
     },
     env,
+    // Returned rather than recomputed by the caller: these two are the
+    // launcher and the module the containment check wards, and a second
+    // `??`-and-`requireAbsolute` at the call site would be a second statement
+    // of which file this `mcp.json` actually names -- the drift `D-0067`
+    // records as the way one rule becomes two (`D-0069`).
+    node: resolve(node),
+    endpointModule: resolve(endpointModule),
   };
 }
 
@@ -901,8 +919,29 @@ export function materializeWorkspace(
   requireInteger("endpoint.epoch", request.endpoint.epoch);
   requireText("prompt", request.prompt);
   const cliArgs = requireCliArgs(request.cliArgs);
-  requireAbsolute("fence.interlock_root", request.fence.interlockRoot);
-  requireAbsolute("fence.claude_org_path", request.fence.claudeOrgPath);
+  // Kept rather than discarded, and `resolve`d for the same two reasons the
+  // workspace is: the containment guard below is lexical, and these are written
+  // into the fence a later process reads.
+  const interlockRoot = resolve(
+    requireAbsolute("fence.interlock_root", request.fence.interlockRoot),
+  );
+  const claudeOrgPath = resolve(
+    requireAbsolute("fence.claude_org_path", request.fence.claudeOrgPath),
+  );
+  // The deny hook and its interpreter, required to be fully qualified for the
+  // reason `requireAbsolute`'s own refusal gives -- these two are rendered into
+  // `settings.local.json` as the `PreToolUse` command, and Claude runs that
+  // command with **the worktree** as its working directory. A relative
+  // `--hook-script ./hook.py` is therefore `<workspace>/hook.py` when it is
+  // finally executed, however safe it looked in the operator's shell, and a
+  // bare `--python python3` is resolved through a `PATH` this process neither
+  // owns nor can inspect. The lap already learned this once on the worker's own
+  // command (`D-0067`, `D-0069`): the fix is to remove the resolution, not to reimplement
+  // whoever else's rules would have performed it.
+  const hookScript = resolve(
+    requireAbsolute("fence.hook_script", request.fence.hookScript ?? defaultHookScript()),
+  );
+  const python = resolve(requireAbsolute("fence.python", request.fence.python ?? process.execPath));
   if (typeof request.sessionUuidFactory !== "function") {
     throw new WorkspaceMaterializationUsageError("session_uuid_factory must be a function");
   }
@@ -913,11 +952,53 @@ export function materializeWorkspace(
   // it at the publication site made an empty `destinationDir` cost a topic
   // branch, a worktree, two published files and an admission ledger line before
   // anyone said the request was wrong.
-  const mcp = renderMcpConfig(
-    request.endpoint,
-    endpointDatabasePath(connection, request.endpoint),
-    destinationDir,
-  );
+  const endpointDatabase = endpointDatabasePath(connection, request.endpoint);
+  const mcp = renderMcpConfig(request.endpoint, endpointDatabase, destinationDir);
+  // **Containment for what the fence DEPENDS on but this step does not write**
+  // (`D-0067`, closed for the materialiser's own fields by `D-0069`).
+  //
+  // The artifact list below states this rule over what materialisation
+  // *creates*, and its refusal says why in its own words: "the fence and the
+  // settings must not be files the fenced child can edit". By that argument the
+  // **deny hook** belongs on a list before either of them. It is the file that
+  // *enforces* the fence, the worker may edit anything in its own worktree, and
+  // the hook does not protect its own path -- so a hook inside the worktree is
+  // a fence the worker rewrites between one tool call and the next.
+  //
+  // The same hole, one step further out each time: the interpreter runs the
+  // hook; the endpoint module and its interpreter run holding the messagebus
+  // lease and the control plane's path; the database is where the gate this
+  // whole lap exists to open is stored; and `{interlock_root}` /
+  // `{claude_org_path}` are substituted into the fence's own deny rules, so a
+  // `denyRead` of `{interlock_root}/.secrets` pointed inside the worktree
+  // denies a directory holding no secrets while the real one stays readable.
+  //
+  // Checked separately from the artifacts rather than appended to that list,
+  // because the two lists are asked opposite questions: an artifact must NOT
+  // exist yet, and every one of these must already exist to be worth anything.
+  //
+  // Every entry is already fully qualified where it is validated, so `resolve`
+  // here normalises and never resolves against this process's directory --
+  // which matters, because this process's directory is not where any of these
+  // are read from.
+  const wardedPaths: readonly (readonly [string, string])[] = [
+    ["the deny hook", hookScript],
+    ["the hook's interpreter", python],
+    ["the endpoint module", mcp.endpointModule],
+    ["the endpoint's interpreter", mcp.node],
+    ["the control plane database", resolve(endpointDatabase)],
+    ["the fence's interlock root", interlockRoot],
+    ["the fence's claude-org path", claudeOrgPath],
+  ];
+  for (const [what, path] of wardedPaths) {
+    if (isInside(path, workspace)) {
+      throw new WorkspaceMaterializationUsageError(
+        `${what} is ${pythonRepr(path)}, inside the workspace ${pythonRepr(workspace)}; ` +
+          "the fenced child can edit anything in its own worktree, so a fence that " +
+          "depends on a file living there is a fence the worker rewrites",
+      );
+    }
+  }
   // The layout invariant, checked over every path an artifact will actually be
   // written to rather than over the directory they are nominally in.
   //
@@ -1062,19 +1143,23 @@ export function materializeWorkspace(
 
   // -- 4. the fence, through the admission path and not around it -----------
   const context = new FenceContext({
-    interlockRoot: request.fence.interlockRoot,
+    interlockRoot,
     // `{worker_dir}` is the checkout the worker works in, which is the
     // worktree -- not the artifact directory beside it. The role document
     // exports it as `WORKER_DIR`, and a worker told its directory is the place
     // its fence lives would be told the wrong thing.
     workerDir: workspace,
-    claudeOrgPath: request.fence.claudeOrgPath,
+    claudeOrgPath,
     // Required by `FenceContext`, not optional: a fence whose hook command does
     // not name an existing file refuses to render with `hook-unresolvable`, so
     // there is no useful "unset" state for this field to have.
-    hookScript: request.fence.hookScript ?? defaultHookScript(),
+    hookScript,
     fencePath,
-    ...(request.fence.python === undefined ? {} : { python: request.fence.python }),
+    // Always passed now, rather than only when the caller supplied one: the
+    // default `FenceContext` would otherwise reach for is `process.execPath`,
+    // which is the same value `python` already holds -- and passing it makes
+    // the interpreter the fence renders identical to the one warded above.
+    python,
   });
 
   const spawner = new FencedSpawner({

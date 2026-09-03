@@ -165,6 +165,7 @@ spaces distinct.
 | D-0067 | Nothing the fence or its evidence depends on may live inside the worktree | accepted |
 | D-0068 | A session is this lap's to stop only while it still holds the lease epoch it spawned under | accepted |
 | D-0069 | A test's wait for a real child is a share of the runner's budget, from D-0052's scale | accepted |
+| D-0070 | The materialiser wards every path the fence depends on, and each is judged where its consumer reads it | accepted |
 
 ---
 
@@ -11978,3 +11979,91 @@ different cases of the same file) and the measurement above. Decision id allocat
 `D-0019`..`D-0099` shared band after checking `origin/main` at `1474e8d`, where `D-0068` is the
 highest id in the band: the change is in `test/helpers/runner-timeouts.ts`, which is shared by every
 lane, so it is a cross-belt decision taken at the window rather than one belt's.
+
+---
+
+## D-0070 -- The materialiser wards every path the fence depends on, and each is judged where its consumer reads it
+
+**Context.** `D-0067` drew the rule -- *nothing the fence or its evidence depends on may live inside
+the worktree* -- and closed it for the two values that never reach `materializeWorkspace`: the
+provider's state root and the worker's own command. It named six that do reach the materialiser and
+were still unguarded there, and said hardening them belonged with the module that owns the invariant.
+This is that entry. The six are `--hook-script`, `--python`, `--endpoint-module`, `--node`,
+`--interlock-root` and `--claude-org-path`, and the control plane's own database file joins them.
+
+**Decision.** `materializeWorkspace` checks a `wardedPaths` list, in its prologue, before anything is
+created, using the same `isInside` the artifact list uses. Seven entries, ordered by how directly the
+fence rests on each:
+
+- the **deny hook** is the file that *enforces* the fence, and it does not protect its own path. A
+  hook inside the worktree is a fence the worker rewrites between one tool call and the next;
+- the **hook's interpreter** decides what the hook does;
+- the **endpoint module** and **its interpreter** run holding the messagebus lease and the control
+  plane's path -- more authority than the fence grants the worker;
+- the **control plane database** is where the gate this whole lap exists to open is stored;
+- `{interlock_root}` and `{claude_org_path}` are substituted into the fence's own **deny rules**, so
+  a `denyRead` of `{interlock_root}/.secrets` pointed inside the worktree denies a directory holding
+  no secrets while the real one stays readable. This is the subtlest of the seven: the fence renders,
+  publishes, verifies and reads as a complete fence.
+
+**Checked as a separate list from the artifacts, not appended to it, because the two lists are asked
+opposite questions.** An artifact must **not** exist yet -- finding it there means another
+materialisation owns it. Every warded path must **already** exist to be worth anything. One list
+answering both would have to carry the distinction anyway, in a field.
+
+**The second half of the rule is that a relative path is not outside the workspace -- it is not
+anywhere.** Three of the six were validated only for being quotable text, and containment alone
+cannot judge them: `--hook-script ./hook.py` is not inside the workspace *here*, and becomes
+`<workspace>/hook.py` when Claude runs the `PreToolUse` command with the worktree as its working
+directory. So `fence.hook_script`, `fence.python` and `endpoint.node` join the fields already held to
+`requireAbsolute`, whose refusal has always stated this reason in its own words: "this value is read
+back by a later process with a working directory -- and, on Windows, a current drive -- of its own".
+`endpoint.endpoint_module`, `fence.interlock_root` and `fence.claude_org_path` were already absolute
+by that same rule, which is why this entry adds containment to them and nothing else.
+
+**Requiring absolute rather than resolving against the consumer's directory is the same trade
+`D-0067` made for the worker command, and it is worth restating because the alternative looks
+cheaper.** Resolving `--python` against the workspace would be this module reimplementing somebody
+else's resolution: `PATH` for a bare name, a working directory for a relative one, a current *drive*
+on Windows for a rooted-but-driveless one. An absolute path is resolved against none of them, and
+`isInside` can then answer about it exactly. The cost is that `--python python3` is refused; the
+price of not paying it is a fence whose enforcing command is decided by ambient state.
+
+**This also fixes a check that was asking its question from the wrong directory.** The fence renderer
+refuses a hook it cannot find or a launcher it cannot execute -- and it resolves both against *this*
+process's working directory, which is the one directory the command will never be run from. Under the
+old contract a relative hook that existed here passed that check and was published as a relative
+string for the worker to resolve in its own worktree. The renderer is unchanged: it now only ever
+sees absolute paths, so its question and its answer are about the same file.
+
+**`endpoint.node` and `endpoint.endpoint_module` are returned by `renderMcpConfig` rather than
+recomputed at the call site.** Both are `??`-defaulted before they are validated, and a second
+`?? default` beside the warded list would be a second statement of which file the `mcp.json` actually
+names -- the drift `D-0067` records as the way one rule becomes two, arriving through the fix for it.
+
+**The control plane database is on the list and has no test, and the entry says so rather than
+implying coverage.** Reaching it needs a database that already exists inside a directory that must
+not exist yet, because `git worktree add` refuses a workspace that is already there. The entry is a
+statement of the rule over a value with no reachable violation today, not a claim about one.
+
+**Every other entry was mutation-checked, and two of the cases were rewritten because of what that
+showed.** With the containment loop deleted each of the seven reachable materialisations *succeeds*
+and records `workspace_materialized`. With `requireAbsolute` removed, though, the first spelling of
+the hook and interpreter cases went red for the wrong reason -- the renderer's `hook-unresolvable`
+refusing a path that named nothing -- which would have let the rule be deleted while the suite still
+looked like it was defending it. Both now name files that really are there *from this process's
+directory*, so removing the rule makes the lap succeed with a relative command in its published
+fence. A test that merely fails is not evidence that a guard is load-bearing.
+
+**Who this defends against is unchanged from `D-0067`, and it is what keeps this list at seven.** The
+fenced party is the **worker**; the operator holds the fence and is trusted. The question each entry
+answers is *can the worker influence this value* -- and everything inside its own worktree it can
+rewrite between one tool call and the next. Hazards whose only actor is the operator attacking
+themselves are recorded there and not guarded here.
+
+**What would falsify it.** The same condition `D-0067` names: a role whose fence legitimately needed
+to reference a file inside the worktree would be refused by this list, and the answer would be to
+split "depends on for enforcement" from "reads as data" rather than to widen the rule. More narrowly,
+if the fence renderer ever resolved its own paths against the workspace instead of the launcher's
+directory, the absoluteness half of this entry would become a redundant second statement of a rule
+that module had taken over -- and it should then be removed from here rather than kept for symmetry.
