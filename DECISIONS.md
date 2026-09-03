@@ -12493,6 +12493,13 @@ that policy in code (`D-0008`). The operator closes it with `gate close --outcom
 with actor `human` for the same reason -- attributing it to `system` would credit a judgement to a
 pass that refuses to make one.
 
+**A replay is a success case in every step.** An ack of an earlier stage's relay -- a `presented` ack
+repeated after the gate reached `answered`, or after it closed -- records its no-op ack and stops: the
+advance is skipped when that stage has already been advanced to (the predicate `gatesNeedingAdvance`
+uses), and a closed gate is settled rather than advanced or re-closed. Without those two conditions a
+harmless duplicate came back as `InadmissibleTransitionRefused` or `GateClosedRefused`, which is the
+opposite of what this verb promises.
+
 **Two guards the first implementation lacked, both found by review.** The forward relay carries the
 answer the *transition* holds, never the argument the call was given: the advance and the enqueue are
 two transactions, so a retry after a kill between them finds the advance already committed, has its
@@ -12595,6 +12602,16 @@ at the instant the pass began: a pass that outlives its 60-second lease would ot
 validating against the acquisition timestamp and go on writing rows and applying destination effects
 under a lease it no longer holds. The verb passes `gateCliSeams.nowMs` -- unless `--now-ms` was
 given, in which case the operator meant the instant they gave and the pass keeps the single read.
+
+**Known limitation, recorded rather than carried silently.** The dropbox's identity is the directory
+it is given, and the directory is an argument of every pass. Two passes over one unacked relay with
+different `--destination-dir` values apply the effect twice, once per directory, and nothing notices:
+the outbox row carries no destination. This is a property of the `KeyedDropbox` stand-in rather than
+of the verb -- the endpoint takes the same directory from its environment and has it too -- and
+`D-0026` already records the destination side as scaffold. A real keyed destination has one address,
+not one per invocation. Until there is one, the operator uses one directory per control plane, and
+the exactly-once claim holds per destination, which is the scope `ACCEPTANCE.md` section 2 states it
+in.
 
 **Why the verb does not also ack.** A delivery worker acking on the recipient's behalf would make the
 ack evidence of nothing: section 9.5 makes the stage advance on the ack precisely so that "delivered"

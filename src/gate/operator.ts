@@ -516,6 +516,27 @@ function recordedAnswer(connection: SqliteDatabase, gateId: string): string | nu
   return body ?? null;
 }
 
+/**
+ * Whether this gate already advanced to `toStage`.
+ *
+ * The same predicate `gatesNeedingAdvance` uses to decide a relay's advance is
+ * outstanding, asked of one relay instead of all of them.
+ */
+function alreadyAdvanced(connection: SqliteDatabase, gateId: string, toStage: string): boolean {
+  return (
+    connection
+      .prepare<[string, string], { one: number }>(
+        `
+        SELECT 1 AS one
+          FROM gate_transition
+         WHERE gate_id = ? AND transition_kind = 'advance' AND to_stage = ?
+         LIMIT 1
+        `,
+      )
+      .get(gateId, toStage) !== undefined
+  );
+}
+
 /** Whether this gate already has a relay for `toStage`. */
 function relayExists(connection: SqliteDatabase, gateId: string, toStage: string): boolean {
   return (
@@ -682,6 +703,19 @@ export function answerGate(
  * `finally` so a refused delivery does not leave the resource claimed for a
  * whole TTL, which would refuse the operator's own next attempt.
  *
+ * **Known limitation, stated rather than carried silently.** The dropbox's
+ * identity is the directory it was given, and the directory is an argument of
+ * every pass. Two passes over one unacked relay with different
+ * `destinationDir`s therefore apply the effect twice -- once per directory --
+ * because the second store holds no record of the first. Nothing in the outbox
+ * notices, since the row carries no destination. This is a property of the
+ * `KeyedDropbox` stand-in rather than of this verb (the endpoint takes the same
+ * directory from `INTERLOCK_MESSAGEBUS_DESTINATION_DIR` and has it too), and
+ * `D-0026` already records that the destination side is scaffold: a real keyed
+ * destination has one address, not one per invocation. Until then the operator
+ * uses one directory per control plane, and the exactly-once claim holds per
+ * destination, which is the scope `ACCEPTANCE.md` section 2 states it in.
+ *
  * @throws {LeaseHeld} if a lap or an endpoint is holding the delivery lease.
  * @throws {HandlerRejected} if no handler serves `recipient` -- the same
  *   refusal the endpoint makes at startup, made here before anything is
@@ -845,15 +879,33 @@ export function ackRelay(
   const outcome = outbox.recordAck(messageId, { nowMs });
   let advanced = false;
   let closed = false;
-  if (!outcome.cancelled) {
-    advanced = advanceOnAck(connection, {
-      gateId: relay.gateId,
-      toStage: relay.toStage,
-      actorKind: RELAY_ADVANCE_ACTOR_KIND,
-      actorId,
-      occurredAtMs: nowMs,
-      recordedAtMs: nowMs,
-    });
+  // A replay is a success case, not an error, and two conditions decide it.
+  //
+  // The ack of an EARLIER stage's relay is the one that used to fail: a
+  // `presented` ack repeated after the gate reached `answered` recorded its
+  // no-op ack and then asked for an advance the transition table refuses as a
+  // rewind (`InadmissibleTransitionRefused`), or -- past the closure -- as
+  // `GateClosedRefused`. So the advance is skipped when this relay's stage has
+  // already been advanced to, which is the predicate `gatesNeedingAdvance` uses
+  // to decide the same question over every relay at once.
+  //
+  // A CLOSED gate is likewise settled rather than wrong: its relay is normally
+  // cancelled and caught by the branch above, but an acked relay survives a
+  // closure untouched (an answered gate must not have its answered relay
+  // rewritten), and asking `closeGate` for an outcome that gate did not reach
+  // would raise. Nobody is owed a second closure of a gate that has one.
+  const settled = gateDetail(connection, relay.gateId);
+  if (!outcome.cancelled && settled.closedAtMs === null) {
+    if (!alreadyAdvanced(connection, relay.gateId, relay.toStage)) {
+      advanced = advanceOnAck(connection, {
+        gateId: relay.gateId,
+        toStage: relay.toStage,
+        actorKind: RELAY_ADVANCE_ACTOR_KIND,
+        actorId,
+        occurredAtMs: nowMs,
+        recordedAtMs: nowMs,
+      });
+    }
     if (relay.toStage === "forwarded") {
       closed = closeGate(connection, {
         gateId: relay.gateId,

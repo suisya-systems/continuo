@@ -501,6 +501,63 @@ describe("what the operator's verbs refuse", () => {
     expect(statusOf(cp, relay.messageId)).toBe("delivered");
   });
 
+  test("a replayed ack of an earlier stage's relay changes nothing and does not fail", () => {
+    // A delayed or repeated `gate ack` on the presented relay, arriving after
+    // the gate has moved on. The ack itself is already a no-op; asking for the
+    // advance again would be a rewind, which the transition table refuses -- so
+    // a harmless replay used to come back as a refusal, against this verb's own
+    // claim that every step is idempotent.
+    const cp = cpFixture("gate-replayed-ack");
+    const dir = destinationDir("gate-replayed-ack");
+    aGate(cp);
+    const presented = presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    deliver(cp, dir, T0 + MINUTE);
+    ackRelay(cp, { messageId: presented.messageId, actorId: ACTOR, nowMs: T0 + 2 * MINUTE });
+    answerGate(cp, {
+      gateId: GATE_ID,
+      body: "force-push",
+      actorId: ACTOR,
+      nowMs: T0 + 3 * MINUTE,
+    });
+    expect(stageOf(cp)).toBe("answered");
+
+    const replay = ackRelay(cp, {
+      messageId: presented.messageId,
+      actorId: ACTOR,
+      nowMs: T0 + 4 * MINUTE,
+    });
+
+    expect(replay).toMatchObject({ acked: false, advanced: false, closed: false });
+    expect(stageOf(cp)).toBe("answered");
+  });
+
+  test("an ack that arrives after the gate closed settles nothing and does not fail", () => {
+    // The other replay: an acked relay survives a closure untouched, so this
+    // one is not caught by the cancelled branch. Nobody is owed a second
+    // closure of a gate that already has one.
+    const cp = cpFixture("gate-ack-after-close");
+    const dir = destinationDir("gate-ack-after-close");
+    aGate(cp);
+    const presented = presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    deliver(cp, dir, T0 + MINUTE);
+    ackRelay(cp, { messageId: presented.messageId, actorId: ACTOR, nowMs: T0 + 2 * MINUTE });
+    closeOpenGate(cp, {
+      gateId: GATE_ID,
+      outcome: "unanswerable",
+      actorId: ACTOR,
+      nowMs: T0 + 3 * MINUTE,
+    });
+
+    const replay = ackRelay(cp, {
+      messageId: presented.messageId,
+      actorId: ACTOR,
+      nowMs: T0 + 4 * MINUTE,
+    });
+
+    expect(replay).toMatchObject({ acked: false, advanced: false, closed: false });
+    expect(outcomeOf(cp)).toBe("unanswerable");
+  });
+
   test("the ack of a relay a closure cancelled advances nothing", () => {
     // A gate withdrawn while the question was in front of somebody: the row is
     // `cancelled`, the late ack changes nothing rather than failing, and no
