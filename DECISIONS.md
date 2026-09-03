@@ -12084,6 +12084,26 @@ is the realistic shape of this mistake anyway. Two rounds found the identical de
 different cases, which says the hazard is the *shape of the case* rather than any one case: a
 containment case whose path does not exist is tested by whichever guard notices absence first.
 
+**Symlink aliasing is declined, and the reason is recorded here because review raises it against this
+list specifically.** `isInside` is lexical, so a workspace of `/alias/wt` and a hook of `/real/wt/tool`
+with `/alias -> /real` are two names for one location that a prefix comparison finds unrelated. That
+is true, and `isInside`'s own docstring has said so since it was written: neither path exists when the
+check runs, `realpathSync` throws on a missing path, and a guard that has to create directories to
+decide is a guard with side effects. Three things decide it:
+
+- **the actor.** Both spellings are operator-supplied -- the workspace from the admitted intent, the
+  warded paths from the command line. Defeating this needs the operator to hand in two names for one
+  place, which is the party the fence is *for* attacking themselves. The worker cannot create a link
+  outside a worktree that does not exist yet.
+- **the cost of the alternative.** Canonicalising the nearest existing ancestor is a *second*
+  predicate, filesystem-dependent and able to throw, for a rule three modules currently answer with
+  one function. `D-0067` names that trade explicitly, and `#107` made it three times.
+- **what it would buy.** The layout mistake an operator actually makes is `join(workspace,
+  ".continuo")`, with or without a `..` in front of it. That is caught, and it is what this is for.
+
+**What would change the answer**: a path on this list that the *worker* can influence -- a value read
+back out of the worktree, or a warded path derived from anything the worker writes. None is today.
+
 **Who this defends against is unchanged from `D-0067`, and it is what keeps this list at seven.** The
 fenced party is the **worker**; the operator holds the fence and is trusted. The question each entry
 answers is *can the worker influence this value* -- and everything inside its own worktree it can
