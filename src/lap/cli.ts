@@ -55,6 +55,7 @@ import {
 } from "../cli/parser.js";
 import { LeaseRefusal } from "../control_plane/lease.js";
 import { openProductionControlPlane } from "../control_plane/migrator.js";
+import { pythonRepr } from "../control_plane/python_repr.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 // The one import that names the shipped backend, and it names an abstraction:
 // see this module's header and D-0059. Through `../index.js` deliberately --
@@ -276,9 +277,25 @@ function gateOptionsOf(args: Namespace): readonly string[] {
  * the next two steps of the lap operate on.
  */
 function report(path: string, outcome: LapOutcome): void {
+  // **The paths are quoted on the SUCCESS line too, and that is the half this
+  // verb had missed.** Every refusal below already goes out through `pythonRepr`
+  // -- the run identifier, the parser's diagnostic, the containment paths -- on
+  // the reasoning that external text reaching a one-line report can forge a
+  // second line. The success line carries the same external text: a POSIX
+  // filename may hold a newline or a terminal control sequence, and `--db`,
+  // the workspace and the branch all arrive from outside. Guarding the failure
+  // path and leaving the success path open protects the case where an operator
+  // is already looking for trouble and not the case where they are not.
+  //
+  // `run_cli.ts` records the open problem this is one answer to: it echoes
+  // `--db` verbatim, deliberately, and says settling it "belongs to whichever
+  // entry settles it for every verb at once". This settles it for this verb
+  // only; the `db` and `run` subtrees still echo raw, and that inconsistency is
+  // named here rather than left for a reader to find.
   lapCliSeams.write(
-    `performed ${outcome.intent.runId} in ${path}: worktree ${outcome.materialized.workspace} ` +
-      `on ${outcome.intent.topicBranch} at ${outcome.materialized.baseCommit}, session ` +
+    `performed ${pythonRepr(outcome.intent.runId)} in ${pythonRepr(path)}: worktree ` +
+      `${pythonRepr(outcome.materialized.workspace)} ` +
+      `on ${pythonRepr(outcome.intent.topicBranch)} at ${outcome.materialized.baseCommit}, session ` +
       `${outcome.orchestration.sessionId} ${outcome.orchestration.path}, gate ` +
       `${outcome.ingested.gateId} over event ${outcome.ingested.eventId} at seq ` +
       `${outcome.ingested.eventSeq}\n`,

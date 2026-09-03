@@ -721,7 +721,7 @@ describe("what the verb refuses, and what it leaves behind", () => {
     // instead of trying to reason about it.
     const f = lap("warded-relative-command");
     expect(await f.perform({ "--claude-command": "./tool" })).toBe(2);
-    expect(f.err.join("")).toContain("not an absolute path");
+    expect(f.err.join("")).toContain("not a fully qualified path");
     expect(existsSync(f.workspace)).toBe(false);
   });
 

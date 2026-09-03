@@ -177,6 +177,13 @@ function requireQuotableText(field: string, value: unknown): string {
  * requiring an absolute path exists to rule out, arriving through the check
  * meant to rule it out.
  *
+ * **Exported so that everyone asking "is this path unambiguous" asks one
+ * implementation.** `src/lap/root.ts` required the worker's command to be
+ * absolute and wrote its own `isAbsolute` check to say so -- inheriting exactly
+ * the gap this docstring describes, in a rule that already had a correct
+ * implementation eleven lines long. A rule with two implementations has one
+ * that is wrong; the only question is which.
+ *
  * So the rule is the root, not the leading separator: `parse` gives `"C:\\"`
  * for a drive-qualified path and `"\\\\server\\share\\"` for a UNC one, and a bare
  * `"\\"` or `"/"` for the drive-relative form. On POSIX the root of an absolute
@@ -184,7 +191,7 @@ function requireQuotableText(field: string, value: unknown): string {
  * which is why `isAbsolute` is asked first and the root is only examined where
  * the two can disagree.
  */
-function isFullyQualified(path: string): boolean {
+export function isFullyQualified(path: string): boolean {
   if (!isAbsolute(path)) {
     return false;
   }

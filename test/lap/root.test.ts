@@ -19,7 +19,11 @@
  * end-to-end green would not notice.
  */
 
+import process from "node:process";
+
 import { describe, expect, test } from "vitest";
+
+import { isFullyQualified } from "../../src/control_plane/lap_run_intent.js";
 
 import {
   awaitTerminalReport,
@@ -214,6 +218,33 @@ describe("D-0061: the artifact directory is derived, one per run", () => {
     // The check is on the stem, and a name that merely starts with one is not
     // reserved -- escaping it would be a rule this function invented.
     expect(lapArtifactDir("/r", "nullable")).toMatch(/nullable$/);
+  });
+});
+
+describe("D-0067: the worker command names files outright", () => {
+  test("a rooted-but-driveless path is refused, not just a relative one", () => {
+    // The Windows gap. `path.win32.isAbsolute("\\worktree\\worker.mjs")` is
+    // true and the path is **drive-relative**: it resolves against whichever
+    // drive the reading process is on, so a probe on `C:` and a child whose
+    // workspace is on `D:` resolve one string as two files. The repository
+    // already had the right predicate -- `isFullyQualified`, written for
+    // exactly this and applied to every persisted path -- and this rule had
+    // grown a second, weaker one.
+    //
+    // Asserted through `isFullyQualified` rather than through a lap, because
+    // the answer is platform-dependent and the case has to say what it means on
+    // both: everywhere, a relative token is refused; on Windows, so is a rooted
+    // one with no drive.
+    expect(isFullyQualified("worker.mjs")).toBe(false);
+    expect(isFullyQualified("./worker.mjs")).toBe(false);
+    if (process.platform === "win32") {
+      expect(isFullyQualified("\\worktree\\worker.mjs")).toBe(false);
+      expect(isFullyQualified("C:\\tools\\worker.mjs")).toBe(true);
+    } else {
+      // The anti-vacuity half on POSIX, where the root is always one character
+      // and a length test alone would refuse every absolute path there.
+      expect(isFullyQualified("/tools/worker.mjs")).toBe(true);
+    }
   });
 });
 

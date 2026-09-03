@@ -1,8 +1,8 @@
-import { isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
-import type { LapRunIntent } from "../control_plane/lap_run_intent.js";
+import { isFullyQualified, type LapRunIntent } from "../control_plane/lap_run_intent.js";
 import { readLease } from "../control_plane/lease.js";
 import { pythonRepr } from "../control_plane/python_repr.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
@@ -634,12 +634,20 @@ function requireAbsoluteWorkerCommand(command: readonly string[] | undefined): v
     );
   }
   for (const [index, token] of command.entries()) {
-    if (!isAbsolute(token)) {
+    // `isFullyQualified`, not `isAbsolute`. On Windows `\worktree\worker.mjs`
+    // is absolute and **drive-relative**: it resolves against whichever drive
+    // the reading process is on, so a probe running on `C:` and a child whose
+    // working directory is a workspace on `D:` resolve one string as two files.
+    // That is the same failure this rule exists to prevent, arriving through the
+    // check meant to prevent it -- and the repository already had the right
+    // predicate, in the module that applies it to every persisted path.
+    if (!isFullyQualified(token)) {
       throw new LapUsageError(
         `the worker command's token ${String(index)} is ${pythonRepr(token)}, which is not ` +
-          "an absolute path. Every token is resolved by somebody -- PATH for a bare name, a " +
-          "working directory for a relative one, and the child's working directory is the " +
-          "worktree it may edit -- so the command is required to name files outright",
+          "a fully qualified path. Every token is resolved by somebody -- PATH for a bare " +
+          "name, a working directory for a relative one, and on Windows a DRIVE for a " +
+          "rooted-but-driveless one -- and the child's working directory is the worktree it " +
+          "may edit, so the command is required to name files outright",
       );
     }
   }
