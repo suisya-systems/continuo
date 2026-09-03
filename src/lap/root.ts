@@ -1185,6 +1185,19 @@ async function performLapHoldingTheEndpointLease(
     //    `transaction()` joins rather than nests and refuses an async body.
     const report = await awaitTerminalReport(reader, orchestration.sessionId, request.completion);
 
+    // 5a. **The renewal that says whether the lease survived the turn**, and it
+    //     is by hand for the same reason the one above materialisation is.
+    //     `hold.failure` records *attempted* renewals, so a turn during which no
+    //     tick ever ran -- the event loop blocked, the process suspended past
+    //     the TTL -- would leave it `null` over a lease that had already lapsed,
+    //     and the lap would report nothing wrong while the endpoint had been
+    //     fenced out. One synchronous attempt here makes the field an answer
+    //     rather than an absence of evidence.
+    //
+    //     **No `requireHeld()`** (`D-0073`): the report exists, and past this
+    //     point a lost lease costs the lease and never the report.
+    hold.tick();
+
     // 6. The settled value, into the one transaction the event and its gate share.
     //
     //    The clock is read ONCE and used for both the deadline decision and the

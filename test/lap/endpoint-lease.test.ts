@@ -644,4 +644,37 @@ describe("where a lost renewal is surfaced depends on which side of the spawn it
     // the worker's endpoint stopped being able to write partway through.
     expect(outcome.endpointLeaseFailure).toBeInstanceOf(LeaseNotHeld);
   });
+
+  test("a lease that lapsed while NO tick ran is still reported", async () => {
+    // The hole the latch has on its own, and the reason the lap renews by hand
+    // once the turn is over. `endpointLeaseFailure` records *attempted*
+    // renewals; a turn during which no tick ever ran -- the event loop blocked,
+    // the process suspended past the TTL -- would leave it null over a lease
+    // that had already lapsed, and the verb would print nothing while the
+    // endpoint had been fenced out of its own outbox for the whole turn.
+    //
+    // Nothing is scheduled here at all, which is that state exactly: the clock
+    // moves past a one-millisecond lease while the transcript is being read.
+    const clock = { ms: T0 };
+    const f = fixture("lapsed-with-no-tick", () => clock.ms);
+    const readerThatOutlastsTheLease = {
+      readTerminalReport: (): Promise<ProviderResult<LapTerminalReadout>> => {
+        clock.ms = T0 + 5;
+        return Promise.resolve(new Ok<LapTerminalReadout>(REPORT));
+      },
+    };
+
+    const outcome = await performLap(f.connection, f.provider, readerThatOutlastsTheLease, {
+      ...f.request,
+      deliveryLease: {
+        ttlMs: 1,
+        schedule: () => () => {
+          // Deliberately empty: nothing is ever scheduled, and nothing to cancel.
+        },
+      },
+    });
+
+    expect(outcome.ingested.gateOpened).toBe(true);
+    expect(outcome.endpointLeaseFailure).toBeInstanceOf(LeaseNotHeld);
+  });
 });

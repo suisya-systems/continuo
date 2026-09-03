@@ -12267,7 +12267,12 @@ to be decided rather than derived.**
   refused. A materialisation that outran the lease then costs one stderr line before any child
   exists, instead of a worker whose endpoint is fenced out of its own outbox for a whole turn with
   silence as the only symptom.
-- **After the terminal report: do not refuse.** Once the turn's report exists, a lost delivery lease
+- **After the terminal report: renew once by hand, and do not refuse.** The by-hand renewal is here
+  for the same reason it is above the spawn, and it is what makes the field below an answer rather
+  than an absence of evidence: the latch records *attempted* renewals, so a turn during which no tick
+  ever ran -- the event loop blocked, the process suspended past the TTL -- would otherwise leave it
+  empty over a lease that had already lapsed, and the lap would report nothing wrong while the
+  endpoint had been fenced out. Once the turn's report exists, a lost delivery lease
   costs the lease and never the report. This is `D-0065`'s trade -- "an expired deadline costs the
   deadline, never the report" -- applied to the other thing a lap can lose, and it takes the same
   shape: a nullable field, `LapOutcome.endpointLeaseFailure`, reported as its own line by the verb.
