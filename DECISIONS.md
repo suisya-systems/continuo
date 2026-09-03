@@ -12493,6 +12493,18 @@ that policy in code (`D-0008`). The operator closes it with `gate close --outcom
 with actor `human` for the same reason -- attributing it to `system` would credit a judgement to a
 pass that refuses to make one.
 
+**Two guards the first implementation lacked, both found by review.** The forward relay carries the
+answer the *transition* holds, never the argument the call was given: the advance and the enqueue are
+two transactions, so a retry after a kill between them finds the advance already committed, has its
+own body dropped by `advanceOnAck`, and would otherwise forward an answer no transition records --
+the recipient acting on B while the durable history says A. A retry offering a different body is
+refused (`AnswerAlreadyRecorded`) rather than absorbed, because correcting a recorded answer is
+`recordCorrection`'s edge and no verb writes it yet. And a close as `expired` requires the gate to
+carry a deadline that has passed (half-open, as `gatesPastDeadline` reads it): the operator decides
+*whether* a passed deadline expires the gate -- that is the policy `D-0008` keeps out of code -- but
+not whether it passed, and a `gate_expired` event for a deadline that did not pass is a durable false
+statement.
+
 **What the verbs may not write.** `answered_and_forwarded` (the ack's consequence), `subject_gone`
 (`reconcile`'s sweep) and `superseded` (written by the gate that supersedes this one) are refused
 twice over: by `choices` on `--outcome`, and by `closeOpenGate` itself, because the rule belongs to

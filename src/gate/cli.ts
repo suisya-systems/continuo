@@ -55,6 +55,7 @@
 
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
+import { DestinationRefusal } from "../control_plane/destination.js";
 import { GateRefusal } from "../control_plane/gates.js";
 import { LeaseRefusal } from "../control_plane/lease.js";
 import { openProductionControlPlane } from "../control_plane/migrator.js";
@@ -199,7 +200,15 @@ function isRefusal(error: unknown): error is Error {
     error instanceof ControlPlaneRefusal ||
     error instanceof LeaseRefusal ||
     error instanceof OutboxUsageError ||
-    error instanceof HandlerRejected
+    error instanceof HandlerRejected ||
+    // `gate deliver` reaches a destination, and a destination refuses for
+    // reasons that are operational rather than defects: a lock it could not
+    // take, a fencing token it judged stale, an idempotency key already bound
+    // to a different payload. `MessageBus.poll` re-raises those unchanged, and
+    // without this they escape as a stack trace and exit 1 -- the status that
+    // reads as "this program crashed" to an operator and to any script
+    // retrying it.
+    error instanceof DestinationRefusal
   );
 }
 

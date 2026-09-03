@@ -53,6 +53,7 @@ import {
   enqueueRelay,
   type GateNeedingAdvance,
   type GatePastDeadline,
+  GateRefusal,
   gatesNeedingAdvance,
   gatesPastDeadline,
   type RelayGap,
@@ -113,6 +114,40 @@ export const OPERATOR_CLOSE_OUTCOMES: readonly string[] = Object.freeze([
   "expired",
   "unanswerable",
 ]);
+
+/**
+ * A second answer, offered to a gate that already carries one.
+ *
+ * Its own class rather than a silent drop, and rather than
+ * {@link InadmissibleTransitionRefused}: the two outcomes a caller must be able
+ * to tell apart are "already done, identically" and "this may not happen", and
+ * a repeat carrying a DIFFERENT body is the second. Correcting a recorded
+ * answer is `recordCorrection`'s edge (section 9.3), which carries a
+ * `supersedes_seq` so the history shows both answers; no verb writes it yet, so
+ * offering a different body here is refused rather than absorbed.
+ */
+export class AnswerAlreadyRecorded extends GateRefusal {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnswerAlreadyRecorded";
+    // The prototype is reset for the reason every refusal in `gates.ts` resets
+    // its own: `GateRefusal`'s constructor pins `GateRefusal.prototype`, so
+    // without this an `instanceof` for this class is false and every caller
+    // that distinguishes refusals sees the base class instead.
+    Object.setPrototypeOf(this, AnswerAlreadyRecorded.prototype);
+  }
+}
+
+/**
+ * A close as `expired` on a gate whose deadline has not passed.
+ */
+export class DeadlineNotPassed extends GateRefusal {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeadlineNotPassed";
+    Object.setPrototypeOf(this, DeadlineNotPassed.prototype);
+  }
+}
 
 /**
  * The message id a relay is enqueued under.
@@ -458,6 +493,29 @@ function forwardedPayload(gate: GateDetail, body: string): string {
   ]);
 }
 
+/**
+ * The answer this gate carries, read off its `answered` advance.
+ *
+ * The transition rather than the caller's argument, because the transition is
+ * where the answer is durable: `answered` is not a relayed stage, so the `body`
+ * on that row is the whole of the evidence the question was answered.
+ */
+function recordedAnswer(connection: SqliteDatabase, gateId: string): string | null {
+  const body = connection
+    .prepare<[string], string | null>(
+      `
+        SELECT body
+          FROM gate_transition
+         WHERE gate_id = ? AND transition_kind = 'advance' AND to_stage = 'answered'
+         ORDER BY seq DESC
+         LIMIT 1
+        `,
+    )
+    .pluck()
+    .get(gateId);
+  return body ?? null;
+}
+
 /** Whether this gate already has a relay for `toStage`. */
 function relayExists(connection: SqliteDatabase, gateId: string, toStage: string): boolean {
   return (
@@ -520,9 +578,14 @@ export function presentGate(
  * enqueue collides on `(gate_id, to_stage)` and returns the id already in
  * force -- which is exactly the crash window between the two.
  *
- * **A repeat does not re-record the answer.** A second call with a *different*
- * body neither corrects nor refuses: the stage is already `answered`, so the
- * advance is the no-op above and the body given is dropped. Correcting a
+ * **A repeat does not re-record the answer, and a repeat with a different one is
+ * refused.** The stage is already `answered`, so the advance is the no-op above
+ * and the body this call was given is dropped by `advanceOnAck`. The relay is
+ * therefore built from the body the *transition* holds, not from the argument:
+ * otherwise a retry after a kill between the two transactions would forward an
+ * answer no transition records, and the recipient would act on B while the
+ * durable history said A. A caller offering a different body gets
+ * {@link AnswerAlreadyRecorded} rather than a silent drop -- correcting a
  * recorded answer is `recordCorrection`'s edge (section 9.3), which carries a
  * `supersedes_seq` so the history shows both, and no verb here writes it yet.
  *
@@ -564,12 +627,35 @@ export function answerGate(
     body,
   });
   const gate = gateDetail(connection, gateId);
+  // The relay carries the answer the DATABASE holds, never the one this call
+  // was given, and the difference is a real divergence rather than a nicety.
+  // The advance and the enqueue are two transactions: a kill between them, or a
+  // second operator answering concurrently, leaves the advance committed and
+  // the relay unwritten. A retry then finds `advanced === false` -- its own body
+  // was dropped on the floor by `advanceOnAck` -- and building the payload from
+  // that body would forward an answer that no transition records, so the
+  // recipient acts on B while the durable history says A.
+  const recorded = recordedAnswer(connection, gateId);
+  if (recorded === null) {
+    // Only reachable if the advance above committed and the transition then
+    // vanished, which the schema does not admit -- said plainly rather than
+    // forwarded as an empty answer.
+    throw new AnswerAlreadyRecorded(
+      `gate ${gateId} is at '${gate.stage}' with no recorded answer to forward`,
+    );
+  }
+  if (recorded !== body) {
+    throw new AnswerAlreadyRecorded(
+      `gate ${gateId} already carries a different answer; it is not replaced by ` +
+        "this one, and correcting a recorded answer is not what this verb does",
+    );
+  }
   const existed = relayExists(connection, gateId, "forwarded");
   const messageId = enqueueRelay(connection, {
     gateId,
     toStage: "forwarded",
     recipient,
-    payload: forwardedPayload(gate, body),
+    payload: forwardedPayload(gate, recorded),
     messageId: relayMessageId(gateId, "forwarded"),
     enqueuedAtMs: nowMs,
   });
@@ -825,6 +911,27 @@ export function closeOpenGate(
       `'${outcome}' is not an outcome a gate verb writes; ` +
         `the operator's outcomes are ${OPERATOR_CLOSE_OUTCOMES.join(", ")}`,
     );
+  }
+  if (outcome === "expired") {
+    // `expired` is a fact about a deadline, and the deadline is on the row. The
+    // operator decides WHETHER a passed deadline expires the gate -- that is
+    // the policy `D-0008` keeps out of code -- but not whether it passed. A
+    // close as `expired` on a gate with no deadline, or one still in the
+    // future, writes a `gate_expired` event that `gatesPastDeadline` would
+    // never have reported: a durable statement about a deadline that did not
+    // happen. The window is half-open, exactly as that detector reads it
+    // (`docs/time-base-policy.md` section 2), so `nowMs === deadlineAtMs` is
+    // past.
+    const gate = gateDetail(connection, gateId);
+    if (gate.deadlineAtMs === null) {
+      throw new DeadlineNotPassed(`gate ${gateId} has no deadline; it does not close as 'expired'`);
+    }
+    if (nowMs < gate.deadlineAtMs) {
+      throw new DeadlineNotPassed(
+        `gate ${gateId}'s deadline is at ${gate.deadlineAtMs} and it is ${nowMs}; ` +
+          "it does not close as 'expired' before then",
+      );
+    }
   }
   return closeGate(connection, {
     gateId,

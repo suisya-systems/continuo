@@ -18,9 +18,11 @@ import {
 } from "../../src/control_plane/migrator.js";
 import { HandlerRejected } from "../../src/control_plane/outbox.js";
 import {
+  AnswerAlreadyRecorded,
   ackRelay,
   answerGate,
   closeOpenGate,
+  DeadlineNotPassed,
   deliverRelays,
   GATE_RELAY_RECIPIENT,
   gateDetail,
@@ -528,6 +530,113 @@ describe("what the operator's verbs refuse", () => {
       closed: false,
     });
     expect(outcomeOf(cp)).toBe("withdrawn");
+  });
+
+  test("a retry forwards the answer the transition holds, and a different one is refused", () => {
+    // The window between the two transactions inside `answerGate`: the advance
+    // committed, the relay did not. A retry's own body is dropped by
+    // `advanceOnAck` (the stage is already 'answered'), so building the payload
+    // from it would forward an answer no transition records -- the recipient
+    // acting on B while the durable history says A.
+    const cp = cpFixture("gate-answer-retry");
+    const dir = destinationDir("gate-answer-retry");
+    aGate(cp);
+    const relay = presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    deliver(cp, dir, T0 + MINUTE);
+    ackRelay(cp, { messageId: relay.messageId, actorId: ACTOR, nowMs: T0 + 2 * MINUTE });
+    // The advance, without the enqueue that ordinarily follows it.
+    advanceOnAck(cp, {
+      gateId: GATE_ID,
+      toStage: "answered",
+      actorKind: "human",
+      actorId: ACTOR,
+      occurredAtMs: T0 + 3 * MINUTE,
+      recordedAtMs: T0 + 3 * MINUTE,
+      body: "force-push",
+    });
+
+    expectRefusal(
+      () =>
+        answerGate(cp, {
+          gateId: GATE_ID,
+          body: "abandon",
+          actorId: ACTOR,
+          nowMs: T0 + 4 * MINUTE,
+        }),
+      AnswerAlreadyRecorded,
+    );
+    expect(gateDetail(cp, GATE_ID).relays.map((r) => r.toStage)).toEqual(["presented"]);
+
+    // The retry that repeats the recorded answer completes the enqueue, and the
+    // payload carries what the transition holds.
+    const finished = answerGate(cp, {
+      gateId: GATE_ID,
+      body: "force-push",
+      actorId: ACTOR,
+      nowMs: T0 + 5 * MINUTE,
+    });
+    expect(finished.advanced).toBe(false);
+    expect(finished.enqueued).toBe(true);
+    expect(
+      cp
+        .prepare<[string], string>("SELECT payload FROM outbox WHERE message_id = ?")
+        .pluck()
+        .get(finished.messageId),
+    ).toContain("force-push");
+  });
+
+  test("a gate does not close as expired before its deadline, or without one", () => {
+    // `expired` is a fact about a deadline. WHETHER a passed deadline expires
+    // the gate is the operator's decision (D-0008 keeps that policy out of
+    // code); whether it passed is the row's, and a `gate_expired` event for a
+    // deadline that did not pass is a durable false statement.
+    const withDeadline = cpFixture("gate-expiry-early");
+    aGate(withDeadline, { deadlineAtMs: T0 + 2 * MINUTE });
+    expectRefusal(
+      () =>
+        closeOpenGate(withDeadline, {
+          gateId: GATE_ID,
+          outcome: "expired",
+          actorId: ACTOR,
+          nowMs: T0 + MINUTE,
+        }),
+      DeadlineNotPassed,
+    );
+    expect(outcomeOf(withDeadline)).toBeNull();
+    // `expired` is reachable from 'presented' and 'answered' only (section
+    // 9.4), so the gate is carried there before the accepted close.
+    const relay = presentGate(withDeadline, { gateId: GATE_ID, nowMs: T0 });
+    deliver(withDeadline, destinationDir("gate-expiry-early-dropbox"), T0 + MINUTE);
+    ackRelay(withDeadline, {
+      messageId: relay.messageId,
+      actorId: ACTOR,
+      nowMs: T0 + MINUTE,
+    });
+    // The window is half-open, exactly as `gatesPastDeadline` reads it: the gate
+    // is past its deadline AT the deadline.
+    expect(
+      closeOpenGate(withDeadline, {
+        gateId: GATE_ID,
+        outcome: "expired",
+        actorId: ACTOR,
+        nowMs: T0 + 2 * MINUTE,
+      }),
+    ).toBe(true);
+    expect(outcomeOf(withDeadline)).toBe("expired");
+
+    const noDeadline = cpFixture("gate-expiry-none");
+    aGate(noDeadline);
+    expectRefusal(
+      () =>
+        closeOpenGate(noDeadline, {
+          gateId: GATE_ID,
+          outcome: "expired",
+          actorId: ACTOR,
+          nowMs: T0 + MINUTE,
+        }),
+      DeadlineNotPassed,
+    );
+    expect(outcomeOf(noDeadline)).toBeNull();
   });
 
   test("a closed gate is not presented to anybody", () => {
