@@ -10774,30 +10774,30 @@ here than it was there, because that side effect runs *after* the event row is i
 2. **`subject_kind` is `run`.** The closed vocabulary has no `workspace`, and widening it would be a
    migration for a subject with no identity of its own. The fact is about the run it was built for.
 
-3. **The artifact directory is claimed atomically, before the worktree exists.** Publishing into a
-   directory another materialisation owns replaces a fence a worker may be running under, and it is
-   reachable within one run as well as across two: a retry with a different workspace would
-   otherwise destroy the earlier materialisation's files and only then meet the duplicate-event
-   refusal.
+3. **The artifact directory must be unclaimed, and is checked before the worktree exists.**
+   Materialisation creates its artifacts, so finding one already there means another materialisation
+   owns the directory -- and publishing over it would replace a fence a worker may be running under.
+   This is the same rule `git worktree add` already imposes on the checkout, applied to the
+   directory beside it, and it is reachable within one run as well as across two: a retry with a
+   different workspace would otherwise destroy the earlier materialisation's files and only then
+   meet the duplicate-event refusal.
 
-   **The claim is the create.** `openSync(..., "wx")` -- `O_EXCL` -- writes an `owner.json` naming
-   the run, and the kernel decides which of two callers gets it. An `existsSync` check ahead of the
-   publication was the first attempt and is not enough: two processes both pass it before either
-   writes, which is check-then-act with the whole race still in it.
+   **The check is check-then-act, and the residual is accepted rather than closed.** Two processes
+   materialising into one *initially empty* artifact directory both pass the existence check before
+   either publishes, and the later one then overwrites the earlier's fence and settings. The rule
+   above closes the sequential case -- one run retried, or a second run started after the first
+   finished -- and leaves the concurrent one open.
 
-   **This is an ownership marker, not a lock, and the distinction is why `D-0206` does not forbid
-   it.** That entry rejects an `O_EXCL` lockfile as a substitute for `flock`, because a lock is
-   released by the kernel when its holder dies and a lockfile is not -- so a crash leaves a file
-   every later process *waits* on, and what waits is the recording of a refusal, which must never
-   wait. Nothing waits on this file: a second materialisation is refused and returns. And a marker
-   surviving a crash is not stale but true -- the directory really does hold a half-materialised
-   run's artifacts, which is the recoverable state rule 5 describes, and the marker is what tells an
-   operator which run to look up before sweeping it.
+   That is accepted on frequency rather than on principle. The race needs two runs pointed at the
+   same `artifactDir` at the same moment, and on lap 1 the layout is step 8's: the composition root
+   cuts an artifact directory per run, so two runs do not share one. An `O_EXCL` ownership marker
+   was written and then withdrawn at the human gate -- it works, but it costs an `owner.json` in
+   every artifact directory and an explanation of why it is not the lockfile `D-0206` rejects, which
+   is a poor trade against a case the layout already prevents.
 
-   **What is asserted, and what is not.** The suite drives the refusal and the marker's contents; it
-   does not drive two processes racing, because that would be a test of `O_EXCL` rather than of this
-   module. The atomicity is the kernel's guarantee, and this rule rests on it rather than restating
-   it.
+   **If it does need closing, the minimal form is `mkdirSync` without `recursive`, using its
+   `EEXIST` as the claim** -- the directory creation is then itself the atomic ownership assertion,
+   with no marker file, no new artifact and nothing to explain against `D-0206`.
 
 4. **Artifacts first, the event last, and the order is enforced rather than described.** Every
    artifact is re-`stat`'d immediately before the append, **and the worktree is re-asked of git**.
@@ -10877,8 +10877,11 @@ here than it was there, because that side effect runs *after* the event row is i
   read. Both rules are instances of one principle -- the artifact that cannot be rebuilt from the
   record goes first -- and they differ because which artifact that is differs.
 
-**Falsifier.** A second producer of `workspace_materialized` anywhere in the build, or a path
-*through `materializeWorkspace`* that reaches the append without publishing the artifacts first; at
+**Falsifier.** Two runs sharing one artifact directory -- at which point rule 3's residual stops
+being unreachable, the concurrent overwrite becomes a real path to replacing a live worker's fence,
+and the `mkdirSync` claim named there has to be taken. Also a second producer of
+`workspace_materialized` anywhere in the build, or a path *through `materializeWorkspace`* that
+reaches the append without publishing the artifacts first; at
 that moment rule 5 is a description rather than a property. (A direct `appendEvent` call is not that
 path -- see rule 5, which says what the spine's openness does and does not leave available.) Also falsified by the
 `event` table gaining a `workspace` `subject_kind`, which would make rule 2 a workaround rather than

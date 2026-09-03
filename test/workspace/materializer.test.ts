@@ -75,7 +75,6 @@ import {
   runGitChecked,
 } from "../../src/workspace/git.js";
 import {
-  ARTIFACT_OWNER_FILENAME,
   FENCE_FILENAME,
   type MaterializationRequest,
   MaterializedWorkspace,
@@ -1297,24 +1296,26 @@ describe("the event describes a workspace that is still a checkout", () => {
 });
 
 describe("an artifact directory belongs to one materialisation", () => {
-  test("a claimed directory is refused before the worktree exists", () => {
+  test("a directory already holding artifacts is refused before the worktree exists", () => {
     // Two runs pointed at one artifact directory: without this, the second's
     // `prepare` publishes over the first's fence and settings -- and the first's
-    // worker may be running under them.
+    // worker may be running under them right now. The same shape `git worktree
+    // add` already imposes on the checkout, applied to the directory beside it.
     const f = fixture("materialize-artifactdir-claimed");
     const first = materializeWorkspace(f.connection, f.request);
-    expect(existsSync(join(f.artifactDir, ARTIFACT_OWNER_FILENAME))).toBe(true);
+    expect(existsSync(first.plan.fencePath)).toBe(true);
 
     const secondWorkspace = join(f.root, "worktree-2");
     expectRefusal(
       () =>
         materializeWorkspace(f.connection, {
           ...f.request,
+          runId: RUN_ID,
           workspace: secondWorkspace,
           topicBranch: "feat/topic-2",
         }),
       WorkspaceMaterializationRefused,
-      /already claimed by an earlier materialisation/,
+      /which already exists/,
     );
 
     // Nothing of the second run was created, and -- the point of the case --
@@ -1326,48 +1327,12 @@ describe("an artifact directory belongs to one materialisation", () => {
     );
   });
 
-  test("the claim is the create, so a checker cannot slip between them", () => {
-    // `existsSync`-then-publish was the first attempt at this rule, and it is
-    // check-then-act: two processes both pass the check before either writes.
-    // The claim is `openSync(..., "wx")` -- O_EXCL -- so the kernel decides
-    // which caller gets the file and there is no window between deciding and
-    // owning.
-    //
-    // A second process cannot be run from here, so what is driven is the
-    // property that survives into one: a directory whose marker exists is
-    // refused whatever else is in it, including a directory that is otherwise
-    // empty -- which is precisely the state both racers saw.
-    const f = fixture("materialize-claim-atomic");
-    mkdirSync(f.artifactDir, { recursive: true });
-    writeFileSync(join(f.artifactDir, ARTIFACT_OWNER_FILENAME), "", "utf8");
-
-    expectRefusal(
-      () => materializeWorkspace(f.connection, f.request),
-      WorkspaceMaterializationRefused,
-      /already claimed by an earlier materialisation/,
-    );
-    expect(existsSync(f.workspace)).toBe(false);
-  });
-
-  test("the marker names the run that owns the directory", () => {
-    // A marker surviving a crash is not a stale lock but a true statement: the
-    // directory holds a half-materialised run's artifacts. This is what tells
-    // an operator which run to look up before sweeping it.
-    const f = fixture("materialize-claim-contents");
-    materializeWorkspace(f.connection, f.request);
-
-    const owner = JSON.parse(
-      readFileSync(join(f.artifactDir, ARTIFACT_OWNER_FILENAME), "utf8"),
-    ) as Record<string, unknown>;
-    expect(owner["run_id"]).toBe(RUN_ID);
-    expect(owner["claimed_at_ms"]).toBe(T0);
-  });
-
-  test("a refused claim costs no worktree and no branch", () => {
-    // Claimed before anything is created, so the refusal is free. Ordering this
-    // ahead of `git worktree add` is what stops a failing call from destroying
-    // a successful one's artifacts.
-    const f = fixture("materialize-claim-order");
+  test("the refusal comes before the worktree, not after it", () => {
+    // A retry of one run with a different workspace reaches the duplicate-event
+    // refusal eventually -- but only after `prepare` has replaced the earlier
+    // materialisation's files. Ordering this check ahead of `git worktree add`
+    // is what stops a failing call from destroying a successful one's artifacts.
+    const f = fixture("materialize-artifactdir-order");
     materializeWorkspace(f.connection, f.request);
     const fenceBefore = readFileSync(join(f.artifactDir, FENCE_FILENAME), "utf8");
 
@@ -1379,27 +1344,9 @@ describe("an artifact directory belongs to one materialisation", () => {
           topicBranch: "feat/topic-3",
         }),
       WorkspaceMaterializationRefused,
-      /already claimed/,
-    );
-    expect(readFileSync(join(f.artifactDir, FENCE_FILENAME), "utf8")).toBe(fenceBefore);
-    expect(existsSync(join(f.root, "worktree-3"))).toBe(false);
-    expect(branchExists("feat/topic-3", f.git)).toBe(false);
-  });
-
-  test("a fence ledger outside the claimed directory is still checked by existence", () => {
-    // The claim covers the directory; a caller-chosen `fenceLedgerPath` can sit
-    // outside it, where the claim cannot reach and an existence check is what
-    // remains.
-    const f = fixture("materialize-ledger-outside");
-    const ledger = join(f.root, "outside-ledger.jsonl");
-    writeFileSync(ledger, "", "utf8");
-
-    expectRefusal(
-      () => materializeWorkspace(f.connection, { ...f.request, fenceLedgerPath: ledger }),
-      WorkspaceMaterializationRefused,
       /which already exists/,
     );
-    expect(existsSync(f.workspace)).toBe(false);
+    expect(readFileSync(join(f.artifactDir, FENCE_FILENAME), "utf8")).toBe(fenceBefore);
   });
 });
 

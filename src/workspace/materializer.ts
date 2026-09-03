@@ -164,14 +164,6 @@ export const MCP_CONFIG_FILENAME = "mcp.json";
 export const FENCE_LEDGER_FILENAME = "fence-ledger.jsonl";
 
 /**
- * The file that says which run owns an artifact directory.
- *
- * Created with `O_EXCL` as the first thing materialisation writes, so the claim
- * and the check are one operation. See {@link claimArtifactDirectory}.
- */
-export const ARTIFACT_OWNER_FILENAME = "owner.json";
-
-/**
  * The endpoint module a worker's MCP configuration launches.
  *
  * Resolved relative to this module the way {@link FencedSpawner}'s
@@ -965,12 +957,20 @@ export function materializeWorkspace(
     // delivery artifacts rather than the worker's.
     ["the endpoint destination directory", destinationDir],
   ];
-  // Any artifact path outside the claimed directory -- only `fenceLedgerPath`
-  // can be one -- is checked by existence, since the claim below cannot cover
-  // it. Inside the directory, the claim is the check and this is redundant with
-  // it; it is kept for the ledger's sake and costs a `stat`.
+  // Unclaimed, before anything is created. Two runs pointed at one artifact
+  // directory would otherwise have the second's `prepare` publish over the
+  // first's fence and settings -- and the first's worker may be running under
+  // them right now, so this is not a tidiness rule but the same "do not replace
+  // a live fence" property `FencedSpawner` defends on the other side. It is
+  // also reachable within ONE run: a retry with a different workspace replaces
+  // the artifacts and only then meets the duplicate-event refusal, leaving the
+  // earlier materialisation's files destroyed by a call that failed.
+  //
+  // The same shape `git worktree add` already imposes on the checkout, applied
+  // to the directory beside it: materialisation creates what it names, so
+  // finding it already there means somebody else owns it.
   for (const [what, path] of plannedArtifactPaths.slice(1)) {
-    if (!isInside(path, artifactDir) && existsSync(path)) {
+    if (existsSync(path)) {
       throw new WorkspaceMaterializationRefused(
         `${what} would be written to ${pythonRepr(path)}, which already exists; ` +
           "materialisation creates its artifacts, so a path that is already there " +
@@ -979,6 +979,12 @@ export function materializeWorkspace(
       );
     }
   }
+  // This is check-then-act, and `D-0057` rule 3 records why the residual is
+  // accepted: two processes reaching an initially empty directory both pass,
+  // and the later one overwrites the earlier's fence. It needs two runs sharing
+  // one `artifactDir`, which lap 1's layout does not produce -- step 8 cuts one
+  // per run. The minimal close, if that changes, is `mkdirSync` without
+  // `recursive` and its `EEXIST` as the claim.
   for (const [what, path] of plannedArtifactPaths) {
     if (isInside(path, workspace)) {
       throw new WorkspaceMaterializationUsageError(
@@ -1050,10 +1056,7 @@ export function materializeWorkspace(
     );
   }
 
-  // -- 3. the artifact directory is claimed, then the worktree --------------
-  // Claimed before anything is created, so a refused claim costs nothing.
-  claimArtifactDirectory(artifactDir, runId, nowMs);
-
+  // -- 3. the worktree ------------------------------------------------------
   // The start point is `baseCommit`, never `baseBranch`: see `addWorktree`.
   addWorktree({ path: workspace, branch: topicBranch, startCommit: baseCommit }, git);
 
@@ -1332,67 +1335,6 @@ function endpointDatabasePath(connection: SqliteDatabase, binding: EndpointBindi
     );
   }
   return override;
-}
-
-/**
- * Take ownership of the artifact directory, atomically, or refuse.
- *
- * Two materialisations pointed at one artifact directory must not both proceed:
- * the second's `prepare` publishes over the first's fence and settings, and the
- * first's worker may be running under them. An `existsSync` check ahead of the
- * publication is not enough and was the first attempt at this -- two processes
- * both pass it before either writes, which is check-then-act with the whole
- * race still in it.
- *
- * So the claim is the create: `openSync(..., "wx")` is `O_EXCL`, and the
- * kernel decides which of two callers gets the file. The loser is told whose
- * directory it is.
- *
- * **This is an ownership marker, not a lock, and `D-0206` is why that
- * distinction has to be drawn explicitly.** That entry rejects an `O_EXCL`
- * lockfile as a substitute for `flock`, because a lock is released by the
- * kernel when its holder dies and a lockfile is not -- so a crash leaves a file
- * every later process *waits* on, and the operation left waiting is the
- * recording of a refusal, which must never wait. None of that applies here.
- * Nothing waits on this file: a second materialisation is refused immediately
- * and returns. And a marker surviving a crash is not a stale lock but a true
- * statement -- the directory really does hold a half-materialised run's
- * artifacts, and the recoverable state `D-0057` rule 5 describes is exactly the
- * one an operator sweeps by removing the directory. The file is what tells them
- * which run to look up while they do it.
- *
- * @throws {WorkspaceMaterializationRefused} if the directory is already owned.
- */
-function claimArtifactDirectory(artifactDir: string, runId: string, nowMs: number): void {
-  mkdirSync(artifactDir, { recursive: true });
-  const claimPath = join(artifactDir, ARTIFACT_OWNER_FILENAME);
-  let handle: number;
-  try {
-    handle = openSync(claimPath, "wx");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw error;
-    }
-    throw new WorkspaceMaterializationRefused(
-      `the artifact directory ${pythonRepr(artifactDir)} is already claimed by an earlier ` +
-        `materialisation (${pythonRepr(claimPath)}); publishing into it would replace a fence ` +
-        "some worker may be running under. Materialise into a directory of this run's own, " +
-        "or sweep that one if its run is finished",
-      { cause: error },
-    );
-  }
-  try {
-    // Written after the exclusive create rather than as part of it, because the
-    // create is what claims and the contents are only for the operator reading
-    // it later. A failure here leaves an empty marker, which still claims.
-    writeAllSync(
-      handle,
-      Buffer.from(`${pythonJsonDocumentSorted({ claimed_at_ms: nowMs, run_id: runId })}\n`, "utf8"),
-    );
-    fsyncSync(handle);
-  } finally {
-    closeSync(handle);
-  }
 }
 
 /**
