@@ -658,6 +658,22 @@ export async function performLap(
   let sessionId: string | null = null;
   const options: SessionOrchestratorOptions = {
     ...materialized.options,
+    // **The orchestrator gets a LIVE clock, and step 7's frozen one is left
+    // where it belongs** (`D-0066`).
+    //
+    // `MaterializationRequest.nowMs` is a `number`, so `materializeWorkspace`
+    // has no live clock to pass on and closes over the instant it was given --
+    // correctly, because that instant is what its own event records. But those
+    // options are then handed to a `SessionOrchestrator` that acquires a lease
+    // with them, and a lease is the one thing in this lap that is *about* the
+    // passage of time: `ttlMs` defaults to 30 seconds, so a materialisation that
+    // took longer than that -- `git worktree add` on a large repository -- would
+    // acquire a lease stamped in the past and already expired. A concurrent
+    // claimant reading a live clock could take it over immediately, putting this
+    // lap on the loser path after it had already spawned.
+    //
+    // `request.nowMs` is a function precisely so this step can supply one.
+    nowMs: request.nowMs,
     sessionUuidFactory: () => {
       const minted = materialized.options.sessionUuidFactory();
       sessionId = minted;

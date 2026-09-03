@@ -161,6 +161,7 @@ spaces distinct.
 | D-0063 | The materialiser takes fields, not the `LapRunIntent`; admission gains the reader that was missing | accepted |
 | D-0064 | Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10 | accepted |
 | D-0065 | An expired gate deadline costs the deadline, never the report; a stale one is refused before the lap starts | accepted |
+| D-0066 | The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference | accepted |
 
 ---
 
@@ -11425,6 +11426,15 @@ first, driven by `PAYLOAD_KEYS` -- the record's own key list, now exported for i
 copy, because a copy would drift the first time a field was added and would tolerate exactly the new
 field's absence. Verified by removing the check and watching the case throw nothing at all.
 
+**The comparison is in both directions, because it is one question.** A key this build does not know
+means a producer wrote a field this build has no code for, and constructing the intent anyway would
+run the lap while silently discarding it -- with no way to know whether what was discarded was
+safety-relevant. "This payload is the record this build writes" is a single claim; checking only that
+nothing is missing leaves the other half of the same hazard open, and one refusal names everything
+wrong with the record rather than whichever half was noticed first. The cost is that the payload
+cannot be extended without every reader being updated first, which for a record the fence and the
+spawn are built on is the direction to fail in.
+
 **What would falsify it.** A `MaterializationRequest` that shrank to the intent's fields plus one --
 if the endpoint binding and the fence substitutions moved into the admitted record, which is a
 plausible thing for step 10 or the console to want -- would make the whole-intent parameter the
@@ -11530,3 +11540,54 @@ on automatically -- rather than a business fact a human reads -- then silently o
 one would remove an action instead of a note, and rule 2 would have to become a refusal with a
 recorded event. `gates.ts`'s `gatesPastDeadline` reads the column today but nothing acts on the
 result unattended.
+
+---
+
+## D-0066 -- The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference
+
+**Context.** `MaterializationRequest.nowMs` is a `number`, not a clock. That is right for what step 7
+does: it stamps one instant on one event, and `D-0057` wants the instant it recorded on the spine and
+the instant its returned options carry to be the same number -- the field's own comment says so, and
+warns that reading `request.nowMs` on each call would let a caller mutate the request into disagreeing
+with the record.
+
+But those options are then handed to a `SessionOrchestrator`, and the orchestrator's first act is to
+**acquire a lease**. A lease is the one thing in this lap that is *about* the passage of time.
+`SessionOrchestratorOptions.ttlMs` defaults to 30 seconds, so a materialisation that took longer than
+that -- `git worktree add` on a large repository, a cold filesystem, a slow CI runner -- acquires a
+lease stamped at the moment materialisation *started* and therefore already expired. A concurrent
+claimant reading a live clock could take it over immediately, and this lap would find itself on the
+loser path (`D-0060`) **after it had already spawned a child**. Every post-spawn gate row and every
+read-back commit would also be stamped at an instant that had passed.
+
+Neither module is wrong on its own. Step 7 cannot supply a live clock because it was never given one;
+step 8's `LapRequest.nowMs` **is** a function, and step 8 is the only place that holds both.
+
+**Decision.** `performLap` overrides `nowMs` on the options it hands the orchestrator, with
+`request.nowMs` -- the live clock. Step 7's frozen instant stays exactly where it belongs: on the
+`workspace_materialized` event, which is a statement about when *that step* ran.
+
+So the lap deliberately runs on **two clocks**, and which is which is not an accident:
+
+- **the materialisation instant** is a fact about a completed step, and a fact does not move;
+- **the orchestrator's clock** measures a lease, a TTL and a fence, none of which mean anything unless
+  they read the time at the moment they are evaluated.
+
+**Consequences.**
+
+- This is the second field `performLap` replaces on the materialiser's options, after the
+  `sessionUuidFactory` wrapper (`D-0060`). `D-0057`'s claim that nothing below step 7 *adds* a field
+  to those options still holds; what step 8 does is supply the two whose right value only it knows.
+- The case `the lease is taken at the time it is actually taken` pins both halves: the lease is stamped
+  on the advanced clock **and** the materialisation event is still stamped at `T0`. The second
+  assertion is what stops the obvious wrong fix -- making the materialiser read a live clock on every
+  call -- from passing. Verified by removing the override: the case fails with
+  `expected 1700000000000 to be 1700000120000`.
+- The defect was invisible on a fast machine and silent on a slow one, and it was found by review
+  rather than by a case, because nothing in either module is wrong when read alone. It is the shape a
+  composition root exists to have: the bug lives in the seam.
+
+**What would falsify it.** If `MaterializationRequest` ever took a clock rather than an instant, step
+7 could hand on a live one and this override would become redundant -- though not wrong. And if the
+orchestrator's lease ever stopped being acquired inside `start()`, the specific hazard above would
+move rather than disappear, and this entry should be re-read against wherever it moved to.

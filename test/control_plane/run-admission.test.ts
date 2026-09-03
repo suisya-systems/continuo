@@ -1058,7 +1058,7 @@ describe("reading the delegation record back (D-0063)", () => {
     const refusal = expectRefusal(
       () => readLapRunIntent(connection, CRAFTED_RUN_ID),
       RunNotAdmitted,
-      /is missing cli_args/,
+      /delegation payload missing cli_args/,
     );
     // Quoted, not interpolated raw: this path names a value nothing validated.
     expect(refusal.message).toContain(`'${CRAFTED_RUN_ID}'`);
@@ -1076,10 +1076,45 @@ describe("reading the delegation record back (D-0063)", () => {
       const refusal = expectRefusal(
         () => readLapRunIntent(connection, CRAFTED_RUN_ID),
         RunNotAdmitted,
-        /delegation payload is missing/,
+        /delegation payload missing/,
       );
       expect(refusal.message, `the refusal does not name ${key}`).toContain(key);
     }
+  });
+
+  test("an unknown key is refused rather than silently discarded", () => {
+    // The other direction of the same check, and the same hazard. A key this
+    // build has no code for means a producer wrote a field this build cannot
+    // honour; constructing the intent anyway would run the lap while discarding
+    // it. If it is safety-relevant, the run proceeds without it and nothing says
+    // so -- and this build cannot know which it is, which is why refusing is the
+    // only answer that cannot be wrong.
+    const payload = wellFormedPayload();
+    payload["sandbox_profile"] = "unrestricted";
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const refusal = expectRefusal(
+      () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+      RunNotAdmitted,
+      /carries unknown sandbox_profile/,
+    );
+    expect(refusal.message).toContain("not the record this build writes");
+  });
+
+  test("a payload that is both short and long says both", () => {
+    // One check with one meaning, so one refusal naming everything wrong with
+    // the record rather than whichever half was noticed first.
+    const payload = wellFormedPayload();
+    delete payload["cli_args"];
+    payload["sandbox_profile"] = "unrestricted";
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const refusal = expectRefusal(
+      () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+      RunNotAdmitted,
+      /missing cli_args and carries unknown sandbox_profile/,
+    );
+    expect(refusal.message).toContain(CRAFTED_RUN_ID);
   });
 
   test("a payload that is not a JSON object is refused", () => {

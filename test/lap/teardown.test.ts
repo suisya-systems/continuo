@@ -51,6 +51,7 @@ import {
 import type { ProviderResult } from "../../src/session/provider.js";
 import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
+import { WORKSPACE_MATERIALIZED_EVENT_TYPE } from "../../src/workspace/materializer.js";
 import { ScriptedProvider } from "../gate_item2/helpers.js";
 import { caseRoot } from "../testkit/cases.js";
 import { expectRefusalAsync } from "../testkit/errors.js";
@@ -60,6 +61,9 @@ const RUN_ID = "run-teardown-1";
 const BASE_BRANCH = "main";
 const TOPIC_BRANCH = "feat/topic";
 const HOLDER = "operator-1";
+
+/** Two minutes: comfortably longer than the orchestrator default 30-second TTL. */
+const SLOW_MS = 120_000;
 
 /** The refusal a `LoserTerminated` carries. Only carried here, never inspected. */
 function staleWriter(sessionId: string): StaleWriterRefused {
@@ -139,7 +143,7 @@ interface Fixture {
  * A repository, an admitted run, and a `performLap` request over a scripted
  * provider whose `start` does whatever the case says.
  */
-function fixture(label: string, onStart: () => never): Fixture {
+function fixture(label: string, onStart: () => never, nowMs: () => number = () => T0): Fixture {
   const root = caseRoot(label);
   const repository = join(root, "repo");
   initRepository(repository);
@@ -185,7 +189,7 @@ function fixture(label: string, onStart: () => never): Fixture {
         node: process.execPath,
       },
       fence: { interlockRoot: root, claudeOrgPath: join(root, "claude-org") },
-      nowMs: () => T0,
+      nowMs,
       sessionUuidFactory: () => "00000000-0000-0000-0000-000000000001",
       completion: { pollIntervalMs: 0, timeoutMs: 1_000 },
       gitTimeoutMs: 60_000,
@@ -293,5 +297,70 @@ describe("the rule, where it actually runs", () => {
     const settings = f.provider.startCalls[0]?.settings as Record<string, unknown>;
     expect(settings["cli_args"]).toContain("--settings");
     expect(settings["cli_args"]).toContain("--permission-mode");
+  });
+});
+
+describe("D-0066: the orchestrator is given a live clock", () => {
+  /**
+   * A clock that reads `T0` once and then jumps two minutes.
+   *
+   * The first read is `performLap`'s own -- the scalar it hands the materialiser
+   * -- so this models a materialisation that took two minutes, which is what a
+   * `git worktree add` on a large repository can take. Every read after it is
+   * the orchestrator's.
+   */
+  function slowMaterialisation(): () => number {
+    let reads = 0;
+    return () => {
+      reads += 1;
+      return reads === 1 ? T0 : T0 + SLOW_MS;
+    };
+  }
+
+  test("the lease is taken at the time it is actually taken", async () => {
+    // The failure this pins is invisible on a fast machine and silent on a slow
+    // one. `materializeWorkspace` can only close over the instant it was given
+    // -- its request carries a `number`, not a clock -- so a `performLap` that
+    // passed those options straight through would hand the orchestrator a clock
+    // frozen at the START of materialisation. The lease TTL defaults to 30
+    // seconds, so a materialisation slower than that acquires a lease already
+    // expired, and a concurrent claimant on a live clock could take it over at
+    // once -- putting this lap on the loser path after it had spawned.
+    const f = fixture(
+      "clock-live",
+      () => {
+        throw new OrchestrationRefused("the provider would not start");
+      },
+      slowMaterialisation(),
+    );
+
+    await expectRefusalAsync(
+      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      OrchestrationRefused,
+    );
+
+    const lease = f.connection
+      .prepare("SELECT acquired_at_ms, expires_at_ms FROM lease WHERE resource = :resource")
+      .get({ resource: `session-run:${RUN_ID}` }) as
+      | { acquired_at_ms: number; expires_at_ms: number }
+      | undefined;
+    expect(lease, "the orchestrator took no lease").toBeDefined();
+
+    // Taken on the advanced clock, not on the materialisation instant.
+    expect(lease?.acquired_at_ms).toBe(T0 + SLOW_MS);
+    // And therefore alive rather than born expired. Its own assertion, because
+    // this is the property that matters: a lease whose expiry is already behind
+    // the wall clock is a lease anyone can take.
+    expect(lease?.expires_at_ms).toBeGreaterThan(T0 + SLOW_MS);
+
+    // The other half of the boundary, and the reason this is not a bug in the
+    // materialiser: step 7's event is a statement about when IT ran, and
+    // unfreezing the orchestrator clock must not move it. Without this
+    // assertion, a "fix" that made the materialiser read a live clock on every
+    // call would pass everything above.
+    const materialised = f.connection
+      .prepare("SELECT occurred_at_ms FROM event WHERE event_type = :type")
+      .get({ type: WORKSPACE_MATERIALIZED_EVENT_TYPE }) as { occurred_at_ms: number };
+    expect(materialised.occurred_at_ms).toBe(T0);
   });
 });

@@ -493,12 +493,28 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
   // would run the worker without arguments the durable record required. That is
   // the shape this function's docstring promises to refuse, and it was the one
   // shape it did not.
-  const missing = Object.values(PAYLOAD_KEYS).filter((key) => !Object.hasOwn(payload, key));
-  if (missing.length > 0) {
+  const known = new Set<string>(Object.values(PAYLOAD_KEYS));
+  const missing = [...known].filter((key) => !Object.hasOwn(payload, key));
+  // **And no key this build does not know.** The two directions are one check
+  // with one meaning -- "this payload is the record this build writes" -- and
+  // checking only one of them leaves the other half of the same hazard open. An
+  // extra key means a producer wrote a field this build has no code for, and
+  // constructing the intent anyway would run the lap while silently discarding
+  // it. If that field is safety-relevant, the run proceeds without honouring it
+  // and nothing says so; refusing is the only answer that cannot be wrong,
+  // because this build cannot know what it is ignoring.
+  const unknown = Object.keys(payload).filter((key) => !known.has(key));
+  if (missing.length > 0 || unknown.length > 0) {
+    const detail = [
+      missing.length > 0 ? `missing ${missing.join(", ")}` : "",
+      unknown.length > 0 ? `carries unknown ${unknown.join(", ")}` : "",
+    ]
+      .filter((part) => part !== "")
+      .join(" and ");
     throw new RunNotAdmitted(
-      `run ${quoted}'s delegation payload is missing ${missing.join(", ")}; it was not ` +
-        "written by this build's record, and a field read as absent would be read as a " +
-        "value nobody chose",
+      `run ${quoted}'s delegation payload ${detail}; it is not the record this build ` +
+        "writes, and a field read as absent -- or one read as nothing at all -- would " +
+        "be a value nobody chose",
     );
   }
 
