@@ -353,6 +353,33 @@ export class HeldDeliveryLease {
     }
   }
 
+  /**
+   * Stop renewing and **leave the lease standing**. Idempotent, never throws.
+   *
+   * For the one state in which giving the lease back would be an act against a
+   * process that is no longer this lap's to act on: `performLap`'s teardown can
+   * decide it must NOT stop the worker, because a takeover writer may have
+   * adopted the child -- and that child's endpoint is still writing under this
+   * lease. A release there would fence it out immediately, which is the same
+   * harm the teardown stood down from doing with a signal, reached by a
+   * different road.
+   *
+   * The lease is left to expire on its own instead. That costs the next lap at
+   * most one TTL on a global resource, and it is the safe direction: the
+   * adopted endpoint keeps working for the rest of the window it was already
+   * going to have, and nothing this lap does shortens it.
+   *
+   * After this, {@link stop} is a no-op -- which is what lets `performLap`'s
+   * outer `finally` stay unconditional.
+   */
+  abandon(): void {
+    if (this.#stopped) {
+      return;
+    }
+    this.#stopped = true;
+    this.#disarm();
+  }
+
   #arm(ms: number): void {
     if (this.#stopped) {
       return;

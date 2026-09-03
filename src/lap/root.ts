@@ -13,6 +13,7 @@ import { activeBinding } from "../control_plane/session_binding.js";
 import type { SpawnOutcome } from "../fencing/spawn.js";
 import {
   Failure,
+  FailureKind,
   type Ok,
   type ProviderResult,
   type SessionProvider,
@@ -1274,12 +1275,33 @@ async function performLapHoldingTheEndpointLease(
     //    road. The binding table is the authority on whose session it is:
     //    `activeBinding(runId)` names it only if this run's own binding was
     //    written, and it is written by the orchestrator before any child exists.
-    if (
-      sessionId !== null &&
-      sessionMayBeStopped(failure) &&
-      stillThisLapsSession(connection, intent.runId, leaseResource, sessionId, heldEpoch)
-    ) {
-      await stopSession(provider, sessionId);
+    //
+    //    **And the endpoint's lease follows the child, not the lap.** Every
+    //    branch below where this lap declines to stop a session it minted -- or
+    //    tries and is not told it worked -- leaves a worker running, and that
+    //    worker's endpoint is still writing under the delivery lease. Giving
+    //    the lease back there would fence that endpoint out at once, which is
+    //    the same harm this teardown just stood down from doing with a signal.
+    //    So the lease is abandoned rather than released: renewal stops, the row
+    //    is left to expire on its own, and nothing this lap does shortens the
+    //    window the adopted endpoint already had.
+    //
+    //    **No `return` in this block, ever.** A `return` from a `finally`
+    //    discards the exception unwinding through it, which on the refusal
+    //    paths is the whole of what the operator was going to be told.
+    if (sessionId !== null) {
+      const mine =
+        sessionMayBeStopped(failure) &&
+        stillThisLapsSession(connection, intent.runId, leaseResource, sessionId, heldEpoch);
+      // The stop is attempted only for a session that is this lap's, and the
+      // lease is abandoned unless the stop reported success. `stopSession`
+      // still swallows the failure for the outcome's sake; what it now reports
+      // is only whether there was one, because "the child may still be alive"
+      // is exactly the question the lease has to be decided on.
+      const stopped = mine && (await stopSession(provider, sessionId));
+      if (!stopped) {
+        hold.abandon();
+      }
     }
   }
 }
@@ -1375,10 +1397,24 @@ function stillThisLapsSession(
  * was returning or throwing. A teardown that reported itself instead of the
  * gate that was just opened is the one way this call could do real harm.
  */
-async function stopSession(provider: SessionProvider, sessionId: string): Promise<void> {
+async function stopSession(provider: SessionProvider, sessionId: string): Promise<boolean> {
   try {
-    await provider.stop(sessionId);
+    const answer = await provider.stop(sessionId);
+    if (!(answer instanceof Failure)) {
+      return true;
+    }
+    // **`UNKNOWN_SESSION` is a `true`, and it is the one failure that is.** It
+    // is the provider saying it has no record of this identity at all, and a
+    // provider commits its record *before* it spawns -- so there is no child of
+    // this lap's for the lease to protect. Every other failure is "the stop did
+    // not report success", which is a state the caller has to treat as a child
+    // that may still be alive.
+    return answer.kind === FailureKind.UNKNOWN_SESSION;
   } catch {
-    // Deliberately empty. See above.
+    // Deliberately empty of REPORTING. See above: the failure is answered by
+    // the return value rather than raised, because a throw here would replace
+    // the lap's outcome and a silent `void` would leave the caller unable to
+    // tell a child that is gone from one that may not be.
+    return false;
   }
 }

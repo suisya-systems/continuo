@@ -12279,6 +12279,18 @@ to be decided rather than derived.**
   In lap 1 the report reaches the gate through the transcript and never through the endpoint, so
   discarding a completed turn over a lease it did not travel on would be pure loss.
 
+**The lease is given back at the end of a lap, EXCEPT where the teardown left a worker running.**
+`performLap`'s teardown declines to stop a session in one state it has already reasoned about -- a
+takeover writer may have adopted this lap's child (`D-0068`) -- and a `stop` that is attempted may
+also come back a `Failure`. In both, a worker is or may be alive, and that worker's endpoint is still
+writing under this lease. Releasing there would fence it out **at once**, which is the same harm the
+teardown just stood down from doing with a signal, reached by a different road. So in those states
+the lease is **abandoned**: renewal stops and the row is left to expire on its own. It costs the next
+lap at most one TTL on a global resource, and it is the safe direction -- the adopted endpoint keeps
+the window it already had, and nothing this lap does shortens it. Everywhere else -- no child was
+ever minted, or the stop reported success -- the lease is released, because leaving a global resource
+standing for a minute after a lap that is provably over is pure cost.
+
 **The 60 seconds is the number most likely to be wrong, and it is wrong in a visible direction.** It
 is not sized to cover the worst synchronous materialisation, and cannot be: several git commands run
 in sequence and each carries its own bound. What covers that is the by-hand renewal above. If laps on

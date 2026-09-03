@@ -42,6 +42,7 @@ import {
   LeaseHeld,
   LeaseNotHeld,
   readLease,
+  StaleWriterRefused,
 } from "../../src/control_plane/lease.js";
 import {
   createProductionControlPlane,
@@ -57,8 +58,8 @@ import {
 } from "../../src/lap/endpoint_lease.js";
 import { type LapRequest, type LapTerminalReadout, performLap } from "../../src/lap/root.js";
 import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
-import { Ok, type ProviderResult } from "../../src/session/provider.js";
-import { OrchestrationRefused } from "../../src/supervisor.js";
+import { Failure, FailureKind, Ok, type ProviderResult } from "../../src/session/provider.js";
+import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import { MCP_CONFIG_FILENAME, MCP_SERVER_NAME } from "../../src/workspace/materializer.js";
 import { observed, ScriptedProvider } from "../gate_item2/helpers.js";
@@ -402,6 +403,35 @@ function initRepository(root: string): GitOptions {
   return git;
 }
 
+/**
+ * A `LoserTerminated` in the state the orchestrator refuses to stop in.
+ *
+ * Constructed rather than provoked, exactly as `test/lap/teardown.test.ts`
+ * constructs its own and for the same reason: what is under test here is what
+ * the layer above does with the value, so the value is what this file needs.
+ * `stopAttempted: false` is the orchestrator's recorded judgement that it must
+ * NOT stop -- a takeover writer has confirmed the binding and may have adopted
+ * this lap's child.
+ */
+function loserThatMustNotStop(sessionId: string): LoserTerminated {
+  return new LoserTerminated(
+    `session ${sessionId} is an UNRESOLVED hazard: a takeover writer has confirmed ` +
+      "the binding, so this claimant stood down from the stop",
+    {
+      sessionId,
+      refusal: new StaleWriterRefused(`the lease under session ${sessionId} went stale`, {
+        actionId: `gate:${sessionId}`,
+        observed: undefined,
+      }),
+      detectedAtMs: T0,
+      terminatedAtMs: T0,
+      stopAnswer: null,
+      stopConfirmed: false,
+      stopAttempted: false,
+    },
+  );
+}
+
 /** A finished turn with something to escalate. */
 const REPORT = {
   kind: "report",
@@ -559,6 +589,54 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
     );
 
     expect(deliveryRow(f.connection).expiresAtMs).toBeLessThanOrEqual(T0 + 1);
+  });
+
+  test("a lap that stood down from stopping its worker does NOT give the lease back", async () => {
+    // `D-0068`'s state, one frame further out. The teardown refuses to stop this
+    // session because a takeover writer may have adopted the child -- and that
+    // child's endpoint is still writing under this lease. Releasing here would
+    // fence it out AT ONCE, which is the same harm the teardown just stood down
+    // from doing with a signal. The lease is left to expire on its own instead.
+    const f = fixture("stood-down-keeps-the-lease");
+    f.provider.onStart = () => {
+      throw loserThatMustNotStop(SESSION_ID);
+    };
+
+    await expectRefusalAsync(
+      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      LoserTerminated,
+      /UNRESOLVED hazard/,
+    );
+
+    expect(f.provider.stopCalls).toEqual([]);
+    // Still standing, and still this lap's epoch: the adopted endpoint keeps the
+    // window it already had.
+    const row = deliveryRow(f.connection);
+    expect(row.expiresAtMs).toBe(T0 + DELIVERY_LEASE_TTL_MS);
+    expect(row.epoch).toBe(1);
+  });
+
+  test("a lap whose stop was not confirmed does NOT give the lease back either", async () => {
+    // The half a `LoserTerminated` does not cover. `provider.stop` may answer
+    // with a `Failure` for a session that does exist, and the provider says in
+    // as many words that this does not prove the child is gone. A child that may
+    // be alive is a child whose endpoint may still be writing, so the lease is
+    // abandoned on the same reasoning.
+    const f = fixture("unconfirmed-stop-keeps-the-lease");
+    const refusingProvider = f.provider as ScriptedProvider & {
+      stop: (sessionId: string) => Promise<ProviderResult<unknown>>;
+    };
+    refusingProvider.stop = (sessionId: string) => {
+      f.provider.stopCalls.push(sessionId);
+      return Promise.resolve(
+        new Failure(FailureKind.BACKEND_UNREACHABLE, "the provider would not answer the stop"),
+      );
+    };
+
+    await performLap(f.connection, f.provider, REPORTING_READER, f.request);
+
+    expect(f.provider.stopCalls).toEqual([SESSION_ID]);
+    expect(deliveryRow(f.connection).expiresAtMs).toBe(T0 + DELIVERY_LEASE_TTL_MS);
   });
 
   test("a second lap is refused while the first holds the delivery lease", async () => {
