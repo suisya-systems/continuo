@@ -10774,13 +10774,30 @@ here than it was there, because that side effect runs *after* the event row is i
 2. **`subject_kind` is `run`.** The closed vocabulary has no `workspace`, and widening it would be a
    migration for a subject with no identity of its own. The fact is about the run it was built for.
 
-3. **The artifact directory must be unclaimed, and is checked before the worktree exists.**
-   Materialisation creates its artifacts, so finding one already there means another materialisation
-   owns the directory -- and publishing over it would replace a fence a worker may be running under.
-   This is the same rule `git worktree add` already imposes on the checkout, applied to the
-   directory beside it, and it is reachable within one run as well as across two: a retry with a
-   different workspace would otherwise destroy the earlier materialisation's files and only then
-   meet the duplicate-event refusal.
+3. **The artifact directory is claimed atomically, before the worktree exists.** Publishing into a
+   directory another materialisation owns replaces a fence a worker may be running under, and it is
+   reachable within one run as well as across two: a retry with a different workspace would
+   otherwise destroy the earlier materialisation's files and only then meet the duplicate-event
+   refusal.
+
+   **The claim is the create.** `openSync(..., "wx")` -- `O_EXCL` -- writes an `owner.json` naming
+   the run, and the kernel decides which of two callers gets it. An `existsSync` check ahead of the
+   publication was the first attempt and is not enough: two processes both pass it before either
+   writes, which is check-then-act with the whole race still in it.
+
+   **This is an ownership marker, not a lock, and the distinction is why `D-0206` does not forbid
+   it.** That entry rejects an `O_EXCL` lockfile as a substitute for `flock`, because a lock is
+   released by the kernel when its holder dies and a lockfile is not -- so a crash leaves a file
+   every later process *waits* on, and what waits is the recording of a refusal, which must never
+   wait. Nothing waits on this file: a second materialisation is refused and returns. And a marker
+   surviving a crash is not stale but true -- the directory really does hold a half-materialised
+   run's artifacts, which is the recoverable state rule 5 describes, and the marker is what tells an
+   operator which run to look up before sweeping it.
+
+   **What is asserted, and what is not.** The suite drives the refusal and the marker's contents; it
+   does not drive two processes racing, because that would be a test of `O_EXCL` rather than of this
+   module. The atomicity is the kernel's guarantee, and this rule rests on it rather than restating
+   it.
 
 4. **Artifacts first, the event last, and the order is enforced rather than described.** Every
    artifact is re-`stat`'d immediately before the append, **and the worktree is re-asked of git**.
