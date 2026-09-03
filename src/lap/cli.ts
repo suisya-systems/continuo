@@ -34,9 +34,11 @@
  * verbs after it.
  *
  * **A refusal is an operator-facing line, not a stack trace**, in the family
- * every other subtree uses: `ControlPlaneRefusal` becomes one stderr line and
- * exit 2. `LapUsageError` is deliberately not caught -- it is a defect in a
- * caller and the parser has already established every type this verb passes on.
+ * every other subtree uses: one stderr line and exit 2. This verb composes four
+ * subsystems and so meets four refusal taxonomies plus two usage-error families;
+ * {@link isOperatorRefusal} says which of them are outcomes an operator acts on
+ * and why the usage errors are among them here when they are not in
+ * `run_cli.ts`.
  *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every string
  * here reaches `--help` on a cp932 console, where a character the console cannot
@@ -61,8 +63,11 @@ import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { createDefaultSessionProvider } from "../index.js";
 import { OrchestrationRefused } from "../supervisor.js";
 import { GitRefusal } from "../workspace/git.js";
-import { WorkspaceMaterializationRefused } from "../workspace/materializer.js";
-import { type LapOutcome, performLap } from "./root.js";
+import {
+  WorkspaceMaterializationRefused,
+  WorkspaceMaterializationUsageError,
+} from "../workspace/materializer.js";
+import { type LapOutcome, LapUsageError, performLap } from "./root.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -106,9 +111,10 @@ const PYTHON_HELP = "the interpreter substituted for {python}. This build's own 
 const POLL_INTERVAL_MS_HELP =
   "milliseconds between transcript reads while waiting for the turn to end.";
 const TURN_TIMEOUT_MS_HELP =
-  "milliseconds to wait for the turn's terminal report before giving up. " +
-  "Nothing is rolled back on a timeout: the workspace, the fence and the child " +
-  "are left as they are.";
+  "milliseconds to wait for the turn's terminal report before giving up. The " +
+  "workspace and the fence are left as they are; the worker's session is " +
+  "stopped, because a lap that gave up must not leave a fenced child running " +
+  "with nobody polling it.";
 const GIT_TIMEOUT_MS_HELP = "wall-clock bound on each git command materialisation runs.";
 const GATE_OPTION_HELP =
   "one answer the gate offers the human. Repeat the flag to give several, in " +
@@ -178,18 +184,34 @@ export const lapCliSeams = {
  * The list is enumerated rather than widened to `Error`, because the point of
  * catching is to leave everything that is *not* on it escaping with its stack.
  *
- * `WorkspaceMaterializationUsageError` and `LapUsageError` are deliberately
- * absent, on the ground `run_cli.ts` states about `RunAdmissionUsageError`:
- * they are defects in a caller, and burying one under a one-line "error:" would
- * cost the stack that diagnoses it.
+ * **The two usage-error families are here too, and that is a departure from
+ * `run_cli.ts` rather than an oversight.** That module leaves
+ * `RunAdmissionUsageError` uncaught on the stated ground that it is a defect in
+ * a caller -- and it is right, because by the time it could fire, its parser has
+ * established every value it passes on. This verb's parser has not. It types
+ * `--turn-timeout-ms` as an integer, which admits `-1`; it types
+ * `--artifact-root` as a string, which admits a relative path. Both are values
+ * an operator typed, and both reach {@link LapUsageError} or
+ * `WorkspaceMaterializationUsageError` at runtime. Left out, they arrive as a
+ * stack trace and exit 1 where every other verb in this CLI gives one line and
+ * exit 2 -- so here the caller IS the operator, and the family follows the
+ * caller rather than the name.
+ *
+ * The rules are deliberately not restated in the parser to catch them earlier.
+ * `root.ts` and the materialiser each state their own constraints once, and a
+ * second statement here would be a second answer to "is this argument usable"
+ * -- the drift `control_plane/cli.ts` and `run_cli.ts` both argue against. The
+ * classification is the seam; the rules stay where they are.
  */
 function isOperatorRefusal(error: unknown): error is Error {
   return (
     error instanceof ControlPlaneRefusal ||
     error instanceof WorkspaceMaterializationRefused ||
+    error instanceof WorkspaceMaterializationUsageError ||
     error instanceof GitRefusal ||
     error instanceof LeaseRefusal ||
-    error instanceof OrchestrationRefused
+    error instanceof OrchestrationRefused ||
+    error instanceof LapUsageError
   );
 }
 

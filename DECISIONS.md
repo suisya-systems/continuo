@@ -11167,8 +11167,17 @@ allowlisted).
   taxonomies.** `ControlPlaneRefusal`, `GitRefusal`, `LeaseRefusal` and `OrchestrationRefused` are
   deliberately separate families -- below this layer they mean different things -- and this verb is
   where all four become one line and exit 2. The list is enumerated rather than widened to `Error`,
-  because the point of catching is to leave everything not on it escaping with its stack:
-  `LapUsageError` and `WorkspaceMaterializationUsageError` are defects in a caller and stay out.
+  because the point of catching is to leave everything not on it escaping with its stack.
+- **The two usage-error families are on the list too, which is a departure from `run_cli.ts`.** That
+  module leaves `RunAdmissionUsageError` uncaught on the stated ground that a usage error is a defect
+  in a caller, and it is right: by the time one could fire, its parser has established every value it
+  passes on. **This verb's parser has not.** It types `--turn-timeout-ms` as an integer, which admits
+  `-1`, and `--artifact-root` as a string, which admits a relative path; both are values an operator
+  typed and both reach `LapUsageError` or `WorkspaceMaterializationUsageError` at runtime. Here the
+  caller *is* the operator, so the family follows the caller rather than the name. The rules are
+  deliberately not restated in the parser to catch them earlier: `root.ts` and the materialiser each
+  state their own constraints once, and a second statement in the CLI would be the drift
+  `control_plane/cli.ts` and `run_cli.ts` both argue against.
 - **No parity ledger claims `test/lap/`.** The precedent is `D-0054` rule 5 as applied by `D-0057`:
   the checker's `unmapped` guard only reaches target tests in a file some ledger's `test_file`
   names, and a source-less feature has no source cases to claim. `test/workspace/materializer.test.ts`
@@ -11237,6 +11246,22 @@ This is that component, and the question is now answerable rather than deferred.
    swallowed -- an exception thrown from a `finally` would REPLACE the outcome the lap was carrying,
    and a teardown that reported itself instead of the gate that was just opened is the one way this
    call could do harm.
+
+   **There is exactly one state where the lap must NOT stop, and it is a state the orchestrator has
+   already decided about.** `LoserTerminated.stopAttempted === false` is not "the stop failed"; it is
+   `SessionOrchestrator`'s recorded judgement that it *must not* stop -- this claimant lost its
+   lease, a takeover writer has since confirmed the binding, and that winner may have adopted the
+   very child this lap spawned. A session-level stop cannot name a process generation, so issuing one
+   would kill the winner's worker. `sessionMayBeStopped` is what keeps that decision from being
+   silently overridden one frame up, and the case
+   `performLap does not stop a session a takeover writer may have adopted` is what keeps
+   `sessionMayBeStopped` honest -- verified by removing the guard and watching only that case go red.
+
+   The cost is accepted and stated: in that one state the child is left running and its referenced
+   handle may keep `lap perform` from returning. That is the safe direction, and reversing it would
+   be trading a visible hang for another claimant's dead worker. **This was a defect introduced by
+   the fix above and caught in review**, which is the honest shape of it: an enclosing teardown added
+   for one hazard overriding an inner component's deliberate restraint about another.
 
 **Alternatives.** **Waiting for the child to exit (rejected.)** A `claude -p` child's exit is not the
 turn's end: it can outlive the terminal line by however long its MCP servers take to shut down, and

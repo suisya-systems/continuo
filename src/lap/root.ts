@@ -18,6 +18,7 @@ import {
   WorkspaceVerdict,
 } from "../session/provider.js";
 import {
+  LoserTerminated,
   type OrchestrationOutcome,
   SessionOrchestrator,
   type SessionOrchestratorOptions,
@@ -605,6 +606,10 @@ export async function performLap(
   };
   const orchestrator = new SessionOrchestrator(connection, provider, options);
 
+  // What went wrong, if anything, so the teardown can consult it. A `finally`
+  // cannot see the exception unwinding through it, and here the exception is
+  // precisely what decides whether the teardown is allowed to run at all.
+  let failure: unknown;
   try {
     let walk: Promise<OrchestrationOutcome> | undefined;
     const spawn = materialized.spawner.execute(materialized.admission, () => {
@@ -655,9 +660,14 @@ export async function performLap(
       report,
       ingested,
     });
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    // 7. The session's life is the lap's, and it ends here on every path --
-    //    including the ones where the walk itself failed after spawning.
+    // 7. The session's life is the lap's, and it ends here on almost every path
+    //    -- including the ones where the walk itself failed after spawning, and
+    //    excluding the one where the orchestrator has already ruled a stop out.
+    //    See {@link sessionMayBeStopped}.
     //
     //    **On the refusal paths this is not tidiness, it is what makes the
     //    refusal reach anyone.** The provider holds a referenced Node child
@@ -671,10 +681,40 @@ export async function performLap(
     //    event and its gate have committed by the time the successful path
     //    reaches this, and on a refusal there is nothing to commit -- so a stop
     //    that goes badly cannot un-open a gate or lose a report.
-    if (sessionId !== null) {
+    if (sessionId !== null && sessionMayBeStopped(failure)) {
       await stopSession(provider, sessionId);
     }
   }
+}
+
+/**
+ * May this lap stop the session it started?
+ *
+ * **No, in exactly one state, and it is a state the orchestrator has already
+ * decided about.** `LoserTerminated` carries `stopAttempted`, and a `false`
+ * there is not "the stop failed" -- it is `SessionOrchestrator`'s recorded
+ * judgement that it *must not* stop: this claimant lost its lease, a takeover
+ * writer has since **confirmed the binding**, and that winner may have adopted
+ * the very child this lap spawned. A session-level stop cannot name a process
+ * generation, so issuing one here would kill the winner's worker. The
+ * orchestrator surfaces the loser's possibly-rogue process as an unresolved
+ * hazard on the exception instead, and this function is what keeps that
+ * decision from being quietly overridden one frame up.
+ *
+ * Everything else -- a refused turn, a timeout, a walk that failed while this
+ * lap still owned the session, a `LoserTerminated` that *did* stop -- is a
+ * session this lap is still responsible for, and it is stopped.
+ *
+ * **The cost, stated rather than hidden.** In the one state above the child is
+ * left running, and the provider holds a referenced handle to it, so
+ * `lap perform` may not return until that child exits. That is the safe
+ * direction and not a regression to fix by stopping anyway: a command that
+ * hangs is visible and recoverable, and a command that killed another
+ * claimant's live worker is neither. The hazard is on the exception the
+ * operator reads.
+ */
+export function sessionMayBeStopped(failure: unknown): boolean {
+  return !(failure instanceof LoserTerminated) || failure.stopAttempted;
 }
 
 /**

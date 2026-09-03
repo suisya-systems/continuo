@@ -35,8 +35,8 @@ import process from "node:process";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
-
-import { main, mainAsync } from "../../src/cli.js";
+import { helpStrings } from "../../src/cli/parser.js";
+import { buildParser, main, mainAsync } from "../../src/cli.js";
 import { dbCliSeams } from "../../src/control_plane/cli.js";
 import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { acquire as acquireLease } from "../../src/control_plane/lease.js";
@@ -356,6 +356,44 @@ describe("the acceptance: a lap from CLI verbs alone", () => {
   });
 });
 
+describe("the help text and the implementation say the same thing", () => {
+  // The tripwire that was missing. `--turn-timeout-ms`'s help described the
+  // child as left running for a whole round after `performLap` started stopping
+  // it, and nothing caught it: `verify` type-checks and runs cases, and neither
+  // reads a help string against the behaviour it describes. These two cases are
+  // the same claim asserted from both sides, so the pair fails when either
+  // moves.
+  const timeoutHelp = (): string => {
+    const help = helpStrings(buildParser()).join("\n");
+    const marker = "milliseconds to wait for the turn's terminal report";
+    const at = help.indexOf(marker);
+    expect(
+      at,
+      "the --turn-timeout-ms help is no longer findable by its opening words",
+    ).toBeGreaterThanOrEqual(0);
+    return help.slice(at, at + 400);
+  };
+
+  test("--help says the session is stopped and the workspace kept", () => {
+    const text = timeoutHelp();
+    expect(text).toContain("stopped");
+    expect(text).toContain("workspace and the fence are left as they are");
+  });
+
+  test("the refusal an operator actually receives says the same", async () => {
+    const f = lap("lap-timeout-wording");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+
+    expect(await f.perform({ "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })).toBe(2);
+    const written = f.err.join("");
+    expect(written).toContain("did not finish its turn");
+    expect(written).toContain("session is stopped");
+    expect(written).toContain("workspace and the fence are left exactly as they are");
+  });
+});
+
 describe("what the verb refuses, and what it leaves behind", () => {
   test("a run that was never admitted is a refusal, not a stack trace", async () => {
     const f = lap("lap-unadmitted");
@@ -493,6 +531,26 @@ describe("what the verb refuses, and what it leaves behind", () => {
 
     const connection = inspect(f.databasePath);
     expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+  });
+
+  test("an operator's own bad values are refusals, not stack traces", async () => {
+    // The parser types `--turn-timeout-ms` as an integer, which admits `-1`, and
+    // `--artifact-root` as a string, which admits a relative path. Both reach a
+    // *usage error* class at runtime -- `LapUsageError` and
+    // `WorkspaceMaterializationUsageError` -- and the reflex is to leave those
+    // uncaught because a usage error is a defect in a caller. Here the caller is
+    // the operator, so leaving them out means a typo arrives as a stack trace and
+    // exit 1 where every other verb in this CLI gives one line and exit 2.
+    const negative = lap("lap-negative-timeout");
+    expect(await negative.perform({ "--turn-timeout-ms": "-1" })).toBe(2);
+    expect(negative.err.join("")).toMatch(/^error: /);
+    expect(negative.err.join("")).toContain("timeout_ms");
+
+    const relative = lap("lap-relative-artifacts");
+    expect(await relative.perform({ "--artifact-root": "relative/dir" })).toBe(2);
+    expect(relative.err.join("")).toMatch(/^error: /);
+    // Refused before anything is created: a malformed request costs no worktree.
+    expect(existsSync(relative.workspace)).toBe(false);
   });
 
   test("a second perform of one run is refused rather than re-run", async () => {
