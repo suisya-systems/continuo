@@ -119,7 +119,11 @@ const GIT_TIMEOUT_MS_HELP = "wall-clock bound on each git command materialisatio
 const GATE_OPTION_HELP =
   "one answer the gate offers the human. Repeat the flag to give several, in " +
   "order; omit it for a free-form answer.";
-const GATE_DEADLINE_HELP = "epoch milliseconds the gate expires at. No deadline when omitted.";
+const GATE_DEADLINE_HELP =
+  "epoch milliseconds the gate expires at. No deadline when omitted. A time " +
+  "already in the past is refused up front; one that passes while the worker " +
+  "runs is dropped, and the gate is opened without a deadline rather than the " +
+  "report being lost.";
 
 const PERFORM_DESCRIPTION =
   "Perform one admitted run: materialise its workspace and render its fence, " +
@@ -267,6 +271,18 @@ function report(path: string, outcome: LapOutcome): void {
       `${outcome.ingested.gateId} over event ${outcome.ingested.eventId} at seq ` +
       `${outcome.ingested.eventSeq}\n`,
   );
+  if (outcome.elapsedDeadlineAtMs !== null) {
+    // Its own line, and on stdout beside the success it qualifies rather than on
+    // stderr: the lap succeeded, the gate is open, and this is the one thing
+    // about it that is not what the operator asked for. Naming the number they
+    // gave is what lets them tell "my deadline was too tight" from "the worker
+    // ran long", which are different next moves.
+    lapCliSeams.write(
+      `note: the requested gate deadline ${String(outcome.elapsedDeadlineAtMs)} had passed ` +
+        `when the turn ended, so gate ${outcome.ingested.gateId} was opened without one; ` +
+        "the report is on the spine either way\n",
+    );
+  }
 }
 
 /**

@@ -396,12 +396,19 @@ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
  * @throws {LapRefused} when the turn ended with nothing to report, when the
  *   provider refuses the read, or when the budget runs out.
  */
-export async function awaitTerminalReport(
-  reader: TerminalReportReader,
-  sessionId: string,
-  completion: TurnCompletion,
-  nowMs: () => number,
-): Promise<LapTerminalReport> {
+/**
+ * The budget's rules, stated once and checked from both entry points.
+ *
+ * Separate from {@link awaitTerminalReport} because of *when* it has to run.
+ * The poll is the last step of the lap; validating there means a malformed
+ * budget is discovered after a worktree exists, a fence has been published and
+ * a child has been started -- and `D-0057` refuses a second materialisation of
+ * one run, so a mistyped `--turn-timeout-ms` would cost the run itself, with
+ * recovery being a fresh run identifier rather than a corrected retry.
+ * `materializeWorkspace` already holds the discipline this states -- refuse a
+ * malformed request with nothing created -- and `performLap` now does too.
+ */
+export function requireCompletion(completion: TurnCompletion): void {
   const { pollIntervalMs, timeoutMs } = completion;
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 0) {
     throw new LapUsageError(
@@ -413,6 +420,20 @@ export async function awaitTerminalReport(
       `timeout_ms must be a non-negative integer of milliseconds, got ${String(timeoutMs)}`,
     );
   }
+}
+
+export async function awaitTerminalReport(
+  reader: TerminalReportReader,
+  sessionId: string,
+  completion: TurnCompletion,
+  nowMs: () => number,
+): Promise<LapTerminalReport> {
+  // Checked here as well as in `performLap`'s prologue, and the duplication is
+  // the point: this is an exported function a caller can reach on its own, so
+  // it cannot rely on a check that lives in a different entry point. The RULES
+  // are stated once, in `requireCompletion`; only the call is in two places.
+  requireCompletion(completion);
+  const { pollIntervalMs, timeoutMs } = completion;
   const sleep = completion.sleep ?? DEFAULT_SLEEP;
   // Read once from the clock the caller gave, before the first read rather than
   // after it: a budget that started counting from the first answer would give a
@@ -514,6 +535,16 @@ export interface LapOutcome {
   readonly report: LapTerminalReport;
   /** The escalation event and the gate now standing over it. */
   readonly ingested: IngestedReport;
+  /**
+   * The deadline this lap was asked for and could not honour, or `null`.
+   *
+   * Non-null exactly when the operator's `deadlineAtMs` had passed by the time
+   * the turn ended, in which case the gate was opened **without** it
+   * (`D-0065`). A field rather than a log line, because the caller is what
+   * tells the operator -- and it is the operator's own number handed back, so
+   * the report can say which deadline was missed rather than that one was.
+   */
+  readonly elapsedDeadlineAtMs: number | null;
 }
 
 /**
@@ -540,6 +571,35 @@ export async function performLap(
   }
   if (typeof request.nowMs !== "function" || typeof request.sessionUuidFactory !== "function") {
     throw new LapUsageError("now_ms and session_uuid_factory must be functions");
+  }
+  // **Everything this function can refuse, refused before anything is created.**
+  // Below this line the lap makes a branch, a worktree, three published
+  // artifacts and a child process, and `D-0057` refuses a second materialisation
+  // of one run -- so an argument this function was always going to reject costs
+  // the run identifier itself if it is rejected late. `materializeWorkspace`
+  // states the same discipline for its own request and keeps it; this is
+  // `performLap` keeping it for the arguments the materialiser never sees.
+  requireCompletion(request.completion);
+  if (request.deadlineAtMs !== undefined && request.deadlineAtMs !== null) {
+    if (!Number.isInteger(request.deadlineAtMs)) {
+      throw new LapUsageError(
+        `deadline_at_ms must be an int of epoch milliseconds, got ${String(request.deadlineAtMs)}`,
+      );
+    }
+    if (request.deadlineAtMs <= request.nowMs()) {
+      // Refused up front rather than dropped silently at the ingest below. A
+      // deadline already in the past when the lap STARTS is a typo -- a
+      // mistyped digit, a stale value pasted from an earlier command -- and the
+      // operator wants to hear about it now, while a corrected retry is still
+      // free. A deadline that expires *while the worker runs* is a different
+      // thing entirely and is handled at the ingest (`D-0065`).
+      throw new LapUsageError(
+        `deadline_at_ms ${String(request.deadlineAtMs)} is already in the past; a gate ` +
+          "cannot be opened with a deadline it has already missed, and a deadline that " +
+          "was stale before the worker started is a mistyped argument rather than a " +
+          "lap that ran long",
+      );
+    }
   }
 
   // 1. What this run was admitted to do. Read rather than retyped: the whole
@@ -635,6 +695,17 @@ export async function performLap(
     );
 
     // 6. The settled value, into the one transaction the event and its gate share.
+    //
+    //    The clock is read ONCE and used for both the deadline decision and the
+    //    write, because `gate.created_at_ms` is this instant and the schema's
+    //    `deadline_at_ms > created_at_ms` is checked against it. Two reads could
+    //    straddle the boundary and put back exactly the constraint violation
+    //    below is here to prevent.
+    const ingestNowMs = request.nowMs();
+    const requested = request.deadlineAtMs ?? null;
+    // `D-0065`: an expired deadline costs the deadline, never the report.
+    const elapsedDeadlineAtMs = requested !== null && requested <= ingestNowMs ? requested : null;
+    const deadlineAtMs = elapsedDeadlineAtMs === null ? requested : null;
     const ingested = ingestTerminalReport(connection, {
       runId: intent.runId,
       report: {
@@ -646,9 +717,9 @@ export async function performLap(
         isError: report.isError,
         returncode: report.returncode,
       },
-      nowMs: request.nowMs(),
+      nowMs: ingestNowMs,
       actorId: request.actorId ?? LAP_ACTOR_ID,
-      ...(request.deadlineAtMs === undefined ? {} : { deadlineAtMs: request.deadlineAtMs }),
+      deadlineAtMs,
       ...(request.gateOptions === undefined ? {} : { gateOptions: request.gateOptions }),
     });
 
@@ -659,6 +730,7 @@ export async function performLap(
       spawn,
       report,
       ingested,
+      elapsedDeadlineAtMs,
     });
   } catch (error) {
     failure = error;

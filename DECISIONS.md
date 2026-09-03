@@ -160,6 +160,7 @@ spaces distinct.
 | D-0062 | The composition root vetoes every `create-workspace` transition | accepted |
 | D-0063 | The materialiser takes fields, not the `LapRunIntent`; admission gains the reader that was missing | accepted |
 | D-0064 | Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10 | accepted |
+| D-0065 | An expired gate deadline costs the deadline, never the report; a stale one is refused before the lap starts | accepted |
 
 ---
 
@@ -11451,3 +11452,70 @@ renewal unnecessary rather than merely unimplemented -- and would be the wrong f
 than any plausible" is the shape of assumption `docs/lease-fencing.md` exists to remove. If step 4
 settles the two scopes differently and concludes the endpoint's lease is not per-process after all,
 this entry's second half is what has to be re-read.
+
+---
+
+## D-0065 -- An expired gate deadline costs the deadline, never the report; a stale one is refused before the lap starts
+
+**Context.** `gate.deadline_at_ms` is the **business** deadline, and
+`docs/production-schema.md`'s DDL says so in as many words at the column -- it is not a relay
+tolerance. The schema enforces `CHECK (deadline_at_ms IS NULL OR deadline_at_ms > created_at_ms)`
+(`migrations/0001_initial.sql`), which is right: a gate that is born already expired is not a
+question anyone can answer.
+
+Step 8 passed `--gate-deadline-at-ms` through to `ingestTerminalReport` unexamined, and that made
+the constraint reachable in the worst possible place. The gate is created **after** the worker's turn
+ends, so a deadline that was comfortably in the future when the operator typed it can be in the past
+by the time the gate is written. The result was a raw `SqliteError` -- outside every refusal family
+the verb classifies, so a stack trace and exit 1 -- and, because `ingestTerminalReport` writes the
+escalation event and its gate in **one transaction**, the worker's report rolled back with it. The
+lap had materialised a worktree, published a fence, run a worker to completion and read its report,
+and then recorded none of it; and `D-0057` refuses a second materialisation of one run, so the
+operator could not retry. Everything done, nothing kept, on a run that was now spent.
+
+**Decision.** Two rules, because the two states are different mistakes.
+
+1. **A deadline already in the past when the lap STARTS is refused, before anything is created.**
+   That is a typo -- a mistyped digit, a stale value pasted from an earlier command -- and the
+   operator should hear about it while a corrected retry is still free. It is refused in
+   `performLap`'s prologue, alongside the completion budget, on the discipline
+   `materializeWorkspace` already states for its own request: refuse a malformed request with
+   nothing built.
+
+2. **A deadline that expires WHILE THE WORKER RUNS is dropped, and the gate is opened without one.**
+   The lap's value is that the worker's words reach a human gate. An elapsed business deadline is
+   information about scheduling; it is not a reason to lose an escalation that a worker actually
+   produced. So the gate is opened with `deadline_at_ms` null -- which the column admits -- and the
+   operator is told on its own line **which** deadline lapsed, because that is what distinguishes "my
+   deadline was too tight" from "the worker ran long", and those have different next moves.
+   The clock is read once and used for both the decision and the write, since
+   `gate.created_at_ms` is that same instant and the constraint is checked against it.
+
+**Alternatives.**
+
+- **Refuse at the ingest (rejected).** The smallest change, and it keeps almost all of the damage:
+  the report is still not on the spine and the run is still spent. It answers the crash without
+  answering the loss.
+- **Re-base the deadline on the gate's creation time -- `now + the original margin` (rejected).** It
+  preserves the *margin* the operator intended, which is genuinely attractive. It is rejected because
+  it changes what the column means: the DDL comment fixes `deadline_at_ms` as the business deadline,
+  and a value silently recomputed from when a worker happened to finish is a scheduling artifact
+  wearing a business deadline's name. A gate whose recorded deadline is not the one anybody asked for
+  is worse than a gate with none, because only the second is honest about what is known.
+
+**Consequences.**
+
+- `LapOutcome` gains `elapsedDeadlineAtMs`: the operator's own number, handed back, so the caller can
+  name it rather than merely report that something lapsed. Null on every ordinary lap.
+- `--gate-deadline-at-ms`'s help states both rules, and is held to the implementation by the same
+  paired assertion `--turn-timeout-ms` now has.
+- Both halves are pinned by cases that were **verified to fail without them**: removing the drop
+  reproduces the original `CHECK constraint failed: deadline_at_ms IS NULL OR deadline_at_ms >
+  created_at_ms` verbatim, and the anti-vacuity half asserts that a deadline the lap *can* honour is
+  written through unchanged.
+
+**What would falsify it.** If a gate's deadline ever becomes something the relay or the sweeper acts
+on automatically -- rather than a business fact a human reads -- then silently opening a gate without
+one would remove an action instead of a note, and rule 2 would have to become a refusal with a
+recorded event. `gates.ts`'s `gatesPastDeadline` reads the column today but nothing acts on the
+result unattended.

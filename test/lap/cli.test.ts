@@ -394,6 +394,67 @@ describe("the help text and the implementation say the same thing", () => {
   });
 });
 
+describe("D-0065: an expired deadline costs the deadline, never the report", () => {
+  test("the gate opens without it, and the operator is told which one lapsed", async () => {
+    // The worker's turn outrunning the operator's deadline used to be fatal in
+    // the worst possible place: `gate.deadline_at_ms > created_at_ms` is a DDL
+    // CHECK, so the ingest raised a raw SQLite error AFTER the whole lap had
+    // run -- and because the event and the gate are one transaction, the
+    // worker's report rolled back with it. Everything was done and nothing was
+    // recorded, on a run that could not be materialised again.
+    //
+    // The clock has to MOVE for this state to exist at all: the deadline must
+    // be in the future when the lap starts (or the prologue refuses it up
+    // front, which is the case above) and in the past when the gate is created.
+    // So the fixture's frozen clock is replaced by one that jumps exactly once,
+    // on its first read -- deterministic, and it puts the whole of the lap on
+    // the far side of the deadline without depending on how long anything took.
+    const f = lap("lap-deadline-lapsed");
+    let reads = 0;
+    patchSeams(lapCliSeams, {
+      nowMs: () => {
+        reads += 1;
+        return reads === 1 ? T0 : T0 + 10_000;
+      },
+    });
+    const deadline = T0 + 5_000;
+
+    expect(await f.perform({ "--gate-deadline-at-ms": String(deadline) }), f.err.join("")).toBe(0);
+
+    const connection = inspect(f.databasePath);
+    const gate = connection.prepare("SELECT gate_id, deadline_at_ms FROM gate").all() as {
+      gate_id: string;
+      deadline_at_ms: number | null;
+    }[];
+    // The gate exists -- which is the whole point -- and carries no deadline.
+    expect(gate).toHaveLength(1);
+    expect(gate[0]?.deadline_at_ms).toBeNull();
+    // And the report reached the spine rather than rolling back with it.
+    expect(eventTypes(connection)).toContain(WORKER_ESCALATION_EVENT_TYPE);
+
+    // The operator is told, and told WHICH deadline, so they can tell "my
+    // deadline was too tight" from "the worker ran long".
+    const written = f.out.join("");
+    expect(written).toContain(String(deadline));
+    expect(written).toContain("opened without one");
+  });
+
+  test("a deadline the lap does honour is written through unchanged", async () => {
+    // The anti-vacuity half: without it, an implementation that dropped every
+    // deadline would satisfy the case above.
+    const f = lap("lap-deadline-kept");
+    const future = T0 + 3_600_000;
+    expect(await f.perform({ "--gate-deadline-at-ms": String(future) }), f.err.join("")).toBe(0);
+
+    const connection = inspect(f.databasePath);
+    const gate = connection.prepare("SELECT deadline_at_ms FROM gate").get() as {
+      deadline_at_ms: number | null;
+    };
+    expect(gate.deadline_at_ms).toBe(future);
+    expect(f.out.join("")).not.toContain("opened without one");
+  });
+});
+
 describe("what the verb refuses, and what it leaves behind", () => {
   test("a run that was never admitted is a refusal, not a stack trace", async () => {
     const f = lap("lap-unadmitted");
@@ -545,12 +606,30 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(await negative.perform({ "--turn-timeout-ms": "-1" })).toBe(2);
     expect(negative.err.join("")).toMatch(/^error: /);
     expect(negative.err.join("")).toContain("timeout_ms");
+    // **And nothing was built.** This half was missing when this case was first
+    // written, which meant it pinned the exit code while quietly accepting that
+    // a typo materialised a worktree, published a fence and started a child --
+    // and `D-0057` refuses a second materialisation of one run, so that typo
+    // cost the run identifier itself. Asserting the exit code alone is what
+    // made the bad behaviour look settled.
+    expect(existsSync(negative.workspace)).toBe(false);
+    expect(existsSync(negative.artifactDir)).toBe(false);
 
     const relative = lap("lap-relative-artifacts");
     expect(await relative.perform({ "--artifact-root": "relative/dir" })).toBe(2);
     expect(relative.err.join("")).toMatch(/^error: /);
     // Refused before anything is created: a malformed request costs no worktree.
     expect(existsSync(relative.workspace)).toBe(false);
+  });
+
+  test("a gate deadline already in the past is refused before anything is built", async () => {
+    // A stale value pasted from an earlier command, or a mistyped digit. The
+    // operator hears about it while a corrected retry is still free -- which it
+    // only is if nothing has been materialised yet.
+    const f = lap("lap-stale-deadline");
+    expect(await f.perform({ "--gate-deadline-at-ms": String(T0 - 1) })).toBe(2);
+    expect(f.err.join("")).toContain("already in the past");
+    expect(existsSync(f.workspace)).toBe(false);
   });
 
   test("a second perform of one run is refused rather than re-run", async () => {
