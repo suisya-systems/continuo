@@ -61,6 +61,10 @@ import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 // `../session/index.js` would make this file know a session backend, which is
 // the join the leak test forbids outside the barrel.
 import { createDefaultSessionProvider } from "../index.js";
+// The session CONTRACT, not a backend: `no-provider-detail-leaks` excludes
+// `src/session/provider.js` from what counts as knowing one, and this is the
+// refusal every provider raises before it starts anything.
+import { SpawnRefused } from "../session/provider.js";
 import { OrchestrationRefused } from "../supervisor.js";
 import { GitRefusal } from "../workspace/git.js";
 import {
@@ -215,6 +219,12 @@ function isOperatorRefusal(error: unknown): error is Error {
     error instanceof GitRefusal ||
     error instanceof LeaseRefusal ||
     error instanceof OrchestrationRefused ||
+    // The spawn precondition, which fires before any child exists: the worker
+    // CLI is not on PATH, its capability probe timed out, it lacks a flag the
+    // fence needs. Every one of those is an environment an operator fixes, and
+    // the commonest of them -- `claude` not installed -- was arriving as a stack
+    // trace after the worktree had already been materialised.
+    error instanceof SpawnRefused ||
     error instanceof LapUsageError
   );
 }

@@ -36,12 +36,13 @@ import { describe, expect, onTestFinished, test } from "vitest";
 
 import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { LapRunIntent } from "../../src/control_plane/lap_run_intent.js";
-import { StaleWriterRefused } from "../../src/control_plane/lease.js";
+import { acquire, StaleWriterRefused } from "../../src/control_plane/lease.js";
 import {
   createProductionControlPlane,
   openProductionControlPlane,
 } from "../../src/control_plane/migrator.js";
 import { admitRun } from "../../src/control_plane/run_admission.js";
+import { prepareBinding } from "../../src/control_plane/session_binding.js";
 import {
   type LapRequest,
   type LapTerminalReadout,
@@ -61,6 +62,9 @@ const RUN_ID = "run-teardown-1";
 const BASE_BRANCH = "main";
 const TOPIC_BRANCH = "feat/topic";
 const HOLDER = "operator-1";
+
+/** A second run, so a session identity can be bound somewhere this lap is not. */
+const OTHER_RUN_ID = "some-other-run";
 
 /** Two minutes: comfortably longer than the orchestrator default 30-second TTL. */
 const SLOW_MS = 120_000;
@@ -214,6 +218,60 @@ describe("the rule, on its own", () => {
     // `undefined` is the successful path: nothing went wrong, and the session
     // is stopped because the turn is over.
     expect(sessionMayBeStopped(undefined)).toBe(true);
+  });
+});
+
+describe("only a session this lap actually bound", () => {
+  test("a session id this run never bound is not stopped", async () => {
+    // The identity is captured from the factory the instant it is minted, which
+    // is what lets the teardown cover a walk that failed after spawning. But
+    // minting happens BEFORE `prepareBinding`, so an id the orchestrator then
+    // fails to bind -- because another run already holds it -- leaves the
+    // captured value set for a session this lap never started. Stopping on that
+    // kills another run's worker: the same harm `sessionMayBeStopped` prevents,
+    // reached by a different road.
+    //
+    // The other run is built first and holds the binding; this lap is then
+    // pointed at the same identity through its factory.
+    const shared = "00000000-0000-0000-0000-0000000000ff";
+    const f = fixture("bound-elsewhere", () => {
+      throw new OrchestrationRefused("unreachable: the binding is refused first");
+    });
+    // The other run has to exist: `session.run_id` is a foreign key onto it.
+    f.connection
+      .prepare(
+        "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms)" +
+          " VALUES (:run_id, 'created', :now, :now)",
+      )
+      .run({ run_id: OTHER_RUN_ID, now: T0 });
+    prepareBinding(
+      f.connection,
+      acquire(f.connection, {
+        resource: "session-run:some-other-run",
+        holder: "other",
+        nowMs: T0,
+        ttlMs: 600_000,
+      }),
+      {
+        sessionId: shared,
+        runId: OTHER_RUN_ID,
+        provider: "scripted",
+        nowMs: T0,
+        attemptId: null,
+      },
+    );
+
+    await expectRefusalAsync(
+      () =>
+        performLap(f.connection, f.provider, UNREACHED_READER, {
+          ...f.request,
+          sessionUuidFactory: () => shared,
+        }),
+      Error,
+    );
+
+    // Whatever refused it, the other run's session was not touched.
+    expect(f.provider.stopCalls).toEqual([]);
   });
 });
 

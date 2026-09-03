@@ -161,6 +161,29 @@ describe("D-0061: the artifact directory is derived, one per run", () => {
     expect(lapArtifactDir("/r", "run-1")).not.toBe(lapArtifactDir("/r", "run-2"));
   });
 
+  test("a run id that encodes past the filesystem's limit is refused here", async () => {
+    // The encoding turns one character into three, so a run identifier can
+    // exceed a filesystem's 255-character name limit well before it looks long:
+    // 86 unsafe characters encode to 258. Left to the filesystem it arrives as
+    // an ENAMETOOLONG from inside materialisation, after the branch and the
+    // worktree exist -- and `D-0057` refuses a second materialisation, so the
+    // run identifier is spent and the operator's recovery is a new one.
+    const runId = "/".repeat(86);
+    await expectRefusalAsync(
+      () => Promise.resolve(lapArtifactDir("/r", runId)),
+      LapUsageError,
+      /encodes to a directory name of 258 characters/,
+    );
+  });
+
+  test("a long run id that stays within the limit is accepted", () => {
+    // The anti-vacuity half. 255 safe characters encode to 255 and are fine;
+    // a cap applied to the raw identifier rather than the encoded one would
+    // refuse this, and would still pass the case above.
+    const runId = "a".repeat(255);
+    expect(lapArtifactDir("/r", runId)).toMatch(/a{255}$/);
+  });
+
   test("two identifiers differing only by case do not fold together", () => {
     // On an NTFS volume `run` and `RUN` are one directory, so two admitted runs
     // would share a fence, a settings file and a ledger -- and would race

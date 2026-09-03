@@ -6,6 +6,7 @@ import type { LapRunIntent } from "../control_plane/lap_run_intent.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { type IngestedReport, ingestTerminalReport } from "../control_plane/report_ingress.js";
 import { readLapRunIntent } from "../control_plane/run_admission.js";
+import { activeBinding } from "../control_plane/session_binding.js";
 import type { SpawnOutcome } from "../fencing/spawn.js";
 import {
   Failure,
@@ -257,6 +258,14 @@ export class MaterializedWorkspaceRequired implements WorkspaceLifecycleObserver
 const ARTIFACT_SEGMENT_SAFE = /^[a-z0-9._-]$/;
 
 /**
+ * The longest single directory name a filesystem will accept.
+ *
+ * 255 on ext4, APFS and NTFS alike. The first two count bytes and the third
+ * counts UTF-16 units; the encoded name is ASCII, so all three agree here.
+ */
+const MAX_ARTIFACT_SEGMENT = 255;
+
+/**
  * The DOS device names Windows still reserves, in every directory, with or
  * without an extension.
  *
@@ -332,6 +341,27 @@ export function lapArtifactDir(artifactRoot: string, runId: string): string {
     // `%6Eul`. Escaping is enough -- a reserved name is reserved exactly, and
     // `%6Eul` is not one of them.
     encoded = `${percentEncode(encoded.slice(0, 1))}${encoded.slice(1)}`;
+  }
+  // **The encoding can triple the length, and a filename cannot.**
+  //
+  // Every common filesystem caps a single name at 255 (ext4 and APFS count
+  // bytes, NTFS counts UTF-16 units; the encoded name is ASCII, so the two agree
+  // here). `LapRunIntent` puts no length rule on a run identifier, and `%XX`
+  // makes the worst case three characters out of one -- so an 86-character run
+  // of unsafe characters encodes to 258 and the directory simply cannot be
+  // created. Left to the filesystem, that arrives as an `ENAMETOOLONG` from
+  // inside materialisation, *after* the branch and the worktree exist, and
+  // `D-0057` refuses a second materialisation -- so the run identifier is spent
+  // and the operator's only recovery is a new one. Refused here it costs
+  // nothing, and the message says the number that actually matters, which is
+  // the encoded length rather than the one the operator can see.
+  if (encoded.length > MAX_ARTIFACT_SEGMENT) {
+    throw new LapUsageError(
+      `run_id ${JSON.stringify(runId)} encodes to a directory name of ` +
+        `${String(encoded.length)} characters, over the ${String(MAX_ARTIFACT_SEGMENT)} a ` +
+        "filesystem accepts. Escaping a character costs three, so a run identifier can " +
+        "exceed this well before it looks long; a shorter identifier is the fix",
+    );
   }
   // `join` rather than string concatenation: the encoded name carries no
   // separator of either platform's, so there is nothing here for `join` to
@@ -769,8 +799,23 @@ export async function performLap(
     //    event and its gate have committed by the time the successful path
     //    reaches this, and on a refusal there is nothing to commit -- so a stop
     //    that goes badly cannot un-open a gate or lose a report.
+    //
+    //    **And only a session this lap actually bound.** The identity is
+    //    captured from the factory the instant it is minted, which is what makes
+    //    the teardown cover a walk that failed after spawning -- but minting
+    //    happens *before* `prepareBinding`, so an id the orchestrator then
+    //    failed to bind (because some other run already holds it) would leave
+    //    `sessionId` set for a session this lap never started. Stopping on that
+    //    would kill another run's worker, which is the same harm
+    //    {@link sessionMayBeStopped} exists to prevent, reached by a different
+    //    road. The binding table is the authority on whose session it is:
+    //    `activeBinding(runId)` names it only if this run's own binding was
+    //    written, and it is written by the orchestrator before any child exists.
     if (sessionId !== null && sessionMayBeStopped(failure)) {
-      await stopSession(provider, sessionId);
+      const bound = activeBinding(connection, intent.runId);
+      if (bound?.sessionId === sessionId) {
+        await stopSession(provider, sessionId);
+      }
     }
   }
 }

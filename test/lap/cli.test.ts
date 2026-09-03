@@ -660,6 +660,24 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(existsSync(join(f.workspace, "README.md"))).toBe(true);
   });
 
+  test("a worker CLI that will not start is a refusal, not a stack trace", async () => {
+    // `SessionProvider.start` runs the spawn precondition before anything is
+    // spawned, and raises `SpawnRefused` when the CLI is absent, its capability
+    // probe fails, or it lacks a flag the fence needs. The commonest of those --
+    // `claude` not installed -- was arriving as an unhandled stack trace and
+    // exit 1, after the worktree had already been materialised, where every
+    // other verb in this CLI gives one line and exit 2.
+    const f = lap("lap-no-cli");
+    expect(await f.perform({ "--claude-command": join(f.root, "not-a-real-cli") })).toBe(2);
+    const written = f.err.join("");
+    expect(written).toMatch(/^error: /);
+    // One line, not a stack.
+    expect(written.trimEnd().split("\n")).toHaveLength(1);
+
+    const connection = inspect(f.databasePath);
+    expect(connection.prepare("SELECT count(*) AS n FROM gate").get()).toEqual({ n: 0 });
+  });
+
   test("a second perform of one run is refused rather than re-run", async () => {
     // The materialiser refuses a run it has already materialised (`D-0057`),
     // and this is the case that says the CLI surfaces that as a refusal rather
