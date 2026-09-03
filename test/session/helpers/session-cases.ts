@@ -12,6 +12,7 @@ import {
   StartRequest,
 } from "../../../src/session/provider.js";
 import { type ChildHandle, sessionRuntime } from "../../../src/session/runtime.js";
+import { childWaitTimeoutMs } from "../../helpers/runner-timeouts.js";
 
 /**
  * The per-case scaffolding shared by the session belt's three test files:
@@ -53,8 +54,8 @@ import { type ChildHandle, sessionRuntime } from "../../../src/session/runtime.j
  */
 
 /**
- * `time.sleep(0.02)` between polls, and a 10-second deadline: the source's two
- * constants, in milliseconds.
+ * `time.sleep(0.02)` between polls, and the deadline the poll runs to: the
+ * source's two constants, in milliseconds.
  *
  * Both are defaults on every helper below, exactly as they are defaults on the
  * source's, so a case that needs a different deadline says so at the call site
@@ -62,15 +63,35 @@ import { type ChildHandle, sessionRuntime } from "../../../src/session/runtime.j
  */
 export const POLL_INTERVAL_MS = 20;
 
-/** The source's `timeout: float = 10.0`. */
-export const POLL_DEADLINE_MS = 10_000;
+/**
+ * How long a poll below waits for a real child to report (D-0069).
+ *
+ * The source's `timeout: float = 10.0` is what this was, and 10s is still what
+ * it is calibrated *from*; what changed is that the number is now derived
+ * rather than written. Every helper here polls a child process this suite
+ * actually started, and `claude-cli-provider.test.ts` polls the real `claude`
+ * CLI against this constant -- so the thing that makes the deadline too short
+ * is a busy machine, which is exactly what D-0052 scales the runner's own
+ * per-test budget for. Deriving it from there keeps one home for that scale
+ * instead of a second number to raise and forget.
+ *
+ * Not a behaviour: a timeout says how long the port is willing to wait, not
+ * what it does, so this does not move the port away from its source.
+ */
+export const POLL_DEADLINE_MS = childWaitTimeoutMs();
 
 /**
  * How long {@link stopSessionsAtTeardown} waits for a stopped child to be gone.
  *
- * The same 10 seconds, and generous on purpose: this is a hygiene check, and a
- * slow CI cell must not be able to turn a passing case red. What it must catch
- * is a child that is *not going to exit at all*.
+ * Ten seconds, and generous on purpose: this is a hygiene check, and a slow CI
+ * cell must not be able to turn a passing case red. What it must catch is a
+ * child that is *not going to exit at all*.
+ *
+ * Deliberately NOT {@link POLL_DEADLINE_MS} and deliberately not scaled with it
+ * (D-0069). That budget covers a child *starting up* and reporting, which is
+ * what a loaded machine slows down; this one covers a child that has already
+ * been sent its stop, which does not depend on start-up latency. They are two
+ * measurements of two things that happen to have started at the same number.
  */
 export const TEARDOWN_EXIT_TIMEOUT_MS = 10_000;
 
@@ -242,8 +263,8 @@ export async function waitForState(
  * The source writes `provider.read_state(session_id).value` with no `Ok` check
  * and relies on Python raising `AttributeError` if a `Failure` ever came back.
  * The port has to say what happens instead, and says it as a failure naming the
- * result -- silently treating a `Failure` as "not observed yet" would poll for
- * ten seconds and then report a timeout, hiding the refusal that caused it.
+ * result -- silently treating a `Failure` as "not observed yet" would poll to
+ * the deadline and then report a timeout, hiding the refusal that caused it.
  */
 export async function waitUntilObserved(
   provider: SessionProvider,

@@ -15,6 +15,7 @@ import {
 import { Outbox } from "../../src/control_plane/outbox.js";
 import { createControlPlane, reconstruct } from "../../src/control_plane/schema.js";
 import { Observation, type SessionProvider, StartRequest } from "../../src/session/provider.js";
+import { childWaitTimeoutMs } from "../helpers/runner-timeouts.js";
 import { caseRoot } from "../testkit/cases.js";
 import { skipIf } from "../testkit/marks.js";
 import { PROVIDERS, type ProviderEntry } from "./registry.js";
@@ -94,7 +95,21 @@ async function start(
   return unwrap(await provider.start(request), `start(${sessionId})`);
 }
 
-async function waitUntilObserved(provider: SessionProvider, sessionId: string, timeoutMs = 10_000) {
+/**
+ * Poll until the child has reported anything at all (D-0069).
+ *
+ * The deadline is `childWaitTimeoutMs()`, not a constant of this file's own:
+ * `[S2]` spawns the real `claude` CLI, and how long that takes to report is a
+ * property of how busy the machine is -- which is what D-0052 already scales
+ * the runner's per-test budget for. A literal here was 10s, and under load on
+ * this port's development cell the same spawn was measured at a p90 of 6.5s and
+ * a max of 9.3s: a margin of 1.08x, which is what issue #113 was.
+ */
+async function waitUntilObserved(
+  provider: SessionProvider,
+  sessionId: string,
+  timeoutMs = childWaitTimeoutMs(),
+) {
   const deadline = Date.now() + timeoutMs;
   let readout = unwrap(await provider.readState(sessionId), `read_state(${sessionId})`);
   while (readout.observation === Observation.COULD_NOT_OBSERVE) {

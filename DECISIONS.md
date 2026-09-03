@@ -164,6 +164,7 @@ spaces distinct.
 | D-0066 | The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference | accepted |
 | D-0067 | Nothing the fence or its evidence depends on may live inside the worktree | accepted |
 | D-0068 | A session is this lap's to stop only while it still holds the lease epoch it spawned under | accepted |
+| D-0069 | A test's wait for a real child is a share of the runner's budget, from D-0052's scale | accepted |
 
 ---
 
@@ -11802,3 +11803,106 @@ ownership from whatever replaced it. And if a future step holds and renews the l
 whole life -- which is step 4's subject, and `D-0064` records that lap 1 runs without it -- the
 comparison becomes an equality that should never fail, and a failure would mean the renewal broke
 rather than that a takeover happened.
+
+---
+
+## D-0069 -- A test's wait for a real child is a share of the runner's budget, not a constant of its own
+
+**Context.** `test/gate_item11/substitution-scenarios.test.ts` drives the control plane with a
+provider actually in the loop, and `[S2]` is the C2 provider: every `[S2]` case spawns the **real
+`claude` CLI** and then polls `readState` until the child has reported anything at all. The poll's
+deadline was a literal in the file's own helper,
+
+    async function waitUntilObserved(provider, sessionId, timeoutMs = 10_000)
+
+10 seconds of wall clock, shared by all six of the file's `[S2]` cases and calibrated on nothing.
+`test/session/helpers/session-cases.ts` carries the same number as `POLL_DEADLINE_MS`, ported as
+"the source's `timeout: float = 10.0`", and `test/session/claude-cli-provider.test.ts` -- the other
+file that spawns the real CLI -- polls against it.
+
+Issue `#113` reports the consequence: under load the file fails about **4 runs in 20**, with
+`child never reported`. The first reading was that one case's budget was tight. That reading was
+wrong, and the evidence that broke it is that the third observed failure was a **different case in
+the same file**. What is weak is not a case, it is the file's real-child path -- so a fix aimed at
+one case would have looked like a repair and re-failed somewhere else in the same file.
+
+**The measurement.** Spawn-to-first-observation for the C2 provider on this port's development cell
+(9 cores, WSL2), timed around `ClaudeCliSessionProvider.start` plus the same 20ms poll:
+
+    idle, n=3                                            957ms ..  2332ms
+    18 spinners, n=5                                    1634ms ..  3939ms
+    18 spinners + 8 concurrent spawners, n=16           3464ms ..  4615ms
+    36 spinners + fsync IO + 4 spawners, n=99,          3309ms ..  9250ms
+      load average ~50 on 9 cores                     p50 4900ms, p90 6453ms
+
+and the file itself, 28.6s idle, takes 70-77s under the last condition. The number that matters is
+not the median, it is the ratio: **a 10s deadline is 1.08x of the worst spawn measured** and 1.5x of
+its p90, and the suite's own parallel pass (`scripts/run-suite.mjs`, which #111 grew by two spawning
+files) is the condition that eats it. At `childWaitTimeoutMs()`'s 20s the same worst case has 2.2x
+and the p90 has 3.1x.
+
+Stated honestly: the red itself did not reproduce on this cell -- 3/3 and then 3/3 green at loads of
+39 and 50 -- and the margin above is why. The failure needs a spawn 8% slower than the slowest of a
+hundred, which is a coin this cell would not flip inside an affordable number of runs and the
+reporter's did four times in twenty. What is measured here is the margin, not the flip, and the
+margin is the thing the fix moves.
+
+**Decision.**
+
+1. **The budget is derived, from D-0052's scale.** `test/helpers/runner-timeouts.ts` gains
+   `childWaitTimeoutMs(platform)`, which is `runnerTimeoutMs(platform) / CHILD_WAIT_BUDGET_DIVISOR`.
+   No second scaling rule is invented: what makes a child slow to report is a loaded or slow
+   machine, which is the thing `D-0052` already scales the runner's per-test budget for, and that
+   scale keeps its one home. 20s on a fast runner, 60s on a slow one.
+2. **The divisor exists so the poll wins the race it is in.** Two budgets cover the same wait: the
+   poll's, which fails with the readout in the message, and Vitest's, which fails with
+   `Test timed out in Nms` and no attribution. `CHILD_WAIT_BUDGET_DIVISOR = 3` is the largest number
+   of waits any one case makes (two -- "a released binding frees the run for the next session")
+   plus one, so even a case that waits twice cannot reach the runner's budget by summing its waits.
+   A flat fraction like a half would have let two waits add up to exactly the runner's budget and
+   handed the failure back to the layer with the worse message.
+3. **Both real-child wait budgets move, not just the reported one.** The gate_item11 helper's
+   default and `session-cases.ts`'s `POLL_DEADLINE_MS` are the same defect at two call sites, and
+   `claude-cli-provider.test.ts` polls the real CLI against the second one. Fixing only the file in
+   the issue would have left the identical weakness under the other real-child file.
+4. **What is not scaled.** `POLL_INTERVAL_MS` (20ms) is a polling rate, not a budget, and a slower
+   machine does not need to be polled less often. `TEARDOWN_EXIT_TIMEOUT_MS` (10s) measures a
+   different thing -- how long an *already stopped* child takes to be gone, which does not depend on
+   CLI start-up latency -- and it is a hygiene check whose expiry means a real defect (a child that
+   outlives its stop holds a Windows directory open and breaks the run's cleanup). Neither is in
+   this entry. The manifest's numbers, `PORT_BUDGET_SCALE`, `RUNNER_TIMEOUT_BASE_MS` and both Vitest
+   configs are untouched.
+
+**The trade, stated plainly.** A child that is genuinely never going to report is now reported after
+20s rather than 10s (60s rather than 10s on Windows). That is 10s per hung case on the cells that
+run first, against a file that already takes 28.6s idle, and it buys a 4.3x margin over the worst
+spawn this port has measured where there was 2.2x. `retry: 0` and the double-green rule (`D-0005`)
+are what protect correctness here; a stopwatch tuned close to observed timings was never doing that
+job, it was only converting a busy machine into a red merge gate -- the same argument `D-0052` makes
+one layer up, which is why this entry connects to it rather than restating it.
+
+**Alternatives.**
+
+- **Raise the one case's deadline.** Rejected on the issue's own evidence: the third failure was a
+  different case in the same file, so the weak thing is the path, not the case.
+- **A flat larger constant (30s, 60s) at each call site.** Rejected. It invents a threshold instead
+  of deriving one, and it puts back the two-homes-for-one-number shape `D-0052` and `D-0604` both
+  exist to remove -- the next person raising the runner's budget would have no reason to look here.
+- **A second scale keyed on load** (`os.loadavg()`, a `CONTINUO_SLOW` variable). Rejected. It is a
+  second scaling rule, it makes the budget depend on a reading taken at an arbitrary instant, and
+  `D-0052` already rejected the environment-variable shape for reasons that apply unchanged.
+- **Scale `POLL_INTERVAL_MS` too.** Rejected: polling less often on a slow machine adds latency to
+  the answer without buying any headroom.
+
+**Falsifier.** If `child never reported` keeps appearing on this file at the new budget, the deadline
+was not the binding constraint and the next suspect is contention in the parallel pass itself
+(`SPAWNING_TESTS`, which #111 grew by two files) rather than any number here. Conversely, if a
+genuinely hung child is ever found to have been reported by Vitest's timeout rather than by the poll,
+the divisor is too small for the number of waits some case now makes and it, not the base, is what to
+revisit.
+
+**Source.** Task `continuo-113-flake`, on issue `#113` (about 4 failures in 20 runs, across two
+different cases of the same file) and the measurement above. Decision id allocated from the
+`D-0019`..`D-0099` shared band after checking `origin/main` at `1474e8d`, where `D-0068` is the
+highest id in the band: the change is in `test/helpers/runner-timeouts.ts`, which is shared by every
+lane, so it is a cross-belt decision taken at the window rather than one belt's.

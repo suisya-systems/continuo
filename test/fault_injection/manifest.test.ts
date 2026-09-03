@@ -16,7 +16,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "vitest";
 
-import { RUNNER_TIMEOUT_BASE_MS, runnerTimeoutMs } from "../helpers/runner-timeouts.js";
+import {
+  CHILD_WAIT_BUDGET_DIVISOR,
+  childWaitTimeoutMs,
+  RUNNER_TIMEOUT_BASE_MS,
+  runnerTimeoutMs,
+} from "../helpers/runner-timeouts.js";
 import { expectRefusal } from "../testkit/errors.js";
 import * as contract from "./contract.js";
 import { ContractViolation, caseSeed, type FaultCase, resolveSkewMs } from "./contract.js";
@@ -591,6 +596,23 @@ describe("the budgets", () => {
     expect(runnerTimeoutMs("win32")).toBe(RUNNER_TIMEOUT_BASE_MS * PORT_BUDGET_SCALE);
     expect(runnerTimeoutMs("linux")).toBe(RUNNER_TIMEOUT_BASE_MS);
     expect(runnerTimeoutMs("darwin")).toBe(RUNNER_TIMEOUT_BASE_MS);
+
+    // D-0069, and it is asserted here rather than beside its own callers for
+    // the reason the two lines above are: this is where the layers that share
+    // one scale are checked against each other, and the wait a test gives a
+    // real child is now a third such layer. What must hold is the ORDER -- the
+    // poll's deadline loses to nothing and beats the runner's, so a child that
+    // never reports is named by the helper's message rather than by an
+    // unattributable `Test timed out in Nms`. The divisor is what buys that on
+    // a case that waits twice, so assert the multiplied form, not just one.
+    for (const platform of ["linux", "darwin", "win32"]) {
+      expect(childWaitTimeoutMs(platform)).toBeLessThan(runnerTimeoutMs(platform));
+      expect(childWaitTimeoutMs(platform) * CHILD_WAIT_BUDGET_DIVISOR).toBe(
+        runnerTimeoutMs(platform),
+      );
+    }
+    // and it really is D-0052's scale rather than a second one of its own.
+    expect(childWaitTimeoutMs("win32")).toBe(childWaitTimeoutMs("linux") * PORT_BUDGET_SCALE);
   });
 
   test("target-only -- no budget in `policy.ts` is read outside the functions that scale it", () => {
