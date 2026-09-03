@@ -45,11 +45,12 @@
       }
     ],
     "target_only_tests": {
-      "count": 1,
+      "count": 2,
       "ids": [
-        "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > target-only -- the scan sees the routes around it"
+        "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > target-only -- the scan sees the routes around it",
+        "test/messagebus/import-graph.test.ts::item 6's static assertion: the delivery layer has no session edge > session knowledge in this suite stays in the stale-readout case[endpoint-lease-renewal.test.ts]"
       ],
-      "why": "The source's import-graph file has no probe case; `test/canary/structural.test.ts` and `test/secretary/structural.test.ts` do, and for the reason that applies here too -- a guard is only as good as what it would have caught, and this port had to REWRITE the scan in a different language with two extra escape routes in it. The probe defends the machinery the port wrote (a type-only import, an `export ... from`, a `require()` in a function body, a dynamic `import()` in a function body, and both dynamic-import primitives reported by name), and additionally asserts that all four session routes are JUDGED session edges -- a scan that saw them and then failed to flag them would pass every case above. It is target-only because it is about the machinery, not about a property of the source."
+      "why": "The source's import-graph file has no probe case; `test/canary/structural.test.ts` and `test/secretary/structural.test.ts` do, and for the reason that applies here too -- a guard is only as good as what it would have caught, and this port had to REWRITE the scan in a different language with two extra escape routes in it. The probe defends the machinery the port wrote (a type-only import, an `export ... from`, a `require()` in a function body, a dynamic `import()` in a function body, and both dynamic-import primitives reported by name), and additionally asserts that all four session routes are JUDGED session edges -- a scan that saw them and then failed to flag them would pass every case above. It is target-only because it is about the machinery, not about a property of the source. The second id is not a case anyone wrote: the parametrisation is a DIRECTORY LISTING, so `test/messagebus/endpoint-lease-renewal.test.ts` -- step 4's acceptance case, added by continuo#110 -- gets a confinement case of its own the moment the file exists. That is the listing working as designed (a file added to this suite is scanned rather than skipped), and it is target-only for the same reason the file is: interlock has no launcher holding the endpoint's lease, so there is no source node id this case could be mapped to. Recorded here rather than waived, because the alternative -- widening the unmapped rule -- would also stop noticing a file that WAS ported and then lost its mapping."
     }
   },
   "totals": {

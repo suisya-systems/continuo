@@ -104,8 +104,10 @@ const SPAWNING_TESTS = [
   "test/gate_item2/mediated-real-provider.test.ts", // 6
   "test/gate_item2/session-driver-harness.test.ts", // 12
   "test/lap/cli.test.ts", // 8, via src/workspace/git.ts and a fenced child
+  "test/lap/endpoint-lease.test.ts", // 6, via src/workspace/git.ts (no claude child)
   "test/lap/teardown.test.ts", // 6, via src/workspace/git.ts (no claude child)
   "test/measurement/cli.test.ts", // sync
+  "test/messagebus/endpoint-lease-renewal.test.ts", // 2
   "test/messagebus/endpoint.test.ts", // 1 + sync
   "test/messagebus/stale-readout.test.ts", // 2
   "test/session/claude-cli-provider.test.ts", // 39

@@ -166,6 +166,11 @@ spaces distinct.
 | D-0068 | A session is this lap's to stop only while it still holds the lease epoch it spawned under | accepted |
 | D-0069 | A test's wait for a real child is a share of the runner's budget, from D-0052's scale | accepted |
 | D-0070 | The materialiser wards every path the fence depends on, and each is judged where its consumer reads it | accepted |
+| D-0071 | The orchestrator's lease stays per-verb, with no code change, and `D-0068`'s residual stays open | accepted |
+| D-0072 | The `lap perform` process is the endpoint's launcher and its lease holder, and the renewal timer lives beside the composition root | accepted |
+| D-0073 | The delivery lease's TTL is chosen against its renewal interval; a tick latches rather than throwing, and never re-acquires | accepted |
+| D-0074 | The endpoint's three lease values are all determinate, and `--endpoint-epoch` is removed rather than demoted | accepted |
+| D-0075 | Lap 1 requires the endpoint, and the delivery lease row is what records that it ran under one | accepted |
 
 ---
 
@@ -12121,3 +12126,251 @@ split "depends on for enforcement" from "reads as data" rather than to widen the
 if the fence renderer ever resolved its own paths against the workspace instead of the launcher's
 directory, the absoluteness half of this entry would become a redundant second statement of a rule
 that module had taken over -- and it should then be removed from here rather than kept for symmetry.
+
+---
+
+## D-0071 -- The orchestrator's lease stays per-verb, with no code change, and `D-0068`'s residual stays open
+
+**Context.** Step 4 (continuo#110) has to settle *two* lease scopes, and the design already knows the
+answer to one of them. Section 4.9: "the orchestrator's lease is per-verb and never crosses the
+gate". The Issue's own acceptance list says the same thing twice over -- "the orchestrator's
+per-verb scope is recorded as settled (no code change expected there)".
+
+**Decision. Settled, and the diff is empty.** `SessionOrchestrator.#acquire()` is called once at the
+top of `start()` and once at the top of `recover()`, and `supervisor.ts` contains no `renew` and no
+`release`. The lease's scope is therefore the spawn-admission critical section and nothing else,
+which is exactly the shape 4.9 records. **This entry is the record; there is nothing to build.**
+Writing it down matters because the absence of a change is indistinguishable from the absence of a
+decision, and the next reader of 4.9 would otherwise have to re-derive that the orchestrator half was
+looked at and found already right.
+
+**What this step does NOT do, stated because `D-0064` predicted it would.** `D-0064` records a second
+reason step 4 was needed: `D-0068`'s residual -- the window between reading the session lease's epoch
+and signalling the child, in which an expired lease can be taken by another claimant -- closes if the
+lease is *held and renewed for the lap's whole life*. **That is not done here, and the residual stays
+open.**
+
+Three grounds, in order of weight:
+
+1. **It is a different lease.** Step 4's subject is `outbox-delivery`, the endpoint's; `D-0068`'s is
+   `session-run:<runId>`, the orchestrator's. Renewing the second is a second timer over a lease this
+   step does not otherwise touch, and continuo#110's acceptance criteria name only the first.
+2. **It is not what 4.9 forbids, and it is not what 4.9 asks for either.** Renewing the session lease
+   across the *turn* would not cross the gate -- 4.9's prohibition is about the human wait at L5-L6,
+   and the turn is L3-L4 -- so there is no contradiction to resolve. But 4.9's per-verb sentence is
+   about scope, and extending the orchestrator's lease across the poll changes that scope. Changing
+   it deserves its own decision rather than arriving as a side effect of the endpoint's renewal.
+3. **Step 8 needed ten review rounds and converged only after being split.** continuo#110's own
+   resumption note says so and asks for a small PR.
+
+**Consequences.** `D-0064`'s second half is *deferred*, not withdrawn: the analysis in it stands, and
+the work it names remains available to whichever step takes it. `D-0068`'s "What would falsify it"
+paragraph -- which says that a lease held and renewed for the lap's whole life turns the epoch
+comparison into an equality that should never fail -- is **still hypothetical after this step**, and
+a reader arriving there from `D-0064` should read this entry rather than assume it happened.
+
+**What would falsify it.** A takeover observed in that window on a real lap would make the residual a
+live defect rather than a stated one, and would move renewing the session lease from "a decision
+somebody should take" to "the fix". So would step 10 needing the orchestrator's lease to survive the
+relay, which would settle the scope question from the other end.
+
+---
+
+## D-0072 -- The `lap perform` process is the endpoint's launcher and its lease holder, and the renewal timer lives beside the composition root
+
+**Context.** Section 4.9 leaves step 4 one sentence of construction -- "whatever process launches the
+endpoint holds its lease and renews it on a timer for as long as the endpoint runs" -- and names no
+process. continuo#110 decision 1 is which one, given that step 8 landed a composition root
+(`D-0059`) and a `lap perform` verb.
+
+**Decision. The `lap perform` process holds it, and the timer lives in `src/lap/endpoint_lease.ts`.**
+
+**The endpoint is a grandchild, and that is what settles it.** `materializeWorkspace` writes the
+worker's `mcp.json` naming `node <endpoint.js>` and appends `--mcp-config` to the worker's arguments;
+the worker's own CLI is the MCP client that starts the endpoint, as a stdio server, and the endpoint
+dies at end of input. So the endpoint's life is a subinterval of the worker's, and the worker's is a
+subinterval of the lap's: `performLap` stops the session in its own `finally` on every path out --
+including refusals and the turn timeout -- and `lap/cli.ts` closes the database only after that
+returns. **The lap process is therefore alive for the whole of the endpoint's life and a little
+either side, on every path, and it is the only continuo process today with that property.**
+
+**This is not the rejected "scope the endpoint to a worker turn".** That answer tried to make renewal
+unnecessary by bounding the endpoint's life. Renewal is implemented here and runs for as long as the
+endpoint runs; nothing assumes the turn is bounded, and a turn that runs for hours is renewed for
+hours. The holder merely happens to outlive the thing it is holding for, which is what a launcher is.
+
+**Where it lives, and why not in `root.ts`.** `root.ts` holds the order and is deliberately nothing
+else. The lease is the one thing in the lap that is about the passage of time, and it carries a
+timer, a latch and a teardown of its own; a module beside the root keeps `performLap` readable as a
+sequence and makes the holder testable without a lap around it. It also keeps the import graph
+one-way -- `endpoint_lease.ts` imports the control plane and the endpoint's resource constant, and
+nothing from `root.ts`, which is why it declares its own refusal (`EndpointLeaseLost`) in the
+`ControlPlaneRefusal` family rather than reusing `LapRefused`.
+
+**Where step 10 leaves this, checked in both directions rather than assumed.** If the gate's human
+wait happens *inside* the worker's turn, the lap is still awaiting the report and still renewing, and
+this decision needs nothing added. If it happens *between* lap invocations, then the worker CLI has
+exited and the endpoint with it, so there is nothing to hold a lease for; the next launcher acquires
+and mints a new epoch for a new endpoint, which is the correct behaviour rather than a gap.
+
+**What would falsify it.** An endpoint that outlives the lap process -- a host application serving
+MCP in-process (section 0, premise 1), or an endpoint started by something other than the worker --
+would move the holder to whatever has the enclosing lifetime. Section 5.1 already records that the
+*requirement* survives that change even though this component may not.
+
+---
+
+## D-0073 -- The delivery lease's TTL is chosen against its renewal interval; a tick latches rather than throwing, and never re-acquires
+
+**Context.** continuo#110 decision 2: the TTL and the renewal interval, "chosen against each other
+rather than against the lap's duration", plus what happens when a renewal is late.
+
+**Decision.** `DELIVERY_LEASE_TTL_MS = 60_000` and `DELIVERY_LEASE_RENEWAL_INTERVAL_MS = 15_000` --
+four ticks per TTL, so three consecutive missed ticks are survivable. **Both are module constants and
+neither is a flag**, because a TTL knob is an invitation to answer an expired lease by making the
+number bigger, which is the first of the two answers section 4.9 records as wrong.
+
+**Safety does not rest on the timer, and saying so is what makes the rest of this entry small.**
+Every fenced write re-evaluates the lease against a live clock *inside the write* (`FENCE_SQL`), so a
+lapsed lease can never admit a write however late a renewal is. The timer is about avoiding spurious
+refusals and about legibility. A late renewal costs a refusal; it never costs a wrong write.
+
+**A tick never throws.** It is reached from a timer, which is outside every `try` and every `await`
+in `performLap`. A throw there would bypass `isOperatorRefusal`, bypass the teardown that stops the
+worker, leave a fenced child running with nobody polling it, and exit 1 with a stack trace where
+every other refusal in this CLI is one line and exit 2. So a failed renewal **latches** on the holder
+and is read where the lap can act on it.
+
+**A tick never re-acquires.** `renew` refuses an expired lease so that a returning holder must
+re-acquire, and re-acquiring raises the epoch. But the epoch is already rendered into the running
+worker's `mcp.json` and fixed in the endpoint's environment at startup, so re-acquiring here would
+mint a token the endpoint can never be told about -- converting a lease this process could still have
+recovered into an endpoint durably fenced out of its own outbox. `renew` also cannot distinguish
+"expired while I stalled" from "taken over" (both are `LeaseNotHeld`) and the answer is the same
+either way, so nothing branches on it.
+
+**A tick that finds the connection in a transaction is skipped and re-armed sooner (250 ms).**
+`withImmediate` refuses a connection already in a transaction, and `SessionOrchestrator` genuinely
+holds a `BEGIN IMMEDIATE` across an awaited `provider.stop()`. Attempting anyway would latch a
+`LeaseUsageError` -- a defect-shaped exception -- over a lease that is perfectly healthy. **A second
+connection is deliberately not the fix**: it would trade a bounded local deferral for cross-connection
+`SQLITE_BUSY` against the very transaction being stepped around, and buy nothing, because the fence
+is inside every write regardless.
+
+**Where a loss is surfaced depends on which side of the spawn it lands, and this is the part that had
+to be decided rather than derived.**
+
+- **Before the spawn: refuse.** `materializeWorkspace` is synchronous and its git runs through
+  `spawnSync`, so the event loop is blocked for the whole of it and no tick can fire -- and
+  `git.ts`'s per-command bound alone defaults to two minutes, longer than the TTL. `performLap`
+  therefore renews **by hand** the instant materialisation returns and refuses if that renewal was
+  refused. A materialisation that outran the lease then costs one stderr line before any child
+  exists, instead of a worker whose endpoint is fenced out of its own outbox for a whole turn with
+  silence as the only symptom.
+- **After the terminal report: renew once by hand, and do not refuse.** The by-hand renewal is here
+  for the same reason it is above the spawn, and it is what makes the field below an answer rather
+  than an absence of evidence: the latch records *attempted* renewals, so a turn during which no tick
+  ever ran -- the event loop blocked, the process suspended past the TTL -- would otherwise leave it
+  empty over a lease that had already lapsed, and the lap would report nothing wrong while the
+  endpoint had been fenced out. Once the turn's report exists, a lost delivery lease
+  costs the lease and never the report. This is `D-0065`'s trade -- "an expired deadline costs the
+  deadline, never the report" -- applied to the other thing a lap can lose, and it takes the same
+  shape: a nullable field, `LapOutcome.endpointLeaseFailure`, reported as its own line by the verb.
+  In lap 1 the report reaches the gate through the transcript and never through the endpoint, so
+  discarding a completed turn over a lease it did not travel on would be pure loss.
+
+**The lease is given back at the end of a lap, EXCEPT where the teardown left a worker running.**
+`performLap`'s teardown declines to stop a session in one state it has already reasoned about -- a
+takeover writer may have adopted this lap's child (`D-0068`) -- and a `stop` that is attempted may
+also come back a `Failure`. In both, a worker is or may be alive, and that worker's endpoint is still
+writing under this lease. Releasing there would fence it out **at once**, which is the same harm the
+teardown just stood down from doing with a signal, reached by a different road. So in those states
+the lease is **abandoned**: renewal stops and the row is left to expire on its own. It costs the next
+lap at most one TTL on a global resource, and it is the safe direction -- the adopted endpoint keeps
+the window it already had, and nothing this lap does shortens it. Everywhere else -- no child was
+ever minted, or the stop reported success -- the lease is released, because leaving a global resource
+standing for a minute after a lap that is provably over is pure cost.
+
+**The 60 seconds is the number most likely to be wrong, and it is wrong in a visible direction.** It
+is not sized to cover the worst synchronous materialisation, and cannot be: several git commands run
+in sequence and each carries its own bound. What covers that is the by-hand renewal above. If laps on
+a large repository start refusing there routinely, the answer is to raise the TTL against **the
+bounded synchronous span** -- which is a real bound and therefore not 4.9's rejected shortcut -- and
+not to remove the check.
+
+**What would falsify it.** A materialiser that yielded to the event loop (asynchronous git) would
+remove the starvation window and with it the reason the TTL is four times the interval rather than
+twice. A delivery path that a worker's report actually travelled on would make the post-report field
+the wrong answer, because then losing the lease would mean losing something.
+
+---
+
+## D-0074 -- The endpoint's three lease values are all determinate, and `--endpoint-epoch` is removed rather than demoted
+
+**Context.** Section 4.9 names "determinate values for the endpoint's lease environment variables" as
+an explicit unblock of step 4, and continuo#110 decision 3 asks for them. Today they are supplied by
+hand.
+
+**Decision, one line each.**
+
+- `INTERLOCK_MESSAGEBUS_RESOURCE` -- already determinate, and unchanged: the constant
+  `DELIVERY_LEASE_RESOURCE` (`"outbox-delivery"`), written by the materialiser, refused by it if a
+  binding ever disagrees, and re-asserted by the endpoint at startup.
+- `INTERLOCK_MESSAGEBUS_HOLDER` -- already determinate, and unchanged: `intent.leaseClaimantId`,
+  filled by `performLap` from the admitted run. `LapRequest.endpoint` already omitted it.
+- `INTERLOCK_MESSAGEBUS_EPOCH` -- **the one that was not**, and now is: the epoch this lap's own
+  acquisition minted, taken from the acquisition rather than read back from the row (`D-0068`'s
+  reason: a number read back later answers a different question).
+
+**Why the flag is removed and not kept as an override.** It was not merely hand-supplied, it was a
+**fiction**: nothing under `src/` ever acquired `outbox-delivery`, so on a real lap there was no
+lease row for the resource at all and every fenced write the endpoint attempted would have been
+refused as a stale writer. This was invisible only because lap 1 never delivers through the endpoint
+(`D-0064`). Keeping the flag as an override would keep a *supported* way to render an epoch naming no
+live lease, which is precisely the defect this step closes. `--endpoint-epoch` therefore goes, and
+`LapRequest.endpoint` narrows from `Omit<EndpointBinding, "holder">` to
+`Omit<EndpointBinding, "holder" | "epoch">`. `EndpointBinding.epoch` itself stays required: the
+materialiser is still handed a real epoch, and now it is an acquired one.
+
+**The consequence, recorded rather than discovered: laps serialise.** `outbox-delivery` is one global
+resource (`D-0053` rule 4 -- the outbox row carries no resource column, so a second resource would be
+a fence proving only that *some* lease is live). Its holder is now the run's claimant, so a second
+concurrent `lap perform` against one control plane is refused `LeaseHeld` at the acquisition --
+before a worktree, a fence or a child exists, and in the family the verb already reports as one line
+and exit 2. That is strictly more honest than the previous behaviour, in which both laps "succeeded"
+while writing under epochs nobody held. It is nonetheless a new refusal on a shipped verb, and it is
+this entry that says so.
+
+**What would falsify it.** A scope column on `outbox`, or a strict recipient predicate on both the
+due and the recovery passes, would let more than one delivery resource exist -- and then the holder
+identity, and with it the serialisation, would have to be reconsidered. `D-0053` leaves both open on
+purpose.
+
+---
+
+## D-0075 -- Lap 1 requires the endpoint, and the delivery lease row is what records that it ran under one
+
+**Context.** continuo#110 decision 4: whether lap 1 requires the endpoint at all, and if it is
+optional, what records that.
+
+**Decision. Required, and this is the branch that changes nothing.** The materialiser already renders
+`mcp.json` unconditionally and appends `--mcp-config`; `EndpointBinding.epoch` is required; every
+`--endpoint-*` flag that survives `D-0074` is `required: true`. Making the endpoint optional would
+mean optional flags, a second `mcp.json` shape, an "absent" state threaded through the binding and
+the materialiser, and a conditional acquire with a conditional release -- a behaviour change to a
+shipped verb that no acceptance criterion asks for.
+
+**The positive argument is the stronger one.** With the acquisition unconditional, "a lap ran" and
+"an endpoint lease was held and renewed for it" are the same fact, and there is no branch to get
+wrong. An optional endpoint would put a second shape into the one place `D-0217` makes unrepeatable.
+
+**What records it.** This entry; the unconditional acquisition in `performLap`; and the
+`outbox-delivery` lease row itself, whose holder and epoch are byte-for-byte what the worker's
+`mcp.json` was rendered with, joinable after the fact with the `workspace_materialized` event. **No
+new column and no `endpointStarted` field**: `performLap` never observes the grandchild and must not
+claim to. What it can honestly record is that it held the lease the endpoint would write under, which
+is what it records.
+
+**What would falsify it.** Section 0 premise 1's in-process host, where the endpoint dissolves as a
+component -- at which point "requires the endpoint" stops being the right sentence, while the
+epoch-fenced writes and the renewal requirement survive it unchanged (section 5.1).

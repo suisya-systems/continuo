@@ -90,12 +90,13 @@ import { type DeliveredEnvelope, MessageBus } from "./bus.js";
  *   schema changes that would lift it -- is written out on the constant, which
  *   is where a reader who is about to widen this will be standing.
  *
- *   Renewing that lease is deliberately **not** this module's job and is not
- *   implemented anywhere yet: it belongs to the launcher (the composition root)
- *   that owns the endpoint's whole lifetime, and that launcher does not exist.
- *   Until it does, an endpoint outliving its lease dies loudly at its next write
- *   rather than quietly delivering under a dead one, which is the safe direction
- *   for the gap.
+ *   Renewing that lease is deliberately **not** this module's job: it belongs to
+ *   the launcher that owns the endpoint's whole lifetime, and since step 4 that
+ *   launcher exists -- `src/lap/endpoint_lease.ts`, held by the `lap perform`
+ *   process (`D-0072`). This module is unchanged by it and deliberately so: the
+ *   epoch is still fixed here at startup, because a renewal keeps the epoch, and
+ *   an endpoint that does outlive its lease still dies loudly at its next write
+ *   rather than quietly delivering under a dead one.
  * - `INTERLOCK_MESSAGEBUS_RECIPIENT` -- the one recipient this endpoint serves.
  *   `poll` is pinned to it; a worker cannot pull another recipient's queue
  *   through this surface.

@@ -210,7 +210,6 @@ function lap(
     "--repository": repository,
     "--artifact-root": artifactRoot,
     "--state-root": stateRoot,
-    "--endpoint-epoch": "1",
     "--endpoint-recipient": NOTIFY_RECIPIENT,
     "--endpoint-destination-dir": destinationDir,
     // A path rather than the built module: nothing here starts an endpoint, and
