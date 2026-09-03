@@ -11190,6 +11190,21 @@ allowlisted).
 - `test/lap/cli.test.ts` is registered in `SPAWNING_TESTS` (`scripts/run-suite.mjs`): it drives real
   git and starts a real child, and `D-0048` runs those apart from the rest of the suite on Windows.
 
+**The cost of being provider-agnostic, stated because it is a cost and not a free property.**
+`ClaudeCliSessionProvider` owns a list of arguments a caller may not supply -- `-p`, `--resume`,
+`--session-id` and the rest -- and refuses them from `#readSettings`, which runs inside
+`orchestrator.start()`. The lap therefore **cannot** reject an admitted intent whose `cliArgs`
+contain one of them before materialising: reading that list would mean importing a backend into
+`src/lap/`, which is the join this entry exists to avoid, and copying it would be a second
+implementation of a rule the provider owns -- the failure mode this branch already made three times.
+So a run admitted with a provider-owned argument spends its identifier: the branch, the worktree and
+the fence are built, the walk refuses, and `D-0057` will not let the run be materialised again.
+Recovery is a fresh run identifier.
+
+Closing it properly means the session contract gaining a "would you accept these settings" question,
+which is an `S1` change (`PROVISIONAL`, and `PROMOTION_REQUIRES` says what settling that interface
+needs). That is a decision above this step, and it is recorded here rather than taken here.
+
 **What would falsify it.** `D-1001`'s own falsifier -- a subpath-exports split that let a provider
 swap avoid touching `src/index.ts` -- would remove the barrel this reaches through, and the import in
 `src/lap/cli.ts` would move with it. Separately, if a second lap-shaped surface ever needs a
@@ -11685,6 +11700,23 @@ field `MaterializationRequest` already had, so the gap predates this step; what 
 command line that reaches them. **The deny hook is the sharpest of them** -- it is the file that
 enforces the fence, and it does not protect its own path. Hardening them belongs with the module that
 owns the invariant and is the follow-on branch's, along with the shared predicate this entry starts.
+
+**Who this rule defends against, and who it does not.** The fenced party is the **worker**. The
+**operator** is the party holding the fence, and is trusted: they choose the role, the workspace and
+the command, and they can already do anything the lap could do. That distinction is what decides
+which of this rule's neighbours are worth paying for, and it was not written down early enough --
+review produced a run of findings premised on an operator attacking themselves (a control character
+in their own `--db`, a `.` on their own `PATH`, a newline in a path they typed), and each one is
+*true* while being a defence against the wrong party.
+
+They were not all declined: `--claude-command` is required to be fully qualified, because a
+`PATH`-resolved binary is decided by ambient state rather than by the operator, and a worktree the
+worker writes to is on that path. The line is not "operator input is safe" but **"does the worker
+get to influence it"** -- and where the answer is no, the cost of a guard is paid by every reader of
+this code forever, for a hazard whose only actor is the person the fence is for.
+
+The remaining ones are named in the PR's known limitations rather than fixed, so a later reader can
+see that the gap is a judgement about the threat model and not a place nobody looked.
 
 **What would falsify it.** If a role's fence ever legitimately needed to reference a file inside the
 worktree -- a project-local configuration the worker edits and the fence reads -- the rule as stated

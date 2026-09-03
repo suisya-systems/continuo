@@ -1,3 +1,4 @@
+import { accessSync, constants, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -491,6 +492,10 @@ function preflight(request: LapRequest, provider: SessionProvider, workspace: st
   // fire over a directory this preflight had just made. A check that has to be
   // run before its neighbour has a side effect is worth saying out loud.
   requireOutsideWorkspace(request, workspace);
+  // The state root has to be a directory this process can write, and the
+  // capability probe will not tell us. See {@link requireUsableStateRoot}.
+  // After containment, because it creates the directory it is checking.
+  requireUsableStateRoot(request.providerStateRoot);
   // The spawn precondition, asked here rather than left to the walk. It is on
   // the contract (`SessionProvider.requireSpawnable`), so this stays
   // provider-agnostic; it raises `SpawnRefused`, which the verb reports as one
@@ -576,6 +581,50 @@ function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
           "its evidence depends on must live outside it",
       );
     }
+  }
+}
+
+/**
+ * The provider's state root must be a directory this process can write.
+ *
+ * **The capability probe will not tell you this, and reading its source is the
+ * only way to find out.** `ClaudeCliSessionProvider` writes `probe-evidence.txt`
+ * into the state root while probing -- and when that write fails it catches the
+ * error and returns a pointer string saying so, because, in its own words,
+ * "failing to write it degrades the record, not the probe". That is right for
+ * the probe: an unwritable state root says nothing about whether the CLI is
+ * compatible. It does mean `requireSpawnable()` succeeds over a state root the
+ * provider cannot actually use, and the failure surfaces later, from
+ * `mkdirSync` on the session directory -- **after** the branch, the worktree and
+ * `workspace_materialized`, on a run `D-0057` will not let anyone materialise
+ * again.
+ *
+ * So the preflight asks the question the probe deliberately does not. A
+ * `--state-root` naming an existing regular file, or a directory this process
+ * may not write, is an ordinary operator typo, and the whole value of catching
+ * it here is that a corrected retry is still free.
+ *
+ * **This check has a side effect, and its position is chosen for it.** It
+ * creates the directory, which is what makes "can this be written" answerable
+ * rather than guessed -- and the provider creates it moments later anyway, so
+ * nothing irreversible is being done early. It runs **after** the containment
+ * check for the reason that check exists: creating it first would put a
+ * directory inside the worktree and only then refuse it for being there.
+ */
+function requireUsableStateRoot(stateRoot: string): void {
+  const root = resolve(stateRoot);
+  try {
+    mkdirSync(root, { recursive: true });
+    // `mkdirSync` on an existing directory is a no-op and proves nothing about
+    // writing to it, so the permission is asked separately.
+    accessSync(root, constants.W_OK);
+  } catch (error) {
+    throw new LapUsageError(
+      `the provider's state root ${pythonRepr(root)} is not a writable directory: ` +
+        `${String(error)}. The worker's records and the turn's transcript are written ` +
+        "there, and the capability probe does not report this -- it treats an unwritable " +
+        "state root as a degraded record rather than an incompatible CLI",
+    );
   }
 }
 

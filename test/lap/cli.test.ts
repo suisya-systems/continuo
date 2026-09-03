@@ -710,6 +710,23 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(existsSync(f.workspace)).toBe(false);
   });
 
+  test("a state root that is not a writable directory is refused up front", async () => {
+    // The capability probe will not catch this: it writes `probe-evidence.txt`
+    // into the state root and treats a failed write as a degraded record rather
+    // than an incompatible CLI -- correctly, since an unwritable directory says
+    // nothing about the CLI. So `requireSpawnable()` succeeds and the failure
+    // surfaces from the session directory's own `mkdirSync`, after the branch,
+    // the worktree and `workspace_materialized` exist, on a run `D-0057` will
+    // not let anyone materialise again. An operator typo costing a run.
+    const f = lap("state-root-not-a-dir");
+    const file = join(f.root, "not-a-directory");
+    writeFileSync(file, "", "utf8");
+
+    expect(await f.perform({ "--state-root": file })).toBe(2);
+    expect(f.err.join("")).toContain("not a writable directory");
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
   test("a relative worker command is refused", async () => {
     // `D-0067`: every token of the worker command must be an absolute path.
     // Three earlier attempts tried to decide safely which relative spellings
