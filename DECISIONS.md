@@ -11901,6 +11901,39 @@ genuinely hung child is ever found to have been reported by Vitest's timeout rat
 the divisor is too small for the number of waits some case now makes and it, not the base, is what to
 revisit.
 
+**Postscript -- what 20s does not fix, and why the answer is not a bigger number.** The budget was
+exercised further after it landed, and the honest result is that **it halves this flake rather than
+removing it**. Across 14 full-suite runs on the development cell one went red, in
+`a stale holder cannot bind a session it started[S2]`, with the same `child never reported` -- so
+about 1 run in 14 against the issue's reported 4 in 20. Three facts decide what to do about the
+remainder, and none of them is "raise it again":
+
+1. **The residual is not the mechanism this entry fixes.** Sampling the real CLI's spawn-to-first-
+   event latency *while the full suite ran* -- 261 samples, four concurrent samplers, the same
+   conditions the serialized spawn pass creates -- gives p50 2.27s, p90 2.68s, p99 3.13s, **max
+   3.67s**. The 20s wait that failed is five times outside the whole distribution. That is not a
+   budget being outgrown by load; it is a stall of a different kind (the cell runs several other
+   agent sessions, on WSL2), and a number chosen to cover it would be chosen by guessing at a tail
+   nobody has measured -- the "invent a threshold rather than derive one" move `D-0029` and `D-1003`
+   both anti-recommend, and the one this entry's Decision 1 exists to avoid.
+2. **This flake cannot turn the merge gate red.** `[S2]` runs only where the real `claude` CLI is on
+   `PATH`, and it is not on a GitHub runner: the CI log for continuo#114 reads
+   `substitution-scenarios.test.ts (12 tests | 6 skipped)` on every cell. The six cases that spawn a
+   real child are **skipped in CI and always have been**, so the cost of the residual is paid by a
+   developer's local run and never by the gate -- which also means a larger budget buys the gate
+   nothing and costs a genuinely hung local child more waiting.
+3. **The failure could not say how long it waited.** The real one read
+   `child never reported: [object Object]`: `String()` of a class with no `toString`, and no elapsed
+   figure at all. So the question "was it 21 seconds or 90?" -- the only question that could justify
+   a specific larger number -- was unanswerable from the artifact the failure produced. The helper
+   now reports the elapsed milliseconds, the budget it was measured against, and the readout's own
+   observation and reason. The next occurrence is therefore evidence; this one was not.
+
+**Falsifier, sharpened.** If the improved message shows a run stalling *just* past 20s -- say 20-30s
+-- with the sampled distribution still topping out near 4s, then the tail is real and reachable and
+the divisor is what to revisit. If instead it shows stalls of a minute or more, the child was not
+slow but stuck, and the remedy is in the provider or the environment, not in any budget here.
+
 **Postscript -- the CI slowdown this was checked against, and cleared of.** continuo#114's first
 run had one cell go red: `double-green (windows-latest, node 22)` took 23.5 minutes for its *first*
 green lap and was cut off by the job's `timeout-minutes: 40` partway through the second. Against

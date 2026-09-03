@@ -104,16 +104,33 @@ async function start(
  * the runner's per-test budget for. A literal here was 10s, and under load on
  * this port's development cell the same spawn was measured at a p90 of 6.5s and
  * a max of 9.3s: a margin of 1.08x, which is what issue #113 was.
+ *
+ * The message says **how long it actually waited** and renders the readout's
+ * own fields. Both were learned by reading a real failure of this helper, which
+ * said
+ *
+ *     child never reported: [object Object]
+ *
+ * -- `String()` of a class with no `toString` -- and so answered neither "how
+ * far past the budget was it?" nor "what did the child say instead?". Those are
+ * the only two questions a reader has here, and a timeout that cannot answer
+ * them cannot be told apart from a budget that is merely too small.
  */
 async function waitUntilObserved(
   provider: SessionProvider,
   sessionId: string,
   timeoutMs = childWaitTimeoutMs(),
 ) {
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
   let readout = unwrap(await provider.readState(sessionId), `read_state(${sessionId})`);
   while (readout.observation === Observation.COULD_NOT_OBSERVE) {
-    expect(Date.now() < deadline, `child never reported: ${String(readout)}`).toBe(true);
+    expect(
+      Date.now() < deadline,
+      `child never reported after ${Date.now() - startedAt}ms of a ${timeoutMs}ms budget ` +
+        `(session ${JSON.stringify(sessionId)}, observation ${String(readout.observation)}, ` +
+        `reason ${JSON.stringify(readout.couldNotObserveReason ?? null)})`,
+    ).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 20));
     readout = unwrap(await provider.readState(sessionId), `read_state(${sessionId})`);
   }
