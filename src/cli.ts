@@ -12,6 +12,8 @@
  * - `db create|migrate|verify ...` -> `src/control_plane/cli.ts`
  * - `run admit ...`         -> `src/control_plane/run_cli.ts`
  * - `lap perform ...`       -> `src/lap/cli.ts`
+ * - `gate list|show|present|deliver|ack|answer|close|reconcile ...`
+ *                           -> `src/gate/cli.ts`
  *
  * Ported from interlock `src/claude_org_runtime/cli.py` at `65f36c5`, which
  * mounts six subtrees. Two of them are not here -- `dispatcher` and `migrate`
@@ -60,6 +62,7 @@ import {
 } from "./cli/parser.js";
 import * as dbCli from "./control_plane/cli.js";
 import * as runCli from "./control_plane/run_cli.js";
+import * as gateCli from "./gate/cli.js";
 import * as lapCli from "./lap/cli.js";
 import * as measurementCli from "./measurement/cli.js";
 import { PACKAGE_NAME } from "./meta.js";
@@ -157,6 +160,15 @@ export function buildParser(): ArgumentParser {
       "human gate over what it reported.",
   );
   lapCli.addSubparsers(lap.addSubparsers("cmd"));
+
+  // gate (the human gate an escalation opened: present it, answer it, ack it)
+  const gate = sub.addParser(
+    "gate",
+    "Human gates over what a lap reported: list the open ones, put one in " +
+      "front of its recipient, record the answer and the ack that closes it, " +
+      "and run the reconcile pass.",
+  );
+  gateCli.addSubparsers(gate.addSubparsers("cmd"));
 
   return parser;
 }
