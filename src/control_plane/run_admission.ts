@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { appendEvent } from "./events.js";
-import { LapRunIntent } from "./lap_run_intent.js";
+import { LapRunIntent, PAYLOAD_KEYS } from "./lap_run_intent.js";
 import { pythonJsonObject } from "./python_json.js";
 import { pythonRepr } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
@@ -480,6 +480,27 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
     );
   }
   const payload = fields as Record<string, unknown>;
+
+  // **Every key the record writes must be present**, checked against the
+  // record's own key list rather than a copy of it.
+  //
+  // Without this, one field decays quietly and only one: `cli_args`. Every other
+  // field is required by the constructor, so an absent one arrives as
+  // `undefined` and is refused -- but `LapRunIntent` reads an omitted `cliArgs`
+  // as the empty list, because for a *caller* omitting it means "no arguments".
+  // For a *reader* it cannot mean that: the writer always emits the key, so its
+  // absence means the payload is not one this build wrote, and absorbing it
+  // would run the worker without arguments the durable record required. That is
+  // the shape this function's docstring promises to refuse, and it was the one
+  // shape it did not.
+  const missing = Object.values(PAYLOAD_KEYS).filter((key) => !Object.hasOwn(payload, key));
+  if (missing.length > 0) {
+    throw new RunNotAdmitted(
+      `run ${quoted}'s delegation payload is missing ${missing.join(", ")}; it was not ` +
+        "written by this build's record, and a field read as absent would be read as a " +
+        "value nobody chose",
+    );
+  }
 
   try {
     // Every field is passed through unchecked and unconverted: the constructor

@@ -11414,6 +11414,17 @@ and then, later, wrong.
 same rules. `materializer.ts` already documents this obligation and states the rules field by field
 against `lap_run_intent.ts`; this entry is the second place that dependency is written down.
 
+**The reader requires every persisted key to be present, and this is not the same check as the
+constructor's.** The constructor validates the *values* it is given, and for six of the seven fields
+that is enough: an absent one arrives as `undefined` and is refused. `cli_args` is the exception and
+the only one, because omitting it is meaningful to a **caller** -- it means "no arguments" -- and
+`LapRunIntent` reads it that way. To a **reader** it cannot mean that: the writer always emits the
+key, so its absence means the payload is not one this build wrote, and absorbing it would run the
+worker without arguments the durable record required, silently. So `readLapRunIntent` checks presence
+first, driven by `PAYLOAD_KEYS` -- the record's own key list, now exported for it -- rather than by a
+copy, because a copy would drift the first time a field was added and would tolerate exactly the new
+field's absence. Verified by removing the check and watching the case throw nothing at all.
+
 **What would falsify it.** A `MaterializationRequest` that shrank to the intent's fields plus one --
 if the endpoint binding and the fence substitutions moved into the admitted record, which is a
 plausible thing for step 10 or the console to want -- would make the whole-intent parameter the

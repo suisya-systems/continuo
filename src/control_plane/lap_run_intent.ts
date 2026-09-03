@@ -204,8 +204,14 @@ function isFullyQualified(path: string): boolean {
  * `claude_cli_provider.ts` reads out of the settings bag. Kept beside the type
  * rather than at the append site so that the field list and the persisted key
  * list cannot be extended one without the other.
+ *
+ * **Exported so the reader can be driven by it** (`readLapRunIntent`). A reader
+ * that checked a hand-written list of keys would be a second statement of this
+ * contract, and the two would drift the first time a field was added -- with the
+ * new field's absence silently tolerated, which is the failure that reader
+ * exists to prevent.
  */
-const PAYLOAD_KEYS = {
+export const PAYLOAD_KEYS = {
   leaseClaimantId: "lease_claimant_id",
   workspace: "workspace",
   role: "role",

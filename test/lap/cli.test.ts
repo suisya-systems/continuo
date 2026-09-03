@@ -632,6 +632,34 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(existsSync(f.workspace)).toBe(false);
   });
 
+  test("a worker that called its own turn a failure opens no gate", async () => {
+    // `D-0056` decides that a turn marked `is_error` is an execution failure and
+    // not an escalation, so the ingress refuses it and no gate is opened. The
+    // behaviour was already right -- `ReportIngressUsageError` is a
+    // `ControlPlaneRefusal`, so it reaches the operator as one line and exit 2
+    // rather than as a stack trace -- and it had no case, which is how a review
+    // came to read it as a defect. This is that case: what is pinned is that the
+    // classification holds through the whole lap, not merely that the class
+    // extends the right base.
+    const f = lap("lap-worker-failed");
+    fakeEnv("FAKE_IS_ERROR", "1");
+
+    expect(await f.perform()).toBe(2);
+    const written = f.err.join("");
+    expect(written).toMatch(/^error: /);
+    expect(written).toContain("is marked is_error");
+    expect(written).toContain("no gate is opened");
+    // One line, not a stack: a stack trace would arrive over several.
+    expect(written.trimEnd().split("\n")).toHaveLength(1);
+
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+    expect(connection.prepare("SELECT count(*) AS n FROM gate").get()).toEqual({ n: 0 });
+    // The workspace and the fence stay: the worker's failure is evidence, and
+    // deleting the checkout it failed in would destroy it.
+    expect(existsSync(join(f.workspace, "README.md"))).toBe(true);
+  });
+
   test("a second perform of one run is refused rather than re-run", async () => {
     // The materialiser refuses a run it has already materialised (`D-0057`),
     // and this is the case that says the CLI surfaces that as a refusal rather
