@@ -831,6 +831,42 @@ export function dispatch(
   argv: readonly string[],
   streams: ArgparseStreams,
 ): number {
+  const status = run(parser, argv, streams);
+  if (typeof status !== "number") {
+    // A handler that returns a promise has not finished when this returns, so a
+    // caller reading the value as a status would report success for a command
+    // still running -- and would lose whatever it eventually threw. Refusing is
+    // the fail-closed direction, and {@link dispatchAsync} is the way through.
+    throw new Error(
+      `${parser.prog}: this command is asynchronous and cannot be dispatched ` +
+        "synchronously; use dispatchAsync",
+    );
+  }
+  return status;
+}
+
+/**
+ * {@link dispatch}, for a command tree that contains an asynchronous handler.
+ *
+ * The lap's verb (`src/lap/cli.ts`) awaits the orchestrator's walk and the
+ * worker's transcript, so its handler returns a promise where every other verb
+ * in this CLI returns a number. Both shapes are settled here, so a subtree does
+ * not have to know which kind its neighbours are.
+ */
+export async function dispatchAsync(
+  parser: ArgumentParser,
+  argv: readonly string[],
+  streams: ArgparseStreams,
+): Promise<number> {
+  return await run(parser, argv, streams);
+}
+
+/** Parse, find the handler, and call it -- whatever shape its result has. */
+function run(
+  parser: ArgumentParser,
+  argv: readonly string[],
+  streams: ArgparseStreams,
+): number | Promise<number> {
   let args: Namespace;
   try {
     args = parser.parseArgs(argv, streams);
@@ -848,5 +884,5 @@ export function dispatch(
     // mounted without its handler would otherwise exit 0 having run nothing.
     throw new Error(`${parser.prog}: the parsed command names no handler`);
   }
-  return (func as (values: Namespace) => number)(args);
+  return (func as (values: Namespace) => number | Promise<number>)(args);
 }

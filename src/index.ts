@@ -430,6 +430,8 @@ export {
   RUN_DELEGATION_RECORDED_EVENT_TYPE,
   RunAdmissionUsageError,
   RunAlreadyAdmitted,
+  RunNotAdmitted,
+  readLapRunIntent,
 } from "./control_plane/run_admission.js";
 export {
   ADVANCE_RUN_STATUS_EFFECT,
@@ -612,6 +614,36 @@ export {
   readFence,
   writeFence,
 } from "./fencing/state.js";
+/**
+ * The lap's composition root (`D-0059`), step 8 of
+ * `docs/design/minimal-operating-loop.md`.
+ *
+ * `root.ts` only. `src/lap/cli.ts` is deliberately absent for the reason
+ * `src/cli.ts` is: it is a verb on the `continuo` bin rather than library
+ * surface -- and here the absence is load-bearing rather than tidy, because
+ * that module reaches this barrel for the shipped provider and a re-export
+ * would close the cycle.
+ *
+ * `lapCliSeams` is absent on the same ground as `spawnSeams` and
+ * `generatorSeams`: a seam for the tests that own the module, not public API.
+ */
+export {
+  awaitTerminalReport,
+  CREATE_WORKSPACE_TRANSITION,
+  LAP_ACTOR_ID,
+  type LapNoTerminalReport,
+  type LapOutcome,
+  LapRefused,
+  type LapRequest,
+  type LapTerminalReadout,
+  type LapTerminalReport,
+  LapUsageError,
+  lapArtifactDir,
+  MaterializedWorkspaceRequired,
+  performLap,
+  type TerminalReportReader,
+  type TurnCompletion,
+} from "./lap/root.js";
 /**
  * Section 5's AC-7 canary divergence report.
  *
@@ -1034,7 +1066,6 @@ export { PACKAGE_NAME, PACKAGE_VERSION } from "./meta.js";
  * down in `docs/secretary-intake-boundary.md` (D-0701).
  */
 export { IntakeQueue, IntakeReceipt, IntakeRefused, SecretaryIntake } from "./secretary/index.js";
-
 /**
  * The session subsystem (S1, S2, S3).
  *
@@ -1076,6 +1107,7 @@ export {
   ContractViolation,
   checkSpawnPrecondition,
   claudeSessionUuid,
+  createDefaultSessionProvider,
   D0009_VERBS,
   DEFAULT_CHILD_STATE,
   DELIVERY_ABSENCE_IS_DELIBERATE,

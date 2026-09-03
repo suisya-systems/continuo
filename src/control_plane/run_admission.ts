@@ -393,3 +393,104 @@ function appendOrRefuse(
   }
   return { eventId: appended.eventId, seq: appended.seq };
 }
+
+/**
+ * A run whose delegation record cannot be read back.
+ *
+ * In the {@link ControlPlaneRefusal} family, for the same reason
+ * {@link RunAlreadyAdmitted} is: an operator naming a run that was never
+ * admitted, or one admitted by a build whose payload this one cannot parse, is
+ * the ordinary outcome of a command someone typed rather than a defect.
+ */
+export class RunNotAdmitted extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "RunNotAdmitted";
+    Object.setPrototypeOf(this, RunNotAdmitted.prototype);
+  }
+}
+
+/**
+ * Read back the {@link LapRunIntent} admission fixed for `runId`.
+ *
+ * **The other half of `D-0055`, and it had none until now.** Admission writes
+ * the intent into the `run_delegation_recorded` payload precisely so that a
+ * later process -- a different one, with a working directory of its own -- can
+ * act on what the lap was admitted to do rather than on flags retyped at the
+ * point of use. Nothing could read it, so the composition root (`D-0059`) is
+ * this function's first caller and the reason it exists.
+ *
+ * **A `LapRunIntent` and not a plain object**, which is the whole point. The
+ * class is nominal and its constructor is its validation, so a payload that has
+ * decayed -- a build that wrote a field this one does not accept, a hand-edited
+ * row -- is refused here rather than reaching the materialiser as a value that
+ * merely looks right. The round trip is therefore also a check: what comes back
+ * is held to the same rules as what went in.
+ *
+ * The lookup is by the deterministic `event_id` {@link factId} assigns rather
+ * than by a `WHERE event_type = ... ORDER BY seq LIMIT 1` scan. Admission is the
+ * only producer of this vocabulary and the id is unique
+ * (`event_by_event_id`), so naming the row is exact where ordering would be a
+ * convention -- and if a second producer ever appends under this event type,
+ * the difference is that this reads admission's record rather than whichever
+ * row sorted first.
+ *
+ * @throws {RunNotAdmitted} when no such run was admitted, or its payload cannot
+ *   be read as an intent.
+ */
+export function readLapRunIntent(connection: SqliteDatabase, runId: string): LapRunIntent {
+  if (typeof runId !== "string" || runId === "") {
+    throw new RunAdmissionUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
+  }
+  const row = connection
+    .prepare<{ event_id: string }, { payload: string }>(
+      "SELECT payload FROM event WHERE event_id = :event_id",
+    )
+    .get({ event_id: factId(RUN_DELEGATION_RECORDED_EVENT_TYPE, runId) });
+  if (row === undefined) {
+    throw new RunNotAdmitted(
+      `run ${runId} has no ${RUN_DELEGATION_RECORDED_EVENT_TYPE} event on the spine, ` +
+        "so there is no record of what it was admitted to do; 'run admit' is what " +
+        "writes one",
+    );
+  }
+
+  let fields: unknown;
+  try {
+    fields = JSON.parse(row.payload);
+  } catch (error) {
+    throw new RunNotAdmitted(
+      `run ${runId}'s delegation payload is not readable JSON: ${String(error)}`,
+      { cause: error },
+    );
+  }
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {
+    throw new RunNotAdmitted(
+      `run ${runId}'s delegation payload is ${pythonRepr(fields)}, not a JSON object`,
+    );
+  }
+  const payload = fields as Record<string, unknown>;
+
+  try {
+    // Every field is passed through unchecked and unconverted: the constructor
+    // is the validation, and a check here would be a second statement of the
+    // rules `lap_run_intent.ts` states once. `runId` comes from the caller
+    // rather than the payload because the payload deliberately does not carry it
+    // -- see `LapRunIntent.payload`.
+    return new LapRunIntent({
+      runId,
+      leaseClaimantId: payload["lease_claimant_id"] as string,
+      workspace: payload["workspace"] as string,
+      role: payload["role"] as string,
+      baseBranch: payload["base_branch"] as string,
+      topicBranch: payload["topic_branch"] as string,
+      prompt: payload["prompt"] as string,
+      cliArgs: payload["cli_args"] as readonly string[],
+    });
+  } catch (error) {
+    throw new RunNotAdmitted(
+      `run ${runId}'s delegation payload is not a valid execution intent: ${String(error)}`,
+      { cause: error },
+    );
+  }
+}

@@ -103,6 +103,7 @@ export type FakeSwitch =
   | "FAKE_OMIT_IDENTITY"
   | "FAKE_REPORT_ID"
   | "FAKE_RESULT_BARE"
+  | "FAKE_RESULT_TEXT"
   | "FAKE_SLEEP"
   | "FAKE_SPAWN_LOG"
   | "FAKE_SUBTYPE"

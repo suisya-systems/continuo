@@ -154,6 +154,12 @@ spaces distinct.
 | D-0217 | `FencedSpawner` splits into `prepare` and `execute`, and the single-spawn-path obligation is restated over both with a provenance check | accepted |
 | D-0057 | The delegation intent and the materialisation result are two records, and materialisation is artifact-first and one-way | accepted |
 | D-0058 | The worker's MCP configuration is a materialised artifact, validated by the endpoint's own config class | accepted |
+| D-0059 | The composition root is `src/lap/`, provider-agnostic, and the lap is one CLI verb because a fence cannot cross a process boundary | accepted |
+| D-0060 | The turn is over when the terminal report exists, not when the child exits | accepted |
+| D-0061 | One artifact directory per run, under an operator-named root, with the run identifier encoded | accepted |
+| D-0062 | The composition root vetoes every `create-workspace` transition | accepted |
+| D-0063 | The materialiser takes fields, not the `LapRunIntent`; admission gains the reader that was missing | accepted |
+| D-0064 | Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10 | accepted |
 
 ---
 
@@ -11077,3 +11083,297 @@ only for as long as the CLI forwarded the whole environment, which is not a prop
 **Source.** Human gate, task `continuo-lap1-workspace-materialize`, on
 `docs/design/minimal-operating-loop.md` step 7 ("a worker that can both work and poll") and section
 4.5. Decision id from the `D-0019`..`D-0099` shared band, next after `D-0057`.
+
+---
+
+## D-0059 -- The composition root is `src/lap/`, provider-agnostic, and the lap is one CLI verb because a fence cannot cross a process boundary
+
+**Context.** `docs/design/minimal-operating-loop.md` section 4.5 names the gap in one sentence: "a
+lap can be performed today only by hand-writing a TypeScript program". Step 8 closes it, and the
+Issue that files it (continuo#107) records that the *placement* of the closing code is itself a
+decision, because continuo has a test that forbids the shape a composition root has.
+
+`test/gate_item11/no-provider-detail-leaks.test.ts` asserts that **no module under `src/` other than
+`src/index.ts` imports both a session backend and `src/control_plane/`** (`ALLOWED_BARRELS`,
+`D-1001`). What that test measures is a number: which files a provider swap has to edit. A
+composition root joins a provider to the control plane by definition, so it either lives in the one
+allowlisted file, joins the allowlist, or does not hold both.
+
+Two details of the test decide the answer, and both are easy to misread. `knowsASessionBackend`
+excludes `src/session/provider.js` -- the contract -- so a module may import `SessionProvider`,
+`Ok`, `Failure` and the workspace-lifecycle vocabulary alongside the whole control plane and be
+entirely legal. And the scan follows every import form, `import type` and dynamic `import()`
+included, per file and with no transitive closure.
+
+**Decision.**
+
+1. **The composition root is `src/lap/root.ts`, and it is provider-agnostic.** It imports the
+   control plane, the materialiser, the supervisor and `../session/provider.js`, and it takes the
+   `SessionProvider` and the transcript reader as parameters. The leak test passes over it unchanged.
+
+2. **The verb is `src/lap/cli.ts`, and it reaches the shipped backend by a provider-neutral name
+   through the package barrel**: `createDefaultSessionProvider`, declared in
+   `src/session/default_provider.ts` and re-exported by `src/index.ts`. Swapping the shipped default
+   edits `src/session/` and nothing in `src/lap/`, so the number item 11 grades is unchanged and
+   `ALLOWED_BARRELS` is not widened. `docs/design/composition-root-placement.md` is the placement
+   note the Issue asked for and holds the four rejected alternatives; the two worth naming here are
+   **adding the verb to the allowlist** (rejected: the swap cost goes from one file to two, which is
+   the weakening the step's acceptance forbids) and **a one-hop indirection under `src/lap/` that
+   imports the concrete provider** (rejected: the swap cost really would be two files while the test
+   went on reporting one, and a check that has been routed around is worse than one widened on
+   purpose).
+
+3. **`readTerminalReport` is reached structurally.** It is on `ClaudeCliSessionProvider` and not on
+   `SessionProvider` (`D-0056`), and its readout type is declared in the provider's own module, so
+   even a type import would be a leak. `src/lap/root.ts` declares `LapTerminalReport`,
+   `LapNoTerminalReport` and `TerminalReportReader` itself -- the same device
+   `src/control_plane/report_ingress.ts` uses for `TerminalReportFact`, for the reason it states
+   there.
+
+4. **The lap is ONE verb, `continuo lap perform`, and not three.** This is forced rather than
+   preferred. `D-0217` makes a spawn plan executable only by the `FencedSpawner` instance that
+   admitted it, and that instance lives in memory; a `spawn` verb in a second process would have to
+   build a second spawner, which `execute` refuses. So materialise, spawn, poll and ingest are one
+   process. The seams an operator gets are `run admit` before it and the gate verbs (step 10) after.
+
+5. **The CLI gains an asynchronous dispatch path.** `dispatch` refuses a handler that returned a
+   promise -- reading one as a status would report success for a command still running and lose
+   whatever it eventually threw -- and `dispatchAsync` / `mainAsync` are what the `bin` uses.
+   `main` is unchanged for every synchronous verb and every case that drives one.
+
+6. **The fence IS wired, so the step's conditional does not apply.** Step 8's own text says that if
+   the fence could not be wired, lap 1 spawning unfenced and the gate being advisory must be
+   recorded explicitly. It was wired: the child is started inside
+   `MaterializedWorkspace.spawner.execute`, and `test/lap/cli.test.ts`'s
+   `the child was started under the fence that was admitted` reads the fence ledger's single
+   `spawn-admitted` line and the child's own recorded `argv` to say so. Nothing about lap 1 is
+   advisory.
+
+**Alternatives.** Placing the whole root in `src/index.ts` (rejected: 44 re-export blocks and no
+function declarations, and a lap's order buried in the file every consumer imports is invisible to
+anyone looking for the lap). Placing it in `src/cli.ts` (rejected on a fact: that file already
+imports `control_plane/cli.js`, so adding a provider is the forbidden join and it is not
+allowlisted).
+
+**Consequences.**
+
+- `src/lap/cli.ts` imports its own package barrel. That is a smell and it is the price of the rule;
+  it is one import in one file, and it is the file that is an entry point.
+- **No parity ledger claims `test/lap/`.** The precedent is `D-0054` rule 5 as applied by `D-0057`:
+  the checker's `unmapped` guard only reaches target tests in a file some ledger's `test_file`
+  names, and a source-less feature has no source cases to claim. `test/workspace/materializer.test.ts`
+  and `test/session/terminal-report.test.ts` are in the same position and carry the same statement in
+  their headers, which is where a reader looks.
+- `test/lap/cli.test.ts` is registered in `SPAWNING_TESTS` (`scripts/run-suite.mjs`): it drives real
+  git and starts a real child, and `D-0048` runs those apart from the rest of the suite on Windows.
+
+**What would falsify it.** `D-1001`'s own falsifier -- a subpath-exports split that let a provider
+swap avoid touching `src/index.ts` -- would remove the barrel this reaches through, and the import in
+`src/lap/cli.ts` would move with it. Separately, if a second lap-shaped surface ever needs a
+*different* provider chosen somewhere that is not `src/session/`, this shape cannot express it and
+the allowlist widening is the recorded fallback.
+
+---
+
+## D-0060 -- The turn is over when the terminal report exists, not when the child exits
+
+**Context.** `D-0056` returns a turn's report as soon as the terminal `result` line appears, without
+waiting for the child to exit, and records the second-`result`-line hazard as an open limitation
+"belonging with the composition root in step 8, which is the component that will actually poll".
+This is that component, and the question is now answerable rather than deferred.
+
+**Decision.**
+
+1. **The lap polls `readTerminalReport` and stops at the first report.** `awaitTerminalReport` reads
+   on an interval until the readout is a report, and returns it. A second `result` line written
+   afterwards is never read.
+
+2. **A `pending: false` readout is a refusal, not a reason to keep polling.** The turn ended and said
+   nothing usable; no amount of waiting changes that, and a loop that retried would spend the whole
+   budget and report a timeout, which names the wrong problem to the operator.
+
+3. **A provider `Failure` is not retried either.** An unknown session, an identity incident and an
+   uninterpretable transcript do not become true by waiting.
+
+4. **There is a budget, and running out of it rolls nothing back.** `--turn-timeout-ms` (default
+   fifteen minutes) bounds the wait; the refusal says so and says explicitly that the workspace, the
+   fence and the child are as they were. The deadline is taken **before** the first read, because a
+   budget started from the first answer gives a provider that blocks for the whole timeout an
+   unbounded second chance.
+
+5. **After the gate is open, the verb stops the session.** The turn's durable outcome -- the
+   escalation event and the gate over it -- has committed by then, so the stop cannot affect it. It
+   is there because a process that has finished its work must not be kept alive by a subprocess
+   handle it no longer needs, and because a child left running after its report is an orphan nothing
+   is supervising. `stop` is the provider's supervised ladder, not a signal, and its outcome is
+   deliberately not checked: a teardown that went badly cannot un-open a gate.
+
+**Alternatives.** **Waiting for the child to exit (rejected.)** A `claude -p` child's exit is not the
+turn's end: it can outlive the terminal line by however long its MCP servers take to shut down, and
+it can fail to arrive at all -- a wedged child would hold the lap open with a complete report already
+on disk, and the gate would never be asked. Stopping at the report makes the lap's duration a
+property of the worker's work rather than of its teardown.
+
+**Consequences.** A turn that somehow wrote two terminal lines has its first read and its second
+ignored. That is the safe direction -- a report is escalated once, to one gate, and `D-0056`'s dedup
+key is per turn -- and it is pinned by a case (`a second terminal line is never read`) rather than
+left as a property nobody checks. If the second line ever proves to carry content rather than a
+restatement, the answer is a second generation and a second ingest, not a longer wait here.
+
+**What would falsify it.** A provider whose terminal line is not the last thing a turn produces --
+one that writes `result` and then amends it -- would make "the first report" the wrong report.
+Nothing in `claude -p`'s stream-json output does that at the version `D-0056` was written against.
+
+---
+
+## D-0061 -- One artifact directory per run, under an operator-named root, with the run identifier encoded
+
+**Context.** `MaterializationRequest.artifactDir` is required rather than defaulted and the
+materialiser says why: the fence, the settings, the MCP configuration and the fence ledger must live
+**outside the worktree**, because inside it they would be tracked files the worker can commit, `git
+status` noise on every run, and -- worst -- a fence the fenced child can edit. It refuses to guess
+the layout, and hands the question to step 8.
+
+**Decision.** `lapArtifactDir(artifactRoot, runId)` is `<artifactRoot>/<encoded runId>`.
+
+1. **The root is a required flag** (`--artifact-root`), not derived. Deriving one would invent a
+   convention about the operator's filesystem, and the materialiser's own refusal exists precisely
+   to stop a layer from guessing.
+2. **One directory per run.** An operator holding a run identifier can find that run's fence by
+   reading the path, which is why it is not a hash.
+3. **The run identifier is encoded, not trusted.** `LapRunIntent` holds it to printable ASCII, which
+   admits `/`, `\`, `:` and `..` -- each of which turns "a directory named after the run" into a
+   directory somewhere else. Every character outside `[A-Za-z0-9._-]` becomes `%XX`; the escape
+   character is itself escaped, so the encoding is injective and two runs cannot collide; and a name
+   that is entirely dots is encoded too, because `.` and `..` are legal identifiers and are not legal
+   directory names.
+
+**Why the guard is here rather than downstream.** The materialiser checks that no artifact lands
+inside the *worktree*. It does not and should not check where else on the operator's filesystem a
+path lands, so nothing below this function would have refused `--artifact-root /var/artifacts` with a
+run called `../../etc`.
+
+**Consequences.** A run identifier and its artifact directory are not the same string, so an
+operator reading a directory name sees `a%2Fb` where the run is `a/b`. The encoding is reversible and
+the one-line report the verb prints names the run rather than the directory, which is the value an
+operator actually carries between commands.
+
+**What would falsify it.** A narrowing of `LapRunIntent`'s identifier rule to something that is
+already a safe path segment would make the encoding dead weight -- though not wrong, and it would
+still be the thing that made the narrowing safe to rely on.
+
+---
+
+## D-0062 -- The composition root vetoes every `create-workspace` transition
+
+**Context.** `ClaudeCliSessionProvider` creates a missing workspace with a bare
+`mkdirSync(workspace, { recursive: true })` and announces a `create-workspace` transition **before**
+doing so, so that a party who knows better can stop it. `D-0057` built the evidence half and said
+this half was step 8's: a `MaterializedWorkspace` cannot be constructed except by
+`materializeWorkspace`, which does not return until git has made the checkout, so "this workspace was
+materialised" is a checkable statement rather than a guess. `registerWorkspaceObserver` already
+exists; nothing in the ported provider changes.
+
+**Decision.** `performLap` registers a `MaterializedWorkspaceRequired` observer, keyed on the
+materialised workspace, immediately after materialisation and before the orchestrator is
+constructed. It **vetoes every `create-workspace` transition**, and allows every other kind.
+
+**Why every one, rather than one for an unexpected path.** By the time the orchestrator starts, the
+worktree exists: git made it, and the materialiser re-asked git about it immediately before appending
+its event. A provider announcing that it is about to *create* this workspace is therefore not
+reporting a mismatch of paths -- it is reporting that **the checkout is gone**, swept between
+materialisation and spawn. A path comparison would allow exactly that case, putting the worker in a
+bare directory with the right name: no checkout, no branch, no base commit, and a run that looks
+normal in every record. The stronger rule is also the simpler one.
+
+**Why not veto other kinds.** An observer that vetoed what it had no opinion about would be an outage
+wearing a safety check's name, and would still pass every case that only asserts the veto.
+
+**Consequences.** The registration is per provider instance and `registerWorkspaceObserver` appends
+without de-duplicating (that is the source's behaviour and is not changed here), so a process that
+performed two laps on one provider would accumulate two observers. `continuo lap perform` builds one
+provider per verb, so this is not reachable today; a future caller that reuses a provider across laps
+has to hold that thought, and the observers are equivalent anyway -- the second veto changes nothing
+but the count in the summarising message.
+
+**What would falsify it.** A provider that used the `create-workspace` transition to announce
+something other than "I am about to make this directory" -- an adoption, say -- would make a blanket
+veto refuse a legitimate start. `WorkspaceTransition.kind` is documented as carried uninterpreted,
+so this is a real possibility for a future backend rather than a theoretical one, and the case
+`allows a transition it has no opinion about` is where a third kind would land.
+
+---
+
+## D-0063 -- The materialiser takes fields, not the `LapRunIntent`; admission gains the reader that was missing
+
+**Context.** `src/workspace/materializer.ts`'s module doc leaves one thing open in as many words:
+whether a `LapRunIntent` should be passed to it whole is "a step-8 question, left open". Answering it
+turned up a second, larger gap: **nothing could read an intent back**. `admitRun` writes it into the
+`run_delegation_recorded` payload and no function anywhere parses that payload, so the record
+`D-0055` exists to fix could not be acted on by the later step it was fixed for.
+
+**Decision.**
+
+1. **`readLapRunIntent(connection, runId)` lands in `src/control_plane/run_admission.ts`** -- the
+   module that wrote the record reads it back -- and returns a `LapRunIntent`, not a plain object.
+   The class is nominal and its constructor is its validation, so a payload that has decayed is
+   refused at the read rather than reaching the materialiser as a value that merely looks right. The
+   round trip is therefore also a check. A run with no such event is `RunNotAdmitted`, in the
+   `ControlPlaneRefusal` family.
+2. **The lookup is by the deterministic `event_id`** admission assigns, not by an
+   `event_type ... ORDER BY seq LIMIT 1` scan. The id is unique and admission is the only producer,
+   so this names the row where ordering would be a convention.
+3. **The materialiser keeps taking fields.** `performLap` reads the intent and destructures it into
+   the `MaterializationRequest`.
+
+**Why not pass the intent whole.** The materialiser's request is deliberately wider than the intent
+-- it also carries the repository, the artifact directory, the endpoint binding, the fence
+substitutions, the clock and the UUID factory -- so a whole-intent parameter would be one field
+beside eight others rather than a simplification, and it would couple `src/workspace/` to a
+control-plane record type for the seven fields it already validates itself. The materialiser
+re-validates those fields on purpose (its own comment explains that a caller can reach it without an
+intent), and that second reading is the thing a whole-intent parameter would quietly make redundant
+and then, later, wrong.
+
+**Consequences.** There are now two readers of the intent's fields, and their rules have to stay the
+same rules. `materializer.ts` already documents this obligation and states the rules field by field
+against `lap_run_intent.ts`; this entry is the second place that dependency is written down.
+
+**What would falsify it.** A `MaterializationRequest` that shrank to the intent's fields plus one --
+if the endpoint binding and the fence substitutions moved into the admitted record, which is a
+plausible thing for step 10 or the console to want -- would make the whole-intent parameter the
+smaller interface, and this decision should be revisited rather than defended.
+
+---
+
+## D-0064 -- Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10
+
+**Context.** `docs/design/minimal-operating-loop.md` section 7 step 4 says the endpoint's launcher
+"must hold and renew [its lease] for the endpoint's whole life", and continuo#107 says in as many
+words that renewal is step 4's and must not be implemented here by accident (`D-0053` rule 4). The
+Issue asks step 8 to record what lap 1 does instead, and whether step 4 is now needed before step 10.
+
+**Decision.** **No renewal is implemented in step 8, deliberately and not by omission.**
+`continuo lap perform` passes `--endpoint-epoch` through to the materialised MCP configuration
+exactly as `D-0058` defined it, and nothing in `src/lap/` acquires, holds or refreshes a lease on the
+endpoint's behalf. The orchestrator's own lease is untouched: it is per-verb, it is taken and
+released inside `SessionOrchestrator`, and it never crosses the gate.
+
+**What lap 1 therefore does.** The worker's endpoint runs under a lease at a fixed epoch that nothing
+refreshes. For the lap as step 8 leaves it, that is sufficient and the reason is `D-0060`: the lap
+ends at the terminal report and the child is stopped, so the endpoint's life is one turn. The
+delivery path is not exercised -- the worker in lap 1 reports and stops; it does not wait for an
+answer.
+
+**Whether step 4 is needed before step 10: yes.** Step 10 is where the human's answer is relayed
+back and acked, which is the first thing that requires the worker's endpoint to still be able to
+write **after** an operator-shaped delay. That delay is unbounded by construction -- it is a person
+reading a gate -- and it is the exact interval a fixed epoch cannot survive. So the ordering
+consequence is recorded here rather than discovered there: **step 4 lands before step 10, and step 10
+should not be started on the assumption that lap 1's endpoint binding is enough.**
+
+**What would falsify it.** A lease whose TTL is longer than any plausible gate answer would make
+renewal unnecessary rather than merely unimplemented -- and would be the wrong fix, because "longer
+than any plausible" is the shape of assumption `docs/lease-fencing.md` exists to remove. If step 4
+settles the two scopes differently and concludes the endpoint's lease is not per-process after all,
+this entry's second half is what has to be re-read.

@@ -103,6 +103,7 @@ const SPAWNING_TESTS = [
   "test/gate_item11/suite-runs-unchanged.test.ts", // sync, via support/run.ts
   "test/gate_item2/mediated-real-provider.test.ts", // 6
   "test/gate_item2/session-driver-harness.test.ts", // 12
+  "test/lap/cli.test.ts", // 5, via src/workspace/git.ts and a fenced child
   "test/measurement/cli.test.ts", // sync
   "test/messagebus/endpoint.test.ts", // 1 + sync
   "test/messagebus/stale-readout.test.ts", // 2

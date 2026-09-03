@@ -413,6 +413,12 @@ async function main() {
       subtype: env.FAKE_SUBTYPE ?? "success",
       is_error: env.FAKE_IS_ERROR === "1",
       terminal_reason: env.FAKE_TERMINAL_REASON ?? "completed",
+      // The turn's prose, and the key is ABSENT unless a case asks for one --
+      // spread rather than assigned, so every case written before
+      // `readTerminalReport` existed emits the byte-identical line it always
+      // did. A `result` with no body is what the real CLI writes for a turn
+      // that said nothing, and the provider reports it as a definite nothing.
+      ...(env.FAKE_RESULT_TEXT === undefined ? {} : { result: env.FAKE_RESULT_TEXT }),
       session_id: reported,
       another_unknown_field: true,
     });
