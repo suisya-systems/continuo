@@ -841,9 +841,12 @@ function forwardedAndAcked(connection: SqliteDatabase): readonly string[] {
  * such as `gate show` a writer -- so an operator could not look at a gate
  * without changing it.
  *
- * **What it settles.** `sweepSubjectGone` closes gates whose subject run
- * reached a terminal status, and `gatesNeedingAdvance` completes the advance a
- * durable ack already justified -- the section 9.5 kill-point-4 recovery. A
+ * **What it settles, and in which order.** `gatesNeedingAdvance` completes the
+ * advance a durable ack already justified -- the section 9.5 kill-point-4
+ * recovery -- and the close that advance implies; only then does
+ * `sweepSubjectGone` close gates whose subject run reached a terminal status.
+ * Sweeping first would close an acked-and-forwarded gate as `subject_gone`
+ * permanently; the body says why in full. A
  * `forwarded` advance completed here also closes the gate, for the reason
  * {@link ackRelay} closes it: the close out of `forwarded` is the ack's
  * consequence and nobody decides it, so a gate recovered by this pass must not
@@ -869,7 +872,24 @@ export function reconcile(
   },
 ): ReconcileReport {
   const { nowMs, actorId, stalledToleranceMs } = options;
-  const subjectGone = sweepSubjectGone(connection, { nowMs, actorId });
+  // The completions run BEFORE the sweep, and the order is the whole
+  // correctness of this pass rather than a preference.
+  //
+  // `sweepSubjectGone` is stage-blind: section 9.4 makes `subject_gone`
+  // reachable from every stage (`CLOSE_OUTCOME_STAGES`), so it closes an open
+  // gate at `forwarded` as readily as one at `received`. Swept first, a gate
+  // whose forward relay was acked in the window a kill interrupted -- exactly
+  // the state the two loops below exist to finish -- is closed `subject_gone`
+  // while the run happens to have ended, and that closure is permanent:
+  // `gatesNeedingAdvance` and {@link forwardedAndAcked} both exclude closed
+  // gates, and `closeGate` refuses to change an outcome already recorded. The
+  // human's answer, delivered and acknowledged, would be filed for ever under
+  // the outcome that means nobody answered.
+  //
+  // Completed first, the same gate closes `answered_and_forwarded` and the
+  // sweep then finds nothing open to sweep. A gate the completions do NOT
+  // finish -- one still waiting for an answer -- is swept exactly as before,
+  // because a terminal run is still a fact about it.
   const pending = gatesNeedingAdvance(connection);
   const advanced: GateNeedingAdvance[] = [];
   const closed: string[] = [];
@@ -909,6 +929,7 @@ export function reconcile(
       closed.push(gateId);
     }
   }
+  const subjectGone = sweepSubjectGone(connection, { nowMs, actorId });
   return Object.freeze({
     subjectGone,
     advanced: Object.freeze(advanced),

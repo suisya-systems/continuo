@@ -377,6 +377,39 @@ describe("the operator's gate walk", () => {
     expect(outcomeOf(cp)).toBe("answered_and_forwarded");
   });
 
+  test("an answered gate whose run then ended still closes as answered_and_forwarded", () => {
+    // The order inside the pass, made falsifiable. `subject_gone` is reachable
+    // from every stage, so a sweep that ran before the completions would close
+    // this gate -- answered, forwarded and acked -- as though nobody had
+    // answered it, and permanently: a closed gate keeps its outcome.
+    const cp = cpFixture("gate-sweep-vs-completion");
+    const dir = destinationDir("gate-sweep-vs-completion");
+    aGate(cp);
+    const presented = presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    deliver(cp, dir, T0 + MINUTE);
+    ackRelay(cp, { messageId: presented.messageId, actorId: ACTOR, nowMs: T0 + 2 * MINUTE });
+    const answered = answerGate(cp, {
+      gateId: GATE_ID,
+      body: "force-push",
+      actorId: ACTOR,
+      nowMs: T0 + 3 * MINUTE,
+    });
+    deliver(cp, dir, T0 + 4 * MINUTE);
+    // The ack landed; the advance and the close did not -- the window inside
+    // `ackRelay` that this pass is the recovery for.
+    cp.prepare<[number, string]>(
+      "UPDATE outbox SET status = 'acked', acked_at_ms = ? WHERE message_id = ?",
+    ).run(T0 + 5 * MINUTE, answered.messageId);
+    // And meanwhile the run ended, which is the ordinary next thing to happen.
+    cp.prepare<[string]>("UPDATE run SET status = 'completed' WHERE run_id = ?").run(RUN_ID);
+
+    const report = reconcile(cp, { nowMs: T0 + 6 * MINUTE, actorId: ACTOR });
+
+    expect(report.closed).toEqual([GATE_ID]);
+    expect(report.subjectGone).toEqual([]);
+    expect(outcomeOf(cp)).toBe("answered_and_forwarded");
+  });
+
   test("reconcile closes a gate whose run is gone and reports without closing the rest", () => {
     // The two halves of D-0079 in one case: `subject_gone` is settled because a
     // terminal run is a fact, and a passed deadline is only reported because no

@@ -12517,6 +12517,18 @@ never leaves it in. It **reports** relay gaps, stalled relays and passed deadlin
 them: the remedies differ per row and per owner (section 9.6), and the expiry rule is undecided policy
 (`D-0008`).
 
+**The completions run before the sweep, and that ordering is load-bearing.** `subject_gone` is
+reachable from every stage (`CLOSE_OUTCOME_STAGES`), so `sweepSubjectGone` closes an open gate at
+`forwarded` as readily as one at `received`. Run first, it closes a gate whose forward relay was
+acked in the window a kill interrupted -- the very state the completions exist to finish -- as
+`subject_gone`, and that is permanent: both `gatesNeedingAdvance` and the forwarded-and-acked query
+exclude closed gates, and `closeGate` refuses to change an outcome already recorded. A human's
+answer, delivered and acknowledged, would be filed for ever under the outcome that means nobody
+answered. Completed first, the same gate closes `answered_and_forwarded` and the sweep then finds
+nothing open; a gate still waiting for an answer is swept exactly as before, because a terminal run
+is still a fact about it. `test/gate/operator.test.ts`'s *an answered gate whose run then ended
+still closes as answered_and_forwarded* is the regression, and it fails against the other order.
+
 **`--stalled-tolerance-ms` has no default.** A default would be an invented tolerance, which is what
 `D-0031` requires to be data rather than code. Omitted, the stalled query does not run and the report
 says `not asked` -- `null` rather than an empty list, because "nobody asked" and "nothing is stalled"
