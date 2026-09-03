@@ -12066,14 +12066,23 @@ already there. So the entry is kept, tested, and described as the earlier and mo
 refusals rather than as the only one. An entry excused from its test on a premise nobody checked is
 the one a mutation can delete in silence.
 
-**Every other entry was mutation-checked, and two of the cases were rewritten because of what that
-showed.** With the containment loop deleted each of the other six materialisations *succeeds* and
+**Every other entry was mutation-checked, and three of the cases were rewritten because of what that
+showed.** With the containment loop deleted, every containment case but the database's *succeeds* and
 records `workspace_materialized`. With `requireAbsolute` removed, though, the first spelling of
 the hook and interpreter cases went red for the wrong reason -- the renderer's `hook-unresolvable`
 refusing a path that named nothing -- which would have let the rule be deleted while the suite still
 looked like it was defending it. Both now name files that really are there *from this process's
 directory*, so removing the rule makes the lap succeed with a relative command in its published
 fence. A test that merely fails is not evidence that a guard is load-bearing.
+
+**The third rewrite is the same trap caught by a second review round, and it is recorded because the
+first round's own correction did not generalise.** The hook *interpreter*'s containment case pointed
+at `<workspace>/python`, a path nothing creates -- so with the ward deleted the renderer's launcher
+check refused it, and the case went red without the ward ever being asked. The fixture's seed commit
+now carries an executable, and the case names it: a repository-vendored interpreter or wrapper script
+is the realistic shape of this mistake anyway. Two rounds found the identical defect in three
+different cases, which says the hazard is the *shape of the case* rather than any one case: a
+containment case whose path does not exist is tested by whichever guard notices absence first.
 
 **Who this defends against is unchanged from `D-0067`, and it is what keeps this list at seven.** The
 fenced party is the **worker**; the operator holds the fence and is trusted. The question each entry

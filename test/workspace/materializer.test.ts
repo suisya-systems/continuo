@@ -101,6 +101,8 @@ import { expectRefusal } from "../testkit/errors.js";
 /** An arbitrary fixed epoch-milliseconds instant. */
 const T0 = 1_700_000_000_000;
 const RUN_ID = "run-materialize-1";
+/** A file the seed commit carries with the executable bit set. See `initRepository`. */
+const WORKTREE_EXECUTABLE = "tool";
 const BASE_BRANCH = "main";
 const TOPIC_BRANCH = "feat/topic";
 
@@ -122,6 +124,22 @@ function initRepository(root: string): GitOptions {
   runGitChecked(["config", "commit.gpgsign", "false"], git);
   writeFileSync(join(root, "README.md"), "seed\n", "utf8");
   runGitChecked(["add", "README.md"], git);
+  // **An executable, committed, so the checkout contains one.** It exists for
+  // the containment cases and nothing else. The fence renderer refuses a hook
+  // launcher it cannot execute, so a case that points `--python` at a path
+  // inside the worktree which does not EXIST is refused by that older guard
+  // instead of by the containment ward -- and would then go red with the ward
+  // deleted, for the wrong reason, while looking like it defended the rule.
+  // Pointing at a real executable in the checkout is what makes that mutation
+  // succeed and reproduce the hole.
+  //
+  // `update-index --chmod=+x` rather than `chmod`: the mode has to be in the
+  // COMMIT for `git worktree add` to check it out, and `chmod` is a no-op on
+  // Windows where the suite also runs. `accessSync(X_OK)` is satisfied by any
+  // existing file there, so the case works on both.
+  writeFileSync(join(root, WORKTREE_EXECUTABLE), "#!/bin/sh\nexit 0\n", "utf8");
+  runGitChecked(["add", WORKTREE_EXECUTABLE], git);
+  runGitChecked(["update-index", "--chmod=+x", WORKTREE_EXECUTABLE], git);
   runGitChecked(["commit", "-m", "seed"], git);
   return git;
 }
@@ -846,7 +864,10 @@ describe("nothing the fence depends on may live inside the worktree (D-0069)", (
   // worth its length: with the containment loop deleted, each of these
   // materialisations SUCCEEDS and records `workspace_materialized` for a fence
   // resting on a file its own subject may edit. A case that merely failed
-  // differently would not have shown that.
+  // differently would not have shown that -- and three of these cases were
+  // rewritten for exactly that reason, because a warded path that does not
+  // EXIST is refused by whichever older guard notices absence first (the
+  // renderer's, for the hook and its interpreter) rather than by the ward.
   //
   // **The database's case is the one exception to the paragraph above, and it
   // is marked as such rather than quietly listed with the others.** The guard
@@ -902,12 +923,20 @@ describe("nothing the fence depends on may live inside the worktree (D-0069)", (
   test("the hook's interpreter inside the worktree is refused", () => {
     // One step out from the hook and the same hole: whoever runs the hook
     // decides what the hook does.
+    //
+    // It names the checkout's committed executable rather than any path inside
+    // the worktree, and the first spelling of this case is why. A
+    // `<workspace>/python` that does not exist is refused by the renderer's
+    // launcher check once the ward is deleted -- red, but from the wrong guard,
+    // and red in a way that would survive the ward being removed. The base
+    // branch carrying an executable is not exotic either: a repository-vendored
+    // interpreter or wrapper script is the realistic shape of this mistake.
     const f = fixture("materialize-python-inside");
     expectRefusal(
       () =>
         materializeWorkspace(f.connection, {
           ...f.request,
-          fence: { ...f.request.fence, python: join(f.workspace, "python") },
+          fence: { ...f.request.fence, python: join(f.workspace, WORKTREE_EXECUTABLE) },
         }),
       WorkspaceMaterializationUsageError,
       /the hook's interpreter is .*inside the workspace/,
