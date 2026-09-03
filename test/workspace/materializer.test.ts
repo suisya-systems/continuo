@@ -47,8 +47,16 @@
  * clock cannot assert what a caller-supplied clock wrote.
  */
 
-import { existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
 
 import Database, { type Database as SqliteDatabase } from "better-sqlite3";
@@ -1223,6 +1231,14 @@ describe("the endpoint database may be reached by another name", () => {
     // whether this passes or fails.
     const f = fixture("materialize-db-relative");
     const relativeName = relative(process.cwd(), f.databasePath);
+    if (isAbsolute(relativeName)) {
+      // `path.relative` returns an ABSOLUTE path when the two sides are on
+      // different Windows drives, which is the ordinary arrangement on a CI
+      // runner: the checkout is on one drive and TMPDIR on another. The case's
+      // premise -- a connection opened with a relative filename -- cannot be
+      // built there, so it asserts nothing rather than something weaker.
+      return;
+    }
     const relativelyOpened = new Database(relativeName);
     onTestFinished(() => {
       relativelyOpened.close();
@@ -1250,8 +1266,14 @@ describe("the endpoint database may be reached by another name", () => {
       document["mcpServers"]?.[MCP_SERVER_NAME]?.["env"]?.["INTERLOCK_MESSAGEBUS_DB"];
     expect(configured).toBe(resolve(f.databasePath));
     // And it is not what resolving the stale relative spelling here would give,
-    // which is the value the bug produced.
-    expect(configured).not.toBe(resolve(relativeName));
+    // which is the value the bug produced. Guarded, because `..` clamps at the
+    // filesystem root: if the deep directory is not deeper than the original
+    // working directory, the stale resolution lands back on the right file by
+    // accident and this assertion would pass against the bug.
+    const stale = resolve(relativeName);
+    if (stale !== resolve(f.databasePath)) {
+      expect(configured).not.toBe(stale);
+    }
   });
 });
 
@@ -1274,8 +1296,13 @@ describe("the event describes a workspace that is still a checkout", () => {
     const f = fixture("materialize-worktree-root");
     const materialized = materializeWorkspace(f.connection, f.request);
 
+    // Compared through `realpathSync.native`, not by spelling. git reports the
+    // long form of a path whose 8.3 short form the request carried, so a
+    // `resolve`-only comparison here would assert the very thing the production
+    // code had to stop doing -- and did, on Windows CI, while the code under
+    // test was already right.
     const rootPerGit = repositoryRoot({ cwd: materialized.workspace, timeoutMs: 60_000 });
-    expect(resolve(rootPerGit)).toBe(materialized.workspace);
+    expect(realpathSync.native(rootPerGit)).toBe(realpathSync.native(materialized.workspace));
     // And it is a different repository root from the one the request named, so
     // the comparison above is not trivially true of any path.
     expect(materialized.workspace).not.toBe(materialized.repository);
