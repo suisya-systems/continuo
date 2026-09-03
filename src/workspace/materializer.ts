@@ -1123,7 +1123,7 @@ export function materializeWorkspace(
       { cause: error },
     );
   }
-  if (pathIdentity(resolve(checkedOutRoot)) !== pathIdentity(workspace)) {
+  if (!sameExistingPath(checkedOutRoot, workspace)) {
     throw new WorkspaceMaterializationRefused(
       `refusing to record a materialisation whose workspace at ${pythonRepr(workspace)} ` +
         `is now inside ${pythonRepr(checkedOutRoot)} rather than being that worktree's ` +
@@ -1394,15 +1394,40 @@ function mainDatabasePath(connection: SqliteDatabase): string {
  * discovering it after a crash.
  */
 function namesTheSameDatabase(left: string, right: string): boolean {
-  if (pathIdentity(left) === pathIdentity(right)) {
+  // Through {@link sameExistingPath}, so the 8.3-short-name and symlink cases
+  // are one rule here and at the worktree sweep rather than two that can drift.
+  return sameExistingPath(left, right);
+}
+
+/**
+ * Do these two paths name the same existing file or directory?
+ *
+ * `resolve` alone is not this question, and Windows CI is where that stopped
+ * being theoretical. `TMPDIR` on a GitHub runner is an **8.3 short path**
+ * (`C:\\Users\\RUNNER~1\\...`) while git reports the long form
+ * (`C:/Users/runneradmin/...`); `resolve` normalises the separators and leaves
+ * `RUNNER~1` alone, so two spellings of one directory compared unequal and the
+ * final sweep refused a workspace that *was* the worktree's own root -- after
+ * the worktree and every artifact had been created. A false refusal at the last
+ * step is the worst place for one.
+ *
+ * `realpathSync.native` is the fix rather than `realpathSync`: only the native
+ * form expands a short name to its long one. It also resolves symlinks, which
+ * is wanted for the same reason on every platform -- a workspace reached
+ * through a symlinked parent is one directory with two spellings too, and that
+ * is reachable on Linux where the 8.3 case is not.
+ *
+ * Falls back to the lexical answer when either side cannot be resolved: this is
+ * asked of paths that are supposed to exist, so a failure to resolve is itself
+ * a reason to say no rather than to guess yes.
+ */
+function sameExistingPath(left: string, right: string): boolean {
+  if (pathIdentity(resolve(left)) === pathIdentity(resolve(right))) {
     return true;
   }
   try {
-    return pathIdentity(realpathSync(left)) === pathIdentity(realpathSync(right));
+    return pathIdentity(realpathSync.native(left)) === pathIdentity(realpathSync.native(right));
   } catch {
-    // One of them does not exist yet, or cannot be read. The spelling
-    // comparison already said no, and inventing a yes here would defeat the
-    // check.
     return false;
   }
 }

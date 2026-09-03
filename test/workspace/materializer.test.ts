@@ -1281,6 +1281,63 @@ describe("the event describes a workspace that is still a checkout", () => {
     expect(materialized.workspace).not.toBe(materialized.repository);
   });
 
+  test("a workspace reached through a symlinked parent is still its own root", () => {
+    // Two spellings of one directory must not read as two directories. Windows
+    // CI found this the expensive way: `TMPDIR` on a GitHub runner is an 8.3
+    // short path (`C:\\Users\\RUNNER~1\\...`) while git reports the long form,
+    // and `resolve` normalises separators without expanding the short name -- so
+    // the final sweep refused a workspace that WAS the worktree's own root,
+    // after the worktree and every artifact had been created. A false refusal at
+    // the last step is the worst place for one.
+    //
+    // The 8.3 case cannot be built on Linux. A symlinked parent is the same
+    // defect in the form this cell can reach: one directory, two spellings, and
+    // only a resolving comparison gets it right.
+    const f = fixture("materialize-symlinked-parent");
+    const real = join(f.root, "real");
+    const link = join(f.root, "via-link");
+    mkdirSync(real, { recursive: true });
+    try {
+      symlinkSync(real, link, "dir");
+    } catch {
+      // Windows without developer mode refuses to create a directory symlink.
+      // The case asserts nothing there rather than something weaker; the cell
+      // that needs this property most is covered by the 8.3 path it hits for
+      // real.
+      return;
+    }
+
+    const materialized = materializeWorkspace(f.connection, {
+      ...f.request,
+      workspace: join(link, "worktree"),
+      artifactDir: join(link, "artifacts"),
+    });
+    expect(materialized.eventSeq).toBeGreaterThan(0);
+    expect(existsSync(join(link, "worktree", "README.md"))).toBe(true);
+  });
+
+  test("an endpoint database reached through a symlinked parent is accepted", () => {
+    // The same comparison, at the other site that uses it. Keeping them one
+    // rule is the point: two spellings of one database must not be read as two
+    // control planes any more than two spellings of one worktree are.
+    const f = fixture("materialize-db-symlinked-parent");
+    const linkDir = join(f.root, "plane-link");
+    try {
+      symlinkSync(f.root, linkDir, "dir");
+    } catch {
+      return;
+    }
+
+    const materialized = materializeWorkspace(f.connection, {
+      ...f.request,
+      endpoint: {
+        ...f.request.endpoint,
+        databasePath: join(linkDir, "production.sqlite3"),
+      },
+    });
+    expect(materialized.eventSeq).toBeGreaterThan(0);
+  });
+
   test("removing the worktree afterwards leaves a path git no longer owns", () => {
     // The state a sweeper leaves behind, and the reason the sweep's question is
     // git's rather than the filesystem's: after `removeWorktree` the directory

@@ -10803,6 +10803,17 @@ here than it was there, because that side effect runs *after* the event row is i
    artifact is re-`stat`'d immediately before the append, **and the worktree is re-asked of git**.
    An event whose manifest is not on disk at that moment is refused, not appended.
 
+   **Two spellings of one directory are one directory, and this is where that stopped being
+   pedantry.** The comparison canonicalises through `realpathSync.native` before deciding. Windows CI
+   found the reason: `TMPDIR` on a GitHub runner is an 8.3 short path (`C:\Users\RUNNER~1\...`) and
+   git reports the long form, so a `resolve`-only comparison -- which normalises separators and
+   leaves the short name alone -- read one directory as two and **refused a workspace that was the
+   worktree's own root, after the worktree and every artifact had been created**. A false refusal at
+   the final sweep is the worst place for one: everything has been done, and the run is told it was
+   not. `realpathSync.native` rather than `realpathSync` because only the native form expands a
+   short name; it resolves symlinks too, which is the same defect in the form a POSIX cell can
+   reach. The endpoint database's alias check uses the same helper, so the two cannot drift.
+
    The worktree is asked of git rather than of `existsSync`, and that is the load-bearing half: a
    concurrent cleanup between `git worktree add` and the append -- an operator sweeping up the
    "artifacts with no event" state rule 4 deliberately allows -- leaves the files intact and the
