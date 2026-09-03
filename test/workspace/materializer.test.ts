@@ -974,6 +974,46 @@ describe("nothing the fence depends on may live inside the worktree (D-0069)", (
     expect(existsSync(f.workspace)).toBe(false);
   });
 
+  test("an endpoint launcher reaching into the worktree through `..` is refused", () => {
+    // The `resolve` inside `renderMcpConfig`, which has two jobs and would be
+    // silently half-removable with only the plain containment cases above. The
+    // ward is lexical, so an unresolved `..` spelling walks past it; and the
+    // resolved string is also what the document is built from, so the file that
+    // is warded and the file that is published are the same bytes. Concatenated
+    // rather than `join`ed, since `join` would normalise it away.
+    const f = fixture("materialize-node-traverse");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          endpoint: {
+            ...f.request.endpoint,
+            node: `${f.artifactDir}${sep}..${sep}worktree${sep}${WORKTREE_EXECUTABLE}`,
+          },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the endpoint's interpreter is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("an endpoint module reaching into the worktree through `..` is refused", () => {
+    const f = fixture("materialize-module-traverse");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          endpoint: {
+            ...f.request.endpoint,
+            endpointModule: `${f.artifactDir}${sep}..${sep}worktree${sep}endpoint.js`,
+          },
+        }),
+      WorkspaceMaterializationUsageError,
+      /the endpoint module is .*inside the workspace/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
   test("an interlock root that IS the worktree is refused", () => {
     // The equality branch of `isInside`, and the substitution that makes it
     // matter: `{interlock_root}` is interpolated into the fence's own deny

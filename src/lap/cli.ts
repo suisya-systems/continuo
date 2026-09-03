@@ -113,9 +113,11 @@ const ENDPOINT_MODULE_HELP =
   "outside the worktree: it runs holding the messagebus lease and the control " +
   "plane's path.";
 const NODE_HELP =
-  "the interpreter the endpoint module is launched with. Must be absolute: the " +
-  "MCP configuration is read by the worker's Claude, whose working directory is " +
-  "the worktree, and a bare name would be resolved through PATH.";
+  "the interpreter the endpoint module is launched with. Must be absolute, and " +
+  "must live outside the worktree: the MCP configuration is read by the worker's " +
+  "Claude, whose working directory is the worktree, so a bare name would be " +
+  "resolved through PATH and a path inside the checkout would name a file the " +
+  "worker itself may rewrite.";
 const INTERLOCK_ROOT_HELP =
   "the path substituted for {interlock_root} in the role document. Must be " +
   "absolute, and must live outside the worktree: it is interpolated into the " +
