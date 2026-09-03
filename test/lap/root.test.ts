@@ -134,7 +134,7 @@ describe("D-0061: the artifact directory is derived, one per run", () => {
 
   test("a run identifier of dot segments cannot walk up", () => {
     const dir = lapArtifactDir("/var/artifacts", "..");
-    expect(dir).toMatch(/%2E%2E$/);
+    expect(dir).toMatch(/\.%2E$/);
     // Stated as its own assertion because it is the one that matters: `join`
     // would have collapsed a literal `..` and put the fence in `/var`.
     expect(dir).not.toMatch(/artifacts[\\/]\.\.$/);
@@ -150,11 +150,47 @@ describe("D-0061: the artifact directory is derived, one per run", () => {
     // Without this, runs `a%2Fb` and `a/b` would encode to one directory and
     // the second admitted would publish its fence over the first's.
     expect(lapArtifactDir("/r", "a%2Fb")).not.toBe(lapArtifactDir("/r", "a/b"));
-    expect(lapArtifactDir("/r", "a%2Fb")).toMatch(/a%252Fb$/);
+    // `%` is `%25` and the literal `F` is `%46`, because uppercase is encoded
+    // too -- so the only uppercase in any output is inside an escape this
+    // function wrote, which is what makes the encoding injective under the case
+    // folding an NTFS volume applies.
+    expect(lapArtifactDir("/r", "a%2Fb")).toMatch(/a%252%46b$/);
   });
 
   test("two runs never share a directory", () => {
     expect(lapArtifactDir("/r", "run-1")).not.toBe(lapArtifactDir("/r", "run-2"));
+  });
+
+  test("two identifiers differing only by case do not fold together", () => {
+    // On an NTFS volume `run` and `RUN` are one directory, so two admitted runs
+    // would share a fence, a settings file and a ledger -- and would race
+    // through the materialiser's check-before-write guard on all three. The
+    // failure is invisible on Linux and silent on Windows, which is the pair
+    // that makes it worth a case. `D-0216` records the same hazard for the
+    // containment guard.
+    const upper = lapArtifactDir("/r", "RUN");
+    expect(upper).not.toBe(lapArtifactDir("/r", "run"));
+    expect(upper.toLowerCase()).not.toBe(lapArtifactDir("/r", "run").toLowerCase());
+    // Lowercase is untouched, so the encoding costs readability only where it
+    // has to.
+    expect(lapArtifactDir("/r", "run-1")).toMatch(/run-1$/);
+  });
+
+  test("a trailing dot cannot make two runs one directory", () => {
+    // Windows drops it. Without the encoding `run.` and `run` are one path.
+    expect(lapArtifactDir("/r", "run.")).toMatch(/run%2E$/);
+    expect(lapArtifactDir("/r", "run.")).not.toBe(lapArtifactDir("/r", "run"));
+  });
+
+  test("a reserved device name is escaped so the run can be materialised at all", () => {
+    // `nul` is a legal run identifier and cannot be a directory on Windows. The
+    // failure without this is not a collision but an outright refusal to
+    // materialise, on one platform, reported as a path error.
+    expect(lapArtifactDir("/r", "nul")).toMatch(/%6Eul$/);
+    expect(lapArtifactDir("/r", "com1.log")).toMatch(/%63om1\.log$/);
+    // The check is on the stem, and a name that merely starts with one is not
+    // reserved -- escaping it would be a rule this function invented.
+    expect(lapArtifactDir("/r", "nullable")).toMatch(/nullable$/);
   });
 });
 
@@ -308,6 +344,39 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
       /did not finish its turn within 1000ms/,
     );
     expect(refusal.message).toContain("Nothing is rolled back");
+  });
+
+  test("a poll interval longer than the budget does not extend it", async () => {
+    // The sleep is capped at what is left. Without the cap the loop wakes past
+    // the deadline and the next read's report is accepted, because the deadline
+    // is only consulted on the pending branch -- so a one-second timeout with a
+    // two-second interval would accept a report that arrived at two seconds and
+    // `--turn-timeout-ms` would bound nothing.
+    const reader = scriptedReader([stillRunning(), stillRunning()]);
+    // A clock the wait actually moves, so "the sleep overshot the deadline" is
+    // a thing this case can observe at all. A clock that ticked per read would
+    // reach the deadline whatever the sleep did, and would be green on the bug.
+    let now = T0;
+    const waits: number[] = [];
+    const sleep = (ms: number): Promise<void> => {
+      waits.push(ms);
+      now += ms;
+      return Promise.resolve();
+    };
+    await expectRefusalAsync(
+      () =>
+        awaitTerminalReport(
+          reader,
+          SESSION,
+          { pollIntervalMs: 2_000, timeoutMs: 1_000, sleep },
+          () => now,
+        ),
+      LapRefused,
+      /did not finish its turn within 1000ms/,
+    );
+    // One wait, and it was the remaining budget rather than the interval.
+    expect(waits).toEqual([1_000]);
+    expect(reader.calls).toBe(2);
   });
 
   test("the deadline is taken before the first read", async () => {

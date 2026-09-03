@@ -11136,10 +11136,14 @@ included, per file and with no transitive closure.
    build a second spawner, which `execute` refuses. So materialise, spawn, poll and ingest are one
    process. The seams an operator gets are `run admit` before it and the gate verbs (step 10) after.
 
-5. **The CLI gains an asynchronous dispatch path.** `dispatch` refuses a handler that returned a
-   promise -- reading one as a status would report success for a command still running and lose
-   whatever it eventually threw -- and `dispatchAsync` / `mainAsync` are what the `bin` uses.
-   `main` is unchanged for every synchronous verb and every case that drives one.
+5. **The CLI gains an asynchronous dispatch path, and the refusal is declared rather than
+   discovered.** A leaf parser marks its handler with `setDefaults({ func, asynchronous: true })`,
+   and `dispatch` refuses such a command **before calling the handler**; `dispatchAsync` /
+   `mainAsync` are what the `bin` uses, and `main` is unchanged for every synchronous verb. The
+   declaration is not decoration: this verb does its work before returning its promise -- it
+   materialises a worktree, publishes a fence and starts a child -- so a `dispatch` that learned the
+   shape from the returned value would learn it with a child already running that nobody was going
+   to observe. That is the opposite of fail-closed, and it is what the first draft did.
 
 6. **The fence IS wired, so the step's conditional does not apply.** Step 8's own text says that if
    the fence could not be wired, lap 1 spawning unfenced and the gate being advisory must be
@@ -11159,6 +11163,12 @@ allowlisted).
 
 - `src/lap/cli.ts` imports its own package barrel. That is a smell and it is the price of the rule;
   it is one import in one file, and it is the file that is an entry point.
+- **The lap is the first surface to compose four subsystems, so it is the first to meet four refusal
+  taxonomies.** `ControlPlaneRefusal`, `GitRefusal`, `LeaseRefusal` and `OrchestrationRefused` are
+  deliberately separate families -- below this layer they mean different things -- and this verb is
+  where all four become one line and exit 2. The list is enumerated rather than widened to `Error`,
+  because the point of catching is to leave everything not on it escaping with its stack:
+  `LapUsageError` and `WorkspaceMaterializationUsageError` are defects in a caller and stay out.
 - **No parity ledger claims `test/lap/`.** The precedent is `D-0054` rule 5 as applied by `D-0057`:
   the checker's `unmapped` guard only reaches target tests in a file some ledger's `test_file`
   names, and a source-less feature has no source cases to claim. `test/workspace/materializer.test.ts`
@@ -11197,9 +11207,13 @@ This is that component, and the question is now answerable rather than deferred.
 
 4. **There is a budget, and running out of it rolls nothing back.** `--turn-timeout-ms` (default
    fifteen minutes) bounds the wait; the refusal says so and says explicitly that the workspace, the
-   fence and the child are as they were. The deadline is taken **before** the first read, because a
-   budget started from the first answer gives a provider that blocks for the whole timeout an
-   unbounded second chance.
+   fence and the child are as they were. Two things make it an actual bound rather than an
+   approximate one, and each was a bug before it was a rule: the deadline is taken **before** the
+   first read, because a budget started from the first answer gives a provider that blocks for the
+   whole timeout an unbounded second chance; and each wait is capped at what is **left** of the
+   budget, because an interval longer than the remaining time would sleep past the deadline and then
+   accept whatever the next read returned -- a one-second timeout with a two-second interval would
+   have accepted a report that arrived at two seconds.
 
 5. **After the gate is open, the verb stops the session.** The turn's durable outcome -- the
    escalation event and the gate over it -- has committed by then, so the stop cannot affect it. It
@@ -11241,12 +11255,23 @@ the layout, and hands the question to step 8.
    to stop a layer from guessing.
 2. **One directory per run.** An operator holding a run identifier can find that run's fence by
    reading the path, which is why it is not a hash.
-3. **The run identifier is encoded, not trusted.** `LapRunIntent` holds it to printable ASCII, which
-   admits `/`, `\`, `:` and `..` -- each of which turns "a directory named after the run" into a
-   directory somewhere else. Every character outside `[A-Za-z0-9._-]` becomes `%XX`; the escape
-   character is itself escaped, so the encoding is injective and two runs cannot collide; and a name
-   that is entirely dots is encoded too, because `.` and `..` are legal identifiers and are not legal
-   directory names.
+3. **The run identifier is encoded against the *filesystem's* identity rules, not the string's.**
+   `LapRunIntent` holds it to printable ASCII, which is a far wider set than a directory name may
+   safely be, and it goes wrong in three separate ways:
+   - `/`, `\`, `:` and `..` turn "a directory named after the run" into a directory somewhere else;
+   - **Windows folds case and drops a trailing dot**, so `run` and `RUN`, or `run` and `run.`, are one
+     directory -- two admitted runs sharing a fence, a settings file and a ledger, racing through the
+     materialiser's check-before-write guard on all three. `D-0216` records the same hazard for the
+     containment guard and answers it the same way;
+   - **Windows reserves `con`, `nul`, `com1` and their kin in every directory**, so a run
+     legitimately called `nul` could not be materialised at all -- on one platform, reported as a
+     path error rather than as anything about the run.
+
+   So every character outside `[a-z0-9._-]` becomes `%XX` (uppercase included, which is what closes
+   the folding hole), a trailing dot is encoded, and a reserved device name has its first character
+   escaped. The escape character is itself escaped and the only uppercase in any output is inside an
+   escape this function wrote, so the encoding is injective **under case folding** and not merely as
+   a string. Lowercase identifiers -- every one this repository writes -- are untouched.
 
 **Why the guard is here rather than downstream.** The materialiser checks that no artifact lands
 inside the *worktree*. It does not and should not check where else on the operator's filesystem a
@@ -11254,9 +11279,10 @@ path lands, so nothing below this function would have refused `--artifact-root /
 run called `../../etc`.
 
 **Consequences.** A run identifier and its artifact directory are not the same string, so an
-operator reading a directory name sees `a%2Fb` where the run is `a/b`. The encoding is reversible and
-the one-line report the verb prints names the run rather than the directory, which is the value an
-operator actually carries between commands.
+operator reading a directory name sees `a%2Fb` where the run is `a/b` and `%52%55%4E` where it is `RUN`.
+The encoding is reversible and the one-line report the verb prints names the run rather than the
+directory, which is the value an operator actually carries between commands. The cost falls only on
+identifiers that were unsafe to begin with.
 
 **What would falsify it.** A narrowing of `LapRunIntent`'s identifier rule to something that is
 already a safe path segment would make the encoding dead weight -- though not wrong, and it would

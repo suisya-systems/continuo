@@ -237,8 +237,43 @@ export class MaterializedWorkspaceRequired implements WorkspaceLifecycleObserver
 // decision 4: the artifact layout (D-0061)
 // --------------------------------------------------------------------------
 
-/** Path characters that need no encoding in a directory name on either platform. */
-const ARTIFACT_SEGMENT_SAFE = /^[A-Za-z0-9._-]$/;
+/**
+ * Path characters that need no encoding in a directory name on either platform.
+ *
+ * **Uppercase is deliberately not in it.** An NTFS volume resolves `run` and
+ * `RUN` to one directory, so two admitted runs whose identifiers differ only by
+ * case would share an artifact directory -- and would then race through the
+ * materialiser's check-before-write guard on the fence, the settings and the
+ * ledger. `D-0216` records the same hazard for the containment guard and
+ * answers it the same way: the platform's identity rule, not the string's.
+ * Lowercase identifiers -- which is every one this repository writes -- are
+ * unaffected and stay readable.
+ */
+const ARTIFACT_SEGMENT_SAFE = /^[a-z0-9._-]$/;
+
+/**
+ * The DOS device names Windows still reserves, in every directory, with or
+ * without an extension.
+ *
+ * A run called `nul` is a perfectly good identifier and cannot be a directory:
+ * the create fails with a message about the path rather than about the run, and
+ * it fails on Windows only. Lowercase only, because {@link ARTIFACT_SEGMENT_SAFE}
+ * has already encoded every uppercase letter, and the comparison is made against
+ * the stem before the first dot, because that is the part Windows reserves.
+ */
+const RESERVED_DEVICE_NAMES: ReadonlySet<string> = new Set([
+  "con",
+  "prn",
+  "aux",
+  "nul",
+  ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`),
+]);
+
+/** `%XX`, the one escape this encoding has. */
+function percentEncode(character: string): string {
+  return `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+}
 
 /**
  * The directory this lap's fence, settings, MCP configuration and fence ledger
@@ -252,13 +287,25 @@ const ARTIFACT_SEGMENT_SAFE = /^[A-Za-z0-9._-]$/;
  * operator's filesystem, so the root is a required flag and the *layout* under
  * it is this step's.
  *
- * **The run identifier is encoded rather than trusted.** `LapRunIntent` holds it
- * to printable ASCII, which admits `/`, `\`, `:` and `..` -- every one of which
- * turns "a directory named after the run" into a directory somewhere else. Each
- * character outside `[A-Za-z0-9._-]` becomes `%XX`, which is reversible, stable
- * across platforms, and collision-free (the escape character is itself
- * escaped). A name that is entirely dots is encoded too, because `.` and `..`
- * are legal identifiers and are not legal directory names.
+ * **The run identifier is encoded rather than trusted**, against the
+ * *filesystem's* identity rules and not the string's. `LapRunIntent` holds it to
+ * printable ASCII, which is a much wider set than a directory name may safely
+ * be, and three separate things go wrong if it is used as written:
+ *
+ * - `/`, `\` and `:` turn "a directory named after the run" into a directory
+ *   somewhere else, and `..` into one above the root;
+ * - Windows resolves `run` and `RUN` to one directory and drops a trailing dot,
+ *   so two admitted runs would share a fence, a settings file and a ledger, and
+ *   would race through the materialiser's check-before-write guard;
+ * - Windows reserves `con`, `nul`, `com1` and their kin in every directory, so a
+ *   run legitimately called `nul` could not be materialised at all -- on one
+ *   platform, with a message about a path rather than about a run.
+ *
+ * So every character outside `[a-z0-9._-]` becomes `%XX`, a trailing dot is
+ * encoded, and a reserved device name has its first character escaped. The
+ * result is reversible, identical on every platform, and collision-free even
+ * under case folding -- the escape character is itself escaped, so two distinct
+ * identifiers cannot encode to one name.
  *
  * Not a hash: an operator looking for a run's fence has the run id and should be
  * able to find the directory by reading it.
@@ -266,12 +313,20 @@ const ARTIFACT_SEGMENT_SAFE = /^[A-Za-z0-9._-]$/;
 export function lapArtifactDir(artifactRoot: string, runId: string): string {
   let encoded = "";
   for (const character of runId) {
-    encoded += ARTIFACT_SEGMENT_SAFE.test(character)
-      ? character
-      : `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+    encoded += ARTIFACT_SEGMENT_SAFE.test(character) ? character : percentEncode(character);
   }
-  if (/^\.+$/.test(encoded)) {
-    encoded = encoded.replaceAll(".", "%2E");
+  // A trailing dot is silently dropped by Windows, so `run.` and `run` would be
+  // one directory; encoding it also settles `.` and `..`, which are legal
+  // identifiers and are not legal directory names.
+  if (encoded.endsWith(".")) {
+    encoded = `${encoded.slice(0, -1)}%2E`;
+  }
+  const stem = encoded.split(".")[0] ?? "";
+  if (RESERVED_DEVICE_NAMES.has(stem)) {
+    // The first character, so the rest of the name still reads: `nul` becomes
+    // `%6Eul`. Escaping is enough -- a reserved name is reserved exactly, and
+    // `%6Eul` is not one of them.
+    encoded = `${percentEncode(encoded.slice(0, 1))}${encoded.slice(1)}`;
   }
   // `join` rather than string concatenation: the encoded name carries no
   // separator of either platform's, so there is nothing here for `join` to
@@ -378,7 +433,13 @@ export async function awaitTerminalReport(
           "fence and the child are as they were, and the run can be polled again",
       );
     }
-    await sleep(pollIntervalMs);
+    // Capped at what is left of the budget, not the bare interval. An interval
+    // longer than the remaining time would sleep past the deadline and then
+    // accept whatever the next read returned -- so a one-second timeout with a
+    // two-second interval would accept a report that arrived at two seconds,
+    // and `--turn-timeout-ms` would not be a bound at all. Waking at the
+    // deadline makes the last read the one the deadline check sees.
+    await sleep(Math.max(0, Math.min(pollIntervalMs, deadline - nowMs())));
   }
 }
 

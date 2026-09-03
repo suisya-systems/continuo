@@ -831,16 +831,13 @@ export function dispatch(
   argv: readonly string[],
   streams: ArgparseStreams,
 ): number {
-  const status = run(parser, argv, streams);
+  const status = run(parser, argv, streams, false);
   if (typeof status !== "number") {
-    // A handler that returns a promise has not finished when this returns, so a
-    // caller reading the value as a status would report success for a command
-    // still running -- and would lose whatever it eventually threw. Refusing is
-    // the fail-closed direction, and {@link dispatchAsync} is the way through.
-    throw new Error(
-      `${parser.prog}: this command is asynchronous and cannot be dispatched ` +
-        "synchronously; use dispatchAsync",
-    );
+    // Unreachable: `run` refuses an asynchronous command before calling its
+    // handler, and a handler not declared asynchronous returning a promise is a
+    // declaration that disagrees with its own implementation. Checked anyway,
+    // because the alternative is returning a promise as an exit status.
+    throw new Error(`${parser.prog}: the command's handler returned a promise unannounced`);
   }
   return status;
 }
@@ -858,14 +855,33 @@ export async function dispatchAsync(
   argv: readonly string[],
   streams: ArgparseStreams,
 ): Promise<number> {
-  return await run(parser, argv, streams);
+  return await run(parser, argv, streams, true);
 }
 
-/** Parse, find the handler, and call it -- whatever shape its result has. */
+/**
+ * The namespace key a leaf parser sets to declare its handler asynchronous.
+ *
+ * A declaration on the parser rather than a property of the returned value,
+ * and the difference is the whole of why it exists. An asynchronous handler has
+ * already *done* things by the time it returns its promise -- `lap perform`
+ * materialises a worktree, publishes a fence and starts a child -- so a
+ * synchronous caller that learned the shape from the result would learn it
+ * after the work it could not observe had begun. Declared, the refusal comes
+ * before the call.
+ */
+export const ASYNCHRONOUS = "asynchronous";
+
+/**
+ * Parse, find the handler, and call it.
+ *
+ * `awaited` says whether the caller can settle a promise. A command declaring
+ * {@link ASYNCHRONOUS} is refused before its handler runs when it cannot.
+ */
 function run(
   parser: ArgumentParser,
   argv: readonly string[],
   streams: ArgparseStreams,
+  awaited: boolean,
 ): number | Promise<number> {
   let args: Namespace;
   try {
@@ -883,6 +899,12 @@ function run(
     // command line that names none. Stated rather than assumed: a subtree
     // mounted without its handler would otherwise exit 0 having run nothing.
     throw new Error(`${parser.prog}: the parsed command names no handler`);
+  }
+  if (args[ASYNCHRONOUS] === true && !awaited) {
+    throw new Error(
+      `${parser.prog}: this command is asynchronous and cannot be dispatched ` +
+        "synchronously; use dispatchAsync",
+    );
   }
   return (func as (values: Namespace) => number | Promise<number>)(args);
 }

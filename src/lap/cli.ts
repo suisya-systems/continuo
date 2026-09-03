@@ -51,6 +51,7 @@ import {
   type Namespace,
   type Subparsers,
 } from "../cli/parser.js";
+import { LeaseRefusal } from "../control_plane/lease.js";
 import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 // The one import that names the shipped backend, and it names an abstraction:
@@ -58,6 +59,7 @@ import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 // `../session/index.js` would make this file know a session backend, which is
 // the join the leak test forbids outside the barrel.
 import { createDefaultSessionProvider } from "../index.js";
+import { OrchestrationRefused } from "../supervisor.js";
 import { GitRefusal } from "../workspace/git.js";
 import { WorkspaceMaterializationRefused } from "../workspace/materializer.js";
 import { type LapOutcome, performLap } from "./root.js";
@@ -160,15 +162,21 @@ export const lapCliSeams = {
 };
 
 /**
- * The three refusal families this verb turns into one operator-facing line.
+ * The refusal families this verb turns into one operator-facing line.
  *
- * `ControlPlaneRefusal` is the one every other subtree reports. The other two
- * are `src/workspace/`'s, and they are outside that family deliberately -- a
- * topic branch that already exists and a git command that never answered are
- * not statements about the control plane, and `git.ts` keeps its three shapes
- * distinct because an operator acts on them differently. **This is the layer
- * where all three become the same thing**: an ordinary outcome of a command
- * someone typed, reported as one line and exit 2. Below it they stay apart.
+ * The lap is the first surface that composes four subsystems, so it is the
+ * first that meets four refusal taxonomies -- and each one is deliberately its
+ * own family, because below this layer they mean different things.
+ * `ControlPlaneRefusal` is what every other subtree reports; `git.ts` keeps its
+ * shapes distinct because "git said no" and "git never answered" are acted on
+ * differently; `LeaseRefusal` says another claimant holds the run; and
+ * `OrchestrationRefused` says the walk stopped -- the provider would not start,
+ * the identity did not read back, this writer lost a race.
+ *
+ * **Every one of them is an ordinary outcome of a command an operator typed**,
+ * and this is the layer where they become the same thing: one line and exit 2.
+ * The list is enumerated rather than widened to `Error`, because the point of
+ * catching is to leave everything that is *not* on it escaping with its stack.
  *
  * `WorkspaceMaterializationUsageError` and `LapUsageError` are deliberately
  * absent, on the ground `run_cli.ts` states about `RunAdmissionUsageError`:
@@ -179,7 +187,9 @@ function isOperatorRefusal(error: unknown): error is Error {
   return (
     error instanceof ControlPlaneRefusal ||
     error instanceof WorkspaceMaterializationRefused ||
-    error instanceof GitRefusal
+    error instanceof GitRefusal ||
+    error instanceof LeaseRefusal ||
+    error instanceof OrchestrationRefused
   );
 }
 
@@ -403,5 +413,9 @@ export function addSubparsers(sub: Subparsers): void {
   });
   addOptionalInt(perform, "--gate-deadline-at-ms", "gate_deadline_at_ms", GATE_DEADLINE_HELP);
 
-  perform.setDefaults({ func: cmdLapPerform });
+  // `asynchronous` is read by `dispatch` BEFORE the handler is called: this
+  // verb materialises a worktree, publishes a fence and starts a child, and a
+  // synchronous caller that discovered the shape from the returned value would
+  // have discovered it after all of that had already happened.
+  perform.setDefaults({ func: cmdLapPerform, asynchronous: true });
 }

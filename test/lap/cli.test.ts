@@ -39,6 +39,7 @@ import { describe, expect, onTestFinished, test } from "vitest";
 import { main, mainAsync } from "../../src/cli.js";
 import { dbCliSeams } from "../../src/control_plane/cli.js";
 import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
+import { acquire as acquireLease } from "../../src/control_plane/lease.js";
 import { openProductionControlPlane } from "../../src/control_plane/migrator.js";
 import {
   WORKER_ESCALATION_EVENT_TYPE,
@@ -64,6 +65,7 @@ const T0 = 1_700_000_000_000;
 const BASE_BRANCH = "main";
 const TOPIC_BRANCH = "feat/topic";
 const ROLE = "worker";
+const RUN_ID = "run-lap-1";
 const HOLDER = "operator-1";
 const SETTINGS_FILENAME = "settings.local.json";
 
@@ -101,6 +103,8 @@ interface Lap {
   readonly stateRoot: string;
   readonly out: string[];
   readonly err: string[];
+  /** The `lap perform` command line, so a case can dispatch it either way. */
+  argv(overrides?: Readonly<Record<string, string>>): string[];
   /** `continuo lap perform`, with `overrides` replacing the defaults by flag. */
   perform(overrides?: Readonly<Record<string, string>>): Promise<number>;
 }
@@ -113,7 +117,7 @@ interface Lap {
  * (`D-0061`), so a case that wants to see the derivation has to be able to
  * choose one.
  */
-function lap(label: string, runId = "run-lap-1"): Lap {
+function lap(label: string, runId = RUN_ID): Lap {
   const root = caseRoot(label);
   const repository = join(root, "repo");
   initRepository(repository);
@@ -219,7 +223,7 @@ function lap(label: string, runId = "run-lap-1"): Lap {
     stateRoot,
     out,
     err,
-    perform(overrides = {}) {
+    argv(overrides = {}) {
       const argv = ["lap", "perform"];
       for (const [flag, value] of Object.entries({ ...flags, ...overrides })) {
         argv.push(flag, value);
@@ -230,7 +234,10 @@ function lap(label: string, runId = "run-lap-1"): Lap {
       for (const token of command) {
         argv.push("--claude-command", token);
       }
-      return mainAsync(argv);
+      return argv;
+    },
+    perform(overrides = {}) {
+      return mainAsync(this.argv(overrides));
     },
   };
 }
@@ -378,6 +385,50 @@ describe("what the verb refuses, and what it leaves behind", () => {
     // into would destroy the evidence of what it did.
     expect(existsSync(join(f.workspace, "README.md"))).toBe(true);
     expect(existsSync(join(f.artifactDir, FENCE_FILENAME))).toBe(true);
+  });
+
+  test("a synchronous dispatch refuses before the lap has begun", () => {
+    // `main` cannot settle a promise, and this verb's handler does its work
+    // before returning one -- it materialises a worktree, publishes a fence and
+    // starts a child. So the shape has to be discovered from the parser's own
+    // declaration and refused BEFORE the handler is called; discovering it from
+    // the returned value would mean discovering it after a child was running
+    // that nobody was going to observe.
+    const f = lap("lap-sync-dispatch");
+    expect(() => main(f.argv())).toThrow(/asynchronous/);
+    expect(existsSync(f.workspace)).toBe(false);
+    expect(existsSync(f.artifactDir)).toBe(false);
+
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKSPACE_MATERIALIZED_EVENT_TYPE);
+  });
+
+  test("a run someone else holds the lease on is a refusal, not a stack trace", async () => {
+    // `SessionOrchestrator.start()` takes the run's lease and raises `LeaseHeld`
+    // -- a `LeaseRefusal`, which is neither a `ControlPlaneRefusal` nor one of
+    // `src/workspace/`'s. So does `OrchestrationRefused` when the walk stops for
+    // its own reasons. Both are ordinary outcomes of a command an operator
+    // typed, and without them on this verb's classification the operator gets an
+    // unhandled stack trace and exit 1 where every other verb gives one line and
+    // exit 2.
+    const f = lap("lap-lease-held");
+    const held = openProductionControlPlane(f.databasePath);
+    onTestFinished(() => {
+      held.close();
+    });
+    acquireLease(held, {
+      resource: `session-run:${RUN_ID}`,
+      holder: "someone-else",
+      nowMs: T0,
+      ttlMs: 600_000,
+    });
+
+    expect(await f.perform()).toBe(2);
+    expect(f.err.join("")).toMatch(/^error: /);
+
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+    expect(connection.prepare("SELECT count(*) AS n FROM gate").get()).toEqual({ n: 0 });
   });
 
   test("a second perform of one run is refused rather than re-run", async () => {
