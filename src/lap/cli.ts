@@ -94,9 +94,11 @@ const STATE_ROOT_HELP =
   "output in. Never defaulted: two providers sharing one directory adopt each " +
   "other's children.";
 const CLAUDE_COMMAND_HELP =
-  "the worker CLI to run, as one token. Repeat the flag to give a command " +
-  "prefix in order (an interpreter and a script). 'claude' when omitted, which " +
-  "requires it on PATH.";
+  "the worker CLI to run, as one token, and it must be an ABSOLUTE path. " +
+  "Repeat the flag to give a command prefix in order (an interpreter and a " +
+  "script); every token must be absolute. Required: a bare name would be " +
+  "resolved through PATH, and the fence cannot rest on which directory the " +
+  "worker happens to be started from.";
 const ENDPOINT_EPOCH_HELP = "the epoch of the lease the worker's endpoint writes under.";
 const ENDPOINT_RECIPIENT_HELP = "the one recipient the worker's endpoint serves.";
 const ENDPOINT_DESTINATION_DIR_HELP = "directory the endpoint's delivery files are written into.";
@@ -434,6 +436,7 @@ export function addSubparsers(sub: Subparsers): void {
     optionStrings: ["--claude-command"],
     dest: "claude_command",
     append: true,
+    required: true,
     metavar: "CLAUDE_COMMAND",
     help: CLAUDE_COMMAND_HELP,
   });

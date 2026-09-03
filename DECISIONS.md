@@ -11642,24 +11642,35 @@ The comparison is `materializeWorkspace`'s own `isInside`, now exported rather t
 case-folds on Windows (`D-0216`), and a second predicate for one rule is how two implementations of
 one rule come to disagree.
 
-**A bare command is not exempt, and skipping it was the rule's own blind spot.** The containment
-check skips a token with no separator, on the ground that `claude` is a name looked up on `PATH`
-rather than a location. That is true and incomplete: **`PATH` may itself carry a relative entry**, and
-a `.` on it makes a bare name resolve against a working directory -- of which there are two here. The
-capability probe runs with this process's; the child is spawned with **the workspace** as its. So a
-file named `claude`, committed to the repository and therefore present the moment `git worktree add`
-returns, can shadow the binary the probe approved, and the fence is applied to a worker the worker
-supplied.
+**Every token of the worker command must be an absolute path, and that rule replaced three attempts
+to be cleverer.** The first skipped any token with no separator, reasoning that `claude` is a name
+looked up on `PATH` rather than a location. The second added a `PATH` check for a relative entry.
+Each was defeated by a resolution rule this repository does not own:
 
-**And the hazard is on the ordinary path, not the flagged one.** With `--claude-command` omitted the
-provider uses its own bare default and `LapRequest.workerCommand` is `undefined`, so a check that
-walked only the supplied tokens examined **nothing at all**. Passing the flag was the case that
-happened to be safer. The check therefore runs whether or not a command was pinned.
+- a `PATH` may carry a relative entry -- and on POSIX an **empty** element means the current
+  directory, so a filter that dropped empty entries as noise dropped precisely the dangerous one;
+- a command given as an interpreter and a script has a **second** token, resolved against the child's
+  working directory, which no check of the first token sees;
+- and the two working directories differ: the capability probe runs with the launcher's, the child is
+  spawned with **the workspace** as its.
 
-It **refuses** rather than resolving: reproducing `PATH` lookup -- `PATHEXT`, the executable-bit test,
-the platform's precedence -- would be a second implementation of something the operating system does,
-in the file that decides what a fenced worker runs. A relative `PATH` entry is independently a
-configuration mistake, and naming it is a better answer than guessing around it.
+**The lesson is the one this entry should have drawn at the first attempt.** Refusing rather than
+reimplementing `PATH` resolution looked like the conservative choice and was not: *the condition to
+refuse on cannot be written without understanding the resolution rules either.* Declining to
+reimplement them and then depending on them is the same bet with the stake hidden. So the resolution
+is removed from the path instead -- an absolute token is resolved against nothing, and `isInside` can
+answer about it exactly.
+
+**`--claude-command` becomes required, and that is the intended cost.** `PATH` is ambient authority.
+A fence exists so that what a worker may do is decided explicitly, and "everything is explicit except
+which binary the worker itself is" was never coherent -- it showed, too: with the flag omitted the
+command was `undefined` in this check and **nothing at all was examined**, which made passing the
+flag safer than not passing it. `ClaudeCliSessionProvider` keeps its own `claude` default; the lap
+simply never reaches it, and nothing in the provider changes.
+
+**Resolving the name once at admission and recording the result was considered and rejected.** Node
+has no `which`, and reaching for a shell to get one adds an interpreter -- and its quoting -- to the
+path that decides what a fenced worker runs. Asking an operator for a full path is the smaller price.
 
 **Ordering inside the preflight is load-bearing, not cosmetic.** Containment is established *before*
 the provider is asked anything, because `requireSpawnable` runs the capability probe and the probe
@@ -11721,6 +11732,15 @@ lease, prepares the binding and marks the spawn synchronously, before its first 
 **Consequences.** The binding check from attempt 2 is kept as well: the two answer different
 questions, and dropping either restores a distinct hole. Between them the rule is "this run bound
 this identity, and this lap still holds the epoch it bound it under".
+
+**The epoch is taken from the acquisition, never read back from the row.** The first implementation
+read the lease row after the walk had started, and that answers a different question: if the process
+is suspended past the TTL between the orchestrator's acquire and the read, the row already belongs to
+a later claimant -- so the lap records **the winner's epoch as its own**, passes its own ownership
+check, and stops the winner's worker. **The check was defeated by where it got its number**, which is
+the failure it exists to prevent wearing a different hat. `SessionOrchestratorOptions.onLeaseAcquired`
+hands the lease over at the only instant it is trustworthy, and is a production seam for that reason
+rather than a test hook.
 
 **The residual, stated precisely, because it is real and it is not closable here.** Reading the epoch
 and signalling the child are two operations, and nothing fences the gap between them: if the lease

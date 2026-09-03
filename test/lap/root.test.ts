@@ -272,12 +272,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
   test("the first report ends the poll", async () => {
     const reader = scriptedReader([stillRunning(), finished("please review")]);
     const sleep = recordingSleep();
-    const report = await awaitTerminalReport(
-      reader,
-      SESSION,
-      { pollIntervalMs: 25, timeoutMs: 10_000, sleep },
-      tickingClock(1),
-    );
+    const report = await awaitTerminalReport(reader, SESSION, {
+      pollIntervalMs: 25,
+      timeoutMs: 10_000,
+      sleep,
+      elapsedMs: tickingClock(1),
+    });
     expect(report.report).toBe("please review");
     // Exactly two reads and one wait: a loop that kept polling after a report
     // would be waiting for the child to exit, which D-0060 declines to do.
@@ -292,12 +292,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     // exits" would silently escalate the later line, and D-0056's dedup key --
     // per session and generation -- would not tell the two apart.
     const reader = scriptedReader([finished("the real report"), finished("a restatement")]);
-    const report = await awaitTerminalReport(
-      reader,
-      SESSION,
-      { pollIntervalMs: 0, timeoutMs: 10_000, sleep: recordingSleep() },
-      tickingClock(1),
-    );
+    const report = await awaitTerminalReport(reader, SESSION, {
+      pollIntervalMs: 0,
+      timeoutMs: 10_000,
+      sleep: recordingSleep(),
+      elapsedMs: tickingClock(1),
+    });
     expect(report.report).toBe("the real report");
     expect(reader.calls).toBe(1);
   });
@@ -316,12 +316,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     ]);
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          reader,
-          SESSION,
-          { pollIntervalMs: 0, timeoutMs: 10_000, sleep: recordingSleep() },
-          tickingClock(1),
-        ),
+        awaitTerminalReport(reader, SESSION, {
+          pollIntervalMs: 0,
+          timeoutMs: 10_000,
+          sleep: recordingSleep(),
+          elapsedMs: tickingClock(1),
+        }),
       LapRefused,
       /without a report to escalate/,
     );
@@ -338,12 +338,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     ]);
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          reader,
-          SESSION,
-          { pollIntervalMs: 0, timeoutMs: 10_000, sleep: recordingSleep() },
-          tickingClock(1),
-        ),
+        awaitTerminalReport(reader, SESSION, {
+          pollIntervalMs: 0,
+          timeoutMs: 10_000,
+          sleep: recordingSleep(),
+          elapsedMs: tickingClock(1),
+        }),
       LapRefused,
       /could not be read/,
     );
@@ -357,12 +357,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     const reader = scriptedReader([stillRunning(), stillRunning(), stillRunning()]);
     const refusal = await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          reader,
-          SESSION,
-          { pollIntervalMs: 0, timeoutMs: 1_000, sleep: recordingSleep() },
-          tickingClock(400),
-        ),
+        awaitTerminalReport(reader, SESSION, {
+          pollIntervalMs: 0,
+          timeoutMs: 1_000,
+          sleep: recordingSleep(),
+          elapsedMs: tickingClock(400),
+        }),
       LapRefused,
       /did not finish its turn within 1000ms/,
     );
@@ -388,12 +388,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     };
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          reader,
-          SESSION,
-          { pollIntervalMs: 2_000, timeoutMs: 1_000, sleep },
-          () => now,
-        ),
+        awaitTerminalReport(reader, SESSION, {
+          pollIntervalMs: 2_000,
+          timeoutMs: 1_000,
+          sleep,
+          elapsedMs: () => now,
+        }),
       LapRefused,
       /did not finish its turn within 1000ms/,
     );
@@ -417,12 +417,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     };
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          reader,
-          SESSION,
-          { pollIntervalMs: 10, timeoutMs: 1_000, sleep: overshooting },
-          () => now,
-        ),
+        awaitTerminalReport(reader, SESSION, {
+          pollIntervalMs: 10,
+          timeoutMs: 1_000,
+          sleep: overshooting,
+          elapsedMs: () => now,
+        }),
       LapRefused,
       /did not finish its turn within 1000ms/,
     );
@@ -444,12 +444,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
       now += ms;
       return Promise.resolve();
     };
-    const report = await awaitTerminalReport(
-      reader,
-      SESSION,
-      { pollIntervalMs: 5_000, timeoutMs: 1_000, sleep: exact },
-      () => now,
-    );
+    const report = await awaitTerminalReport(reader, SESSION, {
+      pollIntervalMs: 5_000,
+      timeoutMs: 1_000,
+      sleep: exact,
+      elapsedMs: () => now,
+    });
     expect(report.report).toBe("arrived while sleeping");
     expect(reader.calls).toBe(2);
   });
@@ -474,12 +474,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     ]);
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          reader,
-          SESSION,
-          { pollIntervalMs: 0, timeoutMs: 10_000, sleep: recordingSleep() },
-          tickingClock(1),
-        ),
+        awaitTerminalReport(reader, SESSION, {
+          pollIntervalMs: 0,
+          timeoutMs: 10_000,
+          sleep: recordingSleep(),
+          elapsedMs: tickingClock(1),
+        }),
       LapRefused,
       /is about some-other-session/,
     );
@@ -493,12 +493,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     const reader = scriptedReader([stillRunning(), stillRunning()]);
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          reader,
-          SESSION,
-          { pollIntervalMs: 0, timeoutMs: 500, sleep: recordingSleep() },
-          tickingClock(500),
-        ),
+        awaitTerminalReport(reader, SESSION, {
+          pollIntervalMs: 0,
+          timeoutMs: 500,
+          sleep: recordingSleep(),
+          elapsedMs: tickingClock(500),
+        }),
       LapRefused,
       /did not finish its turn/,
     );
@@ -511,23 +511,21 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     // whatever built the request rather than a state an operator acts on.
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          scriptedReader([]),
-          SESSION,
-          { pollIntervalMs: 0, timeoutMs: -1 },
-          tickingClock(1),
-        ),
+        awaitTerminalReport(scriptedReader([]), SESSION, {
+          pollIntervalMs: 0,
+          timeoutMs: -1,
+          elapsedMs: tickingClock(1),
+        }),
       LapUsageError,
       /timeout_ms/,
     );
     await expectRefusalAsync(
       () =>
-        awaitTerminalReport(
-          scriptedReader([]),
-          SESSION,
-          { pollIntervalMs: -1, timeoutMs: 0 },
-          tickingClock(1),
-        ),
+        awaitTerminalReport(scriptedReader([]), SESSION, {
+          pollIntervalMs: -1,
+          timeoutMs: 0,
+          elapsedMs: tickingClock(1),
+        }),
       LapUsageError,
       /poll_interval_ms/,
     );

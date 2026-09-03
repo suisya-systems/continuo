@@ -470,7 +470,12 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
     fields = JSON.parse(row.payload);
   } catch (error) {
     throw new RunNotAdmitted(
-      `run ${quoted}'s delegation payload is not readable JSON: ${String(error)}`,
+      // The parser's own message, QUOTED. V8 interpolates a fragment of the
+      // offending input into it, so a hand-edited row carrying a newline or an
+      // escape sequence would reach a one-line refusal with the power to forge
+      // a second line -- the same hazard the run identifier above is quoted
+      // for, arriving by way of the diagnostic rather than the value.
+      `run ${quoted}'s delegation payload is not readable JSON: ${pythonRepr(String(error))}`,
       { cause: error },
     );
   }

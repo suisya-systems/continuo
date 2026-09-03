@@ -30,7 +30,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import process from "node:process";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -58,7 +58,7 @@ import {
 } from "../../src/workspace/materializer.js";
 import { fakeCli, fakeEnv, fakeMode } from "../session/helpers/fake-cli.js";
 import { caseRoot } from "../testkit/cases.js";
-import { patchSeam, patchSeams } from "../testkit/seams.js";
+import { patchSeams } from "../testkit/seams.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
 const T0 = 1_700_000_000_000;
@@ -107,8 +107,6 @@ interface Lap {
   argv(overrides?: Readonly<Record<string, string>>): string[];
   /** `continuo lap perform`, with `overrides` replacing the defaults by flag. */
   perform(overrides?: Readonly<Record<string, string>>): Promise<number>;
-  /** The same, with `--claude-command` dropped so the provider's default is used. */
-  performWithoutCommand(overrides?: Readonly<Record<string, string>>): Promise<number>;
 }
 
 /**
@@ -240,21 +238,6 @@ function lap(label: string, runId = RUN_ID): Lap {
     },
     perform(overrides = {}) {
       return mainAsync(this.argv(overrides));
-    },
-    performWithoutCommand(overrides = {}) {
-      // The command prefix dropped, so the provider falls back to its own bare
-      // default -- the ordinary operator path, and the one a check that walked
-      // only the supplied tokens never examined.
-      const argv = this.argv(overrides);
-      const stripped: string[] = [];
-      for (let index = 0; index < argv.length; index += 1) {
-        if (argv[index] === "--claude-command") {
-          index += 1;
-          continue;
-        }
-        stripped.push(argv[index] as string);
-      }
-      return mainAsync(stripped);
     },
   };
 }
@@ -727,37 +710,31 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(existsSync(f.workspace)).toBe(false);
   });
 
-  test("a bare worker command is refused when PATH can resolve it relatively", async () => {
-    // A bare name is looked up on `PATH`, and `PATH` may itself carry a relative
-    // entry. A `.` on it makes the name resolve against a working directory --
-    // and the two in play are different: the capability probe runs with this
-    // process's, the child is spawned with the WORKSPACE as its. So a file named
-    // `claude`, committed to the repository and therefore present the moment
-    // `git worktree add` returns, can shadow the binary the probe just approved.
-    //
-    // **Run with no --claude-command at all**, which is the half that matters:
-    // the provider's default is bare, `workerCommand` is then undefined, and a
-    // check that only walked the supplied tokens examined nothing. The hazard is
-    // on the ordinary path; passing the flag was the case that happened to be
-    // safer.
-    const f = lap("warded-relative-path");
-    patchSeam(process.env, "PATH", `.${delimiter}${process.env["PATH"] ?? ""}`);
-
-    expect(await f.performWithoutCommand()).toBe(2);
-    expect(f.err.join("")).toContain("bare name");
-    expect(f.err.join("")).toContain("PATH");
+  test("a relative worker command is refused", async () => {
+    // `D-0067`: every token of the worker command must be an absolute path.
+    // Three earlier attempts tried to decide safely which relative spellings
+    // were harmless -- a token with no separator, then a PATH without a relative
+    // entry -- and each was defeated by a resolution rule this repository does
+    // not own: an empty PATH element means the current directory on POSIX, and a
+    // command given as interpreter plus script has a second token no check of
+    // the first one sees. Requiring absolute removes resolution from the path
+    // instead of trying to reason about it.
+    const f = lap("warded-relative-command");
+    expect(await f.perform({ "--claude-command": "./tool" })).toBe(2);
+    expect(f.err.join("")).toContain("not an absolute path");
     expect(existsSync(f.workspace)).toBe(false);
   });
 
-  test("an absolute worker command is unaffected by a relative PATH entry", async () => {
-    // The anti-vacuity half: the hazard is that a BARE name is resolved through
-    // `PATH`, so pinning an absolute command removes it. Without this, a rule
-    // that refused on a relative `PATH` entry regardless would pass the case
-    // above and break every operator whose shell carries one.
-    const f = lap("warded-absolute-command");
-    patchSeam(process.env, "PATH", `.${delimiter}${process.env["PATH"] ?? ""}`);
-
-    expect(await f.perform(), f.err.join("")).toBe(0);
+  test("every token is checked, not just the first", async () => {
+    // The interpreter-plus-script form. `worker.mjs` has no separator in it, so
+    // every earlier version of this rule let it through -- and the interpreter
+    // resolves it against ITS working directory, which is the worktree.
+    const f = lap("warded-second-token");
+    const argv = f.argv();
+    argv.push("--claude-command", "worker.mjs");
+    expect(await mainAsync(argv)).toBe(2);
+    expect(f.err.join("")).toContain("token 2");
+    expect(existsSync(f.workspace)).toBe(false);
   });
 
   test("a second perform of one run is refused rather than re-run", async () => {

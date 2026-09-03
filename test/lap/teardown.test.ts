@@ -216,6 +216,10 @@ function fixture(label: string, onStart: () => never, nowMs: () => number = () =
       repository,
       artifactRoot: join(root, "artifacts"),
       providerStateRoot: join(root, "state"),
+      // Absolute, because `D-0067` requires every token of the worker command to
+      // be one. The scripted provider never runs it; the rule is checked in the
+      // preflight regardless, which is the point of the rule.
+      workerCommand: [process.execPath],
       endpoint: {
         epoch: 1,
         recipient: NOTIFY_RECIPIENT,
@@ -350,6 +354,42 @@ describe("D-0068: the owner's identity is the lease epoch, not the session id", 
     // this lap's to stop.
     expect(outcome.ingested.gateOpened).toBe(true);
     expect(taken, "the takeover never happened, so the case proves nothing").toEqual(["taken"]);
+    expect(f.provider.stopCalls).toEqual([]);
+  });
+
+  test("the epoch comes from the acquisition, not from a later read of the row", async () => {
+    // **Where the first version of this rule defeated itself.** It learned the
+    // epoch by reading the lease row back after the walk had started -- which
+    // answers a different question. If this process is suspended past the TTL
+    // between the orchestrator's acquire and that read, the row already belongs
+    // to a later claimant, so the lap records **the winner's epoch as its own**,
+    // passes its own ownership check, and stops the winner's worker: the exact
+    // failure the check was added to prevent, defeated by where it got its
+    // number.
+    //
+    // The takeover here lands inside the spawn -- after the acquire, before any
+    // later read -- which is that window made deterministic. With the epoch
+    // taken from the acquisition it is this lap's own (lower) value and the
+    // comparison fails; with the epoch re-read it is the winner's and the
+    // comparison passes.
+    const f = fixture("epoch-from-acquisition", () => {
+      throw new OrchestrationRefused("unreachable: replaced below");
+    });
+    f.provider.onStart = () => {
+      acquire(f.connection, {
+        resource: `session-run:${RUN_ID}`,
+        holder: "someone-else",
+        nowMs: T0 + SLOW_MS,
+        ttlMs: 600_000,
+      });
+      throw new OrchestrationRefused("the walk stops, having lost the lease inside the spawn");
+    };
+
+    await expectRefusalAsync(
+      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      OrchestrationRefused,
+    );
+
     expect(f.provider.stopCalls).toEqual([]);
   });
 

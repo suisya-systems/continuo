@@ -1,10 +1,10 @@
-import { delimiter, isAbsolute, join, resolve } from "node:path";
-import process from "node:process";
+import { isAbsolute, join, resolve } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import type { LapRunIntent } from "../control_plane/lap_run_intent.js";
 import { readLease } from "../control_plane/lease.js";
+import { pythonRepr } from "../control_plane/python_repr.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { type IngestedReport, ingestTerminalReport } from "../control_plane/report_ingress.js";
 import { readLapRunIntent } from "../control_plane/run_admission.js";
@@ -384,10 +384,29 @@ export interface TurnCompletion {
   readonly timeoutMs: number;
   /** The wait, injectable so a case does not spend wall-clock. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * The **monotonic** reading the budget is measured against, in milliseconds.
+   *
+   * Defaults to `performance.now()`. Deliberately not the lap's `nowMs`, which
+   * is a wall clock and is the right thing for *stamping* -- an event's
+   * `occurred_at_ms` has to be comparable with every other row's. A wall clock
+   * is the wrong thing for measuring an interval: NTP can step it, and a laptop
+   * that suspends and resumes moves it by however long the lid was shut. Either
+   * would make `--turn-timeout-ms` expire early or late by an amount that has
+   * nothing to do with how long the worker worked.
+   *
+   * Injectable for the same reason `sleep` is: a case that asserts on a budget
+   * needs a clock it controls, and one that ticks only when the injected wait
+   * says so is the only way to observe an overshoot deterministically.
+   */
+  readonly elapsedMs?: () => number;
 }
 
 const DEFAULT_SLEEP = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The default monotonic reading. See {@link TurnCompletion.elapsedMs}. */
+const DEFAULT_ELAPSED_MS = (): number => performance.now();
 
 /**
  * Poll the transcript until the turn is over, and answer with what it said.
@@ -472,7 +491,6 @@ function preflight(request: LapRequest, provider: SessionProvider, workspace: st
   // fire over a directory this preflight had just made. A check that has to be
   // run before its neighbour has a side effect is worth saying out loud.
   requireOutsideWorkspace(request, workspace);
-  requireResolvableWorkerCommand(request);
   // The spawn precondition, asked here rather than left to the walk. It is on
   // the contract (`SessionProvider.requireSpawnable`), so this stays
   // provider-agnostic; it raises `SpawnRefused`, which the verb reports as one
@@ -537,81 +555,93 @@ function requireGateDeadline(request: LapRequest): void {
  * for one rule is how the two drift.
  */
 function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
+  // **Every token of the worker command must be an absolute path**, which is
+  // the rule that removes execution resolution from this lap entirely. See
+  // {@link requireAbsoluteWorkerCommand}.
+  requireAbsoluteWorkerCommand(request.workerCommand);
+
   const warded: readonly (readonly [string, string])[] = [
     // Resolved against this process: the provider does the same at construction.
     ["the provider's state root", resolve(request.providerStateRoot)],
-    // Resolved against the workspace: that is the child's working directory.
+    // Already absolute by the rule above, so `resolve` only normalises.
     ...(request.workerCommand ?? []).map(
-      (token, index) =>
-        [
-          `the worker command's token ${String(index)}`,
-          // A bare name is skipped by resolving it to itself: `claude` is looked
-          // up on `PATH`, not in a directory, so a check that placed it in one
-          // would be inventing a rule about how a command may be spelled.
-          token.includes("/") || token.includes("\\") ? resolve(workspace, token) : token,
-        ] as const,
+      (token, index) => [`the worker command's token ${String(index)}`, resolve(token)] as const,
     ),
   ];
   for (const [what, path] of warded) {
     if (isInside(path, workspace)) {
       throw new LapUsageError(
-        `${what} is ${path}, inside the workspace ${workspace}; the fenced child can ` +
-          "edit anything in its own worktree, so anything the fence or its evidence " +
-          "depends on must live outside it",
+        `${what} is ${pythonRepr(path)}, inside the workspace ${pythonRepr(workspace)}; the ` +
+          "fenced child can edit anything in its own worktree, so anything the fence or " +
+          "its evidence depends on must live outside it",
       );
     }
   }
 }
 
 /**
- * A bare worker command must not be resolvable **relative to anywhere**
- * (`D-0067`).
+ * Every token of the worker's command must be an **absolute path** (`D-0067`).
  *
- * {@link requireOutsideWorkspace} skips a token with no separator in it, on the
- * ground that `claude` is a name looked up on `PATH` rather than a location.
- * That is true and it is not the whole truth: **`PATH` may itself contain a
- * relative entry.** A `.` on it -- or any entry that is not absolute -- makes a
- * bare name resolve against the *working directory*, and the two directories in
- * play are not the same one. The capability probe runs with this process's
- * working directory; the child is spawned with **the workspace** as its cwd. So
- * a file named `claude` committed to the repository, present in the worktree the
- * moment `git worktree add` returns, can shadow the binary the probe just
- * approved. The fence is then applied to the worker's own executable.
+ * **This rule replaces three separate attempts to make execution resolution
+ * safe, and the reason it replaces them is worth more than the rule.**
  *
- * **This is checked whether or not a command was pinned, and that half was the
- * more serious one.** With `--claude-command` omitted the provider uses its own
- * default, `claude`, which is bare -- and `LapRequest.workerCommand` is then
- * `undefined`, so a check that only walked the supplied tokens examined nothing
- * at all. The hazard is not "present when the operator passes a flag"; it is
- * present on the ordinary path, and the flag is the case that was accidentally
- * safer.
+ * The first attempt skipped any token with no separator in it, reasoning that
+ * `claude` is a name looked up on `PATH` rather than a location. The second
+ * added a `PATH` check for a relative entry. Each was defeated in turn, and by
+ * the same thing every time: **a resolution rule this file does not own.** A
+ * `PATH` may carry a relative entry; on POSIX an **empty** element means the
+ * current directory, and a filter that dropped empty entries as noise dropped
+ * precisely the dangerous one; a command given as an interpreter and a script
+ * has a *second* token that resolves relative to the child's cwd, which no
+ * check of the first token sees. And the cwds differ: the capability probe runs
+ * with the launcher's, the child is spawned with **the workspace** as its.
  *
- * Refused rather than resolved. Reproducing `PATH` lookup -- `PATHEXT`, the
- * executable-bit test, the platform's own precedence -- would be a second
- * implementation of something the operating system does, in the file that
- * decides what a fenced worker runs. A relative `PATH` entry is independently a
- * configuration mistake, and refusing it names a real problem rather than
- * guessing around one.
+ * The lesson is the one this file should have drawn at the first attempt.
+ * Refusing rather than reimplementing looked like the conservative choice, and
+ * it was not: **the condition to refuse on cannot be written without
+ * understanding the resolution rules either.** Declining to reimplement them
+ * and then depending on them is the same bet with the stake hidden.
+ *
+ * So the resolution is removed from the path instead. An absolute token is not
+ * resolved against anything: not against `PATH`, not against a working
+ * directory, not against whichever of the two working directories happens to
+ * apply. `isInside` can then answer about it exactly, and the containment rule
+ * above is a statement about the file that will actually be executed.
+ *
+ * **`--claude-command` becomes required, and that is the intended cost.**
+ * `PATH` is ambient authority. The whole point of a fence is that what a worker
+ * may do is decided explicitly, so "everything is explicit except which binary
+ * the worker itself is" was never coherent -- and it showed: with the flag
+ * omitted the command was `undefined` here and **nothing at all was checked**,
+ * which made passing the flag safer than not passing it.
+ *
+ * `ClaudeCliSessionProvider` keeps its own `claude` default; this lap simply
+ * never reaches it, because it always passes a command. Nothing in the provider
+ * changes.
+ *
+ * **Resolving the name once at admission and recording the result was
+ * considered and rejected.** Node has no `which`, and reaching for a shell to
+ * get one adds an interpreter -- and its quoting -- to the path that decides
+ * what a fenced worker runs. Asking an operator for a full path is a smaller
+ * price than that.
  */
-function requireResolvableWorkerCommand(request: LapRequest): void {
-  const tokens = request.workerCommand ?? [];
-  // An unpinned command is the provider's own default, which is bare.
-  const usesBareName =
-    tokens.length === 0 || !(tokens[0]?.includes("/") || tokens[0]?.includes("\\"));
-  if (!usesBareName) {
-    return;
-  }
-  const env = request.env ?? process.env;
-  const search = env["PATH"] ?? env["Path"] ?? "";
-  const relative = search.split(delimiter).filter((entry) => entry !== "" && !isAbsolute(entry));
-  if (relative.length > 0) {
+function requireAbsoluteWorkerCommand(command: readonly string[] | undefined): void {
+  if (command === undefined || command.length === 0) {
     throw new LapUsageError(
-      `the worker command is a bare name and PATH carries the relative entry ` +
-        `${JSON.stringify(relative[0])}; a bare name is then resolved against a working ` +
-        "directory, and the child's is the worktree -- so a file the worker controls could " +
-        "stand in for the binary the capability probe approved. Give an absolute " +
-        "--claude-command, or take the relative entry off PATH",
+      "the worker command must be given, and every token of it must be an absolute path; " +
+        "a bare name would be resolved through PATH, which is ambient authority and not " +
+        "something a fence can be built on",
     );
+  }
+  for (const [index, token] of command.entries()) {
+    if (!isAbsolute(token)) {
+      throw new LapUsageError(
+        `the worker command's token ${String(index)} is ${pythonRepr(token)}, which is not ` +
+          "an absolute path. Every token is resolved by somebody -- PATH for a bare name, a " +
+          "working directory for a relative one, and the child's working directory is the " +
+          "worktree it may edit -- so the command is required to name files outright",
+      );
+    }
   }
 }
 
@@ -645,7 +675,6 @@ export async function awaitTerminalReport(
   reader: TerminalReportReader,
   sessionId: string,
   completion: TurnCompletion,
-  nowMs: () => number,
 ): Promise<LapTerminalReport> {
   // Checked here as well as in `performLap`'s prologue, and the duplication is
   // the point: this is an exported function a caller can reach on its own, so
@@ -654,10 +683,11 @@ export async function awaitTerminalReport(
   requireCompletion(completion);
   const { pollIntervalMs, timeoutMs } = completion;
   const sleep = completion.sleep ?? DEFAULT_SLEEP;
+  const elapsedMs = completion.elapsedMs ?? DEFAULT_ELAPSED_MS;
   // Read once from the clock the caller gave, before the first read rather than
   // after it: a budget that started counting from the first answer would give a
   // provider that blocks for the whole timeout an unbounded second chance.
-  const deadline = nowMs() + timeoutMs;
+  const deadline = elapsedMs() + timeoutMs;
 
   for (;;) {
     // A read is started only while there is budget left. What the budget bounds
@@ -709,7 +739,7 @@ export async function awaitTerminalReport(
           "worker may have written into is not a rollback -- and the session is stopped " +
           "on the way out",
       );
-    if (nowMs() >= deadline) {
+    if (elapsedMs() >= deadline) {
       throw outOfBudget();
     }
     // Capped at what is left of the budget, not the bare interval. An interval
@@ -717,7 +747,7 @@ export async function awaitTerminalReport(
     // accept whatever the next read returned -- so a one-second timeout with a
     // two-second interval would accept a report that arrived at two seconds,
     // and `--turn-timeout-ms` would not be a bound at all.
-    await sleep(Math.max(0, Math.min(pollIntervalMs, deadline - nowMs())));
+    await sleep(Math.max(0, Math.min(pollIntervalMs, deadline - elapsedMs())));
     // **And again after the wait, because a timer is a minimum and not a
     // promise.** `setTimeout` guarantees only that it will not fire early; a
     // congested event loop can resolve it well past the deadline the cap was
@@ -734,7 +764,7 @@ export async function awaitTerminalReport(
     // arrived while sleeping, which is the one thing this function never does.
     // Being strictly past means the timer did not honour the cap, and that is
     // the overshoot worth refusing.
-    if (nowMs() > deadline) {
+    if (elapsedMs() > deadline) {
       throw outOfBudget();
     }
   }
@@ -903,6 +933,20 @@ export async function performLap(
   const leaseResource = materialized.options.resource ?? `session-run:${intent.runId}`;
   const options: SessionOrchestratorOptions = {
     ...materialized.options,
+    // **The epoch, taken from the acquisition itself** (`D-0068`).
+    //
+    // The first version read the lease row back after the walk had started, and
+    // that answers a different question: if this process was suspended past the
+    // TTL between the orchestrator's acquire and the read, the row already
+    // belongs to a later claimant -- so the lap would record **the winner's
+    // epoch as its own**, pass its own ownership check, and stop the winner's
+    // worker. The check would have been defeated by where it got its number,
+    // which is the failure it was added to prevent wearing a different hat. The
+    // value is only trustworthy at the instant it is minted, and this is the
+    // seam that hands it over there.
+    onLeaseAcquired: (lease) => {
+      heldEpoch = lease.epoch;
+    },
     // **The orchestrator gets a LIVE clock, and step 7's frozen one is left
     // where it belongs** (`D-0066`).
     //
@@ -944,29 +988,11 @@ export async function performLap(
       // spawned as one that completed.
       throw new LapRefused("internal: the fenced spawn returned without starting the walk");
     }
-    // The epoch this lap's walk holds, read **before the walk is awaited**.
-    //
-    // **The identity of an owner is an epoch, not a session id** (`D-0068`), and
-    // this line is what the teardown compares against. Read here rather than
-    // after the `await` because the walk can spawn a child and then reject, and
-    // that is precisely the case the teardown exists for -- a capture on the far
-    // side of the `await` never runs on it, and the child is left alive.
-    //
-    // It is already there to read: `orchestrator.start()` acquires the lease,
-    // prepares the binding and marks the spawn synchronously, before its first
-    // `await`, so by the time `execute` has returned the row is written.
-    heldEpoch = readLease(connection, leaseResource)?.epoch ?? null;
-
     const orchestration = await walk;
 
     // 5. The turn. Awaited out here, outside every transaction, because
     //    `transaction()` joins rather than nests and refuses an async body.
-    const report = await awaitTerminalReport(
-      reader,
-      orchestration.sessionId,
-      request.completion,
-      request.nowMs,
-    );
+    const report = await awaitTerminalReport(reader, orchestration.sessionId, request.completion);
 
     // 6. The settled value, into the one transaction the event and its gate share.
     //
