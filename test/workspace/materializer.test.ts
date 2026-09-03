@@ -852,7 +852,7 @@ describe("the MCP launcher is validated too", () => {
   });
 });
 
-describe("nothing the fence depends on may live inside the worktree (D-0069)", () => {
+describe("nothing the fence depends on may live inside the worktree (D-0070)", () => {
   // The artifact list above states this rule over what materialisation
   // *creates*. These are the paths it does not create and the fence depends on
   // anyway, and every one of them is a value an operator hands in on the

@@ -11984,6 +11984,11 @@ lane, so it is a cross-belt decision taken at the window rather than one belt's.
 
 ## D-0070 -- The materialiser wards every path the fence depends on, and each is judged where its consumer reads it
 
+*Id allocated from the `D-0019`..`D-0099` shared band against `origin/main` at `836531f`, where
+`D-0069` is the highest. This entry was drafted as `D-0069` while `#114` was still in review and
+renumbered before merge: the "ids are permanent" rule binds an id that has landed, and two lanes
+appending at once conflict only over the index table, which is what happened.*
+
 **Context.** `D-0067` drew the rule -- *nothing the fence or its evidence depends on may live inside
 the worktree* -- and closed it for the two values that never reach `materializeWorkspace`: the
 provider's state root and the worker's own command. It named six that do reach the materialiser and

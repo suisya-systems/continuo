@@ -832,7 +832,7 @@ function renderMcpConfig(
   // empty override would sail through `missing()` and be recorded as a
   // successful materialisation whose MCP child cannot start.
   // `requireAbsolute`, not `requireQuotableText`, and the difference is the
-  // whole of `D-0067` applied to this one field (`D-0069`). The string returned here is
+  // whole of `D-0067` applied to this one field (`D-0070`). The string returned here is
   // written into `mcp.json` verbatim and then executed by the fenced worker's
   // Claude, whose working directory is **the worktree** -- so a relative
   // `--node ./node` names a file the worker itself may write, and a bare `node`
@@ -864,7 +864,7 @@ function renderMcpConfig(
     // launcher and the module the containment check wards, and a second
     // `??`-and-`requireAbsolute` at the call site would be a second statement
     // of which file this `mcp.json` actually names -- the drift `D-0067`
-    // records as the way one rule becomes two (`D-0069`). They are the same
+    // records as the way one rule becomes two (`D-0070`). They are the same
     // bytes the document above carries, which is the point.
     node,
     endpointModule,
@@ -943,7 +943,7 @@ export function materializeWorkspace(
   // finally executed, however safe it looked in the operator's shell, and a
   // bare `--python python3` is resolved through a `PATH` this process neither
   // owns nor can inspect. The lap already learned this once on the worker's own
-  // command (`D-0067`, `D-0069`): the fix is to remove the resolution, not to reimplement
+  // command (`D-0067`, `D-0070`): the fix is to remove the resolution, not to reimplement
   // whoever else's rules would have performed it.
   const hookScript = resolve(
     requireAbsolute("fence.hook_script", request.fence.hookScript ?? defaultHookScript()),
@@ -962,7 +962,7 @@ export function materializeWorkspace(
   const endpointDatabase = endpointDatabasePath(connection, request.endpoint);
   const mcp = renderMcpConfig(request.endpoint, endpointDatabase, destinationDir);
   // **Containment for what the fence DEPENDS on but this step does not write**
-  // (`D-0067`, closed for the materialiser's own fields by `D-0069`).
+  // (`D-0067`, closed for the materialiser's own fields by `D-0070`).
   //
   // The artifact list below states this rule over what materialisation
   // *creates*, and its refusal says why in its own words: "the fence and the
