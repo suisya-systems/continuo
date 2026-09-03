@@ -1083,15 +1083,22 @@ describe("nothing the fence depends on may live inside the worktree (D-0070)", (
     // this process's directory*: without the rule the fence renders, publishes,
     // and records a successful materialisation whose PreToolUse command is a
     // relative string the worker's Claude will resolve inside its own worktree.
+    //
+    // **It names a file in the checkout rather than one in the case's temporary
+    // directory, and that is a Windows constraint rather than a preference.**
+    // `relative()` between two different DRIVES has no relative answer and
+    // returns an absolute path -- and on a Windows runner the checkout is
+    // commonly on `D:` while `tmpdir()` is on `C:`, so a path built that way
+    // would arrive here already absolute, be accepted, and fail the cell. This
+    // repository's own `package.json` is on the same drive as the working
+    // directory by construction, because the working directory is this
+    // repository. It is only ever read.
     const f = fixture("materialize-hook-relative");
     expectRefusal(
       () =>
         materializeWorkspace(f.connection, {
           ...f.request,
-          fence: {
-            ...f.request.fence,
-            hookScript: relative(process.cwd(), join(f.repository, "README.md")),
-          },
+          fence: { ...f.request.fence, hookScript: "package.json" },
         }),
       WorkspaceMaterializationUsageError,
       /fence\.hook_script must be a fully qualified absolute path/,
@@ -1113,12 +1120,20 @@ describe("nothing the fence depends on may live inside the worktree (D-0070)", (
     // hook's was -- refused, but by the wrong guard. The bare-name half of the
     // rule is carried by the endpoint interpreter below, where nothing else
     // looks at the value at all.
+    //
+    // **`relative(cwd, process.execPath)` was the first spelling and is wrong on
+    // Windows**, for the reason the hook's case above gives: a runner whose
+    // checkout is on `D:` and whose Node is on `C:` has no relative path between
+    // them, so `relative` returns an ABSOLUTE one and the case stops testing
+    // what it says. The runner's own launcher is inside the checkout, hence on
+    // the working directory's drive by construction -- and it is certainly
+    // present and executable, because it is what is running this test.
     const f = fixture("materialize-python-relative");
     expectRefusal(
       () =>
         materializeWorkspace(f.connection, {
           ...f.request,
-          fence: { ...f.request.fence, python: relative(process.cwd(), process.execPath) },
+          fence: { ...f.request.fence, python: join("node_modules", ".bin", "vitest") },
         }),
       WorkspaceMaterializationUsageError,
       /fence\.python must be a fully qualified absolute path/,
