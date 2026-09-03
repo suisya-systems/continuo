@@ -17,7 +17,11 @@ import {
   type WorkspaceTransition,
   WorkspaceVerdict,
 } from "../session/provider.js";
-import { type OrchestrationOutcome, SessionOrchestrator } from "../supervisor.js";
+import {
+  type OrchestrationOutcome,
+  SessionOrchestrator,
+  type SessionOrchestratorOptions,
+} from "../supervisor.js";
 import {
   type EndpointBinding,
   type FenceSubstitutions,
@@ -370,6 +374,17 @@ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
  * at the report makes the lap's duration a property of the worker's work rather
  * than of its teardown.
  *
+ * **What the budget bounds: the waiting, not the reading.** A report that exists
+ * when a read returns is the turn's outcome and is never discarded, however long
+ * that read took -- throwing away a report in hand would leave the worker's own
+ * words unescalated and the gate unopened for a turn that did finish, which is
+ * the failure this whole step exists to remove, arriving by way of a stopwatch.
+ * Each wait is therefore capped at the remaining budget, and exactly one read may
+ * begin at the deadline instant: it is the read that observes what the last wait
+ * was waiting for, and refusing without it would discard a report that arrived
+ * during that wait. A reader that blocks indefinitely is outside this bound and
+ * cannot be brought inside it without abandoning a read in flight.
+ *
  * The cost is stated rather than hidden: a turn that somehow wrote two terminal
  * lines would have its first read and its second ignored. That is the safe
  * direction -- a report is escalated once, to one gate, and `D-0056`'s dedup key
@@ -564,22 +579,47 @@ export async function performLap(
   // 4. The spawn, through the spawner that admitted the plan and no other.
   //    `execute` consumes the plan before calling the callable, so this is one
   //    admission and one child even if the walk below throws.
-  const orchestrator = new SessionOrchestrator(connection, provider, materialized.options);
-  let walk: Promise<OrchestrationOutcome> | undefined;
-  const spawn = materialized.spawner.execute(materialized.admission, () => {
-    walk = orchestrator.start();
-    return walk;
-  });
-  if (walk === undefined) {
-    // Unreachable: `execute` either throws before calling the callable or calls
-    // it exactly once. Checked rather than asserted, because the alternative is
-    // awaiting `undefined` and reporting a lap that never spawned as one that
-    // completed.
-    throw new LapRefused("internal: the fenced spawn returned without starting the walk");
-  }
-  const orchestration = await walk;
+  // The identity the orchestrator is about to mint, captured as it mints it.
+  //
+  // **This is what makes the teardown below cover a walk that FAILED.**
+  // `orchestrator.start()` can spawn a child and then reject -- the identity
+  // never reads back, the post-spawn validation refuses, this writer loses a
+  // race -- and the provider says in as many words that a `Failure` does not
+  // prove no process was created. The session id lives inside that rejected
+  // call, so a `finally` that read it off the outcome would have no outcome to
+  // read, and the child would be left running with nobody observing it and its
+  // handle holding this process open.
+  //
+  // The factory is wrapped rather than replaced: the value handed out is
+  // `materialized.options`' own, so the identity the orchestrator commits and
+  // the one stopped here cannot differ. `D-0057`'s "nothing below adds a field
+  // to these options" is intact -- this observes one, and adds none.
+  let sessionId: string | null = null;
+  const options: SessionOrchestratorOptions = {
+    ...materialized.options,
+    sessionUuidFactory: () => {
+      const minted = materialized.options.sessionUuidFactory();
+      sessionId = minted;
+      return minted;
+    },
+  };
+  const orchestrator = new SessionOrchestrator(connection, provider, options);
 
   try {
+    let walk: Promise<OrchestrationOutcome> | undefined;
+    const spawn = materialized.spawner.execute(materialized.admission, () => {
+      walk = orchestrator.start();
+      return walk;
+    });
+    if (walk === undefined) {
+      // Unreachable: `execute` either throws before calling the callable or
+      // calls it exactly once. Checked rather than asserted, because the
+      // alternative is awaiting `undefined` and reporting a lap that never
+      // spawned as one that completed.
+      throw new LapRefused("internal: the fenced spawn returned without starting the walk");
+    }
+    const orchestration = await walk;
+
     // 5. The turn. Awaited out here, outside every transaction, because
     //    `transaction()` joins rather than nests and refuses an async body.
     const report = await awaitTerminalReport(
@@ -616,7 +656,8 @@ export async function performLap(
       ingested,
     });
   } finally {
-    // 7. The session's life is the lap's, and it ends here on every path.
+    // 7. The session's life is the lap's, and it ends here on every path --
+    //    including the ones where the walk itself failed after spawning.
     //
     //    **On the refusal paths this is not tidiness, it is what makes the
     //    refusal reach anyone.** The provider holds a referenced Node child
@@ -630,7 +671,9 @@ export async function performLap(
     //    event and its gate have committed by the time the successful path
     //    reaches this, and on a refusal there is nothing to commit -- so a stop
     //    that goes badly cannot un-open a gate or lose a report.
-    await stopSession(provider, orchestration.sessionId);
+    if (sessionId !== null) {
+      await stopSession(provider, sessionId);
+    }
   }
 }
 

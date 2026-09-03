@@ -473,6 +473,28 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(existsSync(join(f.workspace, "README.md"))).toBe(true);
   });
 
+  test("a walk that fails after spawning still stops its child", async () => {
+    // `orchestrator.start()` can spawn and then reject -- the identity never
+    // reads back, the post-spawn validation refuses -- and the provider says in
+    // as many words that a Failure does not prove no process was created. The
+    // session id lives inside that rejected call, so a teardown that read it off
+    // the outcome would have no outcome to read and would leave a fenced worker
+    // running with its handle holding this process open. The child here would
+    // sleep two minutes; the case is green only because the verb returns.
+    const f = lap("lap-walk-fails");
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    // The child never names itself, so the identity cannot be read back and the
+    // walk refuses after the spawn rather than before it.
+    fakeEnv("FAKE_OMIT_IDENTITY", "1");
+
+    expect(await f.perform()).toBe(2);
+    expect(f.err.join("")).toMatch(/^error: /);
+
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+  });
+
   test("a second perform of one run is refused rather than re-run", async () => {
     // The materialiser refuses a run it has already materialised (`D-0057`),
     // and this is the case that says the CLI surfaces that as a refusal rather

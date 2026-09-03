@@ -11216,7 +11216,12 @@ This is that component, and the question is now answerable rather than deferred.
    have accepted a report that arrived at two seconds.
 
 5. **The session's life is the lap's, and `performLap` stops it on every path out** -- after a gate
-   is opened, and after every refusal from the poll onward. Two reasons, and the second is the one
+   is opened, after every refusal from the poll onward, **and after a walk that failed having already
+   spawned**. That last one is the case a teardown keyed on the orchestration's outcome cannot reach:
+   `orchestrator.start()` can spawn a child and then reject (the identity never reads back, the
+   post-spawn validation refuses, this writer loses a race), and the provider says in as many words
+   that a `Failure` does not prove no process was created. So the session id is captured from the
+   factory as it is minted rather than read off an outcome that may not exist. Two reasons, and the second is the one
    that makes the timeout real rather than nominal:
    - a child left running after its turn is a fenced worker nobody is polling, which is the state
      the gate exists to prevent;
