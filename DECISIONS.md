@@ -11901,6 +11901,45 @@ genuinely hung child is ever found to have been reported by Vitest's timeout rat
 the divisor is too small for the number of waits some case now makes and it, not the base, is what to
 revisit.
 
+**Postscript -- the CI slowdown this was checked against, and cleared of.** continuo#114's first
+run had one cell go red: `double-green (windows-latest, node 22)` took 23.5 minutes for its *first*
+green lap and was cut off by the job's `timeout-minutes: 40` partway through the second. Against
+`main`'s previous run that cell had done both laps in 18m51s, so the natural suspicion was this
+entry -- that raising a poll's deadline from 10s to 60s on Windows had made some case sit on the new
+number. It had not, and the reasons are recorded here because the shape of the suspicion is one a
+future reader will have again.
+
+**The mechanism cannot do it.** Every helper the budget reaches -- `waitForSpawns`, `waitForState`,
+`waitUntilObserved`, and the four inline loops in `claude-cli-provider.test.ts` and
+`stub-provider.test.ts` -- returns on the poll that succeeds, and no case in the suite asserts on a
+poll *timing out*: there is no `expect(...).rejects` or `try/catch` around any of them, and
+`waitForExit`'s one explicit `10_000` call site passes its own number. A deadline nobody reaches
+costs nothing when it is raised. It could only cost time in a run that was *already going to fail*.
+
+**The measurement says the same thing twice.** Joining per-file durations from the two job logs, 96
+files in common, the failing cell was **2.02x slower on average than `main`'s** -- and the slowdown
+is everywhere except where this entry reaches:
+
+    test/measurement/provenance.test.ts   5.16x     (imports nothing changed here)
+    test/messagebus/messagebus.test.ts    4.21x     (       "                    )
+    test/canary/audit.test.ts             3.42x     (       "                    )
+    every untouched file, p50 1.71x, p90 3.70x
+    test/session/claude-cli-provider.test.ts   0.90x   <- polls a real child, got FASTER
+    test/session/stub-provider.test.ts         0.40x   <- polls a real child, got FASTER
+
+The two files that actually spend the budget are the two that did not grow. And the same commit
+went green on `windows-latest, node 24` in **23m12s for both laps**, against `main`'s 24m21s on that
+same cell -- so on the one comparison that holds platform, node version and code constant, this
+change is 69 seconds *faster*. ubuntu is unmoved (node 22: 3m20s -> 3m09s; node 24: 3m15s -> 2m54s).
+
+**What the run did expose, and it is not this entry's to fix.** `main` already spends 24m21s of a
+40-minute cap to run two laps on `windows-latest, node 24` -- 1.6x of headroom for a rule that
+deliberately runs the suite twice, on the platform D-0052 measured at a p90 of 930s and a max of
+1864s per job. A cell 2x slower than its sibling therefore does not fail on a test; it runs out of
+wall clock. That is a property of the double-green rule (`D-0005`) meeting `timeout-minutes: 40` on
+the slowest platform, it predates this change, and the remedy -- a larger cap, or the two laps as
+two jobs -- is a workflow decision taken at the window, not a number this entry owns.
+
 **Source.** Task `continuo-113-flake`, on issue `#113` (about 4 failures in 20 runs, across two
 different cases of the same file) and the measurement above. Decision id allocated from the
 `D-0019`..`D-0099` shared band after checking `origin/main` at `1474e8d`, where `D-0068` is the
