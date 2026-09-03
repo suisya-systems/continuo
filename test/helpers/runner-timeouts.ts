@@ -11,6 +11,11 @@
  *   `vitest.config.ts` and copied into
  *   `test/gate_item11/support/suite-runs-unchanged.config.ts`.
  *
+ * A third joined them in D-0069: the deadline a test gives a **real child
+ * process** to report at all ({@link childWaitTimeoutMs}), which was a 10s
+ * literal in two test helpers and is now a share of the runner's budget for the
+ * same reason the runner's budget is scaled -- the machine, not the code.
+ *
  * The scale therefore lives here rather than beside either consumer, so the
  * number cannot be raised in one layer and left behind in the other -- which is
  * exactly the shape of the defect D-0604 repaired one level down.
@@ -90,4 +95,40 @@ export function isSlowRunner(platform: string = process.platform): boolean {
  */
 export function runnerTimeoutMs(platform: string = process.platform): number {
   return RUNNER_TIMEOUT_BASE_MS * (isSlowRunner(platform) ? PORT_BUDGET_SCALE : 1);
+}
+
+/**
+ * How many of a case's real-child waits have to fit inside one runner budget.
+ *
+ * `waitUntilObserved` and its siblings poll a **real child process** until it
+ * reports, and the case around them is already under Vitest's per-test budget.
+ * Two budgets therefore race, and the order matters: the poll's own deadline
+ * fails with the readout in the message (`child never reported: ...`), the
+ * runner's fails with `Test timed out in Nms` and no attribution at all. The
+ * poll must win, so its budget has to be strictly smaller than the runner's --
+ * and smaller by enough that a case which waits for more than one child still
+ * loses the race on the wait rather than on the sum.
+ *
+ * The divisor is the largest number of waits any one case in this suite makes
+ * (`test/gate_item11/substitution-scenarios.test.ts`'s "a released binding
+ * frees the run for the next session" waits twice), plus one, so a case's waits
+ * cannot add up to the runner's budget on their own.
+ */
+export const CHILD_WAIT_BUDGET_DIVISOR = 3;
+
+/**
+ * How long a test may wait for a real child to report, in milliseconds (D-0069).
+ *
+ * A share of {@link runnerTimeoutMs} rather than a constant of its own: the
+ * thing that makes a child slow to report -- a loaded machine -- is the same
+ * thing D-0052 already scales the runner's budget for, and a second scaling
+ * rule would be a second number to raise and forget. 20s on a fast runner, 60s
+ * on a slow one.
+ *
+ * `platform` is a parameter for the same reason it is one on
+ * {@link runnerTimeoutMs}: so the rule is testable off the platform the test
+ * happens to be running on.
+ */
+export function childWaitTimeoutMs(platform: string = process.platform): number {
+  return runnerTimeoutMs(platform) / CHILD_WAIT_BUDGET_DIVISOR;
 }

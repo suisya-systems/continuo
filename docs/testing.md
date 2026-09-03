@@ -125,6 +125,22 @@ the reason it actually failed.
 
 If a test genuinely hangs it still fails. It just fails later, which is the cheaper mistake.
 
+### Waiting for a real child
+
+A test that spawns a real child process and polls until it reports has a second deadline of its own,
+and it comes from the same place: `childWaitTimeoutMs()`, which is `runnerTimeoutMs()` divided by
+`CHILD_WAIT_BUDGET_DIVISOR` (D-0069). **20s on a fast runner, 60s on a slow one.** It is smaller than
+the runner's budget on purpose -- the poll's own expiry names the child and prints its readout, the
+runner's says only `Test timed out in Nms` -- and the divisor is large enough that a case which waits
+for two children still cannot reach the runner's budget by summing its waits.
+
+Use it, rather than a literal, wherever a test waits on a child it started
+(`test/session/helpers/session-cases.ts`'s `POLL_DEADLINE_MS` and
+`test/gate_item11/substitution-scenarios.test.ts`'s `waitUntilObserved` are the two that do). A
+literal 10s there was issue #113: under load on a development cell the same real-CLI spawn was
+measured at a p90 of 6.5s against that 10s, and the file failed about 4 runs in 20 -- in two
+different cases, which is what showed the weakness was the path and not one case's budget.
+
 ## Contract tests
 
 `test/contract/` holds tests that pin decisions rather than behaviour of continuo's own code:
