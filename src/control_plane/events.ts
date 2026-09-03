@@ -124,6 +124,7 @@ export const EVENT_TYPES: ReadonlySet<string> = new Set([
   "watcher_heartbeat_refused",
   "run_created",
   "run_delegation_recorded",
+  "workspace_materialized",
 ]);
 
 /**

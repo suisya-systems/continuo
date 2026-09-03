@@ -109,6 +109,7 @@ const SPAWNING_TESTS = [
   "test/session/claude-cli-provider.test.ts", // 39
   "test/session/stub-provider.test.ts", // 29
   "test/settings/sandbox-symlink-deny.test.ts", // sync
+  "test/workspace/materializer.test.ts", // sync, via src/workspace/git.ts
 ];
 
 /**
