@@ -1196,3 +1196,54 @@ export {
   SessionOrchestrator,
   type SessionOrchestratorOptions,
 } from "./supervisor.js";
+/**
+ * Step 7 of the minimal operating loop: workspace materialisation (`D-0057`, `D-0058`).
+ *
+ * The two modules are exported together because they are one step read from two
+ * sides. `materializer.ts` is the surface a composition root calls -- it returns
+ * the completed `SessionOrchestratorOptions` and the admitted `SpawnPlan` step 8
+ * needs -- and `git.ts` is exported for the half of the step that happens
+ * *after* a failure: `removeWorktree` is how an operator sweeps up the
+ * "artifacts but no event" state the ordering deliberately allows, and the
+ * refusal classes are what a sweep routes on.
+ *
+ * `runGit` and `runGitChecked` are on the surface for the same reason
+ * `FenceLedger` is: a caller recovering from a partial materialisation needs to
+ * ask this repository the same questions materialisation asked it, under the
+ * same argv-only, explicit-env, timed conventions, rather than shelling out
+ * beside them.
+ */
+export {
+  addWorktree,
+  branchExists,
+  DEFAULT_GIT_TIMEOUT_MS,
+  GitCommandFailed,
+  type GitOptions,
+  GitRefusal,
+  type GitResult,
+  GitTimedOut,
+  isWellFormedBranchName,
+  removeWorktree,
+  repositoryRoot,
+  resolveBranchCommit,
+  runGit,
+  runGitChecked,
+  type WorktreeRequest,
+} from "./workspace/git.js";
+export {
+  defaultEndpointModule,
+  type EndpointBinding,
+  FENCE_FILENAME,
+  FENCE_LEDGER_FILENAME,
+  type FenceSubstitutions,
+  type MaterializationRequest,
+  type MaterializedArtifact,
+  MaterializedWorkspace,
+  MCP_CONFIG_FILENAME,
+  MCP_SERVER_NAME,
+  materializeWorkspace,
+  WORKSPACE_MATERIALIZED_EVENT_TYPE,
+  WORKSPACE_MATERIALIZER_PRODUCER,
+  WorkspaceMaterializationRefused,
+  WorkspaceMaterializationUsageError,
+} from "./workspace/materializer.js";

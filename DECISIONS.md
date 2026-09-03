@@ -152,6 +152,8 @@ spaces distinct.
 | D-0055 | The lap's execution intent is fixed at admission as `LapRunIntent`, written with the run in one transaction, and carries no authority | accepted |
 | D-0056 | The report ingress reads the transcript: the provider gains a terminal-report read API, and the escalation event and its gate are written in one transaction | accepted |
 | D-0217 | `FencedSpawner` splits into `prepare` and `execute`, and the single-spawn-path obligation is restated over both with a provenance check | accepted |
+| D-0057 | The delegation intent and the materialisation result are two records, and materialisation is artifact-first and one-way | accepted |
+| D-0058 | The worker's MCP configuration is a materialised artifact, validated by the endpoint's own config class | accepted |
 
 ---
 
@@ -10735,3 +10737,343 @@ went through seven review rounds and one redesign on the way here. So it ships f
 the materialiser follows against it. Nothing here imports the workspace layer; `prepare` and
 `execute` are equally usable by the composition root of step 8 and by `spawn`, which is still their
 composition and is what interlock's ported cases drive.
+
+---
+
+## D-0057 -- The delegation intent and the materialisation result are two records, and materialisation is artifact-first and one-way
+
+**Context.** `docs/design/minimal-operating-loop.md` says two things about a "reservation" that
+cannot both be read off one record. Section 6.3 recommends a delegation record
+`{runId, holder, workspace, role, baseBranch, topicBranch, prompt, cliArgs?}` **produced by the
+admission command** -- the durable statement of what a worker was asked to do. Step 7 says to adopt
+claude-org-ja's ordering "in spirit -- materialise every artifact, **commit the reservation last**,
+so a committed reservation always has a sendable payload behind it". Read as one record, those
+contradict: a record produced at intake cannot also be the thing written after the worktree exists.
+
+They are two records. The first is an **intent**, fixed when the work is accepted, and its content is
+known before anything is built. The second is a **result**, and half its content -- the resolved base
+commit, the paths the artifacts actually landed at -- does not exist until the work is done. Merging
+them would mean either an intent that cannot be written until materialisation succeeds, or a result
+whose fields are promises.
+
+The second half of the problem is that the result cannot be written atomically with the thing it
+describes. `D-0051` got atomicity for the `run` row and its `run_created` event by putting both
+inside one `BEGIN IMMEDIATE`. A git worktree and three files have no transaction to join, and
+`D-0051`'s own rejected alternative -- hanging the work off `appendEvent`'s `sideEffect` -- is worse
+here than it was there, because that side effect runs *after* the event row is inserted.
+
+**Decision.**
+
+1. **Two records, two owners.** The delegation intent is produced at admission and is not this
+   step's. Materialisation appends its own event, `workspace_materialized`, whose payload carries
+   what only materialisation knows: the resolved base commit, the repository root, the worktree
+   path, the role, and the artifact manifest. `EVENT_TYPES` gains exactly one entry, under
+   `D-0051` rule 5's "a type is registered when its producer is written" and its
+   `subject_pastparticiple` form.
+
+2. **`subject_kind` is `run`.** The closed vocabulary has no `workspace`, and widening it would be a
+   migration for a subject with no identity of its own. The fact is about the run it was built for.
+
+3. **The artifact directory must be unclaimed, and is checked before the worktree exists.**
+   Materialisation creates its artifacts, so finding one already there means another materialisation
+   owns the directory -- and publishing over it would replace a fence a worker may be running under.
+   This is the same rule `git worktree add` already imposes on the checkout, applied to the
+   directory beside it, and it is reachable within one run as well as across two: a retry with a
+   different workspace would otherwise destroy the earlier materialisation's files and only then
+   meet the duplicate-event refusal.
+
+   **The check is check-then-act, and the residual is accepted rather than closed.** Two processes
+   materialising into one *initially empty* artifact directory both pass the existence check before
+   either publishes, and the later one then overwrites the earlier's fence and settings. The rule
+   above closes the sequential case -- one run retried, or a second run started after the first
+   finished -- and leaves the concurrent one open.
+
+   That is accepted on frequency rather than on principle. The race needs two runs pointed at the
+   same `artifactDir` at the same moment, and on lap 1 the layout is step 8's: the composition root
+   cuts an artifact directory per run, so two runs do not share one. An `O_EXCL` ownership marker
+   was written and then withdrawn at the human gate -- it works, but it costs an `owner.json` in
+   every artifact directory and an explanation of why it is not the lockfile `D-0206` rejects, which
+   is a poor trade against a case the layout already prevents.
+
+   **If it does need closing, the minimal form is `mkdirSync` without `recursive`, using its
+   `EEXIST` as the claim** -- the directory creation is then itself the atomic ownership assertion,
+   with no marker file, no new artifact and nothing to explain against `D-0206`.
+
+4. **Artifacts first, the event last, and the order is enforced rather than described.** Every
+   artifact is re-`stat`'d immediately before the append, **and the worktree is re-asked of git**.
+   An event whose manifest is not on disk at that moment is refused, not appended.
+
+   **Two spellings of one directory are one directory, and this is where that stopped being
+   pedantry.** The comparison canonicalises through `realpathSync.native` before deciding. Windows CI
+   found the reason: `TMPDIR` on a GitHub runner is an 8.3 short path (`C:\Users\RUNNER~1\...`) and
+   git reports the long form, so a `resolve`-only comparison -- which normalises separators and
+   leaves the short name alone -- read one directory as two and **refused a workspace that was the
+   worktree's own root, after the worktree and every artifact had been created**. A false refusal at
+   the final sweep is the worst place for one: everything has been done, and the run is told it was
+   not. `realpathSync.native` rather than `realpathSync` because only the native form expands a
+   short name; it resolves symlinks too, which is the same defect in the form a POSIX cell can
+   reach. The endpoint database's alias check uses the same helper, so the two cannot drift.
+
+   The worktree is asked of git rather than of `existsSync`, and that is the load-bearing half: a
+   concurrent cleanup between `git worktree add` and the append -- an operator sweeping up the
+   "artifacts with no event" state rule 4 deliberately allows -- leaves the files intact and the
+   checkout gone, and "the directory exists" is also true of the bare directory the provider would
+   have made. What this event claims is a *checkout*, so what is verified is that `workspace` is
+   still a worktree and is still that worktree's own root.
+
+5. **The one-way property, stated as the two states and their asymmetry.**
+   - *Artifacts with no event* is **allowed**. A crash before the append leaves a worktree and files
+     nothing claims. It is recognisable (the worktree exists, the run has no
+     `workspace_materialized`) and recoverable (`removeWorktree`, which is on the package surface for
+     this reason and is never called by materialisation itself).
+   - *An event with no artifacts* is **not reachable through this producer**, and the earlier
+     wording of this rule -- "unconstructible" -- was wrong and is corrected here.
+     `materializeWorkspace` is the only producer of the type in the build, it appends only after the
+     sweep, and it exports no seam that reaches its own append without the artifacts. What it cannot
+     do is stop somebody calling `appendEvent` directly with this `event_type`: the spine is a
+     generic append-only fact log and every type on it is writable by anyone holding a connection.
+     That is true of `run_created` too, and `D-0051` does not claim otherwise.
+
+     Reserving the type inside `appendEvent` was considered and rejected: it would put a per-type
+     allowlist into a shared writer for one producer's benefit, and it would still be evaded by the
+     next producer that needed an exception. The honest statement of the guarantee is the one this
+     rule now makes -- a caller reaching past the producer is writing a fact it did not observe,
+     which the spine cannot distinguish for any event type, and which no ordering rule here was ever
+     going to prevent.
+
+6. **A second materialisation of one run is refused, not absorbed** -- the same difference from the
+   spine's idempotent re-append that `D-0051` takes for admission, and for a stronger reason: by the
+   time the duplicate is detected this call has already created a worktree and a branch that the
+   earlier event does not describe.
+
+7. **Refusal does not roll back.** Whatever earlier steps wrote is left where it is. Deleting a
+   checkout an operator may be looking at is not a rollback.
+
+**Consequences.**
+
+- **A retry is an operator action, not a code path.** The recorded payload is what a retry is built
+  from, which is part of why the event must never describe a materialisation that did not happen.
+- **"Which repository" is decided by `cwd` alone, so git's repository-selecting environment
+  variables are removed rather than inherited.** `GIT_DIR`, `GIT_WORK_TREE` and their family make
+  git ignore or reinterpret `cwd`, and git sets them itself for every hook it runs -- so a
+  materialiser invoked from a `post-commit` would create its worktree in whichever repository
+  invoked the hook while every refusal and every event payload named the one the request asked for.
+  git would succeed, which is why nothing downstream could catch it. The removal is narrow on
+  purpose: `HOME`, `PATH`, `SSH_AUTH_SOCK` and the operator's configuration all still reach git,
+  because everything except "which repository" is the operator's to decide.
+- **The event is not a lease and not an authority.** It records that a workspace was built. Nothing
+  in the lap treats it as permission to do anything.
+- **A second reader of the intent's fields validates them by the intent's rules, not by its own.**
+  Step 7 re-validates `runId`, `role`, `baseBranch`, `topicBranch`, `workspace` and `prompt` because
+  it can be reached without an intent -- so the rules have to be the *same* rules. They were not, at
+  first: applying the run-identifier's printable-ASCII rule to every string refused any run whose
+  workspace, branch or prompt carried a non-ASCII character. This organization keeps repositories
+  under paths with Japanese in them and writes its prompts in Japanese, so that was step 7 refusing
+  work `run admit` had accepted. The rules now match `D-0055` field by field: printable ASCII for
+  the run identifier alone, no control characters elsewhere, nothing but non-emptiness on the
+  prompt, and *fully qualified* -- not merely `isAbsolute` -- on every path.
+  **The general form: a validator downstream of a record must restate that record's rules, and a
+  stricter restatement is a defect, not caution.**
+
+  The general form is stated because the instance recurred. After the non-ASCII refusal was fixed,
+  the same mistake was made again in the same module: every element of `cli_args` was routed through
+  the non-empty rule, while `LapRunIntent` permits an empty string as an argv element in as many
+  words. Writing the principle down did not prevent the second instance; what catches it is a case
+  per field that drives the value the record says is legal.
+- **`src/control_plane/lease.ts`'s contrary rule is reconciled, not overridden.** That module records
+  `worktree_filesystem` as an unfenced destination whose residual is "control-plane row under the
+  fence first, file write derived from it" -- the opposite order. It is about a *fenced write to a
+  destination*, where the row is the authority and the file is a projection that can be re-derived at
+  will. Nothing in step 7 is re-derivable: a worktree is a checkout, and a fence is bytes a hook will
+  read. Both rules are instances of one principle -- the artifact that cannot be rebuilt from the
+  record goes first -- and they differ because which artifact that is differs.
+
+**Falsifier.** Two runs sharing one artifact directory -- at which point rule 3's residual stops
+being unreachable, the concurrent overwrite becomes a real path to replacing a live worker's fence,
+and the `mkdirSync` claim named there has to be taken. Also a second producer of
+`workspace_materialized` anywhere in the build, or a path *through `materializeWorkspace`* that
+reaches the append without publishing the artifacts first; at
+that moment rule 5 is a description rather than a property. (A direct `appendEvent` call is not that
+path -- see rule 5, which says what the spine's openness does and does not leave available.) Also falsified by the
+`event` table gaining a `workspace` `subject_kind`, which would make rule 2 a workaround rather than
+a choice, and by the delegation intent growing a resolved base commit, which would mean the two
+records had collapsed back into one.
+
+**Rejected alternative: one reservation record, written last.** It is the literal reading of step 7,
+and it loses the durable work statement entirely for the whole window between accepting the work and
+finishing the checkout -- which is the window in which a crash is most likely and a record most
+wanted. Section 6.3's whole argument for the delegation record is that the instruction should not
+live only in the child's transcript.
+
+**Rejected alternative: three events, one per artifact.** `worktree_added`, `fence_published`,
+`mcp_config_written`. Each would be a fact nothing consumes, and together they would put the partial
+states this decision exists to make unobservable back onto the spine as observable ones -- a consumer
+would then have to decide what a run with two of the three means.
+
+**Rejected alternative: write the event first and repair on failure.** Symmetrical on paper and not
+in practice. The repair runs in the process that just failed, which is the process least able to run
+it, and the state it leaves behind on a crash mid-repair is the one this decision rules out.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-workspace-materialize`, on
+`docs/design/minimal-operating-loop.md` step 7 and section 6.3, whose contradiction this resolves.
+Decision id from the `D-0019`..`D-0099` shared band, next after `D-0056`, checked against
+`origin/main` at `479abc2`. This entry and `D-0058` were first written as `D-0054` and `D-0055`,
+and have been re-taken twice on rebase: the parallel adoption-gap, delegation-record and
+report-ingress tasks each claimed the band's next id and merged ahead of this one, under its
+first-merged-wins rule.
+
+**The fencing half of this work shipped first, as `D-0217`.** Step 7 needs a `prepare` that does not
+spawn, so the `FencedSpawner` split was written alongside this step and reviewed with it. It was
+separated at the human gate after review kept finding defects across the whole diff at once, and the
+smaller change came back clean on its first review in isolation. That is worth recording as a fact
+about the work rather than a note about process: the two halves are independently testable, and
+reviewing them together was hiding both.
+
+---
+
+## D-0058 -- The worker's MCP configuration is a materialised artifact, validated by the endpoint's own config class
+
+**Context.** Step 7's stated purpose is "a worker that can both work and poll". The artifacts the
+fence renderer produces cover the first half only: `src/fencing/renderer.ts` builds a settings
+payload of `permissionMode` plus whichever of `permissions` / `sandbox` / `hooks` / `env` the role
+document authored, and the role document is byte-pinned by a contract test. Nothing anywhere under
+`src/` emits an `mcpServers` entry, a `--mcp-config` argument, or any of the six
+`INTERLOCK_MESSAGEBUS_*` variables the endpoint reads.
+
+So a worker materialised from the fence alone starts fenced and cannot poll: `poll` and `ack` are the
+only writes it has into the control plane, they are served by a stdio child it must be configured to
+launch, and `EndpointConfig.missing()` refuses at startup with exit status 2 when four of those
+variables are unset.
+
+**Decision.**
+
+1. **The MCP configuration is a third materialised artifact**, published beside the fence and the
+   settings, and named in the result event's manifest like the other two.
+
+2. **Its content is derived from the endpoint's own contract, not from a copy of it.** The env map is
+   built and then handed to `EndpointConfig` -- the class `main()` constructs from `process.env` at
+   startup -- and materialisation refuses if `missing()` reports a gap or the lease resource is not
+   `DELIVERY_LEASE_RESOURCE`. An `mcp.json` this step writes is one the endpoint accepts.
+
+3. **The variable names keep their `INTERLOCK_` prefix and the server name does not.** `D-0502`
+   records that the variable names are a wire contract with a configuration file this repository does
+   not own; this step writes that file, so it writes those names. The *server* name is a label a
+   worker sees, so `D-0049` applies and it says `continuo`.
+
+4. **The child is `node <endpoint module>`, by path**, resolved relative to the materialiser the way
+   the deny hook is resolved relative to the spawner. At runtime that path is under `dist/`, so the
+   artifact depends on a build having run -- stated on the constant rather than discovered when a
+   worker's endpoint fails to start. **The launcher is validated, not merely defaulted.** `??` does
+   not fire on an empty string, and rule 2's validation covers the endpoint's *environment* rather
+   than the command that starts it -- so an empty `node` or module override would pass `missing()`
+   and be recorded as a successful materialisation whose child cannot start. Both are required to be
+   non-empty and the module path to be absolute, because the configuration is read by a CLI whose
+   working directory is the worker's. **And the recipient is checked against the registry the
+   endpoint builds**, not merely against `EndpointConfig`: a well-formed recipient that
+   `spikeRegistry` composes no handler for passes `missing()` and is refused by `main()` at startup,
+   and a worker configured with one would poll an eternally empty queue while its real messages
+   stayed due. The check asks the real `spikeRegistry`, over an inert destination, because any
+   restatement of which recipients exist is a restatement that can drift from the one the endpoint
+   runs. **And the database is derived from the connection materialisation writes to**, rather than
+   taken on trust. A path naming a different but perfectly valid production plane passes
+   `missing()`, the endpoint starts cleanly, and the worker then polls a database this run's
+   messages will never reach -- nothing fails, the worker is simply deaf, and that is the failure
+   mode this rule exists to make unreachable. An override remains for the case where a worker
+   reaches one file by another name (a symlink, a bind mount) and is checked against the connection
+   rather than trusted -- by spelling or by canonical path after symlinks, and **deliberately not by
+   file identity**. An earlier revision accepted `(device, inode)` equality here, to admit a bind
+   mount, and that was wrong for this database in particular: the control plane runs on a rollback
+   journal rather than WAL (`connection.ts` records why WAL is refused), and SQLite derives
+   `<path>-journal` from the spelling the database was opened with. Two hard links to one database
+   file are therefore two databases as far as recovery is concerned -- each writer keeps its own
+   journal, and after a crash one path cannot see the other's hot journal. The bytes are shared and
+   the recovery is not, which is worse than two separate databases because it looks like one.
+
+   A directory-level bind mount does not have that problem, since the sidecar is derived beside the
+   database inside the same mounted directory. It is nonetheless not accepted, because
+   distinguishing it from a same-directory hard link means a basename-plus-parent-identity rule this
+   suite cannot exercise without root -- and an untested rule guarding a crash-recovery property is
+   worth less than a refusal an operator can read.
+
+   **The database path is also read from SQLite rather than from the driver.** `connection.name` is
+   the string the caller passed, verbatim; a connection opened with a relative filename keeps it,
+   so a process that changed directory in between would resolve it against the new working
+   directory and configure the worker for a different database, or none. `PRAGMA database_list`
+   gives SQLite's own resolution. Deriving a value from the live connection is only safe if it comes
+   from the connection.
+
+5. **The child's `cli_args` is the admitted run's arguments, then the fence's flags, then
+   `--mcp-config`.** `LapRunIntent` carries `cliArgs` and the provider consumes them through
+   `settings["cli_args"]`, so this step has to carry them across or half the durable execution
+   intent is lost between the record and the child -- silently, because the key would still be
+   present and would still look right.
+
+   **An argument that repeats a flag this step generates is refused, and the ordering is only the
+   second line of defence.** `--settings`, `--permission-mode` and `--mcp-config` *are* the fence;
+   `ClaudeCliSessionProvider` refuses its own owned flags and knows nothing about these. Putting the
+   generated flags last makes a last-wins parser resolve a repeat in the fence's favour, but which
+   occurrence a CLI honours is a property of a program this repository does not own, and a fence
+   resting on that is resting on a guess. So the repeat is refused outright and the ordering is what
+   remains true if the refusal is ever wrong.
+
+**Consequences.**
+
+- **A configuration gap is refused at materialisation, in the operator's process.** Without rule 2 it
+  is discovered by a worker exiting 2 hours later, after the materialisation has already been
+  recorded as successful.
+- **The artifact directory is required to be outside the worktree, and the check is on the paths
+  rather than on the directory.** It holds the fence, the settings, this file and the fence ledger;
+  inside the worktree they would be untracked files the fenced child can edit, including its own
+  fence. Checking only the directory is not enough and the gap is reachable rather than theoretical:
+  `FencedSpawner.settingsName` is public, `writeSettings` treats an absolute one as a full
+  replacement for the directory, and `D-0217` puts a caller-supplied spawner on the request -- so a
+  request with an impeccable artifact directory could still publish `settings.local.json` into the
+  checkout. Every path an artifact will be written to -- the fence, the settings, the MCP
+  configuration and the fence ledger -- is resolved and checked before the worktree is created, and
+  they are checked for **distinctness** as well as containment: two artifacts at one path is not a
+  layout error but a silent substitution, where the later write wins, every later `stat` still
+  succeeds, and the sweep reports a complete manifest for a file whose contents are somebody else's.
+  `D-0217` records the further step this led to -- the request stopped accepting a `FencedSpawner`
+  at all, because a module that owns an invariant about where files go cannot accept an object that
+  decides where files go.
+- **Path identity is one function, used by every comparison.** Having two was itself the bug:
+  containment folded case on Windows and distinctness did not, so on an NTFS volume a fence ledger
+  at `FENCE.JSON` and a fence at `fence.json` read as two artifacts -- the ledger's appends would
+  overwrite the published fence, every `stat` would still succeed, and the materialisation would be
+  recorded as complete. The Windows halves of that fold, and of the fully-qualified path rule, are
+  **not asserted by a simulated case**: stubbing `process.platform` does not produce a Windows
+  world, because `node:path` binds its flavour at load, so `join` and `parse` would stay POSIX while
+  the branch went Windows. They are exercised by the `windows-latest` cell running the suite; their
+  negative cases are asserted by neither cell, and that is recorded as a known limit rather than
+  papered over.
+- **The endpoint's destination directory is held to the artifact layout rule too**, even though this
+  step never writes it: `KeyedDropbox` creates it at endpoint startup and writes delivery files into
+  it for the rest of the worker's life. It is the one configured path whose contents appear inside
+  the checkout *later*, where no check here would ever see them -- and they are the operator's
+  delivery artifacts rather than the worker's.
+- **This is lap 1's shape and inherits lap 1's limit.** One worker, one endpoint process, one
+  recipient pinned by env. The moment several workers share a host, who may `poll` whose queue
+  becomes a question the transport has to answer, and this artifact is where that answer would land.
+
+**Falsifier.** The endpoint growing a configuration source other than its environment -- an argument
+parser, a config file of its own -- at which point rule 2's validation stops covering what the
+endpoint actually reads. Also falsified by the role document gaining an `mcpServers` block, which
+would make this a second writer of the same configuration.
+
+**Rejected alternative: add MCP configuration to `roles.json`.** The document is carried verbatim
+from interlock and byte-pinned by `test/contract/carried-documents.test.ts`; editing it is a
+divergence from the source document for a value that is per-run rather than per-role -- the database
+path, the recipient and the lease epoch all change between runs.
+
+**Rejected alternative: pass the endpoint's environment through the spawned child's `env` instead of
+a config file.** The Claude CLI launches its MCP servers itself; their environment is what the
+configuration says it is, not what the parent happened to export. A parent-env approach would work
+only for as long as the CLI forwarded the whole environment, which is not a property it promises.
+
+**Status.** accepted
+
+**Source.** Human gate, task `continuo-lap1-workspace-materialize`, on
+`docs/design/minimal-operating-loop.md` step 7 ("a worker that can both work and poll") and section
+4.5. Decision id from the `D-0019`..`D-0099` shared band, next after `D-0057`.
