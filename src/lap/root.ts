@@ -1,4 +1,5 @@
-import { join, resolve } from "node:path";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
+import process from "node:process";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
@@ -471,6 +472,7 @@ function preflight(request: LapRequest, provider: SessionProvider, workspace: st
   // fire over a directory this preflight had just made. A check that has to be
   // run before its neighbour has a side effect is worth saying out loud.
   requireOutsideWorkspace(request, workspace);
+  requireResolvableWorkerCommand(request);
   // The spawn precondition, asked here rather than left to the walk. It is on
   // the contract (`SessionProvider.requireSpawnable`), so this stays
   // provider-agnostic; it raises `SpawnRefused`, which the verb reports as one
@@ -562,6 +564,58 @@ function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
 }
 
 /**
+ * A bare worker command must not be resolvable **relative to anywhere**
+ * (`D-0067`).
+ *
+ * {@link requireOutsideWorkspace} skips a token with no separator in it, on the
+ * ground that `claude` is a name looked up on `PATH` rather than a location.
+ * That is true and it is not the whole truth: **`PATH` may itself contain a
+ * relative entry.** A `.` on it -- or any entry that is not absolute -- makes a
+ * bare name resolve against the *working directory*, and the two directories in
+ * play are not the same one. The capability probe runs with this process's
+ * working directory; the child is spawned with **the workspace** as its cwd. So
+ * a file named `claude` committed to the repository, present in the worktree the
+ * moment `git worktree add` returns, can shadow the binary the probe just
+ * approved. The fence is then applied to the worker's own executable.
+ *
+ * **This is checked whether or not a command was pinned, and that half was the
+ * more serious one.** With `--claude-command` omitted the provider uses its own
+ * default, `claude`, which is bare -- and `LapRequest.workerCommand` is then
+ * `undefined`, so a check that only walked the supplied tokens examined nothing
+ * at all. The hazard is not "present when the operator passes a flag"; it is
+ * present on the ordinary path, and the flag is the case that was accidentally
+ * safer.
+ *
+ * Refused rather than resolved. Reproducing `PATH` lookup -- `PATHEXT`, the
+ * executable-bit test, the platform's own precedence -- would be a second
+ * implementation of something the operating system does, in the file that
+ * decides what a fenced worker runs. A relative `PATH` entry is independently a
+ * configuration mistake, and refusing it names a real problem rather than
+ * guessing around one.
+ */
+function requireResolvableWorkerCommand(request: LapRequest): void {
+  const tokens = request.workerCommand ?? [];
+  // An unpinned command is the provider's own default, which is bare.
+  const usesBareName =
+    tokens.length === 0 || !(tokens[0]?.includes("/") || tokens[0]?.includes("\\"));
+  if (!usesBareName) {
+    return;
+  }
+  const env = request.env ?? process.env;
+  const search = env["PATH"] ?? env["Path"] ?? "";
+  const relative = search.split(delimiter).filter((entry) => entry !== "" && !isAbsolute(entry));
+  if (relative.length > 0) {
+    throw new LapUsageError(
+      `the worker command is a bare name and PATH carries the relative entry ` +
+        `${JSON.stringify(relative[0])}; a bare name is then resolved against a working ` +
+        "directory, and the child's is the worktree -- so a file the worker controls could " +
+        "stand in for the binary the capability probe approved. Give an absolute " +
+        "--claude-command, or take the relative entry off PATH",
+    );
+  }
+}
+
+/**
  * The budget's rules, stated once and checked from both entry points.
  *
  * Separate from {@link awaitTerminalReport} because of *when* it has to run.
@@ -624,6 +678,19 @@ export async function awaitTerminalReport(
     }
     const readout = (result as Ok<LapTerminalReadout>).value;
     if (readout.kind === "report") {
+      if (readout.sessionId !== sessionId) {
+        // The reader answered about a different session, and this value is on
+        // its way to becoming a gate: `ingestTerminalReport` keys the
+        // escalation on the session and generation the report carries, so a
+        // mismatched one would open this run's gate over another session's
+        // words -- a human asked to approve something no part of this lap ran.
+        // Checked rather than trusted because the reader is a parameter: the
+        // shipped one is the provider, and the next one may not be.
+        throw new LapRefused(
+          `the terminal report offered for session ${sessionId} is about ` +
+            `${readout.sessionId}; a report is only evidence about the session it names`,
+        );
+      }
       return readout;
     }
     if (!readout.pending) {
@@ -634,22 +701,42 @@ export async function awaitTerminalReport(
         `session ${sessionId} finished its turn without a report to escalate: ${readout.reason}`,
       );
     }
-    if (nowMs() >= deadline) {
-      throw new LapRefused(
+    const outOfBudget = (): LapRefused =>
+      new LapRefused(
         `session ${sessionId} did not finish its turn within ${timeoutMs}ms; the last ` +
           `answer was ${readout.reason}. The workspace and the fence are left exactly ` +
           "as they are -- the refusal is about the turn, and deleting a checkout the " +
           "worker may have written into is not a rollback -- and the session is stopped " +
           "on the way out",
       );
+    if (nowMs() >= deadline) {
+      throw outOfBudget();
     }
     // Capped at what is left of the budget, not the bare interval. An interval
     // longer than the remaining time would sleep past the deadline and then
     // accept whatever the next read returned -- so a one-second timeout with a
     // two-second interval would accept a report that arrived at two seconds,
-    // and `--turn-timeout-ms` would not be a bound at all. Waking at the
-    // deadline makes the last read the one the deadline check sees.
+    // and `--turn-timeout-ms` would not be a bound at all.
     await sleep(Math.max(0, Math.min(pollIntervalMs, deadline - nowMs())));
+    // **And again after the wait, because a timer is a minimum and not a
+    // promise.** `setTimeout` guarantees only that it will not fire early; a
+    // congested event loop can resolve it well past the deadline the cap was
+    // computed against. Without this the next iteration reads first and returns
+    // whatever it finds, so a report produced long after `--turn-timeout-ms` had
+    // passed would be accepted -- and the invariant this function states, that
+    // no new read is *started* after the deadline, would be one the code does
+    // not keep.
+    //
+    // **Strictly past, where the check before the wait is at-or-past**, and the
+    // asymmetry is the whole of what this preserves. The cap lands the wait
+    // exactly ON the deadline by construction, and the read that follows it is
+    // the read the wait was for -- refusing it would discard a report that
+    // arrived while sleeping, which is the one thing this function never does.
+    // Being strictly past means the timer did not honour the cap, and that is
+    // the overshoot worth refusing.
+    if (nowMs() > deadline) {
+      throw outOfBudget();
+    }
   }
 }
 

@@ -402,6 +402,89 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
     expect(reader.calls).toBe(2);
   });
 
+  test("a timer that overshoots the deadline does not buy another read", async () => {
+    // `setTimeout` promises only not to fire EARLY. A congested event loop can
+    // resolve the capped wait long after the deadline it was measured against,
+    // and the next iteration reads first -- so a report produced well past
+    // `--turn-timeout-ms` would be accepted and the bound would hold only on an
+    // idle machine. The sleep here overshoots by a minute, which is what a
+    // stalled loop looks like from inside this function.
+    const reader = scriptedReader([stillRunning(), finished("far too late")]);
+    let now = T0;
+    const overshooting = (ms: number): Promise<void> => {
+      now += ms + 60_000;
+      return Promise.resolve();
+    };
+    await expectRefusalAsync(
+      () =>
+        awaitTerminalReport(
+          reader,
+          SESSION,
+          { pollIntervalMs: 10, timeoutMs: 1_000, sleep: overshooting },
+          () => now,
+        ),
+      LapRefused,
+      /did not finish its turn within 1000ms/,
+    );
+    // The second read never happened, so the late report was never even seen --
+    // which is the difference between "not started after the deadline" and
+    // "started and then discarded".
+    expect(reader.calls).toBe(1);
+  });
+
+  test("a wait that lands exactly on the deadline still gets its read", async () => {
+    // The other side of the same line, and the reason the post-wait check is
+    // strictly-past rather than at-or-past. The cap lands the wait ON the
+    // deadline by construction, and the read that follows is the read the wait
+    // was for: refusing it would throw away a report that arrived while
+    // sleeping, which this function never does.
+    const reader = scriptedReader([stillRunning(), finished("arrived while sleeping")]);
+    let now = T0;
+    const exact = (ms: number): Promise<void> => {
+      now += ms;
+      return Promise.resolve();
+    };
+    const report = await awaitTerminalReport(
+      reader,
+      SESSION,
+      { pollIntervalMs: 5_000, timeoutMs: 1_000, sleep: exact },
+      () => now,
+    );
+    expect(report.report).toBe("arrived while sleeping");
+    expect(reader.calls).toBe(2);
+  });
+
+  test("a report about another session is refused, not ingested", async () => {
+    // The value is on its way to becoming a gate: `ingestTerminalReport` keys
+    // the escalation on the session and generation the report carries, so a
+    // mismatched one would open this run's gate over another session's words --
+    // a human asked to approve something no part of this lap ran. The reader is
+    // a parameter, so this is checked rather than trusted.
+    const reader = scriptedReader([
+      new Ok<LapTerminalReadout>({
+        kind: "report",
+        sessionId: "some-other-session",
+        generation: 0,
+        report: "a report about somebody else's turn",
+        terminalReason: "completed",
+        subtype: "success",
+        isError: false,
+        returncode: 0,
+      }),
+    ]);
+    await expectRefusalAsync(
+      () =>
+        awaitTerminalReport(
+          reader,
+          SESSION,
+          { pollIntervalMs: 0, timeoutMs: 10_000, sleep: recordingSleep() },
+          tickingClock(1),
+        ),
+      LapRefused,
+      /is about some-other-session/,
+    );
+  });
+
   test("the deadline is taken before the first read", async () => {
     // A budget started from the first ANSWER gives a provider that blocks for
     // the whole timeout an unbounded second chance. The clock here jumps the

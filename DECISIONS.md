@@ -11468,7 +11468,21 @@ back and acked, which is the first thing that requires the worker's endpoint to 
 write **after** an operator-shaped delay. That delay is unbounded by construction -- it is a person
 reading a gate -- and it is the exact interval a fixed epoch cannot survive. So the ordering
 consequence is recorded here rather than discovered there: **step 4 lands before step 10, and step 10
-should not be started on the assumption that lap 1's endpoint binding is enough.**
+should not be started on the assumption that lap 1's endpoint binding is enough.** Step 4 is filed as
+**continuo#110**, which records the design's own instruction not to start it until #107 is merged.
+
+**Step 4 is also needed for the teardown to be correct, and that is a second reason nobody had.**
+`D-0068` decides which sessions are this lap's to stop by comparing the lease epoch, and states a
+residual it cannot close: between reading the epoch and signalling the child, a lease that has
+expired can be taken by another claimant. **That residual exists only because the lease is allowed to
+expire while the lap is still running** -- the orchestrator's TTL is 30 seconds and
+`--turn-timeout-ms` defaults to fifteen minutes, so on any ordinary lap it does. A lease *held and
+renewed for the lap's whole life* -- which is exactly what step 4 is -- makes the comparison an
+equality that cannot lose, because no other claimant can acquire a live lease (`LeaseHeld`).
+
+So step 4 is not only the precondition for step 10's relay; **it is what closes the last window in
+step 8's teardown.** Recorded here so that whoever picks up #110 knows it settles two things, and so
+that whoever next reads `D-0068`'s residual does not go looking for a local fix that does not exist.
 
 **What would falsify it.** A lease whose TTL is longer than any plausible gate answer would make
 renewal unnecessary rather than merely unimplemented -- and would be the wrong fix, because "longer
@@ -11628,6 +11642,25 @@ The comparison is `materializeWorkspace`'s own `isInside`, now exported rather t
 case-folds on Windows (`D-0216`), and a second predicate for one rule is how two implementations of
 one rule come to disagree.
 
+**A bare command is not exempt, and skipping it was the rule's own blind spot.** The containment
+check skips a token with no separator, on the ground that `claude` is a name looked up on `PATH`
+rather than a location. That is true and incomplete: **`PATH` may itself carry a relative entry**, and
+a `.` on it makes a bare name resolve against a working directory -- of which there are two here. The
+capability probe runs with this process's; the child is spawned with **the workspace** as its. So a
+file named `claude`, committed to the repository and therefore present the moment `git worktree add`
+returns, can shadow the binary the probe approved, and the fence is applied to a worker the worker
+supplied.
+
+**And the hazard is on the ordinary path, not the flagged one.** With `--claude-command` omitted the
+provider uses its own bare default and `LapRequest.workerCommand` is `undefined`, so a check that
+walked only the supplied tokens examined **nothing at all**. Passing the flag was the case that
+happened to be safer. The check therefore runs whether or not a command was pinned.
+
+It **refuses** rather than resolving: reproducing `PATH` lookup -- `PATHEXT`, the executable-bit test,
+the platform's precedence -- would be a second implementation of something the operating system does,
+in the file that decides what a fenced worker runs. A relative `PATH` entry is independently a
+configuration mistake, and naming it is a better answer than guessing around it.
+
 **Ordering inside the preflight is load-bearing, not cosmetic.** Containment is established *before*
 the provider is asked anything, because `requireSpawnable` runs the capability probe and the probe
 writes `probe-evidence.txt` into the state root -- so asking it first would **create** the very
@@ -11688,6 +11721,28 @@ lease, prepares the binding and marks the spawn synchronously, before its first 
 **Consequences.** The binding check from attempt 2 is kept as well: the two answer different
 questions, and dropping either restores a distinct hole. Between them the rule is "this run bound
 this identity, and this lap still holds the epoch it bound it under".
+
+**The residual, stated precisely, because it is real and it is not closable here.** Reading the epoch
+and signalling the child are two operations, and nothing fences the gap between them: if the lease
+has expired, another claimant can acquire it and recover the session in that window, and the stop
+that follows reaches a child it has adopted. What the epoch comparison bought is the *size* of that
+window -- from **the whole of the poll**, which on an ordinary lap is minutes, down to **the interval
+between one SQL read and one signal**. It did not buy zero, and this entry does not claim it did.
+
+Closing it needs the lease to be **live** rather than merely unrecovered, because `acquire` refuses a
+live lease (`LeaseHeld`) and a claimant that cannot acquire cannot recover. That means holding and
+renewing the lease for the lap's whole life, which is **step 4** (`D-0064`, continuo#110) and is
+explicitly out of this step's scope.
+
+**The tempting local fix is worse, and is recorded so it is not re-proposed.** "Do not stop when the
+lease has expired" removes the race by refusing to act -- and because the TTL is 30 seconds while
+`--turn-timeout-ms` defaults to fifteen minutes, **every lap whose worker works for more than half a
+minute** would then leak its child and re-acquire the hang `D-0060` removed. It also misreads
+`supervisor.ts`, whose `stopAttempted: false` branch fires on `winnerConfirmed || newerWriterActive`
+-- **positive evidence that a takeover happened**, not an inability to prove safety. Here the
+evidence points the other way: an unchanged epoch is positive evidence of ownership. Trading a
+theoretical window for a certain leak on the ordinary path is not the same trade `D-0060` made, where
+the hazard was evidenced and the cost was a visible hang.
 
 **What would falsify it.** If the orchestrator ever released its lease at the end of `start()` rather
 than letting it expire, the epoch this lap captured would be gone and this rule would have to read
