@@ -79,6 +79,21 @@ import { MessageBus } from "../messagebus/index.js";
  */
 export const GATE_RELAY_RECIPIENT = NOTIFY_RECIPIENT;
 
+/**
+ * **Why the enqueue sites take no recipient argument.** `enqueueRelay` writes
+ * the recipient onto the `outbox` row and the `(gate_id, to_stage)` primary key
+ * then makes that row final: a re-enqueue returns the id already in force
+ * rather than re-addressing it. So a recipient chosen per call is a recipient
+ * that can be chosen WRONG once and never corrected -- `answerGate` would
+ * commit the `answered` transition, enqueue the forward relay to a queue no
+ * handler serves, and leave a gate that is answered, cannot be delivered, and
+ * cannot be re-addressed. Since `D-0076` gives lap 1 exactly one relay
+ * recipient, the safe shape and the honest one are the same: the enqueue sites
+ * read the constant. {@link ackRelay} and {@link deliverRelays} still take one,
+ * because neither writes it -- the first compares it and the second polls with
+ * it after checking the registry serves it.
+ */
+
 /** The actor kind a relay's ack advance is recorded under (section 9.3). */
 const RELAY_ADVANCE_ACTOR_KIND = "secretary";
 
@@ -471,11 +486,11 @@ export function presentGate(
   connection: SqliteDatabase,
   options: {
     readonly gateId: string;
-    readonly recipient?: string;
     readonly nowMs: number;
   },
 ): RelayEnqueued {
-  const { gateId, recipient = GATE_RELAY_RECIPIENT, nowMs } = options;
+  const { gateId, nowMs } = options;
+  const recipient = GATE_RELAY_RECIPIENT;
   const gate = gateDetail(connection, gateId);
   const existed = relayExists(connection, gateId, "presented");
   const messageId = enqueueRelay(connection, {
@@ -523,11 +538,11 @@ export function answerGate(
     readonly gateId: string;
     readonly body: string;
     readonly actorId: string;
-    readonly recipient?: string;
     readonly nowMs: number;
   },
 ): AnswerRecorded {
-  const { gateId, body, actorId, recipient = GATE_RELAY_RECIPIENT, nowMs } = options;
+  const { gateId, body, actorId, nowMs } = options;
+  const recipient = GATE_RELAY_RECIPIENT;
   if (body === "") {
     // `advanceOnAck` refuses a null body and SQLite would store an empty
     // string happily, so the empty case is refused here -- one step earlier --
@@ -594,9 +609,10 @@ export function deliverRelays(
     readonly recipient?: string;
     readonly nowMs: number;
     readonly ttlMs: number;
+    readonly clock?: (() => number) | undefined;
   },
 ): DeliveryReport {
-  const { holder, destinationDir, recipient = GATE_RELAY_RECIPIENT, nowMs, ttlMs } = options;
+  const { holder, destinationDir, recipient = GATE_RELAY_RECIPIENT, nowMs, ttlMs, clock } = options;
   const registry = spikeRegistry(new KeyedDropbox(destinationDir, "gate-cli"));
   // Before the lease, so an unserved recipient costs no claim on the one
   // delivery resource -- and before the dropbox is read from, so the refusal
@@ -614,7 +630,22 @@ export function deliverRelays(
       holder,
       registry,
     });
-    const envelopes = bus.poll(recipient, { nowMs, epoch: lease.epoch });
+    // `clock` is handed to the poll for the reason the endpoint hands it one:
+    // a pass that outlives its lease must be fenced at the write it is actually
+    // making, not at the instant it started. Without it every attempt in a pass
+    // longer than the TTL is validated against the acquisition timestamp, so
+    // the lease can expire in wall-clock time while this process keeps writing
+    // rows and applying destination effects -- the single-writer fence saying
+    // yes to a writer that no longer holds it.
+    //
+    // Optional rather than mandatory, and absent it the pass is fenced at
+    // `nowMs` as before: a caller that froze the clock (`--now-ms`, and every
+    // case in the suite) means the instant it gave, and re-reading a live clock
+    // underneath it would make a deterministic verb read the wall clock anyway.
+    const envelopes = bus.poll(
+      recipient,
+      clock === undefined ? { nowMs, epoch: lease.epoch } : { nowMs, epoch: lease.epoch, clock },
+    );
     return Object.freeze({
       recipient,
       epoch: lease.epoch,

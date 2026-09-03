@@ -576,6 +576,23 @@ describe("what the operator's verbs refuse", () => {
     expectRefusal(() => deliver(cp, dir, T0 + MINUTE), LeaseHeld);
   });
 
+  test("the relay recipient is not a per-call argument", () => {
+    // The shape that made an unfixable gate possible: `enqueueRelay` writes the
+    // recipient onto the row and `(gate_id, to_stage)` makes it final, so a
+    // recipient chosen per call could be chosen wrong once -- after the
+    // `answered` transition had already committed -- and never corrected. Both
+    // enqueue sites read the constant, and this is what says so.
+    const cp = cpFixture("gate-recipient-constant");
+    aGate(cp);
+    presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    expect(
+      cp
+        .prepare<[string], string>("SELECT recipient FROM outbox WHERE message_id = ?")
+        .pluck()
+        .get(relayMessageId(GATE_ID, "presented")),
+    ).toBe(GATE_RELAY_RECIPIENT);
+  });
+
   test("a recipient no handler serves is refused before the lease is taken", () => {
     // The endpoint refuses this at startup; the verb refuses it here, and
     // before claiming the one delivery resource -- a misconfiguration must not

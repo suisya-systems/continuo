@@ -171,6 +171,11 @@ spaces distinct.
 | D-0073 | The delivery lease's TTL is chosen against its renewal interval; a tick latches rather than throwing, and never re-acquires | accepted |
 | D-0074 | The endpoint's three lease values are all determinate, and `--endpoint-epoch` is removed rather than demoted | accepted |
 | D-0075 | Lap 1 requires the endpoint, and the delivery lease row is what records that it ran under one | accepted |
+| D-0076 | Both of a gate's relays address `external-notify`, and the operator reads the dropbox | accepted |
+| D-0077 | A privileged publisher is lap 2's deferred work, not a missing piece of lap 1 | accepted |
+| D-0078 | The gate verbs, and why the ack closes the gate rather than a ninth verb | accepted |
+| D-0079 | The reconcile pass is its own verb, the operator owns its cadence, and it pronounces no verdicts | accepted |
+| D-0080 | After the lap there is no endpoint, so a verb drives delivery: `gate deliver` | accepted |
 
 ---
 
@@ -12388,9 +12393,17 @@ is ever applied.
 **Decision. Both relays address `external-notify`; the operator reads the dropbox directory.** The
 constant lives in one place -- `GATE_RELAY_RECIPIENT` in `src/gate/operator.ts` re-exports
 `NOTIFY_RECIPIENT` rather than spelling the string again -- so a package that compiled against a
-renamed handler could not keep addressing a queue nothing serves. `--recipient` exists on the verbs
-that enqueue and ack, defaults to it, and a recipient no handler serves is refused before the
-delivery lease is taken.
+renamed handler could not keep addressing a queue nothing serves.
+
+**And it is a constant rather than a flag, which is a decision the first implementation got wrong.**
+`enqueueRelay` writes the recipient onto the `outbox` row, and `(gate_id, to_stage)` then makes that
+row final: a re-enqueue returns the id already in force rather than re-addressing it. A
+`--recipient` an operator could mistype was therefore a way to wedge a gate permanently --
+`answerGate` commits the `answered` transition first, so a forward relay addressed to a queue no
+handler serves leaves a gate that is answered, undeliverable and unfixable, with the answer already
+recorded. One recipient is what this entry decides; the enqueue sites now read it rather than being
+told it. `deliverRelays` still takes one -- it polls with it after checking the registry serves it
+and persists nothing -- and so does `ackRelay`, which compares it rather than writing it.
 
 **Why not a third handler.** Not because writing one is hard, but because it would answer a question
 nobody asked yet. In lap 1 the reader of both relays is a person (section 4.10 assigns the operator
@@ -12563,6 +12576,13 @@ need a renewal timer for no benefit, and `LeaseHeld` from a running lap or a liv
 right answer rather than a race between two writers of one outbox -- the serialisation the single
 delivery resource exists to buy. Releasing in a `finally` matters for the refusal path: a refused
 delivery that left the resource claimed would refuse the operator's own next attempt for a whole TTL.
+
+**The pass re-reads the clock, and it is the one verb that does.** `MessageBus.poll` takes a `clock`
+and the endpoint hands it one, because an attempt must be fenced at the instant it writes rather than
+at the instant the pass began: a pass that outlives its 60-second lease would otherwise keep
+validating against the acquisition timestamp and go on writing rows and applying destination effects
+under a lease it no longer holds. The verb passes `gateCliSeams.nowMs` -- unless `--now-ms` was
+given, in which case the operator meant the instant they gave and the pass keeps the single read.
 
 **Why the verb does not also ack.** A delivery worker acking on the recipient's behalf would make the
 ack evidence of nothing: section 9.5 makes the stage advance on the ack precisely so that "delivered"

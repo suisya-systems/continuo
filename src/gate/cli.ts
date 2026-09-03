@@ -84,10 +84,6 @@ const MESSAGE_ID_HELP =
   "the relay's message id, as 'gate present', 'gate answer' and 'gate show' " +
   "print it. It must name a relay of a gate: this verb settles the messages a " +
   "gate enqueued and nothing else.";
-const RECIPIENT_HELP =
-  "the recipient the relay is addressed to. Defaults to the one both relays " +
-  "use and the one the endpoint's registry serves; a recipient no handler " +
-  "serves is refused rather than enqueued into a queue nothing delivers.";
 const ACTOR_ID_HELP =
   "who is acting, recorded on the transition. An identity, not an authority: " +
   "the gate's admissibility comes from the transition table, not from this " +
@@ -306,12 +302,11 @@ export function cmdGatePresent(args: Namespace): number {
   return withControlPlane(path, (connection) => {
     const relay = presentGate(connection, {
       gateId: String(args["gate_id"]),
-      recipient: String(args["recipient"]),
       nowMs,
     });
     gateCliSeams.write(
       `${relay.enqueued ? "enqueued" : "already enqueued"} ${relay.messageId} ` +
-        `to ${String(args["recipient"])} for stage ${relay.toStage}\n`,
+        `to ${GATE_RELAY_RECIPIENT} for stage ${relay.toStage}\n`,
     );
     return 0;
   });
@@ -324,9 +319,15 @@ export function cmdGateDeliver(args: Namespace): number {
     const report = deliverRelays(connection, {
       holder: String(args["holder"]),
       destinationDir: String(args["destination_dir"]),
-      recipient: String(args["recipient"]),
       nowMs,
       ttlMs: DELIVERY_LEASE_TTL_MS,
+      // The one verb that re-reads the clock, and the fence is why: an attempt
+      // must be validated at the instant it writes, not at the instant the pass
+      // began, or a pass outliving its 60-second lease keeps writing under a
+      // lease it no longer holds. An operator who froze the clock with
+      // --now-ms means the instant they gave, so that case keeps the single
+      // read.
+      ...(typeof args["now_ms"] === "number" ? {} : { clock: gateCliSeams.nowMs }),
     });
     gateCliSeams.write(
       `delivered ${report.delivered.length} message(s) to ${report.recipient} ` +
@@ -346,7 +347,6 @@ export function cmdGateAck(args: Namespace): number {
     const outcome = ackRelay(connection, {
       messageId: String(args["message_id"]),
       actorId: String(args["actor_id"]),
-      recipient: String(args["recipient"]),
       nowMs,
     });
     // Every step is reported, including the ones that changed nothing: an
@@ -370,7 +370,6 @@ export function cmdGateAnswer(args: Namespace): number {
       gateId: String(args["gate_id"]),
       body: String(args["body"]),
       actorId: String(args["actor_id"]),
-      recipient: String(args["recipient"]),
       nowMs,
     });
     gateCliSeams.write(
@@ -474,16 +473,6 @@ function addGateIdArgument(parser: ArgumentParser): void {
   });
 }
 
-function addRecipientArgument(parser: ArgumentParser): void {
-  parser.addArgument({
-    optionStrings: ["--recipient"],
-    dest: "recipient",
-    defaultValue: GATE_RELAY_RECIPIENT,
-    metavar: "RECIPIENT",
-    help: RECIPIENT_HELP,
-  });
-}
-
 function addActorIdArgument(parser: ArgumentParser): void {
   parser.addArgument({
     optionStrings: ["--actor-id"],
@@ -518,7 +507,6 @@ export function addSubparsers(sub: Subparsers): void {
   const present = sub.addParser("present", PRESENT_DESCRIPTION);
   addDbArgument(present);
   addGateIdArgument(present);
-  addRecipientArgument(present);
   addNowMsArgument(present);
   present.setDefaults({ func: cmdGatePresent });
 
@@ -538,7 +526,6 @@ export function addSubparsers(sub: Subparsers): void {
     metavar: "HOLDER",
     help: HOLDER_HELP,
   });
-  addRecipientArgument(deliver);
   addNowMsArgument(deliver);
   deliver.setDefaults({ func: cmdGateDeliver });
 
@@ -552,7 +539,6 @@ export function addSubparsers(sub: Subparsers): void {
     help: MESSAGE_ID_HELP,
   });
   addActorIdArgument(ack);
-  addRecipientArgument(ack);
   addNowMsArgument(ack);
   ack.setDefaults({ func: cmdGateAck });
 
@@ -567,7 +553,6 @@ export function addSubparsers(sub: Subparsers): void {
     help: BODY_HELP,
   });
   addActorIdArgument(answer);
-  addRecipientArgument(answer);
   addNowMsArgument(answer);
   answer.setDefaults({ func: cmdGateAnswer });
 
