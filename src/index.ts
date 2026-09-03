@@ -615,6 +615,24 @@ export {
   writeFence,
 } from "./fencing/state.js";
 /**
+ * The endpoint's lease, held and renewed by its launcher (`D-0072`), step 4 of
+ * `docs/design/minimal-operating-loop.md`.
+ *
+ * Beside the composition root rather than inside it: `root.ts` holds the order
+ * and this holds the one thing in the lap that is about the passage of time.
+ * The two constants are exported because they are the answer to section 4.9's
+ * "the TTL chosen against the renewal interval", and a reader who wants to know
+ * what those numbers are should not have to open the module to find out.
+ */
+export {
+  DELIVERY_LEASE_RENEWAL_INTERVAL_MS,
+  DELIVERY_LEASE_TTL_MS,
+  type DeliveryLeaseTimers,
+  EndpointLeaseLost,
+  HeldDeliveryLease,
+  holdDeliveryLease,
+} from "./lap/endpoint_lease.js";
+/**
  * The lap's composition root (`D-0059`), step 8 of
  * `docs/design/minimal-operating-loop.md`.
  *

@@ -34,6 +34,11 @@ import {
   type MaterializedWorkspace,
   materializeWorkspace,
 } from "../workspace/materializer.js";
+import {
+  type DeliveryLeaseTimers,
+  type HeldDeliveryLease,
+  holdDeliveryLease,
+} from "./endpoint_lease.js";
 
 /**
  * Step 8 of `docs/design/minimal-operating-loop.md`: the composition root.
@@ -863,8 +868,23 @@ export interface LapRequest {
   readonly providerStateRoot: string;
   /** The worker's own command, if the caller pinned one, for the same check. */
   readonly workerCommand?: readonly string[];
-  /** The worker's endpoint binding, less the holder the intent already fixes. */
-  readonly endpoint: Omit<EndpointBinding, "holder">;
+  /**
+   * The worker's endpoint binding, less the two fields this lap fixes itself.
+   *
+   * The holder is the admitted intent's claimant, and the **epoch is the one
+   * this lap's own acquisition minted** (`D-0074`). Neither is a caller's to
+   * supply: an epoch handed in from outside names whatever the caller believed,
+   * and nothing under `src/` acquired this resource at all until step 4 -- so
+   * the number was a fiction, and the endpoint it configured would have been
+   * refused as a stale writer on its first delivery.
+   */
+  readonly endpoint: Omit<EndpointBinding, "holder" | "epoch">;
+  /**
+   * The endpoint lease's timer and interval, injectable for the same reason
+   * {@link TurnCompletion}'s `sleep` is: a case that asserts on a renewal needs
+   * a tick it fires itself rather than one it waits for.
+   */
+  readonly deliveryLease?: DeliveryLeaseTimers;
   readonly fence: FenceSubstitutions;
   /** The caller's clock. Read at each step that stamps one. */
   readonly nowMs: () => number;
@@ -908,6 +928,22 @@ export interface LapOutcome {
    * the report can say which deadline was missed rather than that one was.
    */
   readonly elapsedDeadlineAtMs: number | null;
+  /**
+   * The renewal that latched and lost the endpoint's delivery lease, or `null`.
+   *
+   * Non-null exactly when a renewal was refused after the spawn and the lap
+   * carried on regardless, which it does deliberately: once the turn's report
+   * exists, a lost delivery lease costs the lease and never the report
+   * (`D-0073`), the same trade `D-0065` made for an elapsed deadline. A loss
+   * *before* the spawn is a refusal instead, because there is still a child not
+   * to start.
+   *
+   * A field rather than a log line, for {@link elapsedDeadlineAtMs}'s reason:
+   * the caller is what tells the operator, and it is the operator who has to
+   * know that the worker's endpoint stopped being able to write partway
+   * through -- the gate over the report is open either way.
+   */
+  readonly endpointLeaseFailure: Error | null;
 }
 
 /**
@@ -945,6 +981,77 @@ export async function performLap(
   //     See {@link preflight} for the list and for why it is a list.
   preflight(request, provider, intent.workspace);
 
+  // 1b. The endpoint's lease, taken and armed (`D-0072`).
+  //
+  //     **Here and not earlier**: the holder is the admitted intent's claimant,
+  //     so there is nothing to take before the intent has been read. **Here and
+  //     not later**: the epoch is consumed by the materialiser below, which
+  //     renders it into the worker's `mcp.json` as `INTERLOCK_MESSAGEBUS_EPOCH`
+  //     -- and an epoch naming no live lease is exactly the defect this step
+  //     closes. **After the preflight**, because this is the first durable
+  //     write the lap makes and the preflight exists to refuse before one.
+  //
+  //     `outbox-delivery` is one global resource (`D-0053` rule 4), so a second
+  //     concurrent lap is refused `LeaseHeld` right here -- before a worktree
+  //     exists, before a fence is published and before any child. That
+  //     serialisation is the lap-1 semantics rather than a limitation of this
+  //     step: one delivery resource means one endpoint permitted to write.
+  //
+  //     **Unconditional** (`D-0075`): lap 1 requires the endpoint, so "a lap
+  //     ran" and "an endpoint lease was held and renewed for it" are one fact
+  //     and there is no branch here to get wrong.
+  const hold = holdDeliveryLease(connection, {
+    holder: intent.leaseClaimantId,
+    // The LIVE clock, and for the reason `D-0066` gives about the orchestrator's:
+    // a lease is the one thing in this lap that is about the passage of time,
+    // and a renewal stamped from an instant frozen at the top would extend the
+    // lease to a moment that has already gone.
+    nowMs: request.nowMs,
+    ...(request.deliveryLease ?? {}),
+  });
+  try {
+    return await performLapHoldingTheEndpointLease(
+      connection,
+      provider,
+      reader,
+      request,
+      intent,
+      hold,
+    );
+  } finally {
+    // **Unconditional, and it runs last on every path.** None of the three
+    // predicates that guard the session teardown applies to a timer, and a
+    // lease left held withholds a GLOBAL resource from the next lap for a whole
+    // TTL. The ordering is what makes it correct: the inner call's own
+    // `finally` has already awaited the session stop by the time this runs, so
+    // the worker -- and therefore the endpoint it launched -- is gone before
+    // renewal stops; and `lap/cli.ts` closes the database only after this
+    // returns, so no tick can reach a closed handle.
+    //
+    // **Do not move the acquisition inside the inner call.** The timer is not
+    // `unref`-ed, so a path that acquires without reaching this `stop` hangs
+    // `lap perform` forever.
+    hold.stop();
+  }
+}
+
+/**
+ * The lap's order, run with the endpoint's delivery lease held and renewing.
+ *
+ * Split from {@link performLap} rather than wrapped in place: the lease has to
+ * be given up on every path out, including the ones where this body throws, and
+ * an outer `try`/`finally` around two hundred lines would have re-indented all
+ * of them for one statement. The split also says where the boundary is -- above
+ * it the lease exists, below it every step may assume it does.
+ */
+async function performLapHoldingTheEndpointLease(
+  connection: SqliteDatabase,
+  provider: SessionProvider,
+  reader: TerminalReportReader,
+  request: LapRequest,
+  intent: LapRunIntent,
+  hold: HeldDeliveryLease,
+): Promise<LapOutcome> {
   // 2. The workspace, the fence, and the admitted plan. One call, and the
   //    `SessionOrchestratorOptions` it returns is complete -- nothing below adds
   //    a field to it, which is what makes step 7 the producer section 4.5 says
@@ -962,11 +1069,27 @@ export async function performLap(
     cliArgs: intent.cliArgs,
     nowMs: request.nowMs(),
     sessionUuidFactory: request.sessionUuidFactory,
-    endpoint: { ...request.endpoint, holder: intent.leaseClaimantId },
+    // Neither field is the caller's any more (`D-0074`): the holder is the
+    // admitted run's claimant and the epoch is the one this lap's own
+    // acquisition minted, so the three `INTERLOCK_MESSAGEBUS_` values the
+    // worker's endpoint starts under name a lease that is live and being
+    // renewed rather than a number somebody typed.
+    endpoint: { ...request.endpoint, holder: intent.leaseClaimantId, epoch: hold.epoch },
     fence: request.fence,
     ...(request.gitTimeoutMs === undefined ? {} : { gitTimeoutMs: request.gitTimeoutMs }),
     ...(request.env === undefined ? {} : { env: request.env }),
   });
+
+  // 2a. **The renewal materialisation could not have made.** `materializeWorkspace`
+  //     is synchronous and its git runs through `spawnSync`, so the event loop
+  //     was blocked for the whole of it and no timer fired -- on a slow
+  //     `git worktree add` that is longer than the TTL. Renewing by hand here,
+  //     and refusing if the renewal was refused, turns "the lease lapsed while
+  //     git ran" into one stderr line **before any child exists**, instead of a
+  //     worker whose endpoint is fenced out of its own outbox for a whole turn
+  //     and whose only symptom is silence.
+  hold.tick();
+  hold.requireHeld();
 
   // 3. The veto, registered before anything can spawn. After materialisation
   //    because it is keyed on what materialisation produced, and before the
@@ -1099,6 +1222,11 @@ export async function performLap(
       report,
       ingested,
       elapsedDeadlineAtMs,
+      // **A field, and never a throw** (`D-0073`). The turn is over and its
+      // report is in hand; a delivery lease lost while it ran costs the lease,
+      // not the report -- the same trade `D-0065` made for an elapsed gate
+      // deadline, in the same shape and one field along.
+      endpointLeaseFailure: hold.failure,
     });
   } catch (error) {
     failure = error;

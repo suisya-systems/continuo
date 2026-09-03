@@ -100,7 +100,6 @@ const CLAUDE_COMMAND_HELP =
   "script); every token must be absolute. Required: a bare name would be " +
   "resolved through PATH, and the fence cannot rest on which directory the " +
   "worker happens to be started from.";
-const ENDPOINT_EPOCH_HELP = "the epoch of the lease the worker's endpoint writes under.";
 const ENDPOINT_RECIPIENT_HELP = "the one recipient the worker's endpoint serves.";
 const ENDPOINT_DESTINATION_DIR_HELP = "directory the endpoint's delivery files are written into.";
 const ENDPOINT_DB_HELP =
@@ -319,6 +318,19 @@ function report(path: string, outcome: LapOutcome): void {
       `${outcome.ingested.gateId} over event ${outcome.ingested.eventId} at seq ` +
       `${outcome.ingested.eventSeq}\n`,
   );
+  if (outcome.endpointLeaseFailure !== null) {
+    // Its own line, on stdout beside the success it qualifies, exactly as the
+    // elapsed deadline below is: the lap succeeded and the gate is open, and
+    // this says that the worker's endpoint stopped being able to write partway
+    // through the turn. The operator needs it because nothing else will say so
+    // -- the report reached the gate through the transcript, not through the
+    // endpoint -- and because a delivery attempted after this point was
+    // refused rather than lost.
+    lapCliSeams.write(
+      `note: the endpoint's delivery lease was lost while the turn ran, so the worker's ` +
+        `endpoint could no longer write: ${outcome.endpointLeaseFailure.message}\n`,
+    );
+  }
   if (outcome.elapsedDeadlineAtMs !== null) {
     // Its own line, and on stdout beside the success it qualifies rather than on
     // stderr: the lap succeeded, the gate is open, and this is the one thing
@@ -374,7 +386,6 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         providerStateRoot: stateRoot,
         ...(claudeCommand === undefined ? {} : { workerCommand: claudeCommand }),
         endpoint: {
-          epoch: Number(args["endpoint_epoch"]),
           recipient: String(args["endpoint_recipient"]),
           destinationDir: String(args["endpoint_destination_dir"]),
           ...(endpointDatabase === undefined ? {} : { databasePath: endpointDatabase }),
@@ -450,14 +461,11 @@ export function addSubparsers(sub: Subparsers): void {
   addRequired(perform, "--state-root", "state_root", STATE_ROOT_HELP);
 
   // the worker's endpoint binding (D-0058)
-  perform.addArgument({
-    optionStrings: ["--endpoint-epoch"],
-    dest: "endpoint_epoch",
-    required: true,
-    type: "int",
-    metavar: "ENDPOINT_EPOCH",
-    help: ENDPOINT_EPOCH_HELP,
-  });
+  // No --endpoint-epoch (D-0074). The epoch is the one `performLap` mints when
+  // it takes the delivery lease, so the worker's endpoint is configured with a
+  // lease that is live and being renewed rather than with a number an operator
+  // typed. Keeping the flag as an override would keep a supported way to render
+  // an epoch naming no live lease, which is the defect step 4 closes.
   addRequired(perform, "--endpoint-recipient", "endpoint_recipient", ENDPOINT_RECIPIENT_HELP);
   addRequired(
     perform,

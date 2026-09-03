@@ -221,7 +221,8 @@ function fixture(label: string, onStart: () => never, nowMs: () => number = () =
       // preflight regardless, which is the point of the rule.
       workerCommand: [process.execPath],
       endpoint: {
-        epoch: 1,
+        // No `epoch`: `performLap` takes the delivery lease itself and renders
+        // the epoch it minted (`D-0074`).
         recipient: NOTIFY_RECIPIENT,
         destinationDir: join(root, "destination"),
         endpointModule: join(root, "endpoint.js"),
@@ -514,18 +515,19 @@ describe("the rule, where it actually runs", () => {
 
 describe("D-0066: the orchestrator is given a live clock", () => {
   /**
-   * A clock that reads `T0` once and then jumps two minutes.
+   * A clock that reads `T0` twice and then jumps two minutes.
    *
-   * The first read is `performLap`'s own -- the scalar it hands the materialiser
-   * -- so this models a materialisation that took two minutes, which is what a
-   * `git worktree add` on a large repository can take. Every read after it is
-   * the orchestrator's.
+   * The first two reads are `performLap`'s own -- the endpoint lease's
+   * acquisition (`D-0072`) and the scalar it hands the materialiser -- so this
+   * models a materialisation that took two minutes, which is what a
+   * `git worktree add` on a large repository can take. Every read after them is
+   * the endpoint lease's post-materialisation renewal and the orchestrator's.
    */
   function slowMaterialisation(): () => number {
     let reads = 0;
     return () => {
       reads += 1;
-      return reads === 1 ? T0 : T0 + SLOW_MS;
+      return reads <= 2 ? T0 : T0 + SLOW_MS;
     };
   }
 
@@ -545,9 +547,16 @@ describe("D-0066: the orchestrator is given a live clock", () => {
       },
       slowMaterialisation(),
     );
+    // The endpoint lease is given a TTL that outlasts the simulated
+    // materialisation, because what is under test here is the ORCHESTRATOR's
+    // clock. With the shipped 60-second TTL this fixture would refuse before
+    // the orchestrator ever ran -- correctly, and that interaction is pinned in
+    // `test/lap/endpoint-lease.test.ts` rather than here, where it would
+    // silently replace this case's subject.
+    const request: LapRequest = { ...f.request, deliveryLease: { ttlMs: 10 * SLOW_MS } };
 
     await expectRefusalAsync(
-      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      () => performLap(f.connection, f.provider, UNREACHED_READER, request),
       OrchestrationRefused,
     );
 
