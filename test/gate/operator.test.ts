@@ -475,6 +475,30 @@ describe("what the operator's verbs refuse", () => {
     );
   });
 
+  test("an ack from a recipient the message was not addressed to does not settle it", () => {
+    // The carried invariant `MessageBus.ack` states, kept on the path that does
+    // not go through the bus: an ack across the recipient boundary is a caller
+    // bug rather than a settlement, and it must not advance a stage on the
+    // strength of a confirmation from somebody the question was never put to.
+    const cp = cpFixture("gate-wrong-recipient");
+    const dir = destinationDir("gate-wrong-recipient");
+    aGate(cp);
+    const relay = presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    deliver(cp, dir, T0 + MINUTE);
+    expectRefusal(
+      () =>
+        ackRelay(cp, {
+          messageId: relay.messageId,
+          actorId: ACTOR,
+          recipient: "somebody-else",
+          nowMs: T0 + 2 * MINUTE,
+        }),
+      UnknownGateRefused,
+    );
+    expect(stageOf(cp)).toBe("received");
+    expect(statusOf(cp, relay.messageId)).toBe("delivered");
+  });
+
   test("the ack of a relay a closure cancelled advances nothing", () => {
     // A gate withdrawn while the question was in front of somebody: the row is
     // `cancelled`, the late ack changes nothing rather than failing, and no
