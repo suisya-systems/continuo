@@ -257,6 +257,24 @@ export interface SessionOrchestratorOptions {
   readonly wait?: Wait;
   readonly attemptIdFactory?: (() => string | null) | undefined;
   readonly seam?: ((name: string) => void) | undefined;
+  /**
+   * Called with the lease this walk acquired, at the instant it acquires it.
+   *
+   * **A production seam, not a test hook**, and it exists because the epoch a
+   * caller needs cannot be recovered afterwards. A composition root that must
+   * later decide "is this session still mine?" compares the lease epoch it
+   * spawned under (`D-0068`), and reading the lease row back to learn that
+   * epoch answers a different question: if the process was suspended past the
+   * TTL between this acquisition and the read, the row already belongs to a
+   * later claimant and the caller would record **the winner's epoch as its
+   * own** -- then pass its own ownership check and stop the winner's worker.
+   * The value is only trustworthy at the moment it is minted, so it is handed
+   * out here.
+   *
+   * Called on every path that takes a lease, `start` and `recover` alike, and
+   * before anything is written under it.
+   */
+  readonly onLeaseAcquired?: ((lease: Lease) => void) | undefined;
 }
 
 /**
@@ -286,6 +304,7 @@ export class SessionOrchestrator {
   readonly #wait: Wait;
   readonly #attemptIdFactory: (() => string | null) | undefined;
   readonly #seam: ((name: string) => void) | undefined;
+  readonly #onLeaseAcquired: ((lease: Lease) => void) | undefined;
   #gateSequence = 0;
 
   constructor(
@@ -325,6 +344,7 @@ export class SessionOrchestrator {
     }
     this.#attemptIdFactory = options.attemptIdFactory;
     this.#seam = options.seam;
+    this.#onLeaseAcquired = options.onLeaseAcquired;
   }
 
   #cross(seamName: string): void {
@@ -338,12 +358,16 @@ export class SessionOrchestrator {
   }
 
   #acquire(): Lease {
-    return leaseModule.acquire(this.#connection, {
+    const lease = leaseModule.acquire(this.#connection, {
       resource: this.#resource,
       holder: this.#holder,
       nowMs: this.#nowMs(),
       ttlMs: this.#ttlMs,
     });
+    // Handed out at the only instant it is knowable, which is here.
+    // See {@link SessionOrchestratorOptions.onLeaseAcquired}.
+    this.#onLeaseAcquired?.(lease);
+    return lease;
   }
 
   /**

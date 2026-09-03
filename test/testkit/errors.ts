@@ -45,6 +45,44 @@ export function expectRefusal<T extends Error>(
 }
 
 /**
+ * {@link expectRefusal} for a rejected promise.
+ *
+ * Its own function rather than a widened `expectRefusal`, because the two
+ * cannot share a body: an `await` inside the `try` is what makes a rejection
+ * observable, and adding one would turn every synchronous caller's assertion
+ * into one that passes a microtask later -- which is the shape that reports a
+ * case as green while the throw it was asserting has not happened yet.
+ *
+ * `action` is called here rather than taking a promise, so that a *synchronous*
+ * throw from an async function's argument evaluation is caught by the same
+ * assertion as a rejection. A caller that had to build the promise first would
+ * see that one escape uncaught.
+ */
+export async function expectRefusalAsync<T extends Error>(
+  action: () => Promise<unknown>,
+  type: new (...args: never[]) => T,
+  match?: RegExp | string,
+): Promise<T> {
+  let thrown: unknown;
+  let threw = false;
+  try {
+    await action();
+  } catch (error) {
+    threw = true;
+    thrown = error;
+  }
+
+  expect(threw, `expected ${type.name} to be thrown, but nothing was thrown`).toBe(true);
+  expect(thrown, `expected ${type.name}, got ${describeThrown(thrown)}`).toBeInstanceOf(type);
+
+  if (match !== undefined) {
+    const pattern = typeof match === "string" ? new RegExp(escapeRegExp(match)) : match;
+    expect(String((thrown as Error).message)).toMatch(pattern);
+  }
+  return thrown as T;
+}
+
+/**
  * The same, for an error raised by SQLite rather than by the control plane.
  *
  * Takes the result **code** rather than a class, because better-sqlite3 raises

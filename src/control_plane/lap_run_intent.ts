@@ -177,6 +177,13 @@ function requireQuotableText(field: string, value: unknown): string {
  * requiring an absolute path exists to rule out, arriving through the check
  * meant to rule it out.
  *
+ * **Exported so that everyone asking "is this path unambiguous" asks one
+ * implementation.** `src/lap/root.ts` required the worker's command to be
+ * absolute and wrote its own `isAbsolute` check to say so -- inheriting exactly
+ * the gap this docstring describes, in a rule that already had a correct
+ * implementation eleven lines long. A rule with two implementations has one
+ * that is wrong; the only question is which.
+ *
  * So the rule is the root, not the leading separator: `parse` gives `"C:\\"`
  * for a drive-qualified path and `"\\\\server\\share\\"` for a UNC one, and a bare
  * `"\\"` or `"/"` for the drive-relative form. On POSIX the root of an absolute
@@ -184,7 +191,7 @@ function requireQuotableText(field: string, value: unknown): string {
  * which is why `isAbsolute` is asked first and the root is only examined where
  * the two can disagree.
  */
-function isFullyQualified(path: string): boolean {
+export function isFullyQualified(path: string): boolean {
   if (!isAbsolute(path)) {
     return false;
   }
@@ -204,8 +211,14 @@ function isFullyQualified(path: string): boolean {
  * `claude_cli_provider.ts` reads out of the settings bag. Kept beside the type
  * rather than at the append site so that the field list and the persisted key
  * list cannot be extended one without the other.
+ *
+ * **Exported so the reader can be driven by it** (`readLapRunIntent`). A reader
+ * that checked a hand-written list of keys would be a second statement of this
+ * contract, and the two would drift the first time a field was added -- with the
+ * new field's absence silently tolerated, which is the failure that reader
+ * exists to prevent.
  */
-const PAYLOAD_KEYS = {
+export const PAYLOAD_KEYS = {
   leaseClaimantId: "lease_claimant_id",
   workspace: "workspace",
   role: "role",

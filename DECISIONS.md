@@ -154,6 +154,16 @@ spaces distinct.
 | D-0217 | `FencedSpawner` splits into `prepare` and `execute`, and the single-spawn-path obligation is restated over both with a provenance check | accepted |
 | D-0057 | The delegation intent and the materialisation result are two records, and materialisation is artifact-first and one-way | accepted |
 | D-0058 | The worker's MCP configuration is a materialised artifact, validated by the endpoint's own config class | accepted |
+| D-0059 | The composition root is `src/lap/`, provider-agnostic, and the lap is one CLI verb because a fence cannot cross a process boundary | accepted |
+| D-0060 | The turn is over when the terminal report exists, not when the child exits | accepted |
+| D-0061 | One artifact directory per run, under an operator-named root, with the run identifier encoded | accepted |
+| D-0062 | The composition root vetoes every `create-workspace` transition | accepted |
+| D-0063 | The materialiser takes fields, not the `LapRunIntent`; admission gains the reader that was missing | accepted |
+| D-0064 | Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10 | accepted |
+| D-0065 | An expired gate deadline costs the deadline, never the report; a stale one is refused before the lap starts | accepted |
+| D-0066 | The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference | accepted |
+| D-0067 | Nothing the fence or its evidence depends on may live inside the worktree | accepted |
+| D-0068 | A session is this lap's to stop only while it still holds the lease epoch it spawned under | accepted |
 
 ---
 
@@ -11077,3 +11087,718 @@ only for as long as the CLI forwarded the whole environment, which is not a prop
 **Source.** Human gate, task `continuo-lap1-workspace-materialize`, on
 `docs/design/minimal-operating-loop.md` step 7 ("a worker that can both work and poll") and section
 4.5. Decision id from the `D-0019`..`D-0099` shared band, next after `D-0057`.
+
+---
+
+## D-0059 -- The composition root is `src/lap/`, provider-agnostic, and the lap is one CLI verb because a fence cannot cross a process boundary
+
+**Context.** `docs/design/minimal-operating-loop.md` section 4.5 names the gap in one sentence: "a
+lap can be performed today only by hand-writing a TypeScript program". Step 8 closes it, and the
+Issue that files it (continuo#107) records that the *placement* of the closing code is itself a
+decision, because continuo has a test that forbids the shape a composition root has.
+
+`test/gate_item11/no-provider-detail-leaks.test.ts` asserts that **no module under `src/` other than
+`src/index.ts` imports both a session backend and `src/control_plane/`** (`ALLOWED_BARRELS`,
+`D-1001`). What that test measures is a number: which files a provider swap has to edit. A
+composition root joins a provider to the control plane by definition, so it either lives in the one
+allowlisted file, joins the allowlist, or does not hold both.
+
+Two details of the test decide the answer, and both are easy to misread. `knowsASessionBackend`
+excludes `src/session/provider.js` -- the contract -- so a module may import `SessionProvider`,
+`Ok`, `Failure` and the workspace-lifecycle vocabulary alongside the whole control plane and be
+entirely legal. And the scan follows every import form, `import type` and dynamic `import()`
+included, per file and with no transitive closure.
+
+**Decision.**
+
+1. **The composition root is `src/lap/root.ts`, and it is provider-agnostic.** It imports the
+   control plane, the materialiser, the supervisor and `../session/provider.js`, and it takes the
+   `SessionProvider` and the transcript reader as parameters. The leak test passes over it unchanged.
+
+2. **The verb is `src/lap/cli.ts`, and it reaches the shipped backend by a provider-neutral name
+   through the package barrel**: `createDefaultSessionProvider`, declared in
+   `src/session/default_provider.ts` and re-exported by `src/index.ts`. Swapping the shipped default
+   edits `src/session/` and nothing in `src/lap/`, so the number item 11 grades is unchanged and
+   `ALLOWED_BARRELS` is not widened. `docs/design/composition-root-placement.md` is the placement
+   note the Issue asked for and holds the four rejected alternatives; the two worth naming here are
+   **adding the verb to the allowlist** (rejected: the swap cost goes from one file to two, which is
+   the weakening the step's acceptance forbids) and **a one-hop indirection under `src/lap/` that
+   imports the concrete provider** (rejected: the swap cost really would be two files while the test
+   went on reporting one, and a check that has been routed around is worse than one widened on
+   purpose).
+
+3. **`readTerminalReport` is reached structurally.** It is on `ClaudeCliSessionProvider` and not on
+   `SessionProvider` (`D-0056`), and its readout type is declared in the provider's own module, so
+   even a type import would be a leak. `src/lap/root.ts` declares `LapTerminalReport`,
+   `LapNoTerminalReport` and `TerminalReportReader` itself -- the same device
+   `src/control_plane/report_ingress.ts` uses for `TerminalReportFact`, for the reason it states
+   there.
+
+4. **The lap is ONE verb, `continuo lap perform`, and not three.** This is forced rather than
+   preferred. `D-0217` makes a spawn plan executable only by the `FencedSpawner` instance that
+   admitted it, and that instance lives in memory; a `spawn` verb in a second process would have to
+   build a second spawner, which `execute` refuses. So materialise, spawn, poll and ingest are one
+   process. The seams an operator gets are `run admit` before it and the gate verbs (step 10) after.
+
+5. **The CLI gains an asynchronous dispatch path, and the refusal is declared rather than
+   discovered.** A leaf parser marks its handler with `setDefaults({ func, asynchronous: true })`,
+   and `dispatch` refuses such a command **before calling the handler**; `dispatchAsync` /
+   `mainAsync` are what the `bin` uses, and `main` is unchanged for every synchronous verb. The
+   declaration is not decoration: this verb does its work before returning its promise -- it
+   materialises a worktree, publishes a fence and starts a child -- so a `dispatch` that learned the
+   shape from the returned value would learn it with a child already running that nobody was going
+   to observe. That is the opposite of fail-closed, and it is what the first draft did.
+
+6. **The fence IS wired, so the step's conditional does not apply.** Step 8's own text says that if
+   the fence could not be wired, lap 1 spawning unfenced and the gate being advisory must be
+   recorded explicitly. It was wired: the child is started inside
+   `MaterializedWorkspace.spawner.execute`, and `test/lap/cli.test.ts`'s
+   `the child was started under the fence that was admitted` reads the fence ledger's single
+   `spawn-admitted` line and the child's own recorded `argv` to say so. Nothing about lap 1 is
+   advisory.
+
+**Alternatives.** Placing the whole root in `src/index.ts` (rejected: 44 re-export blocks and no
+function declarations, and a lap's order buried in the file every consumer imports is invisible to
+anyone looking for the lap). Placing it in `src/cli.ts` (rejected on a fact: that file already
+imports `control_plane/cli.js`, so adding a provider is the forbidden join and it is not
+allowlisted).
+
+**Consequences.**
+
+- `src/lap/cli.ts` imports its own package barrel. That is a smell and it is the price of the rule;
+  it is one import in one file, and it is the file that is an entry point.
+- **The lap is the first surface to compose four subsystems, so it is the first to meet four refusal
+  taxonomies.** `ControlPlaneRefusal`, `GitRefusal`, `LeaseRefusal` and `OrchestrationRefused` are
+  deliberately separate families -- below this layer they mean different things -- and this verb is
+  where all four become one line and exit 2. The list is enumerated rather than widened to `Error`,
+  because the point of catching is to leave everything not on it escaping with its stack.
+- **The two usage-error families are on the list too, which is a departure from `run_cli.ts`.** That
+  module leaves `RunAdmissionUsageError` uncaught on the stated ground that a usage error is a defect
+  in a caller, and it is right: by the time one could fire, its parser has established every value it
+  passes on. **This verb's parser has not.** It types `--turn-timeout-ms` as an integer, which admits
+  `-1`, and `--artifact-root` as a string, which admits a relative path; both are values an operator
+  typed and both reach `LapUsageError` or `WorkspaceMaterializationUsageError` at runtime. Here the
+  caller *is* the operator, so the family follows the caller rather than the name. The rules are
+  deliberately not restated in the parser to catch them earlier: `root.ts` and the materialiser each
+  state their own constraints once, and a second statement in the CLI would be the drift
+  `control_plane/cli.ts` and `run_cli.ts` both argue against.
+- **No parity ledger claims `test/lap/`.** The precedent is `D-0054` rule 5 as applied by `D-0057`:
+  the checker's `unmapped` guard only reaches target tests in a file some ledger's `test_file`
+  names, and a source-less feature has no source cases to claim. `test/workspace/materializer.test.ts`
+  and `test/session/terminal-report.test.ts` are in the same position and carry the same statement in
+  their headers, which is where a reader looks.
+- `test/lap/cli.test.ts` is registered in `SPAWNING_TESTS` (`scripts/run-suite.mjs`): it drives real
+  git and starts a real child, and `D-0048` runs those apart from the rest of the suite on Windows.
+
+**The cost of being provider-agnostic, stated because it is a cost and not a free property.**
+`ClaudeCliSessionProvider` owns a list of arguments a caller may not supply -- `-p`, `--resume`,
+`--session-id` and the rest -- and refuses them from `#readSettings`, which runs inside
+`orchestrator.start()`. The lap therefore **cannot** reject an admitted intent whose `cliArgs`
+contain one of them before materialising: reading that list would mean importing a backend into
+`src/lap/`, which is the join this entry exists to avoid, and copying it would be a second
+implementation of a rule the provider owns -- the failure mode this branch already made three times.
+So a run admitted with a provider-owned argument spends its identifier: the branch, the worktree and
+the fence are built, the walk refuses, and `D-0057` will not let the run be materialised again.
+Recovery is a fresh run identifier.
+
+Closing it properly means the session contract gaining a "would you accept these settings" question,
+which is an `S1` change (`PROVISIONAL`, and `PROMOTION_REQUIRES` says what settling that interface
+needs). That is a decision above this step, and it is recorded here rather than taken here.
+
+**What would falsify it.** `D-1001`'s own falsifier -- a subpath-exports split that let a provider
+swap avoid touching `src/index.ts` -- would remove the barrel this reaches through, and the import in
+`src/lap/cli.ts` would move with it. Separately, if a second lap-shaped surface ever needs a
+*different* provider chosen somewhere that is not `src/session/`, this shape cannot express it and
+the allowlist widening is the recorded fallback.
+
+---
+
+## D-0060 -- The turn is over when the terminal report exists, not when the child exits
+
+**Context.** `D-0056` returns a turn's report as soon as the terminal `result` line appears, without
+waiting for the child to exit, and records the second-`result`-line hazard as an open limitation
+"belonging with the composition root in step 8, which is the component that will actually poll".
+This is that component, and the question is now answerable rather than deferred.
+
+**Decision.**
+
+1. **The lap polls `readTerminalReport` and stops at the first report.** `awaitTerminalReport` reads
+   on an interval until the readout is a report, and returns it. A second `result` line written
+   afterwards is never read.
+
+2. **A `pending: false` readout is a refusal, not a reason to keep polling.** The turn ended and said
+   nothing usable; no amount of waiting changes that, and a loop that retried would spend the whole
+   budget and report a timeout, which names the wrong problem to the operator.
+
+3. **A provider `Failure` is not retried either.** An unknown session, an identity incident and an
+   uninterpretable transcript do not become true by waiting.
+
+4. **There is a budget, and running out of it rolls nothing back.** `--turn-timeout-ms` (default
+   fifteen minutes) bounds the wait; the refusal says so and says explicitly that the workspace, the
+   fence and the child are as they were. Two things make it an actual bound rather than an
+   approximate one, and each was a bug before it was a rule: the deadline is taken **before** the
+   first read, because a budget started from the first answer gives a provider that blocks for the
+   whole timeout an unbounded second chance; and each wait is capped at what is **left** of the
+   budget, because an interval longer than the remaining time would sleep past the deadline and then
+   accept whatever the next read returned -- a one-second timeout with a two-second interval would
+   have accepted a report that arrived at two seconds.
+
+5. **The session's life is the lap's, and `performLap` stops it on every path out** -- after a gate
+   is opened, after every refusal from the poll onward, **and after a walk that failed having already
+   spawned**. That last one is the case a teardown keyed on the orchestration's outcome cannot reach:
+   `orchestrator.start()` can spawn a child and then reject (the identity never reads back, the
+   post-spawn validation refuses, this writer loses a race), and the provider says in as many words
+   that a `Failure` does not prove no process was created. So the session id is captured from the
+   factory as it is minted rather than read off an outcome that may not exist. Two reasons, and the second is the one
+   that makes the timeout real rather than nominal:
+   - a child left running after its turn is a fenced worker nobody is polling, which is the state
+     the gate exists to prevent;
+   - the provider holds a **referenced** Node child handle, so a running child keeps its process's
+     event loop alive. A `--turn-timeout-ms` that printed a refusal and then hung until the child
+     felt like exiting would be a bound in the help text and nowhere else. The case
+     `a timed-out turn refuses and the verb still returns` runs a child that would sleep two minutes
+     and finishes in about a second.
+
+   It is safe in a `finally` because it is after everything durable: the escalation event and its
+   gate have committed on the successful path, and a refusal has nothing to commit. `stop` is the
+   provider's supervised ladder rather than a signal, and its answer is unread and its failures
+   swallowed -- an exception thrown from a `finally` would REPLACE the outcome the lap was carrying,
+   and a teardown that reported itself instead of the gate that was just opened is the one way this
+   call could do harm.
+
+   **There is exactly one state where the lap must NOT stop, and it is a state the orchestrator has
+   already decided about.** `LoserTerminated.stopAttempted === false` is not "the stop failed"; it is
+   `SessionOrchestrator`'s recorded judgement that it *must not* stop -- this claimant lost its
+   lease, a takeover writer has since confirmed the binding, and that winner may have adopted the
+   very child this lap spawned. A session-level stop cannot name a process generation, so issuing one
+   would kill the winner's worker. `sessionMayBeStopped` is what keeps that decision from being
+   silently overridden one frame up, and the case
+   `performLap does not stop a session a takeover writer may have adopted` is what keeps
+   `sessionMayBeStopped` honest -- verified by removing the guard and watching only that case go red.
+
+   The cost is accepted and stated: in that one state the child is left running and its referenced
+   handle may keep `lap perform` from returning. That is the safe direction, and reversing it would
+   be trading a visible hang for another claimant's dead worker. **This was a defect introduced by
+   the fix above and caught in review**, which is the honest shape of it: an enclosing teardown added
+   for one hazard overriding an inner component's deliberate restraint about another.
+
+**Alternatives.** **Waiting for the child to exit (rejected.)** A `claude -p` child's exit is not the
+turn's end: it can outlive the terminal line by however long its MCP servers take to shut down, and
+it can fail to arrive at all -- a wedged child would hold the lap open with a complete report already
+on disk, and the gate would never be asked. Stopping at the report makes the lap's duration a
+property of the worker's work rather than of its teardown.
+
+**What the budget bounds, stated because it is a real limit and not an oversight.** It bounds the
+**waiting**, not the reading. A report that exists when a read returns is the turn's outcome and is
+never discarded, however long that read took -- throwing away a report in hand would leave the
+worker's own words unescalated and the gate unopened for a turn that did finish, which is the exact
+failure this step exists to remove, arriving by way of a stopwatch. What the cap guarantees is that
+no new read is *started* after the deadline.
+
+**Consequences.** A turn that somehow wrote two terminal lines has its first read and its second
+ignored. That is the safe direction -- a report is escalated once, to one gate, and `D-0056`'s dedup
+key is per turn -- and it is pinned by a case (`a second terminal line is never read`) rather than
+left as a property nobody checks. If the second line ever proves to carry content rather than a
+restatement, the answer is a second generation and a second ingest, not a longer wait here.
+
+**What would falsify it.** A provider whose terminal line is not the last thing a turn produces --
+one that writes `result` and then amends it -- would make "the first report" the wrong report.
+Nothing in `claude -p`'s stream-json output does that at the version `D-0056` was written against.
+
+---
+
+## D-0061 -- One artifact directory per run, under an operator-named root, with the run identifier encoded
+
+**Context.** `MaterializationRequest.artifactDir` is required rather than defaulted and the
+materialiser says why: the fence, the settings, the MCP configuration and the fence ledger must live
+**outside the worktree**, because inside it they would be tracked files the worker can commit, `git
+status` noise on every run, and -- worst -- a fence the fenced child can edit. It refuses to guess
+the layout, and hands the question to step 8.
+
+**Decision.** `lapArtifactDir(artifactRoot, runId)` is `<artifactRoot>/<encoded runId>`.
+
+1. **The root is a required flag** (`--artifact-root`), not derived. Deriving one would invent a
+   convention about the operator's filesystem, and the materialiser's own refusal exists precisely
+   to stop a layer from guessing.
+2. **One directory per run.** An operator holding a run identifier can find that run's fence by
+   reading the path, which is why it is not a hash.
+3. **The run identifier is encoded against the *filesystem's* identity rules, not the string's.**
+   `LapRunIntent` holds it to printable ASCII, which is a far wider set than a directory name may
+   safely be, and it goes wrong in three separate ways:
+   - `/`, `\`, `:` and `..` turn "a directory named after the run" into a directory somewhere else;
+   - **Windows folds case and drops a trailing dot**, so `run` and `RUN`, or `run` and `run.`, are one
+     directory -- two admitted runs sharing a fence, a settings file and a ledger, racing through the
+     materialiser's check-before-write guard on all three. `D-0216` records the same hazard for the
+     containment guard and answers it the same way;
+   - **Windows reserves `con`, `nul`, `com1` and their kin in every directory**, so a run
+     legitimately called `nul` could not be materialised at all -- on one platform, reported as a
+     path error rather than as anything about the run.
+
+   So every character outside `[a-z0-9._-]` becomes `%XX` (uppercase included, which is what closes
+   the folding hole), a trailing dot is encoded, and a reserved device name has its first character
+   escaped. The escape character is itself escaped and the only uppercase in any output is inside an
+   escape this function wrote, so the encoding is injective **under case folding** and not merely as
+   a string. Lowercase identifiers -- every one this repository writes -- are untouched.
+
+**Why the guard is here rather than downstream.** The materialiser checks that no artifact lands
+inside the *worktree*. It does not and should not check where else on the operator's filesystem a
+path lands, so nothing below this function would have refused `--artifact-root /var/artifacts` with a
+run called `../../etc`.
+
+**Consequences.** A run identifier and its artifact directory are not the same string, so an
+operator reading a directory name sees `a%2Fb` where the run is `a/b` and `%52%55%4E` where it is `RUN`.
+The encoding is reversible and the one-line report the verb prints names the run rather than the
+directory, which is the value an operator actually carries between commands. The cost falls only on
+identifiers that were unsafe to begin with.
+
+**What would falsify it.** A narrowing of `LapRunIntent`'s identifier rule to something that is
+already a safe path segment would make the encoding dead weight -- though not wrong, and it would
+still be the thing that made the narrowing safe to rely on.
+
+---
+
+## D-0062 -- The composition root vetoes every `create-workspace` transition
+
+**Context.** `ClaudeCliSessionProvider` creates a missing workspace with a bare
+`mkdirSync(workspace, { recursive: true })` and announces a `create-workspace` transition **before**
+doing so, so that a party who knows better can stop it. `D-0057` built the evidence half and said
+this half was step 8's: a `MaterializedWorkspace` cannot be constructed except by
+`materializeWorkspace`, which does not return until git has made the checkout, so "this workspace was
+materialised" is a checkable statement rather than a guess. `registerWorkspaceObserver` already
+exists; nothing in the ported provider changes.
+
+**Decision.** `performLap` registers a `MaterializedWorkspaceRequired` observer, keyed on the
+materialised workspace, immediately after materialisation and before the orchestrator is
+constructed. It **vetoes every `create-workspace` transition**, and allows every other kind.
+
+**Why every one, rather than one for an unexpected path.** By the time the orchestrator starts, the
+worktree exists: git made it, and the materialiser re-asked git about it immediately before appending
+its event. A provider announcing that it is about to *create* this workspace is therefore not
+reporting a mismatch of paths -- it is reporting that **the checkout is gone**, swept between
+materialisation and spawn. A path comparison would allow exactly that case, putting the worker in a
+bare directory with the right name: no checkout, no branch, no base commit, and a run that looks
+normal in every record. The stronger rule is also the simpler one.
+
+**Why not veto other kinds.** An observer that vetoed what it had no opinion about would be an outage
+wearing a safety check's name, and would still pass every case that only asserts the veto.
+
+**Consequences.** The registration is per provider instance and `registerWorkspaceObserver` appends
+without de-duplicating (that is the source's behaviour and is not changed here), so a process that
+performed two laps on one provider would accumulate two observers. `continuo lap perform` builds one
+provider per verb, so this is not reachable today; a future caller that reuses a provider across laps
+has to hold that thought, and the observers are equivalent anyway -- the second veto changes nothing
+but the count in the summarising message.
+
+**What would falsify it.** A provider that used the `create-workspace` transition to announce
+something other than "I am about to make this directory" -- an adoption, say -- would make a blanket
+veto refuse a legitimate start. `WorkspaceTransition.kind` is documented as carried uninterpreted,
+so this is a real possibility for a future backend rather than a theoretical one, and the case
+`allows a transition it has no opinion about` is where a third kind would land.
+
+---
+
+## D-0063 -- The materialiser takes fields, not the `LapRunIntent`; admission gains the reader that was missing
+
+**Context.** `src/workspace/materializer.ts`'s module doc leaves one thing open in as many words:
+whether a `LapRunIntent` should be passed to it whole is "a step-8 question, left open". Answering it
+turned up a second, larger gap: **nothing could read an intent back**. `admitRun` writes it into the
+`run_delegation_recorded` payload and no function anywhere parses that payload, so the record
+`D-0055` exists to fix could not be acted on by the later step it was fixed for.
+
+**Decision.**
+
+1. **`readLapRunIntent(connection, runId)` lands in `src/control_plane/run_admission.ts`** -- the
+   module that wrote the record reads it back -- and returns a `LapRunIntent`, not a plain object.
+   The class is nominal and its constructor is its validation, so a payload that has decayed is
+   refused at the read rather than reaching the materialiser as a value that merely looks right. The
+   round trip is therefore also a check. A run with no such event is `RunNotAdmitted`, in the
+   `ControlPlaneRefusal` family.
+2. **The lookup is by the deterministic `event_id`** admission assigns, not by an
+   `event_type ... ORDER BY seq LIMIT 1` scan. The id is unique and admission is the only producer,
+   so this names the row where ordering would be a convention.
+3. **The materialiser keeps taking fields.** `performLap` reads the intent and destructures it into
+   the `MaterializationRequest`.
+
+**Why not pass the intent whole.** The materialiser's request is deliberately wider than the intent
+-- it also carries the repository, the artifact directory, the endpoint binding, the fence
+substitutions, the clock and the UUID factory -- so a whole-intent parameter would be one field
+beside eight others rather than a simplification, and it would couple `src/workspace/` to a
+control-plane record type for the seven fields it already validates itself. The materialiser
+re-validates those fields on purpose (its own comment explains that a caller can reach it without an
+intent), and that second reading is the thing a whole-intent parameter would quietly make redundant
+and then, later, wrong.
+
+**Consequences.** There are now two readers of the intent's fields, and their rules have to stay the
+same rules. `materializer.ts` already documents this obligation and states the rules field by field
+against `lap_run_intent.ts`; this entry is the second place that dependency is written down.
+
+**The reader requires every persisted key to be present, and this is not the same check as the
+constructor's.** The constructor validates the *values* it is given, and for six of the seven fields
+that is enough: an absent one arrives as `undefined` and is refused. `cli_args` is the exception and
+the only one, because omitting it is meaningful to a **caller** -- it means "no arguments" -- and
+`LapRunIntent` reads it that way. To a **reader** it cannot mean that: the writer always emits the
+key, so its absence means the payload is not one this build wrote, and absorbing it would run the
+worker without arguments the durable record required, silently. So `readLapRunIntent` checks presence
+first, driven by `PAYLOAD_KEYS` -- the record's own key list, now exported for it -- rather than by a
+copy, because a copy would drift the first time a field was added and would tolerate exactly the new
+field's absence. Verified by removing the check and watching the case throw nothing at all.
+
+**The comparison is in both directions, because it is one question.** A key this build does not know
+means a producer wrote a field this build has no code for, and constructing the intent anyway would
+run the lap while silently discarding it -- with no way to know whether what was discarded was
+safety-relevant. "This payload is the record this build writes" is a single claim; checking only that
+nothing is missing leaves the other half of the same hazard open, and one refusal names everything
+wrong with the record rather than whichever half was noticed first. The cost is that the payload
+cannot be extended without every reader being updated first, which for a record the fence and the
+spawn are built on is the direction to fail in.
+
+**What would falsify it.** A `MaterializationRequest` that shrank to the intent's fields plus one --
+if the endpoint binding and the fence substitutions moved into the admitted record, which is a
+plausible thing for step 10 or the console to want -- would make the whole-intent parameter the
+smaller interface, and this decision should be revisited rather than defended.
+
+---
+
+## D-0064 -- Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10
+
+**Context.** `docs/design/minimal-operating-loop.md` section 7 step 4 says the endpoint's launcher
+"must hold and renew [its lease] for the endpoint's whole life", and continuo#107 says in as many
+words that renewal is step 4's and must not be implemented here by accident (`D-0053` rule 4). The
+Issue asks step 8 to record what lap 1 does instead, and whether step 4 is now needed before step 10.
+
+**Decision.** **No renewal is implemented in step 8, deliberately and not by omission.**
+`continuo lap perform` passes `--endpoint-epoch` through to the materialised MCP configuration
+exactly as `D-0058` defined it, and nothing in `src/lap/` acquires, holds or refreshes a lease on the
+endpoint's behalf. The orchestrator's own lease is untouched: it is per-verb, it is taken and
+released inside `SessionOrchestrator`, and it never crosses the gate.
+
+**What lap 1 therefore does.** The worker's endpoint runs under a lease at a fixed epoch that nothing
+refreshes. For the lap as step 8 leaves it, that is sufficient and the reason is `D-0060`: the lap
+ends at the terminal report and the child is stopped, so the endpoint's life is one turn. The
+delivery path is not exercised -- the worker in lap 1 reports and stops; it does not wait for an
+answer.
+
+**Whether step 4 is needed before step 10: yes.** Step 10 is where the human's answer is relayed
+back and acked, which is the first thing that requires the worker's endpoint to still be able to
+write **after** an operator-shaped delay. That delay is unbounded by construction -- it is a person
+reading a gate -- and it is the exact interval a fixed epoch cannot survive. So the ordering
+consequence is recorded here rather than discovered there: **step 4 lands before step 10, and step 10
+should not be started on the assumption that lap 1's endpoint binding is enough.** Step 4 is filed as
+**continuo#110**, which records the design's own instruction not to start it until #107 is merged.
+
+**Step 4 is also needed for the teardown to be correct, and that is a second reason nobody had.**
+`D-0068` decides which sessions are this lap's to stop by comparing the lease epoch, and states a
+residual it cannot close: between reading the epoch and signalling the child, a lease that has
+expired can be taken by another claimant. **That residual exists only because the lease is allowed to
+expire while the lap is still running** -- the orchestrator's TTL is 30 seconds and
+`--turn-timeout-ms` defaults to fifteen minutes, so on any ordinary lap it does. A lease *held and
+renewed for the lap's whole life* -- which is exactly what step 4 is -- makes the comparison an
+equality that cannot lose, because no other claimant can acquire a live lease (`LeaseHeld`).
+
+So step 4 is not only the precondition for step 10's relay; **it is what closes the last window in
+step 8's teardown.** Recorded here so that whoever picks up #110 knows it settles two things, and so
+that whoever next reads `D-0068`'s residual does not go looking for a local fix that does not exist.
+
+**What would falsify it.** A lease whose TTL is longer than any plausible gate answer would make
+renewal unnecessary rather than merely unimplemented -- and would be the wrong fix, because "longer
+than any plausible" is the shape of assumption `docs/lease-fencing.md` exists to remove. If step 4
+settles the two scopes differently and concludes the endpoint's lease is not per-process after all,
+this entry's second half is what has to be re-read.
+
+---
+
+## D-0065 -- An expired gate deadline costs the deadline, never the report; a stale one is refused before the lap starts
+
+**Context.** `gate.deadline_at_ms` is the **business** deadline, and
+`docs/production-schema.md`'s DDL says so in as many words at the column -- it is not a relay
+tolerance. The schema enforces `CHECK (deadline_at_ms IS NULL OR deadline_at_ms > created_at_ms)`
+(`migrations/0001_initial.sql`), which is right: a gate that is born already expired is not a
+question anyone can answer.
+
+Step 8 passed `--gate-deadline-at-ms` through to `ingestTerminalReport` unexamined, and that made
+the constraint reachable in the worst possible place. The gate is created **after** the worker's turn
+ends, so a deadline that was comfortably in the future when the operator typed it can be in the past
+by the time the gate is written. The result was a raw `SqliteError` -- outside every refusal family
+the verb classifies, so a stack trace and exit 1 -- and, because `ingestTerminalReport` writes the
+escalation event and its gate in **one transaction**, the worker's report rolled back with it. The
+lap had materialised a worktree, published a fence, run a worker to completion and read its report,
+and then recorded none of it; and `D-0057` refuses a second materialisation of one run, so the
+operator could not retry. Everything done, nothing kept, on a run that was now spent.
+
+**Decision.** Two rules, because the two states are different mistakes.
+
+1. **A deadline already in the past when the lap STARTS is refused, before anything is created.**
+   That is a typo -- a mistyped digit, a stale value pasted from an earlier command -- and the
+   operator should hear about it while a corrected retry is still free. It is refused in
+   `performLap`'s prologue, alongside the completion budget, on the discipline
+   `materializeWorkspace` already states for its own request: refuse a malformed request with
+   nothing built.
+
+2. **A deadline that expires WHILE THE WORKER RUNS is dropped, and the gate is opened without one.**
+   The lap's value is that the worker's words reach a human gate. An elapsed business deadline is
+   information about scheduling; it is not a reason to lose an escalation that a worker actually
+   produced. So the gate is opened with `deadline_at_ms` null -- which the column admits -- and the
+   operator is told on its own line **which** deadline lapsed, because that is what distinguishes "my
+   deadline was too tight" from "the worker ran long", and those have different next moves.
+   The clock is read once and used for both the decision and the write, since
+   `gate.created_at_ms` is that same instant and the constraint is checked against it.
+
+**Alternatives.**
+
+- **Refuse at the ingest (rejected).** The smallest change, and it keeps almost all of the damage:
+  the report is still not on the spine and the run is still spent. It answers the crash without
+  answering the loss.
+- **Re-base the deadline on the gate's creation time -- `now + the original margin` (rejected).** It
+  preserves the *margin* the operator intended, which is genuinely attractive. It is rejected because
+  it changes what the column means: the DDL comment fixes `deadline_at_ms` as the business deadline,
+  and a value silently recomputed from when a worker happened to finish is a scheduling artifact
+  wearing a business deadline's name. A gate whose recorded deadline is not the one anybody asked for
+  is worse than a gate with none, because only the second is honest about what is known.
+
+**Consequences.**
+
+- `LapOutcome` gains `elapsedDeadlineAtMs`: the operator's own number, handed back, so the caller can
+  name it rather than merely report that something lapsed. Null on every ordinary lap.
+- `--gate-deadline-at-ms`'s help states both rules, and is held to the implementation by the same
+  paired assertion `--turn-timeout-ms` now has.
+- Both halves are pinned by cases that were **verified to fail without them**: removing the drop
+  reproduces the original `CHECK constraint failed: deadline_at_ms IS NULL OR deadline_at_ms >
+  created_at_ms` verbatim, and the anti-vacuity half asserts that a deadline the lap *can* honour is
+  written through unchanged.
+
+**What would falsify it.** If a gate's deadline ever becomes something the relay or the sweeper acts
+on automatically -- rather than a business fact a human reads -- then silently opening a gate without
+one would remove an action instead of a note, and rule 2 would have to become a refusal with a
+recorded event. `gates.ts`'s `gatesPastDeadline` reads the column today but nothing acts on the
+result unattended.
+
+---
+
+## D-0066 -- The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference
+
+**Context.** `MaterializationRequest.nowMs` is a `number`, not a clock. That is right for what step 7
+does: it stamps one instant on one event, and `D-0057` wants the instant it recorded on the spine and
+the instant its returned options carry to be the same number -- the field's own comment says so, and
+warns that reading `request.nowMs` on each call would let a caller mutate the request into disagreeing
+with the record.
+
+But those options are then handed to a `SessionOrchestrator`, and the orchestrator's first act is to
+**acquire a lease**. A lease is the one thing in this lap that is *about* the passage of time.
+`SessionOrchestratorOptions.ttlMs` defaults to 30 seconds, so a materialisation that took longer than
+that -- `git worktree add` on a large repository, a cold filesystem, a slow CI runner -- acquires a
+lease stamped at the moment materialisation *started* and therefore already expired. A concurrent
+claimant reading a live clock could take it over immediately, and this lap would find itself on the
+loser path (`D-0060`) **after it had already spawned a child**. Every post-spawn gate row and every
+read-back commit would also be stamped at an instant that had passed.
+
+Neither module is wrong on its own. Step 7 cannot supply a live clock because it was never given one;
+step 8's `LapRequest.nowMs` **is** a function, and step 8 is the only place that holds both.
+
+**Decision.** `performLap` overrides `nowMs` on the options it hands the orchestrator, with
+`request.nowMs` -- the live clock. Step 7's frozen instant stays exactly where it belongs: on the
+`workspace_materialized` event, which is a statement about when *that step* ran.
+
+So the lap deliberately runs on **two clocks**, and which is which is not an accident:
+
+- **the materialisation instant** is a fact about a completed step, and a fact does not move;
+- **the orchestrator's clock** measures a lease, a TTL and a fence, none of which mean anything unless
+  they read the time at the moment they are evaluated.
+
+**Consequences.**
+
+- This is the second field `performLap` replaces on the materialiser's options, after the
+  `sessionUuidFactory` wrapper (`D-0060`). `D-0057`'s claim that nothing below step 7 *adds* a field
+  to those options still holds; what step 8 does is supply the two whose right value only it knows.
+- The case `the lease is taken at the time it is actually taken` pins both halves: the lease is stamped
+  on the advanced clock **and** the materialisation event is still stamped at `T0`. The second
+  assertion is what stops the obvious wrong fix -- making the materialiser read a live clock on every
+  call -- from passing. Verified by removing the override: the case fails with
+  `expected 1700000000000 to be 1700000120000`.
+- The defect was invisible on a fast machine and silent on a slow one, and it was found by review
+  rather than by a case, because nothing in either module is wrong when read alone. It is the shape a
+  composition root exists to have: the bug lives in the seam.
+
+**What would falsify it.** If `MaterializationRequest` ever took a clock rather than an instant, step
+7 could hand on a live one and this override would become redundant -- though not wrong. And if the
+orchestrator's lease ever stopped being acquired inside `start()`, the specific hazard above would
+move rather than disappear, and this entry should be re-read against wherever it moved to.
+
+---
+
+## D-0067 -- Nothing the fence or its evidence depends on may live inside the worktree
+
+**Context.** `materializeWorkspace` already refused an *artifact* inside the workspace, and its
+refusal states the reason exactly: "the fence and the settings must not be files the fenced child can
+edit". The rule was right and the boundary drawn around it was not. It covered what materialisation
+**writes**, and step 8 adds a CLI that takes paths from an operator which materialisation does not
+write and the fence depends on.
+
+Two of those are not `MaterializationRequest` fields at all -- they exist only because this step
+constructs a session provider, so no earlier module could have guarded them:
+
+- the **provider's state root** holds `record.json` and the turn's transcript, and that transcript is
+  the evidence `readTerminalReport` turns into a gate. Inside the worktree, a worker can append its
+  own terminal line and open a gate over words it chose: **a human approval whose subject wrote the
+  document**.
+- the **worker's own command** is the binary the fence is applied to.
+
+**Decision.** One rule -- *nothing the fence or its evidence depends on may resolve inside the
+workspace* -- checked in `performLap`'s preflight for those two values, before anything is created.
+
+**Each path is resolved the way its own consumer resolves it**, and that is the part a single
+`resolve()` gets wrong. `ClaudeCliSessionProvider` resolves the state root at construction, against
+*this* process's working directory. The command is spawned with the **workspace** as its working
+directory, so a relative token resolves there -- a `--claude-command ./tool` that looks safe from the
+operator's shell is `<workspace>/tool` when it runs. A bare name is skipped, because `claude` is
+looked up on `PATH` rather than in a directory and refusing it would invent a rule about how a
+command may be spelled.
+
+The comparison is `materializeWorkspace`'s own `isInside`, now exported rather than reimplemented: it
+case-folds on Windows (`D-0216`), and a second predicate for one rule is how two implementations of
+one rule come to disagree.
+
+**Every token of the worker command must be an absolute path, and that rule replaced three attempts
+to be cleverer.** The first skipped any token with no separator, reasoning that `claude` is a name
+looked up on `PATH` rather than a location. The second added a `PATH` check for a relative entry.
+Each was defeated by a resolution rule this repository does not own:
+
+- a `PATH` may carry a relative entry -- and on POSIX an **empty** element means the current
+  directory, so a filter that dropped empty entries as noise dropped precisely the dangerous one;
+- a command given as an interpreter and a script has a **second** token, resolved against the child's
+  working directory, which no check of the first token sees;
+- and the two working directories differ: the capability probe runs with the launcher's, the child is
+  spawned with **the workspace** as its.
+
+**The lesson is the one this entry should have drawn at the first attempt.** Refusing rather than
+reimplementing `PATH` resolution looked like the conservative choice and was not: *the condition to
+refuse on cannot be written without understanding the resolution rules either.* Declining to
+reimplement them and then depending on them is the same bet with the stake hidden. So the resolution
+is removed from the path instead -- an absolute token is resolved against nothing, and `isInside` can
+answer about it exactly.
+
+**`--claude-command` becomes required, and that is the intended cost.** `PATH` is ambient authority.
+A fence exists so that what a worker may do is decided explicitly, and "everything is explicit except
+which binary the worker itself is" was never coherent -- it showed, too: with the flag omitted the
+command was `undefined` in this check and **nothing at all was examined**, which made passing the
+flag safer than not passing it. `ClaudeCliSessionProvider` keeps its own `claude` default; the lap
+simply never reaches it, and nothing in the provider changes.
+
+**Resolving the name once at admission and recording the result was considered and rejected.** Node
+has no `which`, and reaching for a shell to get one adds an interpreter -- and its quoting -- to the
+path that decides what a fenced worker runs. Asking an operator for a full path is the smaller price.
+
+**Ordering inside the preflight is load-bearing, not cosmetic.** Containment is established *before*
+the provider is asked anything, because `requireSpawnable` runs the capability probe and the probe
+writes `probe-evidence.txt` into the state root -- so asking it first would **create** the very
+directory the next check exists to refuse, inside the worktree. The refusal would still fire, over a
+directory the preflight had just made.
+
+**What this entry does not yet cover, stated rather than left to be discovered.** Six further paths
+reach `materializeWorkspace` and are not held to this rule there: `--hook-script`, `--python`,
+`--endpoint-module`, `--node`, `--interlock-root` and `--claude-org-path`. Every one of them is a
+field `MaterializationRequest` already had, so the gap predates this step; what this step adds is a
+command line that reaches them. **The deny hook is the sharpest of them** -- it is the file that
+enforces the fence, and it does not protect its own path. Hardening them belongs with the module that
+owns the invariant and is the follow-on branch's, along with the shared predicate this entry starts.
+
+**Who this rule defends against, and who it does not.** The fenced party is the **worker**. The
+**operator** is the party holding the fence, and is trusted: they choose the role, the workspace and
+the command, and they can already do anything the lap could do. That distinction is what decides
+which of this rule's neighbours are worth paying for, and it was not written down early enough --
+review produced a run of findings premised on an operator attacking themselves (a control character
+in their own `--db`, a `.` on their own `PATH`, a newline in a path they typed), and each one is
+*true* while being a defence against the wrong party.
+
+They were not all declined: `--claude-command` is required to be fully qualified, because a
+`PATH`-resolved binary is decided by ambient state rather than by the operator, and a worktree the
+worker writes to is on that path. The line is not "operator input is safe" but **"does the worker
+get to influence it"** -- and where the answer is no, the cost of a guard is paid by every reader of
+this code forever, for a hazard whose only actor is the person the fence is for.
+
+The remaining ones are named in the PR's known limitations rather than fixed, so a later reader can
+see that the gap is a judgement about the threat model and not a place nobody looked.
+
+**What would falsify it.** If a role's fence ever legitimately needed to reference a file inside the
+worktree -- a project-local configuration the worker edits and the fence reads -- the rule as stated
+would refuse a real configuration, and the answer would be to split "depends on for enforcement" from
+"reads as data" rather than to widen the rule.
+
+---
+
+## D-0068 -- A session is this lap's to stop only while it still holds the lease epoch it spawned under
+
+**Context.** `performLap` stops the session it started, on every path out (`D-0060`). Deciding *which*
+sessions are its to stop took three attempts, and the first two were both wrong in the same direction
+-- they proved something weaker than ownership:
+
+1. **Nothing at all.** The `finally` stopped whatever identity had been minted. `LoserTerminated`
+   already showed why that is unsafe: the orchestrator records `stopAttempted: false` exactly when a
+   takeover writer may have adopted this lap's child, and stopping anyway kills the winner's worker.
+2. **The session id.** A binding lookup was added: stop only if `activeBinding(runId)` names this
+   session. That closes one door -- an identity minted but never bound, because another run already
+   held it -- and leaves the other wide open. **`SessionOrchestrator.recover()` reads the id off the
+   existing binding and keeps it**, so after a legitimate takeover the binding still names the same
+   session and an id comparison passes.
+
+The window is not narrow. The orchestrator's lease defaults to a 30-second TTL and
+`--turn-timeout-ms` defaults to fifteen minutes, so **any lap whose worker works for longer than half
+a minute spends most of its poll holding an expired lease**, which any claimant may take.
+
+**Decision. The identity of an owner is the lease epoch, not the session id.** The epoch is strictly
+increasing and a change of holder raises it (`docs/lease-fencing.md`), which is precisely the fact a
+session id does not carry. `performLap` reads the epoch of `session-run:<runId>` as soon as the walk
+has been started and compares it again before stopping:
+
+- **unchanged** -> nobody took over. The lease may well have expired, and that is fine: an expired
+  lease nobody claimed leaves this lap the only party with a claim on the child, so the child is
+  still its to stop. A rule that stood down on mere expiry would leak exactly the children the
+  teardown was added to reap.
+- **moved** -> somebody took over, and whatever they have done with the session is theirs. Stand
+  down, for the same reason `stopAttempted: false` makes the orchestrator stand down.
+
+The epoch is read **before the walk is awaited**, not after, because the walk can spawn a child and
+then reject -- which is the case the teardown exists for, and a capture on the far side of the
+`await` never runs on it. It is available that early because `orchestrator.start()` acquires the
+lease, prepares the binding and marks the spawn synchronously, before its first `await`.
+
+**Consequences.** The binding check from attempt 2 is kept as well: the two answer different
+questions, and dropping either restores a distinct hole. Between them the rule is "this run bound
+this identity, and this lap still holds the epoch it bound it under".
+
+**The epoch is taken from the acquisition, never read back from the row.** The first implementation
+read the lease row after the walk had started, and that answers a different question: if the process
+is suspended past the TTL between the orchestrator's acquire and the read, the row already belongs to
+a later claimant -- so the lap records **the winner's epoch as its own**, passes its own ownership
+check, and stops the winner's worker. **The check was defeated by where it got its number**, which is
+the failure it exists to prevent wearing a different hat. `SessionOrchestratorOptions.onLeaseAcquired`
+hands the lease over at the only instant it is trustworthy, and is a production seam for that reason
+rather than a test hook.
+
+**The residual, stated precisely, because it is real and it is not closable here.** Reading the epoch
+and signalling the child are two operations, and nothing fences the gap between them: if the lease
+has expired, another claimant can acquire it and recover the session in that window, and the stop
+that follows reaches a child it has adopted. What the epoch comparison bought is the *size* of that
+window -- from **the whole of the poll**, which on an ordinary lap is minutes, down to **the interval
+between one SQL read and one signal**. It did not buy zero, and this entry does not claim it did.
+
+Closing it needs the lease to be **live** rather than merely unrecovered, because `acquire` refuses a
+live lease (`LeaseHeld`) and a claimant that cannot acquire cannot recover. That means holding and
+renewing the lease for the lap's whole life, which is **step 4** (`D-0064`, continuo#110) and is
+explicitly out of this step's scope.
+
+**The tempting local fix is worse, and is recorded so it is not re-proposed.** "Do not stop when the
+lease has expired" removes the race by refusing to act -- and because the TTL is 30 seconds while
+`--turn-timeout-ms` defaults to fifteen minutes, **every lap whose worker works for more than half a
+minute** would then leak its child and re-acquire the hang `D-0060` removed. It also misreads
+`supervisor.ts`, whose `stopAttempted: false` branch fires on `winnerConfirmed || newerWriterActive`
+-- **positive evidence that a takeover happened**, not an inability to prove safety. Here the
+evidence points the other way: an unchanged epoch is positive evidence of ownership. Trading a
+theoretical window for a certain leak on the ordinary path is not the same trade `D-0060` made, where
+the hazard was evidenced and the cost was a visible hang.
+
+**What would falsify it.** If the orchestrator ever released its lease at the end of `start()` rather
+than letting it expire, the epoch this lap captured would be gone and this rule would have to read
+ownership from whatever replaced it. And if a future step holds and renews the lease for the lap's
+whole life -- which is step 4's subject, and `D-0064` records that lap 1 runs without it -- the
+comparison becomes an equality that should never fail, and a failure would mean the renewal broke
+rather than that a takeover happened.

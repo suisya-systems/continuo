@@ -11,6 +11,7 @@
  * - `attention scan|watch ...`   -> `src/attention/cli.ts`
  * - `db create|migrate|verify ...` -> `src/control_plane/cli.ts`
  * - `run admit ...`         -> `src/control_plane/run_cli.ts`
+ * - `lap perform ...`       -> `src/lap/cli.ts`
  *
  * Ported from interlock `src/claude_org_runtime/cli.py` at `65f36c5`, which
  * mounts six subtrees. Two of them are not here -- `dispatcher` and `migrate`
@@ -50,9 +51,16 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { TOOL_VERSION } from "./about.js";
 import * as attentionCli from "./attention/cli.js";
-import { ArgparseExit, type ArgparseStreams, ArgumentParser, dispatch } from "./cli/parser.js";
+import {
+  ArgparseExit,
+  type ArgparseStreams,
+  ArgumentParser,
+  dispatch,
+  dispatchAsync,
+} from "./cli/parser.js";
 import * as dbCli from "./control_plane/cli.js";
 import * as runCli from "./control_plane/run_cli.js";
+import * as lapCli from "./lap/cli.js";
 import * as measurementCli from "./measurement/cli.js";
 import { PACKAGE_NAME } from "./meta.js";
 import { addSandboxSubparsers, addSettingsSubparsers } from "./settings/cli.js";
@@ -141,6 +149,15 @@ export function buildParser(): ArgumentParser {
   );
   runCli.addSubparsers(run.addSubparsers("cmd"));
 
+  // lap (the composition root: one admitted run, carried to an open gate)
+  const lap = sub.addParser(
+    "lap",
+    "The minimal operating loop: perform one admitted run -- materialise its " +
+      "workspace, start the worker under the admitted fence, and open the " +
+      "human gate over what it reported.",
+  );
+  lapCli.addSubparsers(lap.addSubparsers("cmd"));
+
   return parser;
 }
 
@@ -157,6 +174,31 @@ export function buildParser(): ArgumentParser {
 export function main(argv: readonly string[]): number {
   try {
     return dispatch(buildParser(), argv, defaultStreams());
+  } catch (error) {
+    if (error instanceof ArgparseExit) {
+      return error.code;
+    }
+    throw error;
+  }
+}
+
+/**
+ * {@link main}, for a command line that may name the one asynchronous verb.
+ *
+ * `lap perform` awaits the orchestrator's walk and the worker's transcript, so
+ * it cannot be carried by a synchronous `main`. This is the entry point the
+ * process uses; `main` stays for every caller that knows its command is
+ * synchronous, and refuses rather than silently returning a promise as a status
+ * (see `dispatch`).
+ *
+ * The `catch` is the same one `main` has and for the same reason -- a command
+ * that raises `ArgparseExit` sets the status rather than escaping as a stack
+ * trace -- and it is repeated rather than shared because an `await` inside it is
+ * what makes it cover a rejection as well as a throw.
+ */
+export async function mainAsync(argv: readonly string[]): Promise<number> {
+  try {
+    return await dispatchAsync(buildParser(), argv, defaultStreams());
   } catch (error) {
     if (error instanceof ArgparseExit) {
       return error.code;
@@ -196,5 +238,5 @@ function isEntryPoint(): boolean {
 }
 
 if (isEntryPoint()) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = await mainAsync(process.argv.slice(2));
 }

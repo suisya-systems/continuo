@@ -1272,7 +1272,7 @@ export function materializeWorkspace(
  * actually makes -- `join(workspace, ".continuo")`, with or without a `..` in
  * front of it -- is caught, which is what it is for.
  */
-function isInside(candidate: string, root: string): boolean {
+export function isInside(candidate: string, root: string): boolean {
   const foldedRoot = pathIdentity(root);
   const foldedCandidate = pathIdentity(candidate);
   const rootWithSeparator = foldedRoot.endsWith(sep) ? foldedRoot : `${foldedRoot}${sep}`;

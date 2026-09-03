@@ -55,11 +55,12 @@ import { describe, expect, onTestFinished, test } from "vitest";
 
 import { helpStrings } from "../../src/cli/parser.js";
 import { buildParser, main, cliSeams as topLevelSeams } from "../../src/cli.js";
-import { EVENT_TYPES } from "../../src/control_plane/events.js";
+import { appendEvent, EVENT_TYPES } from "../../src/control_plane/events.js";
 import {
   LapRunIntent,
   type LapRunIntentFields,
   LapRunIntentUsageError,
+  PAYLOAD_KEYS,
 } from "../../src/control_plane/lap_run_intent.js";
 import {
   createProductionControlPlane,
@@ -75,6 +76,8 @@ import {
   RUN_DELEGATION_RECORDED_EVENT_TYPE,
   RunAdmissionUsageError,
   RunAlreadyAdmitted,
+  RunNotAdmitted,
+  readLapRunIntent,
 } from "../../src/control_plane/run_admission.js";
 import { runCliSeams } from "../../src/control_plane/run_cli.js";
 import {
@@ -91,6 +94,9 @@ import { patchSeam } from "../testkit/seams.js";
 const T0 = 1_700_000_000_000;
 const T1 = T0 + 60_000;
 const RUN_ID = "run-1";
+
+/** A run whose delegation payload this suite writes by hand. See `craftedRun`. */
+const CRAFTED_RUN_ID = "run-crafted";
 
 /**
  * The intent every case admits with, unless the intent is the case's subject.
@@ -928,5 +934,209 @@ describe("continuo run admit", () => {
       // biome-ignore lint/suspicious/noControlCharactersInRegex: the point is the range
       expect(text, `non-ASCII in ${JSON.stringify(text)}`).toMatch(/^[\x00-\x7f]*$/);
     }
+  });
+});
+
+describe("reading the delegation record back (D-0063)", () => {
+  /** Admit one run through the real writer, and hand back its plane. */
+  function admitted(cliArgs: readonly string[] = ["--verbose"]): {
+    connection: SqliteDatabase;
+    intent: LapRunIntent;
+  } {
+    const { connection } = cpFixture();
+    const intent = new LapRunIntent({
+      runId: RUN_ID,
+      leaseClaimantId: "operator-1",
+      workspace: WORKSPACE,
+      role: "worker",
+      baseBranch: "main",
+      topicBranch: "feat/topic",
+      prompt: "port the thing",
+      cliArgs,
+    });
+    admitRun(connection, { intent, nowMs: T0 });
+    return { connection, intent };
+  }
+
+  /** The well-formed payload, as an object a case can take a key out of. */
+  function wellFormedPayload(): Record<string, unknown> {
+    return JSON.parse(
+      new LapRunIntent({
+        runId: CRAFTED_RUN_ID,
+        leaseClaimantId: "operator-1",
+        workspace: WORKSPACE,
+        role: "worker",
+        baseBranch: "main",
+        topicBranch: "feat/topic",
+        prompt: "port the thing",
+        cliArgs: ["--verbose"],
+      }).payload,
+    ) as Record<string, unknown>;
+  }
+
+  /**
+   * A run whose delegation payload is `payload`, verbatim.
+   *
+   * **Appended, not overwritten.** The spine is append-only by trigger -- an
+   * `UPDATE` raises "the event spine is append-only; correct a fact with a new
+   * event" -- so a case reaching for one would be testing against a database
+   * shape the schema forbids. Appending is also the truer model of the hazard:
+   * a payload this build did not write is one some *other* producer wrote,
+   * which is exactly what an older or newer record is.
+   *
+   * The `run` row is inserted directly rather than through `admitRun`, because
+   * `admitRun` would append the well-formed payload this helper exists to
+   * replace. Run creation carries no fence (`D-0046` rule 4), so this is a
+   * write the schema admits.
+   */
+  function craftedRun(payload: string): SqliteDatabase {
+    const { connection } = cpFixture();
+    transaction(connection, (tx) => {
+      tx.prepare(
+        "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms)" +
+          " VALUES (:run_id, :status, :now, :now)",
+      ).run({ run_id: CRAFTED_RUN_ID, status: ADMITTED_RUN_STATUS, now: T0 });
+      const id = `${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${CRAFTED_RUN_ID}`;
+      appendEvent(tx, {
+        eventId: id,
+        eventType: RUN_DELEGATION_RECORDED_EVENT_TYPE,
+        subjectKind: "run",
+        subjectId: CRAFTED_RUN_ID,
+        dedupKey: id,
+        producer: RUN_ADMISSION_PRODUCER,
+        occurredAtMs: T0,
+        ingestedAtMs: T0,
+        runId: CRAFTED_RUN_ID,
+        payload,
+      });
+    });
+    return connection;
+  }
+
+  test("the round trip returns what admission fixed", () => {
+    // The anti-vacuity half, and the reason the reader exists at all: `D-0055`
+    // fixed the execution intent at admission so a later process could act on
+    // it, and until this function there was no way to read it back.
+    const { connection, intent } = admitted(["--verbose", "--model=sonnet"]);
+    const read = readLapRunIntent(connection, RUN_ID);
+
+    expect(read).toBeInstanceOf(LapRunIntent);
+    expect(read.runId).toBe(intent.runId);
+    expect(read.leaseClaimantId).toBe(intent.leaseClaimantId);
+    expect(read.workspace).toBe(intent.workspace);
+    expect(read.role).toBe(intent.role);
+    expect(read.baseBranch).toBe(intent.baseBranch);
+    expect(read.topicBranch).toBe(intent.topicBranch);
+    expect(read.prompt).toBe(intent.prompt);
+    expect(read.cliArgs).toEqual(["--verbose", "--model=sonnet"]);
+    // The payload it would write again is the payload it was read from, which
+    // is the strongest statement of the round trip available without comparing
+    // field by field a second time.
+    expect(read.payload).toBe(intent.payload);
+  });
+
+  test("a run that was never admitted is refused, not answered", () => {
+    const { connection } = cpFixture();
+    expectRefusal(
+      () => readLapRunIntent(connection, "no-such-run"),
+      RunNotAdmitted,
+      /has no run_delegation_recorded event/,
+    );
+  });
+
+  test("an absent cli_args is refused rather than read as no arguments", () => {
+    // The one field whose absence the record's own constructor absorbs: every
+    // other field is required, so an absent one arrives as `undefined` and is
+    // refused -- but an omitted `cliArgs` means "no arguments" to a CALLER. To a
+    // READER it cannot mean that, because the writer always emits the key. So
+    // absorbing it would run the worker without arguments the durable record
+    // required, silently, off a payload this build did not write.
+    const payload = wellFormedPayload();
+    delete payload["cli_args"];
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const refusal = expectRefusal(
+      () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+      RunNotAdmitted,
+      /delegation payload missing cli_args/,
+    );
+    // Quoted, not interpolated raw: this path names a value nothing validated.
+    expect(refusal.message).toContain(`'${CRAFTED_RUN_ID}'`);
+  });
+
+  test("every other absent key is refused too, and named", () => {
+    // Driven off the record's own key list rather than a copy of it, so a field
+    // added to `LapRunIntent` without being added to the reader's check fails
+    // here instead of being silently tolerated.
+    for (const key of Object.values(PAYLOAD_KEYS)) {
+      const payload = wellFormedPayload();
+      delete payload[key];
+      const connection = craftedRun(JSON.stringify(payload));
+
+      const refusal = expectRefusal(
+        () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+        RunNotAdmitted,
+        /delegation payload missing/,
+      );
+      expect(refusal.message, `the refusal does not name ${key}`).toContain(key);
+    }
+  });
+
+  test("an unknown key is refused rather than silently discarded", () => {
+    // The other direction of the same check, and the same hazard. A key this
+    // build has no code for means a producer wrote a field this build cannot
+    // honour; constructing the intent anyway would run the lap while discarding
+    // it. If it is safety-relevant, the run proceeds without it and nothing says
+    // so -- and this build cannot know which it is, which is why refusing is the
+    // only answer that cannot be wrong.
+    const payload = wellFormedPayload();
+    payload["sandbox_profile"] = "unrestricted";
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const refusal = expectRefusal(
+      () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+      RunNotAdmitted,
+      /carries unknown 'sandbox_profile'/,
+    );
+    expect(refusal.message).toContain("not the record this build writes");
+  });
+
+  test("a payload that is both short and long says both", () => {
+    // One check with one meaning, so one refusal naming everything wrong with
+    // the record rather than whichever half was noticed first.
+    const payload = wellFormedPayload();
+    delete payload["cli_args"];
+    payload["sandbox_profile"] = "unrestricted";
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const refusal = expectRefusal(
+      () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+      RunNotAdmitted,
+      /missing cli_args and carries unknown 'sandbox_profile'/,
+    );
+    expect(refusal.message).toContain(CRAFTED_RUN_ID);
+  });
+
+  test("a payload that is not a JSON object is refused", () => {
+    const connection = craftedRun(JSON.stringify([1, 2, 3]));
+    expectRefusal(
+      () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+      RunNotAdmitted,
+      /not a JSON object/,
+    );
+  });
+
+  test("a present-but-malformed field is refused by the record's own rules", () => {
+    // The reader states no field rules of its own: the constructor is the
+    // validation. This is the case that says the round trip is therefore also a
+    // check rather than a cast wearing a type.
+    const payload = wellFormedPayload();
+    payload["workspace"] = "not-absolute";
+    const connection = craftedRun(JSON.stringify(payload));
+    expectRefusal(
+      () => readLapRunIntent(connection, CRAFTED_RUN_ID),
+      RunNotAdmitted,
+      /not a valid execution intent/,
+    );
   });
 });

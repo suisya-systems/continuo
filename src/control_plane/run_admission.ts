@@ -1,7 +1,7 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { appendEvent } from "./events.js";
-import { LapRunIntent } from "./lap_run_intent.js";
+import { LapRunIntent, PAYLOAD_KEYS } from "./lap_run_intent.js";
 import { pythonJsonObject } from "./python_json.js";
 import { pythonRepr } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
@@ -392,4 +392,163 @@ function appendOrRefuse(
     );
   }
   return { eventId: appended.eventId, seq: appended.seq };
+}
+
+/**
+ * A run whose delegation record cannot be read back.
+ *
+ * In the {@link ControlPlaneRefusal} family, for the same reason
+ * {@link RunAlreadyAdmitted} is: an operator naming a run that was never
+ * admitted, or one admitted by a build whose payload this one cannot parse, is
+ * the ordinary outcome of a command someone typed rather than a defect.
+ */
+export class RunNotAdmitted extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "RunNotAdmitted";
+    Object.setPrototypeOf(this, RunNotAdmitted.prototype);
+  }
+}
+
+/**
+ * Read back the {@link LapRunIntent} admission fixed for `runId`.
+ *
+ * **The other half of `D-0055`, and it had none until now.** Admission writes
+ * the intent into the `run_delegation_recorded` payload precisely so that a
+ * later process -- a different one, with a working directory of its own -- can
+ * act on what the lap was admitted to do rather than on flags retyped at the
+ * point of use. Nothing could read it, so the composition root (`D-0059`) is
+ * this function's first caller and the reason it exists.
+ *
+ * **A `LapRunIntent` and not a plain object**, which is the whole point. The
+ * class is nominal and its constructor is its validation, so a payload that has
+ * decayed -- a build that wrote a field this one does not accept, a hand-edited
+ * row -- is refused here rather than reaching the materialiser as a value that
+ * merely looks right. The round trip is therefore also a check: what comes back
+ * is held to the same rules as what went in.
+ *
+ * The lookup is by the deterministic `event_id` {@link factId} assigns rather
+ * than by a `WHERE event_type = ... ORDER BY seq LIMIT 1` scan. Admission is the
+ * only producer of this vocabulary and the id is unique
+ * (`event_by_event_id`), so naming the row is exact where ordering would be a
+ * convention -- and if a second producer ever appends under this event type,
+ * the difference is that this reads admission's record rather than whichever
+ * row sorted first.
+ *
+ * @throws {RunNotAdmitted} when no such run was admitted, or its payload cannot
+ *   be read as an intent.
+ */
+export function readLapRunIntent(connection: SqliteDatabase, runId: string): LapRunIntent {
+  if (typeof runId !== "string" || runId === "") {
+    throw new RunAdmissionUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
+  }
+  // Quoted, not interpolated raw, and this is the one place in this module where
+  // that distinction has teeth. Every other message here names a run that
+  // reached the table through `LapRunIntent`, which holds the identifier to
+  // printable ASCII (`D-0055`). This path is the opposite by construction: it
+  // runs precisely when the identifier matched no row, so it is an operator's
+  // `--run-id` that nothing has validated, on its way into a one-line refusal
+  // that ends at a single newline. `pythonRepr` escapes a newline or a control
+  // character rather than letting it forge a second line of output
+  // (`docs/cli-output-policy.md`).
+  const quoted = pythonRepr(runId);
+  const row = connection
+    .prepare<{ event_id: string }, { payload: string }>(
+      "SELECT payload FROM event WHERE event_id = :event_id",
+    )
+    .get({ event_id: factId(RUN_DELEGATION_RECORDED_EVENT_TYPE, runId) });
+  if (row === undefined) {
+    throw new RunNotAdmitted(
+      `run ${quoted} has no ${RUN_DELEGATION_RECORDED_EVENT_TYPE} event on the spine, ` +
+        "so there is no record of what it was admitted to do; 'run admit' is what " +
+        "writes one",
+    );
+  }
+
+  let fields: unknown;
+  try {
+    fields = JSON.parse(row.payload);
+  } catch (error) {
+    throw new RunNotAdmitted(
+      // The parser's own message, QUOTED. V8 interpolates a fragment of the
+      // offending input into it, so a hand-edited row carrying a newline or an
+      // escape sequence would reach a one-line refusal with the power to forge
+      // a second line -- the same hazard the run identifier above is quoted
+      // for, arriving by way of the diagnostic rather than the value.
+      `run ${quoted}'s delegation payload is not readable JSON: ${pythonRepr(String(error))}`,
+      { cause: error },
+    );
+  }
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {
+    throw new RunNotAdmitted(
+      `run ${quoted}'s delegation payload is ${pythonRepr(fields)}, not a JSON object`,
+    );
+  }
+  const payload = fields as Record<string, unknown>;
+
+  // **Every key the record writes must be present**, checked against the
+  // record's own key list rather than a copy of it.
+  //
+  // Without this, one field decays quietly and only one: `cli_args`. Every other
+  // field is required by the constructor, so an absent one arrives as
+  // `undefined` and is refused -- but `LapRunIntent` reads an omitted `cliArgs`
+  // as the empty list, because for a *caller* omitting it means "no arguments".
+  // For a *reader* it cannot mean that: the writer always emits the key, so its
+  // absence means the payload is not one this build wrote, and absorbing it
+  // would run the worker without arguments the durable record required. That is
+  // the shape this function's docstring promises to refuse, and it was the one
+  // shape it did not.
+  const known = new Set<string>(Object.values(PAYLOAD_KEYS));
+  const missing = [...known].filter((key) => !Object.hasOwn(payload, key));
+  // **And no key this build does not know.** The two directions are one check
+  // with one meaning -- "this payload is the record this build writes" -- and
+  // checking only one of them leaves the other half of the same hazard open. An
+  // extra key means a producer wrote a field this build has no code for, and
+  // constructing the intent anyway would run the lap while silently discarding
+  // it. If that field is safety-relevant, the run proceeds without honouring it
+  // and nothing says so; refusing is the only answer that cannot be wrong,
+  // because this build cannot know what it is ignoring.
+  const unknown = Object.keys(payload).filter((key) => !known.has(key));
+  if (missing.length > 0 || unknown.length > 0) {
+    const detail = [
+      missing.length > 0 ? `missing ${missing.join(", ")}` : "",
+      // **Quoted, where `missing` is not, and the asymmetry is the point.**
+      // `missing` names come from `PAYLOAD_KEYS` -- this build's own constants,
+      // and quoting them would only make the message harder to read. These are
+      // keys of a JSON object some other producer wrote, so they are external
+      // text on its way into a one-line refusal: a key carrying a newline would
+      // forge a second line that reads like continuo's own.
+      unknown.length > 0 ? `carries unknown ${unknown.map(pythonRepr).join(", ")}` : "",
+    ]
+      .filter((part) => part !== "")
+      .join(" and ");
+    throw new RunNotAdmitted(
+      `run ${quoted}'s delegation payload ${detail}; it is not the record this build ` +
+        "writes, and a field read as absent -- or one read as nothing at all -- would " +
+        "be a value nobody chose",
+    );
+  }
+
+  try {
+    // Every field is passed through unchecked and unconverted: the constructor
+    // is the validation, and a check here would be a second statement of the
+    // rules `lap_run_intent.ts` states once. `runId` comes from the caller
+    // rather than the payload because the payload deliberately does not carry it
+    // -- see `LapRunIntent.payload`.
+    return new LapRunIntent({
+      runId,
+      leaseClaimantId: payload["lease_claimant_id"] as string,
+      workspace: payload["workspace"] as string,
+      role: payload["role"] as string,
+      baseBranch: payload["base_branch"] as string,
+      topicBranch: payload["topic_branch"] as string,
+      prompt: payload["prompt"] as string,
+      cliArgs: payload["cli_args"] as readonly string[],
+    });
+  } catch (error) {
+    throw new RunNotAdmitted(
+      `run ${quoted}'s delegation payload is not a valid execution intent: ${String(error)}`,
+      { cause: error },
+    );
+  }
 }
