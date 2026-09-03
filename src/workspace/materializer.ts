@@ -1,5 +1,6 @@
 import {
   closeSync,
+  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -67,12 +68,16 @@ import {
  *   them. That state is recoverable by hand and by
  *   {@link import("./git.js").removeWorktree}, and recognising it is cheap: the
  *   worktree exists, the run has no `workspace_materialized` event.
- * - **"event but no artifacts" is unconstructible.** Not "avoided" -- there is
- *   no exported call that appends this event. {@link materializeWorkspace} is
- *   the only producer of {@link WORKSPACE_MATERIALIZED_EVENT_TYPE} in the
- *   build, it appends only after the stat sweep, and it exports no seam that
- *   lets a caller skip to the append. A caller who wants the event has to
- *   produce the artifacts to get it.
+ * - **"event but no artifacts" is not reachable through this producer.**
+ *   {@link materializeWorkspace} is the only producer of
+ *   {@link WORKSPACE_MATERIALIZED_EVENT_TYPE} in the build, it appends only
+ *   after the stat sweep, and it exports no seam that lets a caller skip to its
+ *   own append. What it cannot prevent is a direct `appendEvent` call under
+ *   this type: the spine is a generic append-only fact log and every type on it
+ *   is writable by anyone holding a connection -- `run_created` included. An
+ *   earlier draft of this docstring said "unconstructible", which was wrong;
+ *   `D-0057` rule 4 carries the correction and why reserving the type inside
+ *   `appendEvent` was rejected.
  *
  * The asymmetry is chosen rather than accidental. Of the two recoverable-from
  * states, "files nobody claims" is a sweep; "a durable record of a workspace
@@ -952,6 +957,28 @@ export function materializeWorkspace(
     // delivery artifacts rather than the worker's.
     ["the endpoint destination directory", destinationDir],
   ];
+  // Unclaimed, before anything is created. Two runs pointed at one artifact
+  // directory would otherwise have the second's `prepare` publish over the
+  // first's fence and settings -- and the first's worker may be running under
+  // them right now, so this is not a tidiness rule but the same "do not replace
+  // a live fence" property `FencedSpawner` defends on the other side. It is
+  // also reachable within ONE run: a retry with a different workspace replaces
+  // the artifacts and only then meets the duplicate-event refusal, leaving the
+  // earlier materialisation's files destroyed by a call that failed.
+  //
+  // The same shape `git worktree add` already imposes on the checkout, applied
+  // to the directory beside it: materialisation creates what it names, so
+  // finding it already there means somebody else owns it.
+  for (const [what, path] of plannedArtifactPaths.slice(1)) {
+    if (existsSync(path)) {
+      throw new WorkspaceMaterializationRefused(
+        `${what} would be written to ${pythonRepr(path)}, which already exists; ` +
+          "materialisation creates its artifacts, so a path that is already there " +
+          "belongs to another materialisation -- publishing over it would replace a " +
+          "fence some worker may be running under",
+      );
+    }
+  }
   for (const [what, path] of plannedArtifactPaths) {
     if (isInside(path, workspace)) {
       throw new WorkspaceMaterializationUsageError(

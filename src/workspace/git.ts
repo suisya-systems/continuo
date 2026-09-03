@@ -249,6 +249,59 @@ function errorCodeOf(error: unknown): string | undefined {
   return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
 }
 
+/**
+ * An argv as one quoted line, for a message an operator will read.
+ *
+ * Every element through {@link pythonRepr}, which is what the rest of this
+ * repository does with a value it received from outside. Two things follow, and
+ * the second is a limit worth stating rather than assuming away.
+ *
+ * It **does** make the argument boundaries readable and the control characters
+ * visible: a bare `join(" ")` renders a branch name containing a space as two
+ * arguments, and a name containing a newline as two lines, which is the shape
+ * of message an operator misreads.
+ *
+ * It does **not** make the message ASCII, and it is not trying to.
+ * `pythonRepr` reproduces CPython 3's `repr`, which leaves printable non-ASCII
+ * alone -- `repr('\u65e5')` is `'\u65e5'`, not an escape. That is the right
+ * behaviour here: `docs/cli-output-policy.md` governs what continuo *authors*
+ * and says in as many words that values it receives from outside "may of course
+ * be non-ASCII", and `D-0055` deliberately admits non-ASCII branches and paths
+ * because this organization has repositories under them. A renderer that
+ * escaped them would make every refusal about such a repository unreadable to
+ * the operator who owns it, in exchange for a console-encoding problem the
+ * policy explicitly assigns elsewhere. `lap_run_intent.ts` quotes the same
+ * class of value the same way.
+ */
+function renderArgv(argv: readonly string[]): string {
+  return argv.map((part) => pythonRepr(part)).join(" ");
+}
+
+/**
+ * A caller-supplied timeout, checked before it reaches `spawnSync`.
+ *
+ * `timeout: 0` is not "no wait" to Node -- it means **no timeout at all**, so a
+ * caller passing it would get an unbounded, uninterruptible synchronous call
+ * from a function whose docstring promises a wall-clock bound. That is the
+ * failure this module's SIGKILL note is about, arriving through the parameter
+ * meant to control it. Negative and non-integer values reach `spawnSync` as
+ * argument errors from outside this module's refusal vocabulary, so they are
+ * refused here too rather than surfacing as `ERR_OUT_OF_RANGE`.
+ */
+function requireTimeout(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new GitRefusal(
+      `timeoutMs must be a positive integer of milliseconds, got ${pythonRepr(timeoutMs)}; ` +
+        "zero disables Node's timeout entirely, which would make an unbounded call out of " +
+        "the one bound this adapter promises",
+    );
+  }
+  return timeoutMs;
+}
+
 /** `str(exc)`: CPython's `str` of an exception never prefixes the class name. */
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -281,7 +334,7 @@ function stripTrailingNewlines(text: string): string {
  *   not a branch".
  */
 export function runGit(args: readonly string[], options: GitOptions): GitResult {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
+  const timeoutMs = requireTimeout(options.timeoutMs);
   const argv = Object.freeze(["git", ...args]);
   const result = spawnSync("git", [...args], {
     cwd: options.cwd,
@@ -305,12 +358,12 @@ export function runGit(args: readonly string[], options: GitOptions): GitResult 
   if (result.error !== undefined) {
     if (errorCodeOf(result.error) === "ETIMEDOUT") {
       throw new GitTimedOut(
-        `git did not finish within ${String(timeoutMs)}ms: ${argv.join(" ")}`,
+        `git did not finish within ${String(timeoutMs)}ms: ${renderArgv(argv)}`,
         argv,
         timeoutMs,
       );
     }
-    throw new GitRefusal(`cannot run ${argv.join(" ")}: ${describe(result.error)}`, {
+    throw new GitRefusal(`cannot run ${renderArgv(argv)}: ${describe(result.error)}`, {
       cause: result.error,
     });
   }
@@ -321,7 +374,7 @@ export function runGit(args: readonly string[], options: GitOptions): GitResult 
     // not a partial read -- but there is no exit code to report, and inventing
     // one would put a number in a durable payload that git never produced.
     throw new GitRefusal(
-      `git was terminated by signal ${pythonRepr(result.signal ?? "unknown")}: ${argv.join(" ")}`,
+      `git was terminated by signal ${pythonRepr(result.signal ?? "unknown")}: ` + renderArgv(argv),
     );
   }
 
@@ -346,7 +399,7 @@ export function runGitChecked(args: readonly string[], options: GitOptions): Git
   const result = runGit(args, options);
   if (result.exitCode !== 0) {
     throw new GitCommandFailed(
-      `${result.argv.join(" ")} exited ${String(result.exitCode)}: ` +
+      `${renderArgv(result.argv)} exited ${String(result.exitCode)}: ` +
         `${pythonRepr(result.stderr === "" ? result.stdout : result.stderr)}`,
       result,
     );
@@ -428,7 +481,7 @@ function isNoOnExitOne(result: GitResult): boolean {
     return false;
   }
   throw new GitCommandFailed(
-    `${result.argv.join(" ")} exited ${String(result.exitCode)}, which is neither yes (0) ` +
+    `${renderArgv(result.argv)} exited ${String(result.exitCode)}, which is neither yes (0) ` +
       `nor no (1): ${pythonRepr(result.stderr === "" ? result.stdout : result.stderr)}`,
     result,
   );

@@ -10774,7 +10774,15 @@ here than it was there, because that side effect runs *after* the event row is i
 2. **`subject_kind` is `run`.** The closed vocabulary has no `workspace`, and widening it would be a
    migration for a subject with no identity of its own. The fact is about the run it was built for.
 
-3. **Artifacts first, the event last, and the order is enforced rather than described.** Every
+3. **The artifact directory must be unclaimed, and is checked before the worktree exists.**
+   Materialisation creates its artifacts, so finding one already there means another materialisation
+   owns the directory -- and publishing over it would replace a fence a worker may be running under.
+   This is the same rule `git worktree add` already imposes on the checkout, applied to the
+   directory beside it, and it is reachable within one run as well as across two: a retry with a
+   different workspace would otherwise destroy the earlier materialisation's files and only then
+   meet the duplicate-event refusal.
+
+4. **Artifacts first, the event last, and the order is enforced rather than described.** Every
    artifact is re-`stat`'d immediately before the append, **and the worktree is re-asked of git**.
    An event whose manifest is not on disk at that moment is refused, not appended.
 
@@ -10785,22 +10793,32 @@ here than it was there, because that side effect runs *after* the event row is i
    have made. What this event claims is a *checkout*, so what is verified is that `workspace` is
    still a worktree and is still that worktree's own root.
 
-4. **The one-way property, stated as the two states and their asymmetry.**
+5. **The one-way property, stated as the two states and their asymmetry.**
    - *Artifacts with no event* is **allowed**. A crash before the append leaves a worktree and files
      nothing claims. It is recognisable (the worktree exists, the run has no
      `workspace_materialized`) and recoverable (`removeWorktree`, which is on the package surface for
      this reason and is never called by materialisation itself).
-   - *An event with no artifacts* is **unconstructible**, not merely avoided. `materializeWorkspace`
-     is the only producer of the type in the build, it appends only after the sweep, and it exports
-     no seam that reaches the append without the artifacts. A caller who wants the event has to
-     produce the artifacts to get it.
+   - *An event with no artifacts* is **not reachable through this producer**, and the earlier
+     wording of this rule -- "unconstructible" -- was wrong and is corrected here.
+     `materializeWorkspace` is the only producer of the type in the build, it appends only after the
+     sweep, and it exports no seam that reaches its own append without the artifacts. What it cannot
+     do is stop somebody calling `appendEvent` directly with this `event_type`: the spine is a
+     generic append-only fact log and every type on it is writable by anyone holding a connection.
+     That is true of `run_created` too, and `D-0051` does not claim otherwise.
 
-5. **A second materialisation of one run is refused, not absorbed** -- the same difference from the
+     Reserving the type inside `appendEvent` was considered and rejected: it would put a per-type
+     allowlist into a shared writer for one producer's benefit, and it would still be evaded by the
+     next producer that needed an exception. The honest statement of the guarantee is the one this
+     rule now makes -- a caller reaching past the producer is writing a fact it did not observe,
+     which the spine cannot distinguish for any event type, and which no ordering rule here was ever
+     going to prevent.
+
+6. **A second materialisation of one run is refused, not absorbed** -- the same difference from the
    spine's idempotent re-append that `D-0051` takes for admission, and for a stronger reason: by the
    time the duplicate is detected this call has already created a worktree and a branch that the
    earlier event does not describe.
 
-6. **Refusal does not roll back.** Whatever earlier steps wrote is left where it is. Deleting a
+7. **Refusal does not roll back.** Whatever earlier steps wrote is left where it is. Deleting a
    checkout an operator may be looking at is not a rollback.
 
 **Consequences.**
@@ -10842,9 +10860,10 @@ here than it was there, because that side effect runs *after* the event row is i
   read. Both rules are instances of one principle -- the artifact that cannot be rebuilt from the
   record goes first -- and they differ because which artifact that is differs.
 
-**Falsifier.** A second producer of `workspace_materialized` anywhere in the build, or any exported
-call that appends it without publishing the artifacts first; at that moment "unconstructible" becomes
-"avoided by convention" and rule 4 is a description rather than a property. Also falsified by the
+**Falsifier.** A second producer of `workspace_materialized` anywhere in the build, or a path
+*through `materializeWorkspace`* that reaches the append without publishing the artifacts first; at
+that moment rule 5 is a description rather than a property. (A direct `appendEvent` call is not that
+path -- see rule 5, which says what the spine's openness does and does not leave available.) Also falsified by the
 `event` table gaining a `workspace` `subject_kind`, which would make rule 2 a workaround rather than
 a choice, and by the delegation intent growing a resolved base commit, which would mean the two
 records had collapsed back into one.

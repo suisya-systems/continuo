@@ -69,6 +69,7 @@ import {
   branchExists,
   GitCommandFailed,
   type GitOptions,
+  GitRefusal,
   removeWorktree,
   repositoryRoot,
   runGitChecked,
@@ -559,14 +560,19 @@ describe("M3: artifacts first, the event last", () => {
     const f = fixture("materialize-twice");
     materializeWorkspace(f.connection, f.request);
 
-    // A fresh path and branch, so the refusal comes from the spine rather than
-    // from git having the worktree already.
+    // A fresh path, branch AND artifact directory, so the refusal comes from the
+    // spine rather than from git having the worktree or from the artifact
+    // directory already being claimed -- both of which refuse earlier and would
+    // make this case pass for the wrong reason.
+    const secondArtifacts = join(f.root, "artifacts-2");
+    mkdirSync(secondArtifacts, { recursive: true });
     expectRefusal(
       () =>
         materializeWorkspace(f.connection, {
           ...f.request,
           workspace: join(f.root, "worktree-2"),
           topicBranch: "feat/topic-2",
+          artifactDir: secondArtifacts,
         }),
       WorkspaceMaterializationRefused,
       /materialised before/,
@@ -1286,6 +1292,115 @@ describe("the event describes a workspace that is still a checkout", () => {
     removeWorktree(materialized.workspace, f.git);
     expect(existsSync(materialized.workspace)).toBe(false);
     expect(() => repositoryRoot({ cwd: materialized.workspace, timeoutMs: 60_000 })).toThrow();
+  });
+});
+
+describe("an artifact directory belongs to one materialisation", () => {
+  test("a directory already holding artifacts is refused before the worktree exists", () => {
+    // Two runs pointed at one artifact directory: without this, the second's
+    // `prepare` publishes over the first's fence and settings -- and the first's
+    // worker may be running under them right now. The same shape `git worktree
+    // add` already imposes on the checkout, applied to the directory beside it.
+    const f = fixture("materialize-artifactdir-claimed");
+    const first = materializeWorkspace(f.connection, f.request);
+    expect(existsSync(first.plan.fencePath)).toBe(true);
+
+    const secondWorkspace = join(f.root, "worktree-2");
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          runId: RUN_ID,
+          workspace: secondWorkspace,
+          topicBranch: "feat/topic-2",
+        }),
+      WorkspaceMaterializationRefused,
+      /which already exists/,
+    );
+
+    // Nothing of the second run was created, and -- the point of the case --
+    // the FIRST run's artifacts are untouched.
+    expect(existsSync(secondWorkspace)).toBe(false);
+    expect(branchExists("feat/topic-2", f.git)).toBe(false);
+    expect(readFileSync(first.plan.fencePath, "utf8")).toBe(
+      readFileSync(join(f.artifactDir, FENCE_FILENAME), "utf8"),
+    );
+  });
+
+  test("the refusal comes before the worktree, not after it", () => {
+    // A retry of one run with a different workspace reaches the duplicate-event
+    // refusal eventually -- but only after `prepare` has replaced the earlier
+    // materialisation's files. Ordering this check ahead of `git worktree add`
+    // is what stops a failing call from destroying a successful one's artifacts.
+    const f = fixture("materialize-artifactdir-order");
+    materializeWorkspace(f.connection, f.request);
+    const fenceBefore = readFileSync(join(f.artifactDir, FENCE_FILENAME), "utf8");
+
+    expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          workspace: join(f.root, "worktree-3"),
+          topicBranch: "feat/topic-3",
+        }),
+      WorkspaceMaterializationRefused,
+      /which already exists/,
+    );
+    expect(readFileSync(join(f.artifactDir, FENCE_FILENAME), "utf8")).toBe(fenceBefore);
+  });
+});
+
+describe("the git adapter's own refusals", () => {
+  test("a zero timeout is refused rather than becoming no timeout", () => {
+    // Node treats `timeout: 0` as NO timeout, so a caller passing it would get
+    // an unbounded, uninterruptible synchronous call from a function whose
+    // docstring promises a wall-clock bound.
+    const f = fixture("materialize-timeout-zero");
+    expectRefusal(
+      () => branchExists(BASE_BRANCH, { cwd: f.repository, timeoutMs: 0 }),
+      GitRefusal,
+      /must be a positive integer/,
+    );
+  });
+
+  test("a non-integer timeout is refused inside this module's vocabulary", () => {
+    const f = fixture("materialize-timeout-fractional");
+    expectRefusal(
+      () => branchExists(BASE_BRANCH, { cwd: f.repository, timeoutMs: 1.5 }),
+      GitRefusal,
+      /must be a positive integer/,
+    );
+  });
+
+  test("a git refusal quotes each argv element rather than joining them raw", () => {
+    // Not an ASCII-escaping rule: `docs/cli-output-policy.md` governs what
+    // continuo authors and says values it receives from outside "may of course
+    // be non-ASCII", and D-0055 admits non-ASCII branches and paths because this
+    // organization has repositories under them. Escaping them would make every
+    // refusal about such a repository unreadable to the operator who owns it.
+    //
+    // What quoting buys is that the message survives a value containing a space
+    // or a newline: a bare join renders one such branch name as two arguments,
+    // or as two lines, which is the shape an operator misreads.
+    const f = fixture("materialize-git-quoting");
+    const awkward = "feat/two words";
+
+    const refusal = expectRefusal(
+      () => runGitChecked(["rev-parse", "--verify", `refs/heads/${awkward}`], f.git),
+      GitCommandFailed,
+    );
+    expect(refusal.message).toContain("'refs/heads/feat/two words'");
+    // The elements stay separable: the quoted form is what makes the space
+    // inside one argument distinguishable from the space between two.
+    expect(refusal.message).toContain("'rev-parse' '--verify'");
+
+    // And a non-ASCII branch name is carried through, not mangled.
+    const japanese = "feat/\u65e5\u672c\u8a9e";
+    const nonAscii = expectRefusal(
+      () => runGitChecked(["rev-parse", "--verify", `refs/heads/${japanese}`], f.git),
+      GitCommandFailed,
+    );
+    expect(nonAscii.message).toContain(japanese);
   });
 });
 
