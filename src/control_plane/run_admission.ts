@@ -507,7 +507,13 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
   if (missing.length > 0 || unknown.length > 0) {
     const detail = [
       missing.length > 0 ? `missing ${missing.join(", ")}` : "",
-      unknown.length > 0 ? `carries unknown ${unknown.join(", ")}` : "",
+      // **Quoted, where `missing` is not, and the asymmetry is the point.**
+      // `missing` names come from `PAYLOAD_KEYS` -- this build's own constants,
+      // and quoting them would only make the message harder to read. These are
+      // keys of a JSON object some other producer wrote, so they are external
+      // text on its way into a one-line refusal: a key carrying a newline would
+      // forge a second line that reads like continuo's own.
+      unknown.length > 0 ? `carries unknown ${unknown.map(pythonRepr).join(", ")}` : "",
     ]
       .filter((part) => part !== "")
       .join(" and ");

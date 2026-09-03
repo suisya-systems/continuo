@@ -674,8 +674,40 @@ describe("what the verb refuses, and what it leaves behind", () => {
     // One line, not a stack.
     expect(written.trimEnd().split("\n")).toHaveLength(1);
 
+    // **And nothing was built.** Classifying the refusal was only half of it:
+    // the capability check used to run inside `orchestrator.start()`, so
+    // `claude` not being installed cost a branch, a worktree and a
+    // `workspace_materialized` event -- and `D-0057` refuses a second
+    // materialisation, so fixing PATH did not make the run retryable. The
+    // preflight asks the provider before any of that exists.
+    expect(existsSync(f.workspace)).toBe(false);
     const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKSPACE_MATERIALIZED_EVENT_TYPE);
     expect(connection.prepare("SELECT count(*) AS n FROM gate").get()).toEqual({ n: 0 });
+  });
+
+  test("a provider state root inside the worktree is refused before anything is built", async () => {
+    // `D-0067`, for the one path this PR introduces that the materialiser never
+    // sees. The transcript is the evidence `readTerminalReport` turns into a
+    // gate, so a state root inside the worktree is a gate opened over words its
+    // own subject wrote. The remaining warded paths are all
+    // `MaterializationRequest` fields and are branch B's.
+    const f = lap("lap-state-root-inside");
+    expect(await f.perform({ "--state-root": join(f.workspace, "state") })).toBe(2);
+    expect(f.err.join("")).toContain("the provider's state root");
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a relative worker command that would resolve inside the worktree is refused", async () => {
+    // The command is spawned with the WORKSPACE as its working directory, so a
+    // relative token resolves there -- `./tool` looks safe from the operator's
+    // shell and is `<workspace>/tool` when it runs. Each warded path is resolved
+    // the way its own consumer resolves it, and this is the case that says the
+    // command's consumer is not this process.
+    const f = lap("lap-relative-command");
+    expect(await f.perform({ "--claude-command": "./tool" })).toBe(2);
+    expect(f.err.join("")).toContain("worker command");
+    expect(existsSync(f.workspace)).toBe(false);
   });
 
   test("a second perform of one run is refused rather than re-run", async () => {

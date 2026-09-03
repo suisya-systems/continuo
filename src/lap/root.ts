@@ -1,8 +1,9 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import type { LapRunIntent } from "../control_plane/lap_run_intent.js";
+import { readLease } from "../control_plane/lease.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { type IngestedReport, ingestTerminalReport } from "../control_plane/report_ingress.js";
 import { readLapRunIntent } from "../control_plane/run_admission.js";
@@ -27,6 +28,7 @@ import {
 import {
   type EndpointBinding,
   type FenceSubstitutions,
+  isInside,
   type MaterializedWorkspace,
   materializeWorkspace,
 } from "../workspace/materializer.js";
@@ -427,6 +429,139 @@ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
  *   provider refuses the read, or when the budget runs out.
  */
 /**
+ * **Everything this lap can refuse, refused before anything irreversible.**
+ *
+ * A list rather than a run of `if`s, and the list is the point. `D-0057` refuses
+ * a second materialisation of one run, so anything rejected *after* the branch
+ * and the worktree exist costs the run identifier itself -- the operator's
+ * recovery is a new run, not a corrected retry. Every entry below is a check
+ * that was, at some point, made too late:
+ *
+ * - the **completion budget** was validated inside the poll, which is the last
+ *   step of the lap;
+ * - the **gate deadline** was handed to the ingest and refused by a DDL
+ *   constraint after the worker had finished (`D-0065`);
+ * - the **provider's spawnability** was asked by `orchestrator.start()`, so
+ *   `claude` not being on `PATH` burned a run;
+ * - the **artifact directory's length** was left to the filesystem;
+ * - the **provider's state root** is where the worker's transcript is written,
+ *   and a transcript inside the worktree is a gate opened over words its own
+ *   subject wrote (`D-0067`).
+ *
+ * They were each fixed as they were found, which is how five separate late
+ * refusals came to exist: the discipline was stated and then applied one
+ * instance at a time. Enumerating them here is the repair for *that* -- a check
+ * added later has a place to go, and a flag added without one shows up as a
+ * missing entry rather than as a hole.
+ *
+ * `materializeWorkspace` keeps the same rule for its own request and says so;
+ * this is `performLap` keeping it for the arguments the materialiser never sees.
+ */
+function preflight(request: LapRequest, provider: SessionProvider, workspace: string): void {
+  requireCompletion(request.completion);
+  requireGateDeadline(request);
+  // The artifact directory's name, which the encoding can push past a
+  // filesystem's limit. Computed and discarded: what is wanted is the refusal.
+  lapArtifactDir(request.artifactRoot, request.runId);
+  // **Containment before the provider is asked anything, and the order is not
+  // cosmetic.** `requireSpawnable` runs the capability probe, and the probe
+  // writes `probe-evidence.txt` into the provider's state root -- so asking it
+  // first would CREATE the very directory the next check exists to refuse, and
+  // create it inside the worktree. The refusal would still fire, and it would
+  // fire over a directory this preflight had just made. A check that has to be
+  // run before its neighbour has a side effect is worth saying out loud.
+  requireOutsideWorkspace(request, workspace);
+  // The spawn precondition, asked here rather than left to the walk. It is on
+  // the contract (`SessionProvider.requireSpawnable`), so this stays
+  // provider-agnostic; it raises `SpawnRefused`, which the verb reports as one
+  // line and exit 2.
+  provider.requireSpawnable();
+}
+
+/** The gate deadline's rules. See {@link LapRequest.deadlineAtMs} and `D-0065`. */
+function requireGateDeadline(request: LapRequest): void {
+  const deadlineAtMs = request.deadlineAtMs;
+  if (deadlineAtMs === undefined || deadlineAtMs === null) {
+    return;
+  }
+  if (!Number.isInteger(deadlineAtMs)) {
+    throw new LapUsageError(
+      `deadline_at_ms must be an int of epoch milliseconds, got ${String(deadlineAtMs)}`,
+    );
+  }
+  if (deadlineAtMs <= request.nowMs()) {
+    // Refused up front rather than dropped silently at the ingest below. A
+    // deadline already in the past when the lap STARTS is a typo -- a mistyped
+    // digit, a stale value pasted from an earlier command -- and the operator
+    // wants to hear about it now, while a corrected retry is still free. A
+    // deadline that expires *while the worker runs* is a different thing
+    // entirely and is handled at the ingest (`D-0065`).
+    throw new LapUsageError(
+      `deadline_at_ms ${String(deadlineAtMs)} is already in the past; a gate cannot be ` +
+        "opened with a deadline it has already missed, and a deadline that was stale " +
+        "before the worker started is a mistyped argument rather than a lap that ran long",
+    );
+  }
+}
+
+/**
+ * The paths this lap supplies that the fenced worker must not be able to edit
+ * (`D-0067`).
+ *
+ * **These two only.** Every other path the verb takes is a field of
+ * `MaterializationRequest`, and containment for those belongs to
+ * `materializeWorkspace`, which owns the invariant and has the workspace in
+ * hand. What is here is what that module never sees:
+ *
+ * - the **provider's state root** holds `record.json` and the turn's transcript,
+ *   and that transcript is the evidence `readTerminalReport` turns into a gate.
+ *   Inside the worktree, a worker can append its own terminal line and open a
+ *   gate over words it chose -- a human approval whose subject wrote the
+ *   document. It is not a materialiser field at all: it exists only because this
+ *   step constructs a provider.
+ * - the **worker's own command** is the binary the fence is applied to.
+ *
+ * **Each is resolved the way its own consumer resolves it**, which is the whole
+ * difficulty. `ClaudeCliSessionProvider` resolves the state root at
+ * construction, against *this* process's working directory. The command is
+ * spawned with the **workspace** as its working directory, so a relative token
+ * resolves there -- a `--claude-command ./tool` that looks safe from the
+ * operator's shell is `<workspace>/tool` when it runs. Resolving both the same
+ * way would leave one of them checked against a directory it will never be read
+ * from.
+ *
+ * The comparison is `materializeWorkspace`'s own `isInside`, imported rather
+ * than rewritten: it case-folds on Windows (`D-0216`), and a second predicate
+ * for one rule is how the two drift.
+ */
+function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
+  const warded: readonly (readonly [string, string])[] = [
+    // Resolved against this process: the provider does the same at construction.
+    ["the provider's state root", resolve(request.providerStateRoot)],
+    // Resolved against the workspace: that is the child's working directory.
+    ...(request.workerCommand ?? []).map(
+      (token, index) =>
+        [
+          `the worker command's token ${String(index)}`,
+          // A bare name is skipped by resolving it to itself: `claude` is looked
+          // up on `PATH`, not in a directory, so a check that placed it in one
+          // would be inventing a rule about how a command may be spelled.
+          token.includes("/") || token.includes("\\") ? resolve(workspace, token) : token,
+        ] as const,
+    ),
+  ];
+  for (const [what, path] of warded) {
+    if (isInside(path, workspace)) {
+      throw new LapUsageError(
+        `${what} is ${path}, inside the workspace ${workspace}; the fenced child can ` +
+          "edit anything in its own worktree, so anything the fence or its evidence " +
+          "depends on must live outside it",
+      );
+    }
+  }
+}
+
+/**
  * The budget's rules, stated once and checked from both entry points.
  *
  * Separate from {@link awaitTerminalReport} because of *when* it has to run.
@@ -530,6 +665,19 @@ export interface LapRequest {
   readonly repository: string;
   /** The root {@link lapArtifactDir} places this run's artifact directory under. */
   readonly artifactRoot: string;
+  /**
+   * Where the session provider keeps its records and the turn's transcript.
+   *
+   * Carried so it can be **checked**, not used: `performLap` never reads it, and
+   * the caller has already built the provider over it. It is here because the
+   * transcript is what `readTerminalReport` turns into a gate, and a transcript
+   * the worker can edit is a gate opened over words its own subject wrote --
+   * and this is the only place that knows both the path and the workspace it
+   * must stay out of. See {@link requireOutsideWorkspace} and `D-0067`.
+   */
+  readonly providerStateRoot: string;
+  /** The worker's own command, if the caller pinned one, for the same check. */
+  readonly workerCommand?: readonly string[];
   /** The worker's endpoint binding, less the holder the intent already fixes. */
   readonly endpoint: Omit<EndpointBinding, "holder">;
   readonly fence: FenceSubstitutions;
@@ -602,40 +750,15 @@ export async function performLap(
   if (typeof request.nowMs !== "function" || typeof request.sessionUuidFactory !== "function") {
     throw new LapUsageError("now_ms and session_uuid_factory must be functions");
   }
-  // **Everything this function can refuse, refused before anything is created.**
-  // Below this line the lap makes a branch, a worktree, three published
-  // artifacts and a child process, and `D-0057` refuses a second materialisation
-  // of one run -- so an argument this function was always going to reject costs
-  // the run identifier itself if it is rejected late. `materializeWorkspace`
-  // states the same discipline for its own request and keeps it; this is
-  // `performLap` keeping it for the arguments the materialiser never sees.
-  requireCompletion(request.completion);
-  if (request.deadlineAtMs !== undefined && request.deadlineAtMs !== null) {
-    if (!Number.isInteger(request.deadlineAtMs)) {
-      throw new LapUsageError(
-        `deadline_at_ms must be an int of epoch milliseconds, got ${String(request.deadlineAtMs)}`,
-      );
-    }
-    if (request.deadlineAtMs <= request.nowMs()) {
-      // Refused up front rather than dropped silently at the ingest below. A
-      // deadline already in the past when the lap STARTS is a typo -- a
-      // mistyped digit, a stale value pasted from an earlier command -- and the
-      // operator wants to hear about it now, while a corrected retry is still
-      // free. A deadline that expires *while the worker runs* is a different
-      // thing entirely and is handled at the ingest (`D-0065`).
-      throw new LapUsageError(
-        `deadline_at_ms ${String(request.deadlineAtMs)} is already in the past; a gate ` +
-          "cannot be opened with a deadline it has already missed, and a deadline that " +
-          "was stale before the worker started is a mistyped argument rather than a " +
-          "lap that ran long",
-      );
-    }
-  }
-
   // 1. What this run was admitted to do. Read rather than retyped: the whole
   //    point of D-0055 is that the execution intent is fixed once, at admission,
-  //    and every later step acts on that record.
+  //    and every later step acts on that record. It comes first because the
+  //    workspace the checks below are drawn against is on it.
   const intent = readLapRunIntent(connection, request.runId);
+
+  // 1a. Everything this lap can refuse, refused before anything irreversible.
+  //     See {@link preflight} for the list and for why it is a list.
+  preflight(request, provider, intent.workspace);
 
   // 2. The workspace, the fence, and the admitted plan. One call, and the
   //    `SessionOrchestratorOptions` it returns is complete -- nothing below adds
@@ -686,6 +809,11 @@ export async function performLap(
   // the one stopped here cannot differ. `D-0057`'s "nothing below adds a field
   // to these options" is intact -- this observes one, and adds none.
   let sessionId: string | null = null;
+  /** The lease epoch this lap's walk held, or `null` if it never took one. */
+  let heldEpoch: number | null = null;
+  // Derived the way `SessionOrchestrator` derives it, off the same options, so
+  // the two cannot name different resources.
+  const leaseResource = materialized.options.resource ?? `session-run:${intent.runId}`;
   const options: SessionOrchestratorOptions = {
     ...materialized.options,
     // **The orchestrator gets a LIVE clock, and step 7's frozen one is left
@@ -729,6 +857,19 @@ export async function performLap(
       // spawned as one that completed.
       throw new LapRefused("internal: the fenced spawn returned without starting the walk");
     }
+    // The epoch this lap's walk holds, read **before the walk is awaited**.
+    //
+    // **The identity of an owner is an epoch, not a session id** (`D-0068`), and
+    // this line is what the teardown compares against. Read here rather than
+    // after the `await` because the walk can spawn a child and then reject, and
+    // that is precisely the case the teardown exists for -- a capture on the far
+    // side of the `await` never runs on it, and the child is left alive.
+    //
+    // It is already there to read: `orchestrator.start()` acquires the lease,
+    // prepares the binding and marks the spawn synchronously, before its first
+    // `await`, so by the time `execute` has returned the row is written.
+    heldEpoch = readLease(connection, leaseResource)?.epoch ?? null;
+
     const orchestration = await walk;
 
     // 5. The turn. Awaited out here, outside every transaction, because
@@ -811,11 +952,12 @@ export async function performLap(
     //    road. The binding table is the authority on whose session it is:
     //    `activeBinding(runId)` names it only if this run's own binding was
     //    written, and it is written by the orchestrator before any child exists.
-    if (sessionId !== null && sessionMayBeStopped(failure)) {
-      const bound = activeBinding(connection, intent.runId);
-      if (bound?.sessionId === sessionId) {
-        await stopSession(provider, sessionId);
-      }
+    if (
+      sessionId !== null &&
+      sessionMayBeStopped(failure) &&
+      stillThisLapsSession(connection, intent.runId, leaseResource, sessionId, heldEpoch)
+    ) {
+      await stopSession(provider, sessionId);
     }
   }
 }
@@ -848,6 +990,57 @@ export async function performLap(
  */
 export function sessionMayBeStopped(failure: unknown): boolean {
   return !(failure instanceof LoserTerminated) || failure.stopAttempted;
+}
+
+/**
+ * Is the session named by `sessionId` still **this lap's** to stop? (`D-0068`)
+ *
+ * **Two questions, and the second is the one that took three attempts to get
+ * right.**
+ *
+ * The first is whether this run bound this identity at all. The identity is
+ * captured from the factory the instant it is minted, which is what lets the
+ * teardown reach a walk that failed *after* spawning -- but minting happens
+ * before `prepareBinding`, so an id the orchestrator then failed to bind
+ * (because another run already holds it) would otherwise be stopped by a lap
+ * that never started it.
+ *
+ * The second is whether this lap is still the owner, **and a session id cannot
+ * answer it**. `SessionOrchestrator.recover()` reads the id off the existing
+ * binding and keeps it, so after a legitimate takeover the binding still names
+ * the same session -- an id comparison passes and the original lap stops a
+ * worker the new owner has adopted. This is not an edge case: the orchestrator's
+ * lease defaults to a 30-second TTL and `--turn-timeout-ms` defaults to fifteen
+ * minutes, so **any lap whose worker works for longer than half a minute spends
+ * most of its poll holding an expired lease**, which anyone may take.
+ *
+ * **The owner's identity is the lease epoch.** It is strictly increasing and a
+ * change of holder raises it (`docs/lease-fencing.md`), so:
+ *
+ * - the epoch is unchanged -> nobody took over. The lease may well have expired,
+ *   and that is fine: an expired lease nobody claimed leaves this lap the only
+ *   party with a claim on the child, and the child is still its to stop.
+ * - the epoch has moved -> somebody took over, and whatever they did with the
+ *   session is theirs. Stand down, exactly as `LoserTerminated.stopAttempted`
+ *   makes the orchestrator stand down.
+ *
+ * `heldEpoch` of `null` means the walk never reached a lease, so there is
+ * nothing this lap can claim to own.
+ */
+function stillThisLapsSession(
+  connection: SqliteDatabase,
+  runId: string,
+  leaseResource: string,
+  sessionId: string,
+  heldEpoch: number | null,
+): boolean {
+  if (heldEpoch === null) {
+    return false;
+  }
+  if (activeBinding(connection, runId)?.sessionId !== sessionId) {
+    return false;
+  }
+  return readLease(connection, leaseResource)?.epoch === heldEpoch;
 }
 
 /**

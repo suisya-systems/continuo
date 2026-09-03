@@ -49,11 +49,11 @@ import {
   performLap,
   sessionMayBeStopped,
 } from "../../src/lap/root.js";
-import type { ProviderResult } from "../../src/session/provider.js";
+import { Ok, type ProviderResult } from "../../src/session/provider.js";
 import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import { WORKSPACE_MATERIALIZED_EVENT_TYPE } from "../../src/workspace/materializer.js";
-import { ScriptedProvider } from "../gate_item2/helpers.js";
+import { observed, ScriptedProvider } from "../gate_item2/helpers.js";
 import { caseRoot } from "../testkit/cases.js";
 import { expectRefusalAsync } from "../testkit/errors.js";
 
@@ -130,7 +130,37 @@ function initRepository(root: string): GitOptions {
   return git;
 }
 
-/** A reader that is never reached: every case here fails before the poll. */
+/** The one session identity every case here mints. */
+const SESSION_ID = "00000000-0000-0000-0000-000000000001";
+
+/** A finished turn with something to escalate, for the cases that reach the poll. */
+const REPORT = {
+  kind: "report",
+  sessionId: SESSION_ID,
+  generation: 0,
+  report: "please review",
+  terminalReason: "completed",
+  subtype: "success",
+  isError: false,
+  returncode: 0,
+} as const;
+
+/**
+ * A fixture whose walk **succeeds**, so a case can reach the poll.
+ *
+ * The scripted provider needs one confirming read-back for the orchestrator to
+ * commit the binding; everything else is the default success path.
+ */
+function successfulWalk(label: string): Fixture {
+  const f = fixture(label, () => {
+    throw new Error("unreachable: this fixture's walk succeeds");
+  });
+  f.provider.onStart = undefined;
+  f.provider.nextReadouts = [observed(SESSION_ID)];
+  return f;
+}
+
+/** A reader that is never reached: those cases fail before the poll. */
 const UNREACHED_READER = {
   readTerminalReport(): Promise<ProviderResult<LapTerminalReadout>> {
     throw new Error("the transcript must not be read: the walk failed before the turn");
@@ -185,6 +215,7 @@ function fixture(label: string, onStart: () => never, nowMs: () => number = () =
       runId: RUN_ID,
       repository,
       artifactRoot: join(root, "artifacts"),
+      providerStateRoot: join(root, "state"),
       endpoint: {
         epoch: 1,
         recipient: NOTIFY_RECIPIENT,
@@ -272,6 +303,89 @@ describe("only a session this lap actually bound", () => {
 
     // Whatever refused it, the other run's session was not touched.
     expect(f.provider.stopCalls).toEqual([]);
+  });
+});
+
+describe("D-0068: the owner's identity is the lease epoch, not the session id", () => {
+  test("a session another claimant has taken over is not stopped", async () => {
+    // **The hole a session-id comparison leaves open, and it is the common case
+    // rather than a corner.** `SessionOrchestrator.recover()` reads the id off
+    // the existing binding and keeps it, so after a legitimate takeover the
+    // binding still names the same session -- an id check passes and the
+    // original lap stops a worker the new owner has adopted. And the window is
+    // wide: the orchestrator's lease defaults to 30 seconds while
+    // `--turn-timeout-ms` defaults to fifteen minutes, so any lap whose worker
+    // works for longer than half a minute spends most of its poll holding an
+    // expired lease that anybody may take.
+    //
+    // The takeover is performed here directly -- `acquire` on the same resource
+    // under a different holder, which is what raises the epoch -- because that
+    // is the whole of what a second claimant does that this lap can observe.
+    // The takeover happens **during the poll**, which is where it happens in
+    // life: the walk finishes, the lease's 30 seconds run out while the worker
+    // works, and a second claimant recovers the run. Doing it inside the spawn
+    // instead would raise the epoch before this lap's own lease is observable,
+    // which is a different and easier situation than the one under test.
+    const f = successfulWalk("epoch-taken-over");
+    const taken: string[] = [];
+    const readerThatLosesTheLease = {
+      readTerminalReport(): Promise<ProviderResult<LapTerminalReadout>> {
+        if (taken.length === 0) {
+          acquire(f.connection, {
+            resource: `session-run:${RUN_ID}`,
+            holder: "someone-else",
+            nowMs: T0 + SLOW_MS,
+            ttlMs: 600_000,
+          });
+          taken.push("taken");
+        }
+        return Promise.resolve(new Ok<LapTerminalReadout>(REPORT));
+      },
+    };
+
+    const outcome = await performLap(f.connection, f.provider, readerThatLosesTheLease, f.request);
+
+    // The lap itself succeeded: the gate is open, which is the point -- losing
+    // the lease does not undo the work, it only means the child is no longer
+    // this lap's to stop.
+    expect(outcome.ingested.gateOpened).toBe(true);
+    expect(taken, "the takeover never happened, so the case proves nothing").toEqual(["taken"]);
+    expect(f.provider.stopCalls).toEqual([]);
+  });
+
+  test("a lease nobody took is still this lap's to stop, and the session is stopped", async () => {
+    // The anti-vacuity half for the takeover case above, on the same successful
+    // walk: with no second claimant the epoch does not move and the child is
+    // reaped as usual. Without this, a rule that stood down whenever it could
+    // not prove ownership would pass the case above and leak every child.
+    const f = successfulWalk("epoch-unclaimed");
+    const outcome = await performLap(
+      f.connection,
+      f.provider,
+      { readTerminalReport: () => Promise.resolve(new Ok<LapTerminalReadout>(REPORT)) },
+      f.request,
+    );
+
+    expect(outcome.ingested.gateOpened).toBe(true);
+    expect(f.provider.stopCalls).toEqual([SESSION_ID]);
+  });
+
+  test("a lease that merely expired is still this lap's to stop", async () => {
+    // The anti-vacuity half, and a real distinction rather than a formality.
+    // An expired lease nobody claimed leaves this lap the only party with a
+    // claim on the child -- so the child is still its to stop, and a rule that
+    // stood down on expiry would leak exactly the children the teardown was
+    // added to reap. Only a CHANGE of epoch means somebody else is holding it.
+    const f = fixture("epoch-merely-expired", () => {
+      throw new OrchestrationRefused("the provider would not start");
+    });
+
+    await expectRefusalAsync(
+      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      OrchestrationRefused,
+    );
+
+    expect(f.provider.stopCalls).toEqual(["00000000-0000-0000-0000-000000000001"]);
   });
 });
 

@@ -1096,7 +1096,7 @@ describe("reading the delegation record back (D-0063)", () => {
     const refusal = expectRefusal(
       () => readLapRunIntent(connection, CRAFTED_RUN_ID),
       RunNotAdmitted,
-      /carries unknown sandbox_profile/,
+      /carries unknown 'sandbox_profile'/,
     );
     expect(refusal.message).toContain("not the record this build writes");
   });
@@ -1112,7 +1112,7 @@ describe("reading the delegation record back (D-0063)", () => {
     const refusal = expectRefusal(
       () => readLapRunIntent(connection, CRAFTED_RUN_ID),
       RunNotAdmitted,
-      /missing cli_args and carries unknown sandbox_profile/,
+      /missing cli_args and carries unknown 'sandbox_profile'/,
     );
     expect(refusal.message).toContain(CRAFTED_RUN_ID);
   });

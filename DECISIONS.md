@@ -162,6 +162,8 @@ spaces distinct.
 | D-0064 | Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10 | accepted |
 | D-0065 | An expired gate deadline costs the deadline, never the report; a stale one is refused before the lap starts | accepted |
 | D-0066 | The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference | accepted |
+| D-0067 | Nothing the fence or its evidence depends on may live inside the worktree | accepted |
+| D-0068 | A session is this lap's to stop only while it still holds the lease epoch it spawned under | accepted |
 
 ---
 
@@ -11591,3 +11593,105 @@ So the lap deliberately runs on **two clocks**, and which is which is not an acc
 7 could hand on a live one and this override would become redundant -- though not wrong. And if the
 orchestrator's lease ever stopped being acquired inside `start()`, the specific hazard above would
 move rather than disappear, and this entry should be re-read against wherever it moved to.
+
+---
+
+## D-0067 -- Nothing the fence or its evidence depends on may live inside the worktree
+
+**Context.** `materializeWorkspace` already refused an *artifact* inside the workspace, and its
+refusal states the reason exactly: "the fence and the settings must not be files the fenced child can
+edit". The rule was right and the boundary drawn around it was not. It covered what materialisation
+**writes**, and step 8 adds a CLI that takes paths from an operator which materialisation does not
+write and the fence depends on.
+
+Two of those are not `MaterializationRequest` fields at all -- they exist only because this step
+constructs a session provider, so no earlier module could have guarded them:
+
+- the **provider's state root** holds `record.json` and the turn's transcript, and that transcript is
+  the evidence `readTerminalReport` turns into a gate. Inside the worktree, a worker can append its
+  own terminal line and open a gate over words it chose: **a human approval whose subject wrote the
+  document**.
+- the **worker's own command** is the binary the fence is applied to.
+
+**Decision.** One rule -- *nothing the fence or its evidence depends on may resolve inside the
+workspace* -- checked in `performLap`'s preflight for those two values, before anything is created.
+
+**Each path is resolved the way its own consumer resolves it**, and that is the part a single
+`resolve()` gets wrong. `ClaudeCliSessionProvider` resolves the state root at construction, against
+*this* process's working directory. The command is spawned with the **workspace** as its working
+directory, so a relative token resolves there -- a `--claude-command ./tool` that looks safe from the
+operator's shell is `<workspace>/tool` when it runs. A bare name is skipped, because `claude` is
+looked up on `PATH` rather than in a directory and refusing it would invent a rule about how a
+command may be spelled.
+
+The comparison is `materializeWorkspace`'s own `isInside`, now exported rather than reimplemented: it
+case-folds on Windows (`D-0216`), and a second predicate for one rule is how two implementations of
+one rule come to disagree.
+
+**Ordering inside the preflight is load-bearing, not cosmetic.** Containment is established *before*
+the provider is asked anything, because `requireSpawnable` runs the capability probe and the probe
+writes `probe-evidence.txt` into the state root -- so asking it first would **create** the very
+directory the next check exists to refuse, inside the worktree. The refusal would still fire, over a
+directory the preflight had just made.
+
+**What this entry does not yet cover, stated rather than left to be discovered.** Six further paths
+reach `materializeWorkspace` and are not held to this rule there: `--hook-script`, `--python`,
+`--endpoint-module`, `--node`, `--interlock-root` and `--claude-org-path`. Every one of them is a
+field `MaterializationRequest` already had, so the gap predates this step; what this step adds is a
+command line that reaches them. **The deny hook is the sharpest of them** -- it is the file that
+enforces the fence, and it does not protect its own path. Hardening them belongs with the module that
+owns the invariant and is the follow-on branch's, along with the shared predicate this entry starts.
+
+**What would falsify it.** If a role's fence ever legitimately needed to reference a file inside the
+worktree -- a project-local configuration the worker edits and the fence reads -- the rule as stated
+would refuse a real configuration, and the answer would be to split "depends on for enforcement" from
+"reads as data" rather than to widen the rule.
+
+---
+
+## D-0068 -- A session is this lap's to stop only while it still holds the lease epoch it spawned under
+
+**Context.** `performLap` stops the session it started, on every path out (`D-0060`). Deciding *which*
+sessions are its to stop took three attempts, and the first two were both wrong in the same direction
+-- they proved something weaker than ownership:
+
+1. **Nothing at all.** The `finally` stopped whatever identity had been minted. `LoserTerminated`
+   already showed why that is unsafe: the orchestrator records `stopAttempted: false` exactly when a
+   takeover writer may have adopted this lap's child, and stopping anyway kills the winner's worker.
+2. **The session id.** A binding lookup was added: stop only if `activeBinding(runId)` names this
+   session. That closes one door -- an identity minted but never bound, because another run already
+   held it -- and leaves the other wide open. **`SessionOrchestrator.recover()` reads the id off the
+   existing binding and keeps it**, so after a legitimate takeover the binding still names the same
+   session and an id comparison passes.
+
+The window is not narrow. The orchestrator's lease defaults to a 30-second TTL and
+`--turn-timeout-ms` defaults to fifteen minutes, so **any lap whose worker works for longer than half
+a minute spends most of its poll holding an expired lease**, which any claimant may take.
+
+**Decision. The identity of an owner is the lease epoch, not the session id.** The epoch is strictly
+increasing and a change of holder raises it (`docs/lease-fencing.md`), which is precisely the fact a
+session id does not carry. `performLap` reads the epoch of `session-run:<runId>` as soon as the walk
+has been started and compares it again before stopping:
+
+- **unchanged** -> nobody took over. The lease may well have expired, and that is fine: an expired
+  lease nobody claimed leaves this lap the only party with a claim on the child, so the child is
+  still its to stop. A rule that stood down on mere expiry would leak exactly the children the
+  teardown was added to reap.
+- **moved** -> somebody took over, and whatever they have done with the session is theirs. Stand
+  down, for the same reason `stopAttempted: false` makes the orchestrator stand down.
+
+The epoch is read **before the walk is awaited**, not after, because the walk can spawn a child and
+then reject -- which is the case the teardown exists for, and a capture on the far side of the
+`await` never runs on it. It is available that early because `orchestrator.start()` acquires the
+lease, prepares the binding and marks the spawn synchronously, before its first `await`.
+
+**Consequences.** The binding check from attempt 2 is kept as well: the two answer different
+questions, and dropping either restores a distinct hole. Between them the rule is "this run bound
+this identity, and this lap still holds the epoch it bound it under".
+
+**What would falsify it.** If the orchestrator ever released its lease at the end of `start()` rather
+than letting it expire, the epoch this lap captured would be gone and this rule would have to read
+ownership from whatever replaced it. And if a future step holds and renews the lease for the lap's
+whole life -- which is step 4's subject, and `D-0064` records that lap 1 runs without it -- the
+comparison becomes an equality that should never fail, and a failure would mean the renewal broke
+rather than that a takeover happened.
