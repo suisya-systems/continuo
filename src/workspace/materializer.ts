@@ -838,10 +838,16 @@ function renderMcpConfig(
   // `--node ./node` names a file the worker itself may write, and a bare `node`
   // is resolved through a `PATH` this process does not own. Neither is a value
   // materialisation can judge, and both are values it can refuse.
-  const node = requireAbsolute("endpoint.node", binding.node ?? process.execPath);
-  const endpointModule = requireAbsolute(
-    "endpoint.endpoint_module",
-    binding.endpointModule ?? defaultEndpointModule(),
+  //
+  // `resolve`d at the same time, and NOT only on the way out: these two strings
+  // are what gets written into the document below, and warding one spelling
+  // while publishing another is a gap rather than an inelegance. `resolve`
+  // collapses `..` textually, the kernel collapses it after following symlinks,
+  // and the two disagree exactly when a component is a link -- so a `--node`
+  // spelled with a `..` could be warded as one file and executed as another.
+  const node = resolve(requireAbsolute("endpoint.node", binding.node ?? process.execPath));
+  const endpointModule = resolve(
+    requireAbsolute("endpoint.endpoint_module", binding.endpointModule ?? defaultEndpointModule()),
   );
   return {
     document: {
@@ -858,9 +864,10 @@ function renderMcpConfig(
     // launcher and the module the containment check wards, and a second
     // `??`-and-`requireAbsolute` at the call site would be a second statement
     // of which file this `mcp.json` actually names -- the drift `D-0067`
-    // records as the way one rule becomes two (`D-0069`).
-    node: resolve(node),
-    endpointModule: resolve(endpointModule),
+    // records as the way one rule becomes two (`D-0069`). They are the same
+    // bytes the document above carries, which is the point.
+    node,
+    endpointModule,
   };
 }
 
@@ -981,6 +988,13 @@ export function materializeWorkspace(
   // here normalises and never resolves against this process's directory --
   // which matters, because this process's directory is not where any of these
   // are read from.
+  //
+  // The database entry is the one whose *hole* is out of reach rather than
+  // whose check is: `git worktree add` refuses a workspace directory that is
+  // already there, and a database has to exist to have been opened -- so the
+  // refusal below fires, but git would have refused the same request a moment
+  // later. It is on the list because the rule is about what the fence depends
+  // on, not about which violations happen to have a second backstop.
   const wardedPaths: readonly (readonly [string, string])[] = [
     ["the deny hook", hookScript],
     ["the hook's interpreter", python],

@@ -12040,15 +12040,35 @@ sees absolute paths, so its question and its answer are about the same file.
 recomputed at the call site.** Both are `??`-defaulted before they are validated, and a second
 `?? default` beside the warded list would be a second statement of which file the `mcp.json` actually
 names -- the drift `D-0067` records as the way one rule becomes two, arriving through the fix for it.
+They are also **normalised before the document is built rather than on the way out**, so the string
+that is warded and the string that is published are the same bytes: `resolve` collapses `..`
+textually while the kernel collapses it after following symlinks, and warding one spelling while
+publishing another would leave the two free to name different files.
 
-**The control plane database is on the list and has no test, and the entry says so rather than
-implying coverage.** Reaching it needs a database that already exists inside a directory that must
-not exist yet, because `git worktree add` refuses a workspace that is already there. The entry is a
-statement of the rule over a value with no reachable violation today, not a claim about one.
+**The same rule's other call site had to be given the same argument.** `performLap` shares this
+module's `isInside` -- `D-0067` exported it precisely so there would be one predicate -- but it was
+handing that predicate `intent.workspace` **unnormalised**, while `materializeWorkspace` resolves its
+own workspace first. `LapRunIntent` says in as many words that being resolvable is all it checks and
+that normalisation belongs to the task that materialises the path, so a run admitted as
+`/repo/wt/../wt` gave a lexical comparison a root that `/repo/wt/tool` does not textually prefix: the
+guard answered "not inside" and passed a worker command the checkout would then contain. **Sharing
+the predicate is not the same as sharing its precondition**, and this is the second time that
+distinction has cost something. `performLap` now resolves the root at the top of its own guard.
+
+**The control plane database's entry is belt-and-braces, and saying so took a correction.** The first
+draft of this entry claimed the case was *unreachable* -- that a database must already exist to be
+opened while the workspace must not exist for `git worktree add`, so no path could be inside a
+directory that is not there. That is wrong, and wrong in the way worth recording: the ward runs in
+the **prologue**, before anything is created, so a control plane living where the worktree is about
+to be cut reaches it and is refused. What is unreachable is the *hole*, not the check -- with the
+ward deleted the same request fails anyway, from `git worktree add` refusing a directory that is
+already there. So the entry is kept, tested, and described as the earlier and more legible of two
+refusals rather than as the only one. An entry excused from its test on a premise nobody checked is
+the one a mutation can delete in silence.
 
 **Every other entry was mutation-checked, and two of the cases were rewritten because of what that
-showed.** With the containment loop deleted each of the seven reachable materialisations *succeeds*
-and records `workspace_materialized`. With `requireAbsolute` removed, though, the first spelling of
+showed.** With the containment loop deleted each of the other six materialisations *succeeds* and
+records `workspace_materialized`. With `requireAbsolute` removed, though, the first spelling of
 the hook and interpreter cases went red for the wrong reason -- the renderer's `hook-unresolvable`
 refusing a path that named nothing -- which would have let the rule be deleted while the suite still
 looked like it was defending it. Both now name files that really are there *from this process's

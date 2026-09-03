@@ -56,7 +56,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
 
 import Database, { type Database as SqliteDatabase } from "better-sqlite3";
@@ -126,9 +126,16 @@ function initRepository(root: string): GitOptions {
   return git;
 }
 
-/** A production control plane at head with one admitted run on it. */
-function controlPlane(root: string): { connection: SqliteDatabase; path: string } {
-  const path = join(root, "production.sqlite3");
+/**
+ * A production control plane at head with one admitted run on it.
+ *
+ * `at` is a parameter for exactly one case: the containment rule wards the
+ * database itself, and the only way to violate that is for the control plane to
+ * live where the worktree is about to be created.
+ */
+function controlPlane(root: string, at?: string): { connection: SqliteDatabase; path: string } {
+  const path = at ?? join(root, "production.sqlite3");
+  mkdirSync(dirname(path), { recursive: true });
   createProductionControlPlane(path, { nowMs: T0 }).close();
   const connection = openProductionControlPlane(path);
   onTestFinished(() => {
@@ -164,11 +171,15 @@ interface Fixture {
   readonly request: MaterializationRequest;
 }
 
-function fixture(label: string, overrides: Partial<MaterializationRequest> = {}): Fixture {
+function fixture(
+  label: string,
+  overrides: Partial<MaterializationRequest> = {},
+  databaseAt?: (root: string) => string,
+): Fixture {
   const root = caseRoot(label);
   const repository = join(root, "repo");
   const git = initRepository(repository);
-  const plane = controlPlane(root);
+  const plane = controlPlane(root, databaseAt?.(root));
 
   // Outside the worktree, deliberately: the materialiser refuses an artifact
   // directory inside it, and the reason is asserted in its own case below.
@@ -837,13 +848,13 @@ describe("nothing the fence depends on may live inside the worktree (D-0069)", (
   // resting on a file its own subject may edit. A case that merely failed
   // differently would not have shown that.
   //
-  // Not covered, and recorded rather than glossed: **the control plane
-  // database**. It is on the warded list because it is where the gate this lap
-  // exists to open is stored, but it cannot be reached through this function --
-  // the database must already exist to be opened, the workspace must NOT exist
-  // for `git worktree add`, and no path can be inside a directory that is not
-  // there. The entry is a statement of the rule over a value that has no
-  // reachable violation today, not a claim of coverage.
+  // **The database's case is the one exception to the paragraph above, and it
+  // is marked as such rather than quietly listed with the others.** The guard
+  // fires -- the case below proves it -- but with the guard deleted the request
+  // does not succeed: `git worktree add` refuses a workspace directory that is
+  // already there, and one holding a database necessarily is. So the entry is
+  // belt-and-braces, and the honest claim for it is "the rule is stated over
+  // this value too", not "this closes a reachable hole".
 
   test("a deny hook inside the worktree is refused", () => {
     // The worst of the list and the reason it exists: this is the file that
@@ -965,6 +976,24 @@ describe("nothing the fence depends on may live inside the worktree (D-0069)", (
       /the fence's claude-org path is .*inside the workspace/,
     );
     expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a control plane database inside the worktree is refused", () => {
+    // The database holds the gate this whole lap exists to open, and the
+    // admission ledger the fence's own audit trail is written beside. The only
+    // way to reach it is for the control plane to live where the worktree is
+    // about to be created -- which git would refuse a moment later, so this
+    // guard is the earlier and more legible of two refusals rather than the
+    // only one. See the block comment above.
+    const f = fixture("materialize-database-inside", {}, (root) =>
+      join(root, "worktree", "production.sqlite3"),
+    );
+    expectRefusal(
+      () => materializeWorkspace(f.connection, f.request),
+      WorkspaceMaterializationUsageError,
+      /the control plane database is .*inside the workspace/,
+    );
+    expect(branchExists(TOPIC_BRANCH, f.git)).toBe(false);
   });
 
   test("a relative deny hook is refused before it can be resolved by anyone", () => {

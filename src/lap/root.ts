@@ -560,6 +560,17 @@ function requireGateDeadline(request: LapRequest): void {
  * for one rule is how the two drift.
  */
 function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
+  // **The root is resolved here, and forgetting to was a live hole rather than
+  // a tidiness lapse.** `isInside` is lexical by design, and `materializeWorkspace`
+  // normalises its own workspace before asking it -- but the value arriving here
+  // is `intent.workspace` as an operator typed it at admission, and
+  // `LapRunIntent` says in as many words that being *resolvable* is all it
+  // checks and that normalisation "belong[s] to the task that materialises it".
+  // So a workspace admitted as `/repo/wt/../wt` made this guard compare
+  // `/repo/wt/tool` against a root it does not textually prefix, answer "not
+  // inside", and pass a worker command the checkout would then contain. One
+  // rule, one predicate, and now one spelling of its argument.
+  const root = resolve(workspace);
   // **Every token of the worker command must be an absolute path**, which is
   // the rule that removes execution resolution from this lap entirely. See
   // {@link requireAbsoluteWorkerCommand}.
@@ -574,9 +585,9 @@ function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
     ),
   ];
   for (const [what, path] of warded) {
-    if (isInside(path, workspace)) {
+    if (isInside(path, root)) {
       throw new LapUsageError(
-        `${what} is ${pythonRepr(path)}, inside the workspace ${pythonRepr(workspace)}; the ` +
+        `${what} is ${pythonRepr(path)}, inside the workspace ${pythonRepr(root)}; the ` +
           "fenced child can edit anything in its own worktree, so anything the fence or " +
           "its evidence depends on must live outside it",
       );

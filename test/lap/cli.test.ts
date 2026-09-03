@@ -30,7 +30,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join, sep } from "node:path";
 import process from "node:process";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
@@ -116,8 +116,20 @@ interface Lap {
  * `runId` is a parameter because the artifact directory is derived from it
  * (`D-0061`), so a case that wants to see the derivation has to be able to
  * choose one.
+ *
+ * `spellWorkspace` exists for one case and is worth the parameter. `LapRunIntent`
+ * requires the workspace to be fully qualified and says in as many words that
+ * normalisation is not its business, so a run can be admitted with a `..` in it
+ * -- and every containment check downstream is lexical. It takes the normalised
+ * path and returns the spelling to admit, because the case cannot compute one
+ * itself: `caseRoot` hands out a FRESH directory per call, so a case that asked
+ * for the root a second time would be spelling a different lap's workspace.
  */
-function lap(label: string, runId = RUN_ID): Lap {
+function lap(
+  label: string,
+  runId = RUN_ID,
+  spellWorkspace: (workspace: string) => string = (workspace) => workspace,
+): Lap {
   const root = caseRoot(label);
   const repository = join(root, "repo");
   initRepository(repository);
@@ -178,7 +190,7 @@ function lap(label: string, runId = RUN_ID): Lap {
       "--lease-claimant-id",
       HOLDER,
       "--workspace",
-      workspace,
+      spellWorkspace(workspace),
       "--role",
       ROLE,
       "--base-branch",
@@ -695,6 +707,31 @@ describe("what the verb refuses, and what it leaves behind", () => {
     const f = lap("lap-state-root-inside");
     expect(await f.perform({ "--state-root": join(f.workspace, "state") })).toBe(2);
     expect(f.err.join("")).toContain("the provider's state root");
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("an un-normalised admitted workspace does not open the containment guard", async () => {
+    // The predicate is shared with the materialiser (`isInside`), and sharing it
+    // is not enough on its own: it is LEXICAL, so it answers about whatever
+    // spelling of the root it is handed. `materializeWorkspace` normalises its
+    // own workspace before asking; this side receives `intent.workspace` exactly
+    // as an operator typed it at admission, and `LapRunIntent` deliberately does
+    // not normalise -- being resolvable is all it checks.
+    //
+    // So `<root>/worktree/../worktree` is a fully qualified path that admission
+    // accepts, that the materialiser checks out at `<root>/worktree`, and that a
+    // prefix comparison finds no `<root>/worktree/...` path inside. Without the
+    // `resolve` at the top of the guard, the command below is accepted and the
+    // binary the fence is applied to is a file in the checkout the worker may
+    // rewrite: one rule, one predicate, and two spellings of its argument.
+    const f = lap(
+      "lap-workspace-unnormalised",
+      RUN_ID,
+      // Concatenated rather than `join`ed: `join` would normalise it away.
+      (workspace) => `${workspace}${sep}..${sep}${basename(workspace)}`,
+    );
+    expect(await f.perform({ "--claude-command": join(f.workspace, "tool") })).toBe(2);
+    expect(f.err.join("")).toContain("worker command");
     expect(existsSync(f.workspace)).toBe(false);
   });
 
