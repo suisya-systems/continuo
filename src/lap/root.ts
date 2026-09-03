@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
@@ -397,6 +397,40 @@ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
  *   provider refuses the read, or when the budget runs out.
  */
 /**
+ * Refuse any of `paths` that resolves inside `workspace` (`D-0067`).
+ *
+ * The rule is one sentence -- **nothing the fence depends on may live where the
+ * fenced worker can edit it** -- and `materializeWorkspace` states it for every
+ * path in its own request. This is the same rule for the two values that never
+ * reach it.
+ *
+ * A token that is not a path at all is skipped rather than refused: a worker
+ * command of `claude` is a name resolved on `PATH`, and refusing it would be
+ * this function inventing a rule about how a command may be spelled. Only an
+ * absolute path can be inside the workspace in the first place, and only an
+ * absolute path is what this can honestly judge.
+ */
+function requireOutsideWorkspace(
+  paths: readonly (readonly [string, string])[],
+  workspace: string,
+): void {
+  const root = resolve(workspace);
+  for (const [what, path] of paths) {
+    if (typeof path !== "string" || !isAbsolute(path)) {
+      continue;
+    }
+    const resolved = resolve(path);
+    if (resolved === root || resolved.startsWith(`${root}${sep}`)) {
+      throw new LapUsageError(
+        `${what} is ${resolved}, inside the workspace ${root}; the fenced child can ` +
+          "edit anything in its own worktree, so anything the fence or its evidence " +
+          "depends on must live outside it",
+      );
+    }
+  }
+}
+
+/**
  * The budget's rules, stated once and checked from both entry points.
  *
  * Separate from {@link awaitTerminalReport} because of *when* it has to run.
@@ -500,6 +534,24 @@ export interface LapRequest {
   readonly repository: string;
   /** The root {@link lapArtifactDir} places this run's artifact directory under. */
   readonly artifactRoot: string;
+  /**
+   * Where the session provider keeps its records and the turn's transcript.
+   *
+   * Carried so it can be **checked**, not used: `performLap` never reads it, and
+   * the caller has already built the provider over it. It is here because the
+   * transcript is what `readTerminalReport` turns into a gate, and a transcript
+   * the worker can edit is a gate opened over words its own subject wrote --
+   * and `performLap` is the only place that knows both this path and the
+   * workspace it must stay out of (`D-0067`).
+   */
+  readonly providerStateRoot: string;
+  /**
+   * The worker's own command, if the caller pinned one, for the same check.
+   *
+   * Tokens that are not absolute paths are skipped: `claude` is a name resolved
+   * on `PATH`, not a location this can judge.
+   */
+  readonly workerCommand?: readonly string[];
   /** The worker's endpoint binding, less the holder the intent already fixes. */
   readonly endpoint: Omit<EndpointBinding, "holder">;
   readonly fence: FenceSubstitutions;
@@ -606,6 +658,34 @@ export async function performLap(
   //    point of D-0055 is that the execution intent is fixed once, at admission,
   //    and every later step acts on that record.
   const intent = readLapRunIntent(connection, request.runId);
+
+  // 1a. **The two warded paths the materialiser never sees** (`D-0067`).
+  //
+  //     `materializeWorkspace` holds this rule for everything in its own
+  //     request, and these are the values that never reach it. They are checked
+  //     here rather than in the verb because the workspace is not known until
+  //     the intent above has been read, and they are checked at all because
+  //     both are things the fenced worker must not be able to edit:
+  //
+  //     - the **provider's state root** holds `record.json` and the turn's
+  //       transcript, and that transcript is the evidence `readTerminalReport`
+  //       turns into a gate. Inside the worktree, a worker can append its own
+  //       terminal line and open a gate over words it chose -- which makes the
+  //       human approval a document the subject wrote.
+  //     - the **worker's own command** is the binary the fence is applied to.
+  //
+  //     `performLap` does not otherwise use either one; it validates them
+  //     because it is the only place that knows both the value and the
+  //     workspace.
+  requireOutsideWorkspace(
+    [
+      ["the provider's state root", request.providerStateRoot],
+      ...(request.workerCommand ?? []).map(
+        (token, index) => [`the worker command's token ${String(index)}`, token] as const,
+      ),
+    ],
+    intent.workspace,
+  );
 
   // 2. The workspace, the fence, and the admitted plan. One call, and the
   //    `SessionOrchestratorOptions` it returns is complete -- nothing below adds

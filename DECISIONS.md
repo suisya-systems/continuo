@@ -162,6 +162,7 @@ spaces distinct.
 | D-0064 | Lap 1 runs without endpoint lease renewal, and step 4 is required before step 10 | accepted |
 | D-0065 | An expired gate deadline costs the deadline, never the report; a stale one is refused before the lap starts | accepted |
 | D-0066 | The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference | accepted |
+| D-0067 | Nothing the fence depends on may live inside the worktree, and every path the lap takes from outside is held to it | accepted |
 
 ---
 
@@ -11591,3 +11592,70 @@ So the lap deliberately runs on **two clocks**, and which is which is not an acc
 7 could hand on a live one and this override would become redundant -- though not wrong. And if the
 orchestrator's lease ever stopped being acquired inside `start()`, the specific hazard above would
 move rather than disappear, and this entry should be re-read against wherever it moved to.
+
+---
+
+## D-0067 -- Nothing the fence depends on may live inside the worktree, and every path the lap takes from outside is held to it
+
+**Context.** `materializeWorkspace` already refused an *artifact* inside the workspace, and its
+refusal states the reason exactly: "the fence and the settings must not be files the fenced child can
+edit". The rule was right and the boundary it was drawn around was wrong. It covered what
+materialisation **writes** -- the fence, the settings, the MCP configuration, the ledger, the
+delivery directory -- and step 8 then added a CLI that takes seven more paths from an operator, none
+of which materialisation writes and every one of which the fence depends on.
+
+The worst is the deny hook. It is the file that *enforces* the fence; the worker may edit anything in
+its own worktree; and the hook does not protect its own path. A `--hook-script` inside the worktree is
+a fence the worker rewrites between one tool call and the next, and every subsequent `PreToolUse`
+check runs the worker's version. The same hole appears one step out each time: the interpreter runs
+the hook; the endpoint module and its interpreter run holding the messagebus lease and the control
+plane's path; the provider's state root holds the transcript that `readTerminalReport` turns into a
+gate -- a worker that can append to it opens a human gate over words it chose, which makes the
+approval a document its own subject wrote; and `{interlock_root}` is substituted into the fence's own
+deny rules, so a `denyRead` of `{interlock_root}/.secrets` aimed inside the worktree reads as
+protection and protects nothing.
+
+**Decision.** One rule, stated once: **nothing the fence or its evidence depends on may resolve
+inside the workspace.** It is enforced in two places, split by what each can see:
+
+1. **`materializeWorkspace`** holds it for every path in its own request -- the deny hook, the hook's
+   interpreter, the endpoint module and its interpreter, the control-plane database, `interlock_root`
+   and `claude_org_path` -- because that module owns the containment invariant and has the workspace
+   in hand. Checked as a **separate list** from the artifacts, not appended to it, because the two are
+   asked opposite questions: an artifact must not exist yet, and each of these must already exist to
+   be worth anything.
+2. **`performLap`'s prologue** holds it for the two values the materialiser never sees: the provider's
+   state root and the worker's own command. `LapRequest` carries both **to be checked, not used** --
+   the provider is already built over the state root by the time the lap starts -- and the check lives
+   here because the workspace is not known until the admitted intent has been read.
+
+A command token that is not an absolute path is skipped rather than refused: `claude` is a name
+resolved on `PATH`, only an absolute path can be inside the workspace, and refusing a bare name would
+be this rule inventing a second rule about how a command may be spelled.
+
+**Why this took eight review rounds to surface, recorded so the observation outlives the bug.** Every
+one of these paths is correct in isolation and correct in the module that consumes it. The hazard
+exists only in the relation between two facts that live in different files -- *this path is supplied
+by an operator* and *this directory is writable by the worker* -- and no module holds both. Seven
+rounds of review read the lap's ordering, its refusals, its clocks and its records without meeting it,
+because none of those questions is this question. **The observation, not the fix, is the durable
+part: when a new path enters the lap from outside, ask what happens if it points inside the worktree
+before asking anything else about it.** The cases are parametrized off one list for that reason -- a
+flag added later without a check should surface as a missing case rather than as a silent hole.
+
+**Consequences.**
+
+- The control-plane database is on the warded list and is **unreachable through the verb**: reaching
+  its check would need a database file inside the workspace at materialisation, and materialisation
+  refuses a workspace that already exists. It is kept as defence in depth for `performLap` as a
+  library entry point, and its case says so rather than claiming coverage it does not have.
+- A `--endpoint-db` pointing into the worktree is refused by the neighbouring "names the same
+  database" guard before containment is consulted, which is the older check doing its job.
+- The refusals land before anything is built, so a corrected retry is free -- which matters because
+  `D-0057` refuses a second materialisation of one run.
+
+**What would falsify it.** If a role's fence ever legitimately needed to reference a file inside the
+worktree -- a project-local configuration the worker is meant to edit and the fence is meant to read
+-- then the rule as stated would refuse a real configuration, and the answer would be to split
+"depends on for enforcement" from "reads as data" rather than to widen the rule. Nothing in
+`roles.json` does this today: every substitution there is a deny-rule path or an executable.

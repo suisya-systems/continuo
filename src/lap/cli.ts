@@ -319,6 +319,12 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         runId: String(args["run_id"]),
         repository: String(args["repository"]),
         artifactRoot: String(args["artifact_root"]),
+        // Handed over to be CHECKED against the workspace, not used: see
+        // `LapRequest.providerStateRoot` and `D-0067`. The provider is already
+        // built over this path, which is exactly why the check cannot live here
+        // -- the workspace is not known until the admitted intent is read.
+        providerStateRoot: stateRoot,
+        ...(claudeCommand === undefined ? {} : { workerCommand: claudeCommand }),
         endpoint: {
           epoch: Number(args["endpoint_epoch"]),
           recipient: String(args["endpoint_recipient"]),

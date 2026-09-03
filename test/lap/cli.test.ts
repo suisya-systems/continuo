@@ -261,6 +261,123 @@ function eventTypes(connection: SqliteDatabase): string[] {
 
 // --------------------------------------------------------------------------
 
+describe("D-0067: nothing the fence depends on may live where the worker can edit it", () => {
+  // The fence is only as good as the files that enforce it, and the worker can
+  // edit anything in its own worktree. Every path the verb takes from an
+  // operator is checked against the workspace for that reason -- not because
+  // any of these is a likely typo, but because a fence that holds only while
+  // nobody makes them is not a fence. The cases are parametrized off one list
+  // so that a flag added later without a check is a missing case rather than a
+  // silent hole.
+  //
+  // The refusals arrive before anything is built, which is what makes a
+  // corrected retry free (`D-0057` refuses a second materialisation).
+  /**
+   * A path inside the worktree that **exists once the checkout is made**.
+   *
+   * `README.md` is committed by `initRepository`, so `git worktree add` puts it
+   * there. That detail is the case rather than a convenience: a path inside the
+   * worktree that does not exist is refused by older guards -- the renderer will
+   * not build a fence around a hook that is not there -- so a case pointing at a
+   * missing file proves nothing about containment. The hazard the review
+   * described is precisely a **tracked** file: materialisation succeeds because
+   * the file is there, and the worker can then edit it.
+   */
+  const tracked = (f: Lap): string => join(f.workspace, "README.md");
+
+  /**
+   * A path inside the worktree that does not exist.
+   *
+   * Right for the three values below and wrong for the four above: the state
+   * root is a directory the provider creates, `interlock_root` is substituted
+   * into deny rules without being opened, and the database path is refused by a
+   * different guard entirely. None of them has to exist to reach the check.
+   */
+  const inside = (f: Lap, name: string): string => join(f.workspace, name);
+
+  test("a deny hook inside the worktree is refused", async () => {
+    // The worst of them: the worker rewrites the script that decides what it is
+    // allowed to do, between one tool call and the next.
+    const f = lap("warded-hook");
+    expect(await f.perform({ "--hook-script": tracked(f) })).toBe(2);
+    expect(f.err.join("")).toContain("the deny hook");
+    expect(f.err.join("")).toContain("inside the workspace");
+    expect(existsSync(f.artifactDir)).toBe(false);
+  });
+
+  test("the hook's interpreter inside the worktree is refused", async () => {
+    // The same hole one step out: replace the interpreter and the hook never
+    // really runs.
+    const f = lap("warded-python");
+    expect(await f.perform({ "--python": tracked(f) })).toBe(2);
+    expect(f.err.join("")).toContain("interpreter");
+  });
+
+  test("the provider's state root inside the worktree is refused", async () => {
+    // The transcript is the evidence `readTerminalReport` turns into a gate. A
+    // worker that can append to it can write its own terminal line and open a
+    // gate over words it chose -- a human approval whose subject wrote the
+    // document.
+    const f = lap("warded-state");
+    expect(await f.perform({ "--state-root": inside(f, "state") })).toBe(2);
+    expect(f.err.join("")).toContain("the provider's state root");
+    // Refused in the prologue, before the worktree exists: this check is one of
+    // the two `performLap` makes itself, and it makes them where every other
+    // pre-flight refusal is made.
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("the endpoint module and its interpreter inside the worktree are refused", async () => {
+    // They run holding the messagebus lease and the control plane's path.
+    const withModule = lap("warded-endpoint-module");
+    expect(await withModule.perform({ "--endpoint-module": tracked(withModule) })).toBe(2);
+    expect(withModule.err.join("")).toContain("the endpoint module");
+
+    const withNode = lap("warded-endpoint-node");
+    expect(await withNode.perform({ "--node": tracked(withNode) })).toBe(2);
+    expect(withNode.err.join("")).toContain("interpreter");
+  });
+
+  test("a database path inside the worktree is refused, by whichever guard reaches it", async () => {
+    // The control plane is on the warded list because it holds the gate this
+    // whole lap exists to open. **It has no case of its own, and this comment is
+    // where that is said rather than left for a reader to notice.** Reaching the
+    // containment check would need a database file inside the workspace at
+    // materialisation, and materialisation refuses a workspace that already
+    // exists -- so the file cannot be there yet. The entry is defence in depth
+    // for `performLap` as a library entry point, and it is unreachable through
+    // the verb (`D-0067`).
+    //
+    // What IS reachable is the neighbouring guard, and this case pins that a
+    // database path pointing into the worktree does not get through *something*:
+    // `endpointDatabasePath` refuses a `--endpoint-db` that does not name the
+    // same file the connection opened, which a path inside the worktree cannot.
+    const f = lap("warded-db");
+    expect(await f.perform({ "--endpoint-db": inside(f, "cp.sqlite3") })).toBe(2);
+    expect(f.err.join("")).toContain("endpoint.database_path");
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a fence substitution inside the worktree is refused", async () => {
+    // `{interlock_root}` is substituted into the fence's own deny rules -- a
+    // `denyRead` of `{interlock_root}/.secrets` pointed inside the worktree
+    // denies a directory that holds no secrets, so the rule reads as protection
+    // and protects nothing.
+    const f = lap("warded-interlock-root");
+    expect(await f.perform({ "--interlock-root": inside(f, "root") })).toBe(2);
+    expect(f.err.join("")).toContain("interlock root");
+  });
+
+  test("a worker command that is a bare name is not refused", async () => {
+    // The anti-vacuity half, and a real distinction rather than a formality:
+    // only an absolute path can be inside the workspace, and `claude` is a name
+    // resolved on PATH. A check that refused it would be inventing a rule about
+    // how a command may be spelled -- and every case above would still pass.
+    const f = lap("warded-bare-command");
+    expect(await f.perform(), f.err.join("")).toBe(0);
+  });
+});
+
 describe("the acceptance: a lap from CLI verbs alone", () => {
   test("admit, perform, and a human is now being asked something", async () => {
     const f = lap("lap-e2e");

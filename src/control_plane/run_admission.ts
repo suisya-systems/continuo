@@ -470,7 +470,12 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
     fields = JSON.parse(row.payload);
   } catch (error) {
     throw new RunNotAdmitted(
-      `run ${quoted}'s delegation payload is not readable JSON: ${String(error)}`,
+      // The parser's own message, QUOTED. V8 interpolates a fragment of the
+      // offending input into it, so a hand-edited row carrying a newline or an
+      // escape sequence would reach a one-line refusal with the power to forge
+      // a second line -- the same hazard the run identifier above is quoted
+      // for, arriving by way of the diagnostic rather than the value.
+      `run ${quoted}'s delegation payload is not readable JSON: ${pythonRepr(String(error))}`,
       { cause: error },
     );
   }
@@ -536,6 +541,13 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
     });
   } catch (error) {
     throw new RunNotAdmitted(
+      // NOT quoted, and the asymmetry with the JSON message above is deliberate
+      // rather than an oversight. That one is V8's and interpolates a raw
+      // fragment of the input; this one is `lap_run_intent.ts`'s own, and every
+      // external value in it has already been through `pythonRepr` at the site
+      // that built it. Quoting it again would escape the quotes it already
+      // carries and make the one message an operator most needs to read the
+      // hardest to.
       `run ${quoted}'s delegation payload is not a valid execution intent: ${String(error)}`,
       { cause: error },
     );

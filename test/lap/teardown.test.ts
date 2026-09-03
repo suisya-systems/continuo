@@ -181,6 +181,7 @@ function fixture(label: string, onStart: () => never, nowMs: () => number = () =
       runId: RUN_ID,
       repository,
       artifactRoot: join(root, "artifacts"),
+      providerStateRoot: join(root, "state"),
       endpoint: {
         epoch: 1,
         recipient: NOTIFY_RECIPIENT,

@@ -913,11 +913,49 @@ export function materializeWorkspace(
   // it at the publication site made an empty `destinationDir` cost a topic
   // branch, a worktree, two published files and an admission ledger line before
   // anyone said the request was wrong.
-  const mcp = renderMcpConfig(
-    request.endpoint,
-    endpointDatabasePath(connection, request.endpoint),
-    destinationDir,
-  );
+  const endpointDatabase = endpointDatabasePath(connection, request.endpoint);
+  const mcp = renderMcpConfig(request.endpoint, endpointDatabase, destinationDir);
+  // **Containment for the things the fence DEPENDS on but this step does not
+  // write** (`D-0067`).
+  //
+  // The list below is the artifacts, and containment was first stated over
+  // those alone because they are what materialisation creates. That was the
+  // wrong boundary, and the refusal there says why in its own words: "the fence
+  // and the settings must not be files the fenced child can edit". By that
+  // argument the **deny hook** belongs on a list before either of them -- it is
+  // the file that *enforces* the fence, the worker can edit anything in its own
+  // worktree, and the hook does not protect its own path. A hook inside the
+  // worktree is a fence the worker rewrites between one tool call and the next.
+  //
+  // The same hole, one step out each time: the interpreter runs the hook; the
+  // endpoint module and its interpreter run holding the messagebus lease and
+  // the control plane's path; the database is where the gate this whole lap
+  // exists to open is stored; and `interlock_root` / `claude_org_path` are
+  // substituted into the fence's own deny rules, so a `denyRead` of
+  // `{interlock_root}/.secrets` pointed inside the worktree denies a directory
+  // that holds no secrets.
+  //
+  // Checked separately from the artifacts rather than appended to that list,
+  // because the two are asked opposite questions: an artifact must NOT exist
+  // yet, and every one of these must already exist to be worth anything.
+  const wardedPaths: readonly (readonly [string, string])[] = [
+    ["the deny hook", resolve(request.fence.hookScript ?? defaultHookScript())],
+    ["the hook's interpreter", resolve(request.fence.python ?? process.execPath)],
+    ["the endpoint module", resolve(request.endpoint.endpointModule ?? defaultEndpointModule())],
+    ["the endpoint's interpreter", resolve(request.endpoint.node ?? process.execPath)],
+    ["the control plane database", resolve(endpointDatabase)],
+    ["the fence's interlock root", resolve(request.fence.interlockRoot)],
+    ["the fence's claude-org path", resolve(request.fence.claudeOrgPath)],
+  ];
+  for (const [what, path] of wardedPaths) {
+    if (isInside(path, workspace)) {
+      throw new WorkspaceMaterializationUsageError(
+        `${what} is ${pythonRepr(path)}, inside the workspace ${pythonRepr(workspace)}; ` +
+          "the fenced child can edit anything in its own worktree, so a fence that " +
+          "depends on a file living there is a fence the worker rewrites",
+      );
+    }
+  }
   // The layout invariant, checked over every path an artifact will actually be
   // written to rather than over the directory they are nominally in.
   //
