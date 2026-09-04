@@ -27,8 +27,9 @@ keeping.
 Which of them must already exist is not uniform, and getting it backwards costs a run:
 
 - **Must exist**: the CLI, the interpreter, the target repository, and the directory holding `--db`.
-- **Must not exist**: `--endpoint-destination-dir`, which is refused for existing, and the workspace,
-  which `git worktree add` creates.
+- **Must not exist**: the workspace, which `git worktree add` creates.
+- **Either way**: `--endpoint-destination-dir` is created if it does not exist and reused if it does
+  (`D-0085`, #122; this section's runs predate that fix and used a fresh dropbox per run).
 - **Created for you**: `--state-root` and `--artifact-root` are both made recursively if absent.
 - **Strictest case**: `--interlock-root` and `--claude-org-path` are substituted into the fence's own
   deny rules, so a path that is not there leaves a fence that looks enforced and guards nothing.
@@ -65,12 +66,13 @@ DB=/home/happy_ryo/work/org/workers/continuo-dogfood/control-plane.sqlite3
 # G is the gate id, printed by `lap perform`; it is set in section 5.
 ```
 
-Three constraints, each of which exits 2 when broken:
+Three rules about paths. The first and third exit 2 when broken:
 
 - The directory holding `--db` must already exist. `db create` creates the file, never the directory.
-- `--endpoint-destination-dir` **must not exist**. Materialisation is what creates it, so an existing
-  path is treated as another materialisation's, and publishing over it could replace a fence some
-  worker is running under. Give each run a fresh path (`dropbox-001`, `dropbox-002`, ...).
+- `--endpoint-destination-dir` is created if absent and **reused if present** (`D-0085`, #122). The
+  dropbox deduplicates per idempotency key and fences a superseded writer out by its own token, so
+  one directory can serve several runs; the runs below still used a fresh path each
+  (`dropbox-001`, `dropbox-002`, ...), which is what makes each run's effects easy to read apart.
 - `--artifact-root` is reusable -- it writes `<root>/<run id>` -- but it must live outside the worktree.
 
 ---
@@ -314,9 +316,12 @@ appends nothing, so the five events below are what a closed run would show too. 
 - **Cause.** By design: materialisation owns the path, so an existing one is presumed to belong to
   another materialisation.
 - **Workaround.** Do not create it; give each run a fresh path.
-- **Real fix.** The refusal is right; the help text should say the directory must not exist. Read
-  alongside `gate deliver`'s "Created if it does not exist" for the same directory, the current
-  wording reads as a contradiction.
+- **Real fix.** The conclusion above is wrong about which half to keep. Materialisation does *not*
+  create this directory -- `KeyedDropbox` does, with `mkdir -p`, at endpoint startup and again on
+  every `gate deliver` -- so its presence is no evidence of another materialisation, and what
+  protects a shared dropbox is its per-key deduplication and its own fencing token. **Closed by
+  `D-0085` (#122):** created if missing and reused if present, for both verbs, and both helps now say
+  so and name each other.
 
 ### F-5. The dropbox payload is `\uXXXX`-escaped, so a human cannot read it
 
@@ -700,9 +705,10 @@ per-run identifier moved on -- `--run-id lap1-dogfood-007`, `--topic-branch dogf
 `--workspace .../continuo-dogfood/workspace-007`. All three must change together: the run id is
 already taken in the control plane, and the branch and the workspace already exist, so a command
 that only drops the `--cli-arg` lines fails at admission rather than producing this run.
-`lap perform` likewise takes `--endpoint-destination-dir .../dropbox-007`, which must *not* exist
-(F-4). Run 008 is the same with `008` throughout **and a different prompt** -- the two runs share
-nothing but their flags, so `$PROMPT` must be reassigned between them.
+`lap perform` likewise takes `--endpoint-destination-dir .../dropbox-007`, which at the time of this
+run must *not* exist (F-4; the refusal is gone since `D-0085`). Run 008 is the same with `008`
+throughout **and a different prompt** -- the two runs share nothing but their flags, so `$PROMPT`
+must be reassigned between them.
 
 Run 007's prompt in full. It is 9.2's with the commit spelled out as two separate `Bash` calls, plus
 the four observations written to an uncommitted `sandbox-report.txt`:

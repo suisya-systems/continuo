@@ -61,7 +61,7 @@ import process from "node:process";
 
 import Database, { type Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
-
+import { FENCE_NAME } from "../../src/control_plane/destination.js";
 import { EVENT_TYPES } from "../../src/control_plane/events.js";
 import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { LapRunIntent } from "../../src/control_plane/lap_run_intent.js";
@@ -762,6 +762,122 @@ describe("no artifact can land inside the worktree", () => {
         }),
       WorkspaceMaterializationUsageError,
       /the endpoint destination directory would be written to/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("continuo#122: an endpoint destination directory that already exists is accepted", () => {
+    // Containment is a rule about WHERE the path is; the unclaimed check above
+    // is a rule about WHO made it, and this step does not make this one --
+    // `KeyedDropbox` opens it with `mkdir -p` at endpoint startup and again on
+    // every `gate deliver`. So its presence is not evidence of another
+    // materialisation, and refusing it made the one dropbox an operator polls
+    // unusable for the next lap (D-0085). The dropbox's own protection against
+    // a superseded writer is the fencing watermark it keeps beside the effects.
+    const f = fixture("materialize-destination-exists");
+    const destinationDir = f.request.endpoint.destinationDir;
+    mkdirSync(destinationDir, { recursive: true });
+    const earlier = join(destinationDir, "earlier.effect.json");
+    writeFileSync(earlier, "{}\n", "utf8");
+
+    const materialized = materializeWorkspace(f.connection, f.request);
+
+    expect(materialized.artifacts).toHaveLength(3);
+    expect(existsSync(earlier)).toBe(true);
+  });
+
+  test("continuo#122: a destination directory that is a dangling symlink is refused", () => {
+    // The spelling `existsSync` gets wrong. It follows the link, finds nothing
+    // and reports the path absent, while `mkdirSync(..., {recursive: true})`
+    // sees the link itself and refuses with EEXIST -- so a check written the
+    // obvious way passes this and the endpoint fails on it, with the whole
+    // materialisation already recorded.
+    const f = fixture("materialize-destination-dangling");
+    try {
+      symlinkSync(join(f.root, "nowhere"), f.request.endpoint.destinationDir, "dir");
+    } catch {
+      // Windows without developer mode refuses to create a symlink. The case
+      // asserts nothing there rather than asserting something weaker.
+      return;
+    }
+    expectRefusal(
+      () => materializeWorkspace(f.connection, f.request),
+      WorkspaceMaterializationUsageError,
+      /endpoint destination directory .* exists and does not resolve to a directory/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("continuo#122: a dropbox another control plane drove past this epoch is refused", () => {
+    // The qualifier on "reused if it does": one dropbox per control plane. The
+    // fencing watermark is keyed by the lease RESOURCE, a constant with no
+    // database in it, while the epochs measured against it are one plane's
+    // lease sequence -- so a dropbox already at epoch 5 refuses this run's
+    // epoch 1, and without this it refuses it at the endpoint's first delivery,
+    // with the workspace, the artifacts and the event already there.
+    const f = fixture("materialize-destination-foreign-fence");
+    const destinationDir = f.request.endpoint.destinationDir;
+    mkdirSync(destinationDir, { recursive: true });
+    writeFileSync(
+      join(destinationDir, FENCE_NAME),
+      `${JSON.stringify({ [DELIVERY_LEASE_RESOURCE]: 5 })}\n`,
+      "utf8",
+    );
+    expectRefusal(
+      () => materializeWorkspace(f.connection, f.request),
+      WorkspaceMaterializationRefused,
+      /has already honoured fencing token 5/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("continuo#122: a dropbox this plane's earlier epoch left behind is reused", () => {
+    // The anti-vacuity half of the case above, and the shape same-plane reuse
+    // actually has: the lap that ran before this one left its own watermark,
+    // and this run's epoch is above it because lease epochs on one resource
+    // only rise. A check written as "any watermark refuses" would pass every
+    // other case in this file and refuse exactly the workflow #122 asks for.
+    const f = fixture("materialize-destination-own-fence");
+    const destinationDir = f.request.endpoint.destinationDir;
+    mkdirSync(destinationDir, { recursive: true });
+    writeFileSync(
+      join(destinationDir, FENCE_NAME),
+      `${JSON.stringify({ [DELIVERY_LEASE_RESOURCE]: 2 })}\n`,
+      "utf8",
+    );
+
+    const materialized = materializeWorkspace(f.connection, {
+      ...f.request,
+      endpoint: { ...f.request.endpoint, epoch: 3 },
+    });
+    expect(materialized.artifacts).toHaveLength(3);
+  });
+
+  test("continuo#122: a destination directory that is a file is refused, and nothing is created", () => {
+    // What the narrowing must not lose. `KeyedDropbox` opens the path as a
+    // directory, so a regular file there is a request the endpoint cannot start
+    // under -- and without this it would be found at endpoint startup, after
+    // the branch, the worktree, the artifacts and the event.
+    const f = fixture("materialize-destination-file");
+    writeFileSync(f.request.endpoint.destinationDir, "not a dropbox\n", "utf8");
+    expectRefusal(
+      () => materializeWorkspace(f.connection, f.request),
+      WorkspaceMaterializationUsageError,
+      /endpoint destination directory .* exists and does not resolve to a directory/,
+    );
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("continuo#122: an artifact this step does write is still refused for existing", () => {
+    // The anti-vacuity half of the case above: the refusal was narrowed to the
+    // paths materialisation creates, not deleted. Without this, dropping the
+    // check outright would pass every case in this file.
+    const f = fixture("materialize-fence-exists");
+    writeFileSync(join(f.artifactDir, FENCE_FILENAME), "{}\n", "utf8");
+    expectRefusal(
+      () => materializeWorkspace(f.connection, f.request),
+      WorkspaceMaterializationRefused,
+      /the fence would be written to .* which already exists/,
     );
     expect(existsSync(f.workspace)).toBe(false);
   });
