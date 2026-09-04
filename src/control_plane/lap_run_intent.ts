@@ -149,7 +149,7 @@ const CONTROL_CHARACTERS = /[\x00-\x1f\x7f-\x9f]/;
  * on a guess.
  *
  * **Why the list lives here rather than in `materializer.ts`, which generates
- * them.** `D-0085` needs the two concepts stated side by side, and admission
+ * them.** `D-0086` needs the two concepts stated side by side, and admission
  * checks both -- it runs at `run admit`, before a workspace exists, so
  * `materializer.ts` (which imports this) cannot be where the shared list is
  * without `control_plane` depending on `workspace`. A sixth generated flag
@@ -165,7 +165,7 @@ export const FENCE_OWNED_FLAGS: readonly string[] = [
 ];
 
 /**
- * **Concept two: the flags that alter what the fence means** -- `D-0085`, and
+ * **Concept two: the flags that alter what the fence means** -- `D-0086`, and
  * the door issue #133 was filed about.
  *
  * {@link FENCE_OWNED_FLAGS} is not this list and does not imply it. Those
@@ -286,7 +286,7 @@ export const FENCE_OWNED_FLAGS: readonly string[] = [
  *
  * **A named list, not a rule, and that is its limit.** It refuses the flags
  * that are known today to alter a rendered fence; it cannot refuse one a
- * future CLI release adds. `D-0085` says so in as many words rather than
+ * future CLI release adds. `D-0086` says so in as many words rather than
  * leaving the reader to assume this is exhaustive.
  */
 export const FENCE_ALTERING_FLAGS: readonly string[] = [
@@ -591,13 +591,13 @@ export class LapRunIntent {
       // trading this hole for the one it was closing.
       if (argument === "--") {
         throw new LapRunIntentUsageError(
-          `cli_args[${index}] is '--', the end-of-options marker (D-0085). This step renders ` +
+          `cli_args[${index}] is '--', the end-of-options marker (D-0086). This step renders ` +
             "the operator's arguments before the fence's own, so a '--' among them ends option " +
             "parsing and hands the child every fence flag as positional text -- a run admitted " +
             "with it would spawn a child with no fence at all",
         );
       }
-      // `D-0085`'s two concepts, refused here for two different reasons and
+      // `D-0086`'s two concepts, refused here for two different reasons and
       // named separately so the refusal says which one this argument is.
       const owned = FENCE_OWNED_FLAGS.find((flag) => matchesFlag(argument, flag));
       if (owned !== undefined) {
@@ -611,7 +611,7 @@ export class LapRunIntent {
       if (altering !== undefined) {
         throw new LapRunIntentUsageError(
           `cli_args[${index}] is ${pythonRepr(argument)}, which is ${altering} -- a flag that ` +
-            "alters what the fence permits (D-0085). The fence does not generate it, so nothing " +
+            "alters what the fence permits (D-0086). The fence does not generate it, so nothing " +
             "downstream would refuse it, and a run admitted with it would spawn a child fenced " +
             "by something other than its role document",
         );

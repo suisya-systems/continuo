@@ -459,7 +459,7 @@ describe("cli args are a list of strings, in order", () => {
 });
 
 // --------------------------------------------------------------------------
-// fence-altering flags (D-0085)
+// fence-altering flags (D-0086)
 // --------------------------------------------------------------------------
 
 describe("cli args may not restate a flag the fence generates", () => {
@@ -483,7 +483,7 @@ describe("cli args may not restate a flag the fence generates", () => {
 });
 
 describe("cli args may not name a flag that alters what the fence permits", () => {
-  // `D-0085`, and the substance of issue #133. Nothing downstream refuses
+  // `D-0086`, and the substance of issue #133. Nothing downstream refuses
   // these: they are not generated, so the fence-render checkpoint's
   // duplicate-flag argument never reaches them, and the provider's own owned
   // flags are a third list that does not overlap either. Admission is the only
@@ -654,7 +654,7 @@ describe("cli args may not name a flag that alters what the fence permits", () =
   });
 
   test("the list's length is pinned, so prose that counts it cannot drift", () => {
-    // `D-0085` states the size in words. A flag added or removed without the
+    // `D-0086` states the size in words. A flag added or removed without the
     // entry being updated leaves a decision record that miscounts its own
     // decision -- and the count is how a reader checks they are looking at the
     // same list the entry describes.

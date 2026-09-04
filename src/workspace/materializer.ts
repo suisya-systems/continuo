@@ -20,7 +20,7 @@ import { appendEvent } from "../control_plane/events.js";
 import { spikeRegistry } from "../control_plane/handlers.js";
 // The flags this step generates and refuses an admitted run from restating.
 // The list lives beside `FENCE_ALTERING_FLAGS` in `lap_run_intent.ts` rather
-// than here, because `D-0085` needs the two concepts stated in one place and
+// than here, because `D-0086` needs the two concepts stated in one place and
 // admission -- which runs before any workspace exists -- checks both. A sixth
 // generated flag goes on that list, not on a copy of it here.
 import { FENCE_OWNED_FLAGS } from "../control_plane/lap_run_intent.js";

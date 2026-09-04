@@ -181,8 +181,7 @@ spaces distinct.
 | D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | accepted |
 | D-0084 | `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do | accepted |
 | D-0085 | The endpoint destination directory is created if missing and reused if present, for both verbs that take one | accepted |
-
-| D-0085 | Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both | accepted |
+| D-0086 | Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both | accepted |
 
 ---
 
@@ -13058,7 +13057,7 @@ is a claim on a resource rather than a `mkdir -p`. Also falsified by a dropbox g
 state that a second writer would corrupt, since the argument here is precisely that the only shared
 state it keeps (the fencing watermark) is the thing that makes sharing safe.
 
-## D-0085 -- Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both
+## D-0086 -- Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both
 
 **Context.** The second dogfood's write-up (`docs/operations/lap-1-dogfood.md` section 10.5; issue
 #133) settled one finding by reading rather than by running: the `cli_args` door is open by
