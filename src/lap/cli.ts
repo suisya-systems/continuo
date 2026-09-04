@@ -53,6 +53,7 @@ import {
   type Namespace,
   type Subparsers,
 } from "../cli/parser.js";
+import { SERVED_RECIPIENTS } from "../control_plane/handlers.js";
 import { LeaseRefusal } from "../control_plane/lease.js";
 import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { pythonRepr } from "../control_plane/python_repr.js";
@@ -100,7 +101,10 @@ const CLAUDE_COMMAND_HELP =
   "script); every token must be absolute. Required: a bare name would be " +
   "resolved through PATH, and the fence cannot rest on which directory the " +
   "worker happens to be started from.";
-const ENDPOINT_RECIPIENT_HELP = "the one recipient the worker's endpoint serves.";
+const ENDPOINT_RECIPIENT_HELP =
+  "the one recipient the worker's endpoint serves. Must be one the outbox has a handler " +
+  "registered for (see the list this flag accepts above); a recipient with no handler is " +
+  "refused here, before any worktree or fence is created.";
 const ENDPOINT_DESTINATION_DIR_HELP = "directory the endpoint's delivery files are written into.";
 const ENDPOINT_DB_HELP =
   "path the worker reaches the control plane by, when that is a different " +
@@ -466,7 +470,13 @@ export function addSubparsers(sub: Subparsers): void {
   // lease that is live and being renewed rather than with a number an operator
   // typed. Keeping the flag as an override would keep a supported way to render
   // an epoch naming no live lease, which is the defect step 4 closes.
-  addRequired(perform, "--endpoint-recipient", "endpoint_recipient", ENDPOINT_RECIPIENT_HELP);
+  perform.addArgument({
+    optionStrings: ["--endpoint-recipient"],
+    dest: "endpoint_recipient",
+    choices: SERVED_RECIPIENTS,
+    required: true,
+    help: ENDPOINT_RECIPIENT_HELP,
+  });
   addRequired(
     perform,
     "--endpoint-destination-dir",

@@ -246,3 +246,32 @@ export function spikeRegistry(destination: Destination): HandlerRegistry {
   registry.register(new HumanGatedHandler());
   return registry;
 }
+
+/**
+ * A {@link Destination} good for nothing but naming the handler that would
+ * hold it -- {@link SERVED_RECIPIENTS} constructs a real registry to read its
+ * recipients back, and {@link NotifyDestinationHandler}'s constructor demands
+ * something {@link isDestination} accepts before it will say what recipient
+ * it serves.
+ */
+const introspectionDestination: Destination = {
+  name: "cli-introspection",
+  apply: () => {
+    throw new AssertionError({
+      message: "the cli-introspection destination exists to be listed, not applied",
+    });
+  },
+  effectCount: () => 0,
+  attemptCount: () => 0,
+};
+
+/**
+ * Every recipient {@link spikeRegistry} answers for, read back from a real
+ * registry rather than re-listed by hand -- so a recipient added, renamed, or
+ * removed here is reflected everywhere this is the source (`continuo#121`:
+ * `lap perform --help` and its `--endpoint-recipient` validation) without a
+ * second edit to keep in sync.
+ */
+export const SERVED_RECIPIENTS: readonly string[] = spikeRegistry(introspectionDestination)
+  .handlers()
+  .map((handler) => handler.recipient);

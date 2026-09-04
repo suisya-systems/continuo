@@ -35,10 +35,10 @@ import process from "node:process";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
-import { helpStrings } from "../../src/cli/parser.js";
+import { dispatch, helpStrings } from "../../src/cli/parser.js";
 import { buildParser, main, mainAsync } from "../../src/cli.js";
 import { dbCliSeams } from "../../src/control_plane/cli.js";
-import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
+import { HUMAN_GATED_RECIPIENT, NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { acquire as acquireLease } from "../../src/control_plane/lease.js";
 import { openProductionControlPlane } from "../../src/control_plane/migrator.js";
 import {
@@ -474,6 +474,38 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(f.err.join("")).toContain("run_delegation_recorded");
     // Nothing was built for a run that does not exist.
     expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("continuo#121: --help lists the recipients the outbox actually serves", () => {
+    // `helpStrings` walks `spec.help` only; the served values render in
+    // `--endpoint-recipient`'s `{a,b}` metavar instead (`#metavar`, driven by
+    // `choices`), which is part of `usage()`/`help()` and not of that walk. So
+    // this reads the same rendering `--help` on a real console does.
+    const out: string[] = [];
+    const status = dispatch(buildParser(), ["lap", "perform", "--help"], {
+      stdout: (text) => out.push(text),
+      stderr: (text) => out.push(text),
+    });
+    expect(status).toBe(0);
+    const help = out.join("");
+    expect(help).toContain(NOTIFY_RECIPIENT);
+    expect(help).toContain(HUMAN_GATED_RECIPIENT);
+  });
+
+  test("continuo#121: an unknown --endpoint-recipient is refused before admission is even read", () => {
+    const f = lap("lap-unknown-recipient");
+    // `main`, not `f.perform`: an unrecognised choice is a parser refusal
+    // (`ArgparseExit`) raised by `dispatch` itself, before the handler --
+    // and therefore before the lap -- ever runs, so it never reaches the
+    // "asynchronous verb" guard the synchronous-dispatch case above exists
+    // to exercise. `main` catches it and returns its code rather than
+    // throwing, exactly as it does for `--help`.
+    expect(main(f.argv({ "--endpoint-recipient": "bogus-recipient" }))).toBe(2);
+    expect(existsSync(f.workspace)).toBe(false);
+    expect(existsSync(f.artifactDir)).toBe(false);
+
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKSPACE_MATERIALIZED_EVENT_TYPE);
   });
 
   test("a turn that said nothing opens no gate", async () => {
