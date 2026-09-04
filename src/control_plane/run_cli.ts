@@ -1,5 +1,5 @@
 /**
- * `continuo run admit`.
+ * `continuo run admit` and `continuo run close`.
  *
  * Mounted into the unified CLI by `src/cli.ts`, which owns no flag of its own
  * here: the subtree's module declares its parser, exactly as
@@ -41,10 +41,12 @@
  * all of them are the ordinary outcome of a command an operator typed -- this
  * run is already admitted, this file is not a control plane, this file is behind
  * -- rather than defects. They become one stderr line and exit 2, the same code
- * `db verify` and `attention scan` use. `RunAdmissionUsageError` is deliberately
- * *not* caught: it is a defect in a caller, and it is not reachable from here at
- * all, because the parser has already established that `--run-id` is a string
- * and `--now-ms` an int.
+ * `db verify` and `attention scan` use. `close` meets three families rather than
+ * one, because it takes a lease and transitions a row; {@link isOperatorRefusal}
+ * names them and says why each is an outcome an operator acts on. The two usage
+ * errors are deliberately *not* caught: they are defects in a caller, and
+ * `admit`'s is not reachable from here at all, because the parser has already
+ * established that `--run-id` is a string and `--now-ms` an int.
  *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every string
  * here reaches `--help` on a cp932 console, where a character the console cannot
@@ -69,9 +71,12 @@
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
 import { LapRunIntent } from "./lap_run_intent.js";
+import { LeaseRefusal } from "./lease.js";
 import { openProductionControlPlane } from "./migrator.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import { admitRun } from "./run_admission.js";
+import { closeRun, RUN_CLOSE_OUTCOMES } from "./run_close.js";
+import { type RunStatus, RunTransitionRefused, UnknownRunRefused } from "./run_lifecycle.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -112,6 +117,31 @@ const ADMIT_DESCRIPTION =
   "run-id already on the table rather than re-admitting it, and exits 2 with " +
   "the reason when it refuses.";
 
+const CLOSE_RUN_ID_HELP =
+  "the run to close. It must already be admitted and must not already be at a " +
+  "terminal status: which terminal status a run reached is a fact, and a wrong " +
+  "one is corrected by opening a new run.";
+const OUTCOME_HELP =
+  "the terminal status the run reached. Required and never defaulted: a close " +
+  "records an outcome the operator observed, and a guessed 'completed' would " +
+  "be a fact nobody stated.";
+const ACTOR_ID_HELP =
+  "who is closing the run. The run lease is taken under this identity and the " +
+  "transition is stamped with its epoch, so it is what the row records about " +
+  "who closed the run. An identity, not an authority.";
+const CLOSE_NOW_MS_HELP =
+  "the clock, epoch milliseconds, stamped as the run's updated_at_ms and used " +
+  "to take and give back the lease. Read once from the system clock when " +
+  "omitted; nothing below this command reads a clock.";
+
+const CLOSE_DESCRIPTION =
+  "Close a run: record the operator's close by advancing the run from its " +
+  "current status to the terminal status given by --outcome, as the single " +
+  "fenced writer of run.status. It records step 11 rather than performing it " +
+  "-- push, PR and merge stay manual -- and it appends no event and reads no " +
+  "gate (D-0084). Refuses a run that is absent or already closed, and exits 2 " +
+  "with the reason.";
+
 /**
  * The three effects this module has on the world, as a replaceable record.
  *
@@ -144,16 +174,44 @@ export const runCliSeams = {
 };
 
 /**
- * Report a control-plane refusal on stderr and stop, rather than letting it
- * escape.
+ * The errors this subtree reports as an operator-facing line rather than
+ * letting escape, in the shape `lap/cli.ts`'s `isOperatorRefusal` has.
+ *
+ * `ControlPlaneRefusal` is `admit`'s whole answer and half of `close`'s. The
+ * other three are `close`'s alone, and each is an outcome an operator acts on:
+ *
+ * - `LeaseRefusal` covers `LeaseHeld` -- a lap is still driving this run, so
+ *   wait or stop it -- and the two fenced-write refusals its family carries,
+ *   which is what a second closer racing this one looks like.
+ * - `RunTransitionRefused` and `UnknownRunRefused` are `run_lifecycle.ts`'s, and
+ *   `run_close.ts` refuses both cases before the write with a message of its
+ *   own. They are listed anyway because the pre-check and the write are not one
+ *   transaction: a run closed by another writer in between arrives here, and it
+ *   is still an ordinary answer rather than a defect.
+ *
+ * `RunAdmissionUsageError` and `RunCloseUsageError` are deliberately absent:
+ * they are defects in a caller, and burying a stack under `error: ...` would
+ * cost the frames that diagnose it.
+ */
+function isOperatorRefusal(error: unknown): error is Error {
+  return (
+    error instanceof ControlPlaneRefusal ||
+    error instanceof LeaseRefusal ||
+    error instanceof RunTransitionRefused ||
+    error instanceof UnknownRunRefused
+  );
+}
+
+/**
+ * Report a refusal on stderr and stop, rather than letting it escape.
  *
  * `ArgparseExit` rather than `process.exit`, because `src/cli.ts`'s `main`
  * already catches it and turns it into the process's status -- the one place
  * that is a process boundary.
  */
-function refuse(error: ControlPlaneRefusal): never {
+function refuse(error: Error): never {
   runCliSeams.writeError(`error: ${error.message}\n`);
-  throw new ArgparseExit(2, "refused run admission");
+  throw new ArgparseExit(2, "refused run verb");
 }
 
 /** `--now-ms` if given, else the one clock read. */
@@ -231,7 +289,52 @@ export function cmdRunAdmit(args: Namespace): number {
       connection.close();
     }
   } catch (error) {
-    if (error instanceof ControlPlaneRefusal) {
+    if (isOperatorRefusal(error)) {
+      refuse(error);
+    }
+    throw error;
+  }
+  return 0;
+}
+
+/**
+ * `continuo run close`.
+ *
+ * As thin as `admit`, and thin about a smaller thing: every rule about what a
+ * close is -- the statuses it may leave, the terminal set it may reach, that it
+ * appends no event and reads no gate -- lives in `run_close.ts` and is stated
+ * there once (`D-0084`). This resolves arguments, opens the database, calls one
+ * entry point, reports what moved, and closes the handle in a `finally` whatever
+ * the outcome, for the reason `cmdRunAdmit` does.
+ */
+export function cmdRunClose(args: Namespace): number {
+  const path = String(args["db"]);
+  const nowMs = nowMsOf(args);
+
+  try {
+    const connection = openProductionControlPlane(path);
+    try {
+      const closed = closeRun(connection, {
+        runId: String(args["run_id"]),
+        // The parser's `choices` is this same set, so the cast narrows a value
+        // argparse has already held to the vocabulary.
+        outcome: String(args["outcome"]) as RunStatus,
+        actorId: String(args["actor_id"]),
+        nowMs,
+      });
+      // The step and the epoch. The step, because an operator closing a run out
+      // of `created` should see that it never ran; the epoch, because it is the
+      // link between this row and the lease row naming who closed it, and it is
+      // the whole of the close's audit trail.
+      runCliSeams.write(
+        `closed ${closed.runId} in ${path}: status ${closed.from} -> ${closed.to} ` +
+          `by ${closed.actorId} under writer epoch ${closed.writerEpoch}\n`,
+      );
+    } finally {
+      connection.close();
+    }
+  } catch (error) {
+    if (isOperatorRefusal(error)) {
       refuse(error);
     }
     throw error;
@@ -294,4 +397,38 @@ export function addSubparsers(sub: Subparsers): void {
     help: NOW_MS_HELP,
   });
   admit.setDefaults({ func: cmdRunAdmit });
+
+  const close = sub.addParser("close", CLOSE_DESCRIPTION);
+  addDbArgument(close);
+  close.addArgument({
+    optionStrings: ["--run-id"],
+    dest: "run_id",
+    required: true,
+    metavar: "RUN_ID",
+    help: CLOSE_RUN_ID_HELP,
+  });
+  close.addArgument({
+    optionStrings: ["--outcome"],
+    dest: "outcome",
+    required: true,
+    // The vocabulary itself, not a copy of it: `run_close.ts` names the terminal
+    // set and this reads it, so --help and the domain cannot disagree.
+    choices: RUN_CLOSE_OUTCOMES,
+    help: OUTCOME_HELP,
+  });
+  close.addArgument({
+    optionStrings: ["--actor-id"],
+    dest: "actor_id",
+    required: true,
+    metavar: "ACTOR_ID",
+    help: ACTOR_ID_HELP,
+  });
+  close.addArgument({
+    optionStrings: ["--now-ms"],
+    dest: "now_ms",
+    type: "int",
+    metavar: "NOW_MS",
+    help: CLOSE_NOW_MS_HELP,
+  });
+  close.setDefaults({ func: cmdRunClose });
 }
