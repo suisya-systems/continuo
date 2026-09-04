@@ -7,6 +7,7 @@ import {
   acquireRunLease,
   advanceRunStatus,
   RUN_STATUSES,
+  type RunRecord,
   type RunStatus,
   readRun,
   TERMINAL_RUN_STATUSES,
@@ -110,6 +111,9 @@ export const RUN_CLOSE_OUTCOMES = TERMINAL_RUN_STATUSES;
  */
 export const RUN_CLOSE_LEASE_TTL_MS = 60_000;
 
+/** What may be printed back into a one-line report. See {@link closeRun}. */
+const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
+
 // --------------------------------------------------------------------------
 // refusals
 // --------------------------------------------------------------------------
@@ -198,6 +202,20 @@ export interface ClosedRun {
  *   the write; the refusal is an `action` row before this is raised.
  * @throws {ProtectedWriteMissed} another writer moved the run off the status
  *   this call read.
+ *
+ * **The residual, stated rather than glossed.** The checks above are refused
+ * before the lease is taken, so a close this call can see is impossible costs
+ * the database nothing. That is not a claim about two closes racing: the status
+ * read and the acquire are separate transactions -- `acquire` and
+ * `protectedWrite` each own a `BEGIN IMMEDIATE` and neither can be joined to
+ * another -- so a second closer arriving after the first has committed and given
+ * the lease back reads a status that is already stale, takes the lease (raising
+ * the epoch, replacing the holder), and only then misses on the compare-and-set.
+ * Its refusal is correct and the run is untouched, but the `lease` row no longer
+ * names the writer the `run` row's `writer_epoch` was allocated by, so the
+ * audit link is to an epoch that wrote nothing. Closing that would need the
+ * status precondition and the acquire in one transaction, which is a change to
+ * `lease.ts`'s transaction ownership rather than to this verb (`D-0084`).
  */
 export function closeRun(
   connection: SqliteDatabase,
@@ -212,12 +230,14 @@ export function closeRun(
   const { runId, outcome, actorId, nowMs, ttlMs = RUN_CLOSE_LEASE_TTL_MS } = options;
 
   requireText("run_id", runId);
-  requireText("actor_id", actorId);
+  requirePrintableActor(actorId);
   requireInt("now_ms", nowMs);
   requireInt("ttl_ms", ttlMs);
   requireOutcome(outcome);
 
-  const from = closeableStatusOf(connection, runId, outcome);
+  const record = closeableRecordOf(connection, runId, outcome);
+  requireForwardClock(runId, record, nowMs);
+  const from = record.status as RunStatus;
 
   const lease = acquireRunLease(connection, { runId, holder: actorId, nowMs, ttlMs });
   try {
@@ -243,17 +263,20 @@ export function closeRun(
 // --------------------------------------------------------------------------
 
 /**
- * The status `runId` is at, refused unless a close may leave it.
+ * The `run` row for `runId`, refused unless a close may leave the status it is
+ * at.
  *
  * The three refusals here are the transition set of `D-0084` stated once: no
  * such run, a run already at a terminal status, and a row whose status is not a
- * word this build knows.
+ * word this build knows. The row itself is handed back rather than just the
+ * status, because the clock check below is about the same read: two reads would
+ * be two answers about one row.
  */
-function closeableStatusOf(
+function closeableRecordOf(
   connection: SqliteDatabase,
   runId: string,
   outcome: RunStatus,
-): RunStatus {
+): RunRecord {
   // `pythonRepr`, not raw interpolation: this identifier is an operator's
   // `--run-id` and nothing has validated it on the path where it matched no row,
   // so a newline in it would otherwise forge a second line of output
@@ -282,7 +305,58 @@ function closeableStatusOf(
         "mean",
     );
   }
-  return status as RunStatus;
+  return record;
+}
+
+/**
+ * The close's clock, refused if it runs the run's own timestamps backwards.
+ *
+ * `run` carries `CHECK (updated_at_ms >= created_at_ms)` and this verb writes
+ * `updated_at_ms` from `--now-ms`, so a clock behind the run's creation -- a
+ * corrected system clock, a database written on a faster one, a hand-typed
+ * `--now-ms` -- makes the transition fail *inside* the fenced statement. What
+ * reaches the operator then is a raw `SQLITE_CONSTRAINT` from three frames down,
+ * after a lease has already been taken and given back. Asked here it is a
+ * refusal naming both instants, and it costs nothing: it is a comparison on the
+ * row this call has already read.
+ *
+ * The bound is `updated_at_ms`, not the `CHECK`'s `created_at_ms`. The DDL is
+ * the floor; the run's last movement is the honest one, because a close stamped
+ * before the transition that preceded it would record a history that runs
+ * backwards while satisfying the constraint.
+ */
+function requireForwardClock(runId: string, record: RunRecord, nowMs: number): void {
+  if (nowMs >= record.updatedAtMs) {
+    return;
+  }
+  throw new RunCloseRefused(
+    `closing run ${pythonRepr(runId)} at now_ms=${nowMs} would stamp an ` +
+      `updated_at_ms before the run's own ${record.updatedAtMs}; a close does not ` +
+      "run a run's timestamps backwards, and the row's CHECK would refuse it from " +
+      "inside the fenced statement rather than here",
+  );
+}
+
+/**
+ * The actor, held to printable ASCII.
+ *
+ * The same rule `LapRunIntent` holds a run id to, for the same reason and one
+ * verb later: this string is printed back verbatim in the close's report, so a
+ * value carrying a newline would put a second line on stdout that reads like a
+ * second close. A usage error rather than a refusal, matching where `D-0051`
+ * placed the equivalent check for `run admit`: a malformed identifier is a
+ * defect in whoever composed it, and it never reaches the report at all.
+ */
+function requirePrintableActor(actorId: unknown): asserts actorId is string {
+  requireText("actor_id", actorId);
+  if (!PRINTABLE_ASCII.test(actorId)) {
+    throw new RunCloseUsageError(
+      `actor_id must be printable ASCII (U+0020..U+007E), got ${pythonRepr(actorId)}; ` +
+        "it is printed back verbatim in this verb's report, so a character that " +
+        "ends a line or moves a cursor is one the report cannot quote back as the " +
+        "string the lease row holds",
+    );
+  }
 }
 
 function requireText(field: string, value: unknown): asserts value is string {

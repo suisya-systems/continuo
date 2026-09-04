@@ -12956,6 +12956,20 @@ lease (`D-0046` rule 3) makes that impossible, and this verb inherits the falsif
 gains a `running` status writer -- at that point `created -> <terminal>` stops being the ordinary
 case and becomes the exception worth reporting rather than admitting silently.
 
+**A residual this leaves open, measured rather than assumed.** The refusals above are taken before
+the lease, so a close this verb can see is impossible costs the database nothing. Two closes *racing*
+are a different case and the verb does not close it: the status read and the acquire are separate
+transactions -- `lease.ts` gives `acquire` and `protectedWrite` a `BEGIN IMMEDIATE` each and refuses
+to join either to an outer one -- so a second closer that reads before the first commits will take
+the lease (raising the epoch and replacing the holder) and only then miss on the compare-and-set. The
+run is untouched and the refusal is correct; what is lost is that the `lease` row afterwards names an
+epoch that wrote nothing, so the row's `writer_epoch` no longer resolves to the actor who closed it.
+Making the precondition and the acquire one transaction is a change to `lease.ts`'s transaction
+ownership, which is `D-0046`'s territory and not this verb's, and it is worth taking when a second
+operator surface exists -- lap 1 has one operator.
+
 **What records it.** `test/control_plane/run-close.test.ts` walks all nine admitted steps, asserts
-that a refusal costs the database nothing (no epoch bumped, no status moved), that the lease is taken
-under the actor and given back, and that the spine is unchanged by a close.
+that a refusal this verb detects costs the database nothing (no epoch bumped, no status moved), that
+the lease is taken under the actor and given back, that a `--now-ms` behind the run's own
+`updated_at_ms` is refused here rather than by the row's `CHECK` from inside the fenced statement,
+and that the spine is unchanged by a close.

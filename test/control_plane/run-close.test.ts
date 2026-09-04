@@ -452,6 +452,59 @@ describe("a close that cannot land writes nothing", () => {
     expect(runRow(connection)["status"]).toBe("created");
   });
 
+  test("refuses a clock behind the run's own updated_at_ms, before the lease", () => {
+    const { connection } = admittedFixture();
+
+    // `run` carries CHECK (updated_at_ms >= created_at_ms), and the close writes
+    // `updated_at_ms`. Without this check the write fails INSIDE the fenced
+    // statement, so what reaches the operator is a raw SQLITE_CONSTRAINT after a
+    // lease has already been taken and given back.
+    expectRefusal(
+      () =>
+        closeRun(connection, {
+          runId: RUN_ID,
+          outcome: "completed",
+          actorId: ACTOR,
+          nowMs: T0 - 1,
+        }),
+      RunCloseRefused,
+      /would stamp an updated_at_ms before the run's own 1700000000000/,
+    );
+
+    expect(runRow(connection)["status"]).toBe("created");
+    expect(readLease(connection, runLeaseResource(RUN_ID))).toBeUndefined();
+  });
+
+  test("closes at the run's own instant: the bound is not strict", () => {
+    const { connection } = admittedFixture();
+
+    // Equal is admissible -- a close in the same millisecond as the admission is
+    // a fast operator, not a clock running backwards.
+    closeRun(connection, { runId: RUN_ID, outcome: "completed", actorId: ACTOR, nowMs: T0 });
+
+    expect(runRow(connection)["status"]).toBe("completed");
+  });
+
+  test("refuses an actor id that could forge a second line of output", () => {
+    const { connection } = admittedFixture();
+
+    // The value is printed back verbatim in the close's report, so a newline in
+    // it would put a line on stdout that reads like a second close. Held to
+    // printable ASCII exactly as `LapRunIntent` holds a run id, and refused
+    // before anything is written.
+    expect(() =>
+      closeRun(connection, {
+        runId: RUN_ID,
+        outcome: "completed",
+        actorId: "op\nclosed forged-run in nowhere",
+        nowMs: T1,
+      }),
+    ).toThrow(RunCloseUsageError);
+
+    expect(runRow(connection)["status"]).toBe("created");
+    expect(readLease(connection, runLeaseResource(RUN_ID))).toBeUndefined();
+  });
+
   test("refuses a malformed argument before anything is read", () => {
     const { connection } = admittedFixture();
 
