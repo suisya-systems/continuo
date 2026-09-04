@@ -613,11 +613,24 @@ function requireRunId(field: string, value: unknown): string {
  * flags (`-p`, `--resume`, `--session-id` and the rest) but knows nothing about
  * these -- they are this step's, and nothing else would refuse them.
  *
+ * `--setting-sources` and `--strict-mcp-config` join them under `D-0081`. They
+ * are the two halves of the same property: each of the first three flags names
+ * what the child should read, and neither says anything about what the child
+ * reads *besides* it. An operator argument that restated either one would put
+ * the surroundings back -- which is the failure they exist to remove, arriving
+ * through the one door the fence hands the operator.
+ *
  * Refused rather than overridden, because "the last occurrence wins" is a
  * property of a CLI this repository does not own. A fence that rests on an
  * argument-precedence rule nobody here can test is a fence resting on a guess.
  */
-const FENCE_OWNED_FLAGS: readonly string[] = ["--settings", "--permission-mode", "--mcp-config"];
+const FENCE_OWNED_FLAGS: readonly string[] = [
+  "--settings",
+  "--permission-mode",
+  "--mcp-config",
+  "--setting-sources",
+  "--strict-mcp-config",
+];
 
 /**
  * The admitted run's own CLI arguments, checked.
@@ -1179,6 +1192,11 @@ export function materializeWorkspace(
   const spawner = new FencedSpawner({
     ledger: new FenceLedger(fenceLedgerPath),
     settingsName: DEFAULT_SETTINGS_NAME,
+    // The child this workspace is materialised for is a `claude -p` session --
+    // `LapRunIntent` carries a prompt and the provider renders `--print`, and
+    // there is no path through this step that produces an interactive one. So
+    // the fence is rendered for a spawn with nobody at its prompt (`D-0081`).
+    nonInteractive: true,
   });
   const admission = spawner.prepare(role, context);
   if (!admission.admitted || admission.plan === null) {
@@ -1304,8 +1322,11 @@ export function materializeWorkspace(
     prompt: request.prompt,
     // The admitted run's own arguments first, then the fence's flags, then the
     // configuration that makes the worker able to poll. `plan.cliArgs()` is
-    // `--settings <path> --permission-mode <mode>` (`D-0010`); `--mcp-config`
-    // is what `D-0058` adds.
+    // `--settings <path> --permission-mode <mode> --setting-sources ''`
+    // (`D-0010`, and the last of the three `D-0081`); `--mcp-config` is what
+    // `D-0058` adds, and `--strict-mcp-config` beside it is `D-0081`'s other
+    // half: without it the rendered MCP document is one more server list among
+    // the target repository's own, rather than the only one.
     //
     // **The order is the fail-closed direction, and it is the second line of
     // defence rather than the first.** The flags this step generates are the
@@ -1315,7 +1336,13 @@ export function materializeWorkspace(
     // is `requireFenceOwnedFlagsAbsent` above, which refuses such an argument
     // outright, because "which occurrence wins" is a property of a CLI this
     // repository does not own and must not be the only thing a fence rests on.
-    cli_args: Object.freeze([...cliArgs, ...plan.cliArgs(), "--mcp-config", mcpConfigPath]),
+    cli_args: Object.freeze([
+      ...cliArgs,
+      ...plan.cliArgs(),
+      "--mcp-config",
+      mcpConfigPath,
+      "--strict-mcp-config",
+    ]),
   });
 
   return new MaterializedWorkspace(MATERIALIZATION_MINT, {

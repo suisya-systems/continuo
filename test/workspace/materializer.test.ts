@@ -506,10 +506,17 @@ describe("the completed SessionOrchestratorOptions", () => {
     expect(settings["prompt"]).toBe("do the work");
     const cliArgs = settings["cli_args"] as string[];
     // The fence's flags come from the plan rather than being spelled again
-    // here; what is asserted is that they are present and that `--mcp-config`
-    // was appended after them.
-    expect(cliArgs.slice(0, 4)).toEqual(materialized.plan.cliArgs());
-    expect(cliArgs.slice(4)).toEqual(["--mcp-config", join(f.artifactDir, MCP_CONFIG_FILENAME)]);
+    // here -- and their COUNT comes from the plan too, rather than being a
+    // literal this file would have to be edited every time the fence grows a
+    // flag. What is asserted is that they are present and that the MCP flags
+    // were appended after them.
+    const fenceFlags = materialized.plan.cliArgs();
+    expect(cliArgs.slice(0, fenceFlags.length)).toEqual(fenceFlags);
+    expect(cliArgs.slice(fenceFlags.length)).toEqual([
+      "--mcp-config",
+      join(f.artifactDir, MCP_CONFIG_FILENAME),
+      "--strict-mcp-config",
+    ]);
   });
 
   test("the plan it returns is one the spawner will execute", () => {
@@ -1392,8 +1399,13 @@ describe("the admitted run's own CLI arguments survive", () => {
     expect(cliArgs.slice(0, 2)).toEqual(["--model", "sonnet"]);
     // The generated flags come after, so a parser resolving a repeated option
     // last-wins resolves it in the fence's favour.
-    expect(cliArgs.slice(2, 6)).toEqual(materialized.plan.cliArgs());
-    expect(cliArgs.slice(6)).toEqual(["--mcp-config", join(f.artifactDir, MCP_CONFIG_FILENAME)]);
+    const fenceFlags = materialized.plan.cliArgs();
+    expect(cliArgs.slice(2, 2 + fenceFlags.length)).toEqual(fenceFlags);
+    expect(cliArgs.slice(2 + fenceFlags.length)).toEqual([
+      "--mcp-config",
+      join(f.artifactDir, MCP_CONFIG_FILENAME),
+      "--strict-mcp-config",
+    ]);
   });
 
   test("an empty argument is carried, because the intent permits one", () => {
@@ -1441,13 +1453,38 @@ describe("the admitted run's own CLI arguments survive", () => {
     expect(existsSync(f.workspace)).toBe(false);
   });
 
+  test("the two flags that remove the surroundings are owned by the fence too", () => {
+    // `D-0081`. `--setting-sources` and `--strict-mcp-config` are not more
+    // configuration for the child: each one is what makes one of the other
+    // flags exclusive rather than additive. An operator argument restating
+    // either would put the target repository's own settings, or its own MCP
+    // servers, back underneath a fence that had just excluded them -- which is
+    // the defect they close, arriving through the one door the fence leaves
+    // open. Both spellings, for the reason the case above gives.
+    const f = fixture("materialize-cli-args-hermetic");
+    for (const argument of [
+      "--setting-sources",
+      "--setting-sources=user,project,local",
+      "--strict-mcp-config",
+      "--strict-mcp-config=false",
+    ]) {
+      expectRefusal(
+        () => materializeWorkspace(f.connection, { ...f.request, cliArgs: [argument] }),
+        WorkspaceMaterializationUsageError,
+        /repeats --(setting-sources|strict-mcp-config)/,
+      );
+    }
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
   test("no arguments means only the generated flags (the anti-vacuity half)", () => {
     const f = fixture("materialize-cli-args-none");
     const materialized = materializeWorkspace(f.connection, f.request);
     const cliArgs = (materialized.options.settings as Record<string, unknown>)[
       "cli_args"
     ] as string[];
-    expect(cliArgs.slice(0, 4)).toEqual(materialized.plan.cliArgs());
+    const fenceFlags = materialized.plan.cliArgs();
+    expect(cliArgs.slice(0, fenceFlags.length)).toEqual(fenceFlags);
   });
 });
 
