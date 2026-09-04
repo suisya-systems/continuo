@@ -226,7 +226,8 @@ That is worth stating plainly rather than letting the recommendation borrow stre
 have.
 
 *The addition that closes it.* A test in `test/contract/` asserting that **every vector in
-`cli_args_allow` appears verbatim in that document's `deviations` list**. It is mechanical (both
+`cli_args_allow` appears verbatim in that document's `deviations` list**, and that a vector containing
+one of section 6's corpus flags has a deviation **naming that flag**. It is mechanical (both
 sides are literal strings in files this repository owns), it fails closed (an authorised vector with
 no written reason is red), and it turns "somebody should explain this" into a check. It also gives
 the corpus in section 6 the thing it needs -- a place where every authorised vector is enumerated.
@@ -373,10 +374,21 @@ A second exported constant that no longer enforces anything is that trap rebuilt
   `["--dangerously-skip-permissions", "--foo"]`, submitting the bare flag would still be refused under
   exact whole-vector matching and CI would stay green over a document that had just re-opened the
   largest hole `D-0086` names. The case that catches that scans **every vector in every role's
-  `cli_args_allow`** for a corpus member and fails naming the role, the vector and the flag.
+  `cli_args_allow`** for a corpus member.
+
+  **What it does when it finds one is the whole of the "informs, not bars" policy, and it has to be
+  said precisely or the test contradicts it.** A scan that simply fails would bar the entries D7
+  deliberately permits -- `--allowedTools` is on the corpus and is the only argument the dogfood ever
+  needed, so a bar would make the hatch useless for the only observed case. What the scan gates is
+  the **record**: it fails unless that vector's `deviations` entry **names the corpus flag it
+  authorises**. Authorising `["--allowedTools", "Edit,Write"]` is therefore green once somebody has
+  written down that it authorises `--allowedTools` and why; authorising it silently is red. That is
+  the same shape as the deviation check in 4.1 and merges with it into one case, and it is a check on
+  whether a decision was recorded rather than on which decision was taken.
+
   `AGENTS.md`'s "green is not enough" rule applies directly -- this is a new check, so it ships with
-  an anti-vacuity fixture: a document that *does* authorise a corpus flag, over which the scan is
-  observed red.
+  an anti-vacuity fixture: a document authorising a corpus flag with no deviation naming it, over
+  which the scan is observed red.
 - The four *admitted* flags `D-0086` asserts on purpose (`--restricted`, `--disable-slash-commands`,
   `--permission-prompts`, `--tmux`) **invert**: under an allowlist they are refused like everything
   else, and the cases that assert they are admitted must be deleted rather than left to fail. That
@@ -396,9 +408,21 @@ residual risk of the whole design and section 7 states it as such.
 ## 7. What this does not close
 
 - **The escape hatch is the door, moved.** An allowlist does not remove the ability to run a child
-  with a widened fence; it moves the decision from a command line into a digest-pinned document. The
-  security claim is exactly that and no more: **per-run** widening becomes impossible, **reviewed**
-  widening stays possible. Anyone with commit access and a green CI can still author it.
+  with a widened fence; it moves the decision from a command line into a digest-pinned document.
+  **Per-run** widening by an operator becomes impossible; **reviewed** widening stays possible, and
+  anyone with commit access and a green CI can still author it.
+- **The vector is fixed. What the vector points at is not, and that is a real gap in the sentence
+  above.** Several of the arguments a role might plausibly authorise dereference something outside
+  the document: `--plugin-url` fetches whatever is served today, `--plugin-dir` and `--add-dir` name
+  directories whose contents change between runs, `--file` downloads bytes at startup. For those, the
+  argv bytes and the digest stay identical while the child's capabilities move, so "the operator
+  cannot widen per run" holds only for arguments that are self-contained -- a tool list, a mode -- and
+  not for arguments that are references. The design does not pin referenced content and this note does
+  not propose that it should; what it does is make authorising such an argument impossible to do
+  silently, since every one of those flags is on the corpus and so needs a written deviation naming
+  it. A reviewer meeting one should treat "this argument is a reference" as the question, and the
+  honest default answer is that a reference belongs in the rendered fence (§4.2's apply shape), where
+  continuo controls what it points at.
 - **An authorised vector authorises its value forever.** `["--allowedTools", "Edit,Write"]` on a
   role is not scoped to a run, a repository or a date. Nothing here proposes an expiry.
 - **`PROVIDER_OWNED_FLAGS` is untouched**, and the provider's own `base_cli_args` path
@@ -471,12 +495,14 @@ document authorises, and everything else is refused. Four parts:
 Its prose stays in `D-0086`, which is append-only and is the record of what six review passes found.
 Its twenty-four names become a test corpus, and the case that corpus drives **reads the document
 rather than submitting arguments**: it scans every vector in every role's `cli_args_allow` for a
-corpus member and fails naming the role, the vector and the flag. Submitting each flag and asserting
-refusal would be close to vacuous -- a role authorising `["--dangerously-skip-permissions", "--foo"]`
-still refuses the bare flag under exact matching, so CI would stay green over a document that had
-just re-opened the largest hole `D-0086` names. The corpus **informs** review of a hatch entry rather
-than barring one, because `--allowedTools` is on it and is the only argument the dogfood ever
-needed.
+corpus member, and fails unless that vector's `deviations` entry **names the flag it authorises**.
+Submitting each flag and asserting refusal would be close to vacuous -- a role authorising
+`["--dangerously-skip-permissions", "--foo"]` still refuses the bare flag under exact matching, so CI
+would stay green over a document that had just re-opened the largest hole `D-0086` names. And a scan
+that simply failed would **bar** the entries this decision deliberately permits: `--allowedTools` is
+on the corpus and is the only argument the dogfood ever needed. So the corpus gates the **record**
+and not the decision -- authorising a corpus flag is green once somebody has written down that they
+did and why, and red when done silently.
 
 **This supersedes `D-0086`, and restates the half of it that survives.** `D-0086`'s central decision
 was that the constructor refuses both lists; that stops being true here, so under `AGENTS.md`'s rule
@@ -512,15 +538,16 @@ role?" splits across two files). *A key on the role body rather than a top-level
 scanning; making it inert means editing `META_KEYS` in a module ported faithfully from interlock).
 *The corpus bars the hatch* (rejected: it would bar the only argument ever needed).
 
-**What records it.** Three checks, all new. (1) The allowlist's own cases at each of the three
+**What records it.** Two checks, both new. (1) The allowlist's own cases at each of the three
 enforcement points, including the unconditional empty-vector rule, which is the one a literal reading
-of "must equal an entry" gets wrong. (2) The corpus scan over the document, described above. (3) A
-`test/contract/` case asserting that **every vector in `cli_args_allow` appears verbatim in the
-`deviations` list** for `roles.json` -- because `carried-documents.test.ts` compares only `bytes` and
-`sha256`, and `deviations` is free-form metadata no assertion reads, so without it the digest pin
-forces a deliberate second edit but not a written reason. Checks (2) and (3) are new checks under
-`AGENTS.md`'s "green is not enough" rule and each ships with an anti-vacuity fixture: a document that
-authorises a corpus flag, and one that authorises a vector no deviation mentions, both observed red.
+of "must equal an entry" gets wrong. (2) One `test/contract/` case over `roles.json` asserting that
+**every vector in `cli_args_allow` appears verbatim in the `deviations` list**, and that a vector
+containing a corpus flag has a deviation **naming that flag**. It exists because
+`carried-documents.test.ts` compares only `bytes` and `sha256` while `deviations` is free-form
+metadata no assertion reads -- so without it the digest pin forces a deliberate second edit but not a
+written reason. Check (2) is a new check under `AGENTS.md`'s "green is not enough" rule and ships with
+its anti-vacuity fixture: a document authorising a corpus flag with no deviation naming it, observed
+red.
 
 **Consequences.** `continuo run admit --cli-arg X` refuses X under the shipped document, for every
 role; the flag stays, because an authorised argument must be passable, and its help says so.
@@ -555,8 +582,8 @@ Each row is a question this design had to answer and that the gate can overturn 
 | D3 | Where does the escape hatch live? | **A top-level `cli_args_allow` key in `src/fencing/roles.json`, plus a test tying each vector to a `deviations` entry** | The renderer reads only `roles` and `global`, so no ported code changes. The digest pin alone is weaker than it looks -- `carried-documents.test.ts` compares only `bytes` and `sha256`, and `deviations` is metadata nothing reads -- so it forces a deliberate second edit but not a written reason. The added test is what makes "reviewed, not per-run" enforced rather than hoped for |
 | D4 | Permit an operator argument, or apply one from the document? | **Permit** | Applying is safer, but puts arguments in the child's argv that the `run_delegation_recorded` payload does not mention, and `D-0055` makes that payload the whole statement of what a run runs. Overturnable: if the gate values the closed door more than the complete record, H0 (§4.2) is the stronger design |
 | D5 | Which module enforces the allowlist? | **`admitRun`, first in `lap perform`'s preflight, and the materialiser's validation block -- not the constructor, which keeps `FENCE_OWNED_FLAGS` and the bare `--`** | The preflight is load-bearing rather than belt-and-braces: `performLap` takes the one global delivery lease *before* it materialises, so a check first met at the materialiser lets a run that will be refused consume an epoch and a resource. The constructor is excluded from the *allowlist* only, because it also runs at `lap perform` -- teaching it a mutable document would make an admitted run *unreadable* once its entry was removed. The owned-flag list stays there: it is this build's own output, closed by construction and role-independent |
-| D6 | What happens to `FENCE_ALTERING_FLAGS`? | **Delete from `src/`; the names become a corpus that scans the document, not one that submits arguments** | A non-enforcing exported list rebuilds the exact trap `D-0086` names. The scan direction is load-bearing: under exact whole-vector matching a submitted bare flag is refused even when the document authorises a vector containing it, so a submit-and-assert corpus would stay green over the widening it exists to catch |
-| D7 | Does the corpus bar an escape-hatch entry, or inform review of one? | **Inform** | `--allowedTools` is on the corpus and is the only argument the dogfood ever needed; a bar makes the hatch useless for the only observed case. This is the residual risk, stated in §7 |
+| D6 | What happens to `FENCE_ALTERING_FLAGS`? | **Delete from `src/`; the names become a corpus that scans the document, not one that submits arguments** | A non-enforcing exported list rebuilds the exact trap `D-0086` names. The scan direction is load-bearing: under exact whole-vector matching a submitted bare flag is refused even when the document authorises a vector containing it, so a submit-and-assert corpus stays green over the widening it exists to catch |
+| D7 | Does the corpus bar an escape-hatch entry, or inform review of one? | **Neither, exactly: it gates the *record*.** CI is red until the vector's `deviations` entry names the corpus flag it authorises, and green once it does | A bar makes the hatch useless for the only case ever observed (`--allowedTools` is on the corpus). A purely advisory corpus is not a check at all. Gating on whether the decision was written down is the version that is enforceable without deciding for the reviewer -- and it is the same case as D3's deviation check, merged |
 | D8 | Is `D-0086` superseded? | **Yes. `D-0087` supersedes it and restates the surviving owned-flag rule** | Its central decision -- the constructor refuses both lists -- stops being true, and `AGENTS.md` says a decision that stops being true gains `Status: superseded by D-XXXX`. Leaving it accepted would give a reader two accepted answers to "what refuses `cli_args`?". The price is that `D-0087` must restate `FENCE_OWNED_FLAGS` and the bare `--` rule so nothing is only recorded in a superseded entry, which it does |
 | D9 | Does `--cli-arg` survive as a CLI flag? | **Yes, with rewritten help** | Removing it would make an authorised argument unpassable. The help must say the refusal is the default and that the role document is where the answer is authored |
 | D10 | How is "no operator arguments" expressed? | **An unconditional rule: `cli_args` of length zero is always authorised** | Exact matching against an absent entry list matches nothing, so a literal implementation would refuse the no-argument run every lap has performed. Writing `[[]]` on each role instead makes a deletable line load-bearing -- a documentation tidy-up would stop every lap |
