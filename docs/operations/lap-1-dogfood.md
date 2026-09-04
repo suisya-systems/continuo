@@ -116,6 +116,10 @@ The two `--cli-arg` lines are **the workaround for F-2**, not something this ver
 them and the worker finishes its turn without ever getting an `Edit` through -- that is exactly what
 laps 1 and 2 of this dogfood did.
 
+> **Since D-0081 this workaround is no longer needed.** A non-interactive spawn renders
+> `permissionMode: acceptEdits`, so the run above admits without either `--cli-arg` line. They are
+> left in place because this section records what these three laps actually took; see F-2.
+
 Pass a value that starts with `-` as `--cli-arg=--allowedTools`. Written with a space,
 `--cli-arg --allowedTools`, argparse reads the next token as a flag and exits with
 `expected one argument`.
@@ -263,6 +267,11 @@ verb exists to move it. Five events remain: `run_created`, `run_delegation_recor
   discovery to its own artifact directory -- or, failing that, detect a `.claude/settings*.json` in
   the target repository before spawning and refuse. Undetected, an operator cannot tell whether the
   fence or the ambient configuration is the thing in force.
+- **Fixed (D-0081, #119).** The first of the two: the rendered plan passes `--setting-sources ''`,
+  which confines the child to the fence and the managed settings, and the materialiser passes
+  `--strict-mcp-config` for the same reason on the MCP axis. The pre-spawn refusal was not taken --
+  it would make every repository with local settings permanently unrunnable. The clone workaround
+  above is no longer needed.
 
 ### F-2. Under the fence as shipped, a non-interactive worker cannot write anything
 
@@ -283,6 +292,10 @@ verb exists to move it. Five events remain: `run_created`, `run_delegation_recor
   `permissionMode: acceptEdits` for a non-interactive spawn. Which one is a fence design decision,
   so nothing was changed here. As it stands, lap 1's worker can only read and escalate, which does
   not meet section 7 step 7's "a worker that can both work and poll".
+- **Fixed (D-0081, #120).** The second of the two, taken at the human gate: a non-interactive spawn
+  renders `default` as `acceptEdits`. The role document is untouched -- its allow list is not
+  widened and its deny rules are byte-identical -- so an interactive spawn of the same role is
+  unchanged.
 
 ### F-3. An arbitrary `--endpoint-recipient` fails just before the spawn
 
