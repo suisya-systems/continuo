@@ -1929,6 +1929,26 @@ describe("the fence's writable surface is derived from the worktree's own git (D
     expect(gitDir.startsWith(f.workspace)).toBe(false);
   });
 
+  test("an ambiguous short ref name does not move the branch path (codex review)", () => {
+    const f = fixture("materialize-git-roots-ambiguous");
+    materializeWorkspace(f.connection, f.request);
+
+    const worktreeGit: GitOptions = { ...f.git, cwd: f.workspace };
+    // A tag with the SAME name as the checked-out branch. `symbolic-ref --short`
+    // abbreviates only as far as the name stays unambiguous, so with this in the
+    // repository it answers `heads/feat/topic` -- and a `refs/heads` prefix put
+    // back on that names `refs/heads/heads/feat/topic`, which is not the
+    // branch's ref and is not anything.
+    runGitChecked(["tag", TOPIC_BRANCH, "HEAD"], worktreeGit);
+
+    const commonDir = runGitChecked(
+      ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      worktreeGit,
+    ).stdout;
+    expect(gitMetadataRoots(worktreeGit)).toContain(`${commonDir}/refs/heads/${TOPIC_BRANCH}`);
+    expect(gitMetadataRoots(worktreeGit).some((root) => root.includes("heads/heads/"))).toBe(false);
+  });
+
   test("a detached HEAD contributes no branch ref rather than refs/heads/HEAD", () => {
     const f = fixture("materialize-git-roots-detached");
     materializeWorkspace(f.connection, f.request);

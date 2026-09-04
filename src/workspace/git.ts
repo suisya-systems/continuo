@@ -564,9 +564,16 @@ export function gitMetadataRoots(options: GitOptions): readonly string[] {
   // one form that answers no by exit status instead of by echoing `HEAD` back
   // the way `rev-parse --abbrev-ref` does -- a detached checkout would
   // otherwise produce `refs/heads/HEAD`.
-  const head = runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], options);
+  //
+  // The FULL ref, and no `--short`. `--short` abbreviates only as far as the
+  // name stays unambiguous, so a repository carrying both `refs/heads/release`
+  // and `refs/tags/release` answers `heads/release` -- and this would then name
+  // `refs/heads/heads/release`, a path that is not the branch's ref and is not
+  // anything. The full ref is already `refs/heads/<name>` and needs no prefix
+  // put back on it. (Found by codex review of this change.)
+  const head = runGit(["symbolic-ref", "--quiet", "HEAD"], options);
   if (isNoOnExitOne(head)) {
-    roots.push(posixJoin(commonDir, "refs/heads", head.stdout));
+    roots.push(posixJoin(commonDir, head.stdout));
   }
   roots.push(posixJoin(commonDir, "packed-refs"));
   // De-duplicated in place: in a plain clone `--git-dir` and `--git-common-dir`
