@@ -176,6 +176,7 @@ spaces distinct.
 | D-0078 | The gate verbs, and why the ack closes the gate rather than a ninth verb | accepted |
 | D-0079 | The reconcile pass is its own verb, the operator owns its cadence, and it pronounces no verdicts | accepted |
 | D-0080 | After the lap there is no endpoint, so a verb drives delivery: `gate deliver` | accepted |
+| D-0081 | The fence is the child's only configuration, and it renders a mode the child can work under | accepted |
 
 ---
 
