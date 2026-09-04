@@ -7,8 +7,11 @@ operator can call", judges the five items the port left open, and puts the decis
 order.
 
 **Status: propose-only.** No implementation accompanies this document, and it files no `DECISIONS.md`
-entry. Every decision named below is proposed to continuo's human gate (`D-0031`, `D-0036`) or, where
-said so explicitly, to cadenza's. The recommendations are recommendations, not decisions taken.
+entry *for anything it proposes*. Every decision named below is proposed to continuo's human gate
+(`D-0031`, `D-0036`) or, where said so explicitly, to cadenza's. The recommendations are
+recommendations, not decisions taken. The one entry that cites this document, `D-0087`, is the
+opposite case: it records a **premise supplied to** the document being revised by the operator, not a
+recommendation of the document being accepted.
 
 **What this document deliberately does not do.** It does not treat claude-org-ja's implementation as
 the specification the successor must reproduce. Roughly a third of ja's delegation machinery exists
@@ -39,8 +42,10 @@ wrong one changes the answer:
 Citations to `DECISIONS.md` are by entry id only, per that file's own rule that it is never cited by
 line number. Citations to source are `path:line` at the revisions above.
 
-**Two operator premises this document is written under.** Both were settled after the survey and are
-recorded on cadenza#22. They are **premises supplied to this document, not findings of it** -- the
+**Two operator premises this document is written under.** Both were settled after the survey. The
+first was recorded on cadenza#22 and stands as written; the second was recorded there as a **working
+assumption** with a revisit trigger, that trigger has fired, and it was settled differently on
+2026-09-05 (cadenza#40). They are **premises supplied to this document, not findings of it** -- the
 sections they touch say what they change and, where a judgement survives them unchanged, say that
 too:
 
@@ -49,24 +54,42 @@ too:
    record of truth, serves a human-facing web UI, and speaks MCP over localhost to agent sessions
    (the host-local exception, ratified 2026-06-14 -- an org-doctrine ratification this document takes
    as given rather than verifies). **The only other processes are the agent sessions themselves.**
-2. **Working assumption, not a settled decision: that application is hosted by cadenza**, as an
-   outermost adapter beside the existing catalog adapter. The provider-agnostic constraint binds
-   cadenza's `domain`, `application` and `ports` layers rather than the repository, so the placement
-   is architecturally available.
+   Unchanged by the revision below.
+2. **That application is hosted by `rondo`, a third repository, which consumes continuo and cadenza
+   as libraries.** The host is neither existing repository's outermost adapter layer. Continuo stays
+   the control-plane library, cadenza stays the catalog and gate-semantics library, and everything
+   the host needs that neither of them owns -- the HTTP server, the web UI, the localhost MCP
+   endpoint, and the SQLite driver reached through continuo's exports -- lives in rondo. Settled
+   2026-09-05 on cadenza#40 and recorded as `D-0087`.
 
-**Premise 1 is structural and this document is written on it. Premise 2 is not**, and it is recorded
-as a working assumption deliberately: fixing it here without a counter-proposal on the page would be
-the same error this document criticises elsewhere -- a position hardened by repetition rather than by
-grounds -- just pointed inward instead of upstream. So both readings, and the trigger that settles it.
+**Both premises are now settled and this document is written on both.** They are settled for
+different reasons, and the difference is worth keeping: premise 1 is *structural*, so no later fact
+could cheaply move it, while premise 2 is not -- it was settled by an operator choice at the moment
+its trigger named, and the rest of section 0 is the record of why it was held open until then and
+what closed it. That
+record is kept rather than deleted because the sections below were written against the open question
+and a reader needs to know which answer they were written against; the conditionals themselves are
+resolved in place, so nothing below still asks the reader to pick.
 
-**Why cadenza.** The command surface -- approving a gate, issuing a delegation -- is the semantic
-half cadenza's charter claims, so a surface over it is a surface over cadenza's own vocabulary. And
-it adds no repository: this document already records that neither `DECISIONS.md` can hold a decision
-binding both repositories (section 8), so a shape that multiplies cross-repository decisions walks
-straight into a defect that is already named.
+**What premise 2 used to say.** *That application is hosted by cadenza*, as an outermost adapter
+beside the existing catalog adapter -- marked a working assumption, not a settled decision, on the
+ground that the provider-agnostic constraint binds cadenza's `domain`, `application` and `ports`
+layers rather than the repository, so the placement was architecturally available.
 
-**The counter-proposal, and the fact that supports it.** Put the application in its own package --
-a third repository, or a separate workspace package -- and keep cadenza pure. What argues for it is an
+**Why it was held open rather than fixed.** Fixing it here without a counter-proposal on the page
+would have been the same error this document criticises elsewhere -- a position hardened by
+repetition rather than by grounds -- just pointed inward instead of upstream. So both readings were
+recorded, and the trigger that would settle it.
+
+**The argument for cadenza, which is what the settlement rejected.** The command surface -- approving
+a gate, issuing a delegation -- is the semantic half cadenza's charter claims, so a surface over it is
+a surface over cadenza's own vocabulary. And it adds no repository: this document already records
+that neither `DECISIONS.md` can hold a decision binding both repositories (section 8), so a shape
+that multiplies cross-repository decisions walks straight into a defect that is already named. That
+second half is the part the settlement pays for, and section 8's note below says so.
+
+**The counter-proposal, and the fact that supported it.** Put the application in its own package --
+a third repository, or a separate workspace package -- and keep cadenza pure. What argued for it is an
 asymmetry visible in cadenza#22's own ownership table: of the four things a console renders, **three
 are continuo's** (the delegation record, run and belt state with `awaiting_user` events, the outbox)
 and one is cadenza's (gate semantics), with the operator conversation undecided. A host placed in
@@ -74,18 +97,42 @@ cadenza therefore lives in the repository that owns the minority of what it draw
 majority across a package boundary. Keeping it separate also leaves cadenza's layer discipline intact
 rather than widening it (below).
 
-**The cost of premise 2, which is checkable and easy to under-read as "just another adapter".**
-Cadenza's import-boundary gate is not a layer allowlist alone; it is a **per-binding external
-allowlist**, and `src/adapters` -- described in the test as "the one layer that is allowed I/O, and
-only this much of it" -- currently admits exactly `node:fs`'s `readFileSync` and `statSync`
+**The cost of the cadenza reading, which is checkable and was easy to under-read as "just another
+adapter".** Cadenza's import-boundary gate is not a layer allowlist alone; it is a **per-binding
+external allowlist**, and `src/adapters` -- described in the test as "the one layer that is allowed
+I/O, and only this much of it" -- currently admits exactly `node:fs`'s `readFileSync` and `statSync`
 (`cadenza@origin/main test/architecture/import-boundaries.test.ts`, `ALLOWED_EXTERNALS_BY_LAYER`). A
 web host needs an HTTP server, continuo's exports, and a SQLite driver reached through them, each
-named binding by binding. That is a deliberate widening of the one check keeping cadenza I/O-minimal.
+named binding by binding. That would have been a deliberate widening of the one check keeping cadenza
+I/O-minimal, and under the settled premise it does not happen: those bindings are rondo's, and rondo
+has no such gate to widen because it is the outermost layer by construction.
 
-**Revisit trigger: the first line of application code.** Unlike premise 1, this choice is not
-structural -- the same data model, the same ports, the same continuo dependency (6.4) under either
-answer; only the directory changes. It is therefore cheap to change until an application exists, and
-should be settled at that moment rather than before or long after.
+**The revisit trigger, and that it fired.** The trigger this document set was **the first line of
+application code**, on the reasoning that the choice was not structural -- the same data model, the
+same ports, the same continuo dependency (6.4) under either answer; only the directory changed -- so
+it was cheap to change until an application existed and should be settled at that moment rather than
+before or long after. It was settled at that moment. The answer taken is the counter-proposal's
+*third repository* branch rather than its *workspace package* branch.
+
+**What the settlement changed elsewhere in this document.** Four passages had been written as
+conditionals on premise 2 or as statements that the question was open. Each is resolved where it
+stands, and **none of them changes its recommendation** -- which is the concrete form of the claim
+that the choice was never structural:
+
+- **2.1** stated the placement as not settled. It now states it, and keeps the consequence that held
+  under either answer: the host must be able to import continuo.
+- **4.8** conditioned cadenza's need for a `bin` and a build on cadenza hosting. It does not host, so
+  that need does not arise; what remains is the ordinary requirement that a library be importable.
+- **6.4** was written to survive premise 2 either way and does -- its recommendation was taken as
+  `D-0045`, whose own text says the same. What the settlement removes is the **"plus cadenza"** half
+  of its band, and with it the second of its three obstacles: extending cadenza's import allowlist
+  was cadenza's obligation only if cadenza hosted the application. The obstacle is struck through
+  rather than deleted, and the section now names the importer as the host rather than as cadenza.
+- **8**'s packaging bullet loses its larger reading: cadenza stays a library, and rondo imports it.
+  The defect section 8 actually names gets **wider**, not narrower -- a third repository, itself with
+  no `DECISIONS.md`, now sits above two that cannot record a decision binding each other, so every
+  decision about the host is one none of the three files can hold. That is the price of this answer,
+  and it is named here rather than discovered later.
 
 ---
 
@@ -218,13 +265,12 @@ its scope.
 - **Explicitly out of scope:** the console itself. No UI, no HTTP server, no identity provider.
   cadenza#22 is not scheduled by this document and this document does not schedule it.
 
-**What is settled about where it will be built, and what is not** (section 0). Settled: the console is
-the web surface of a *single host application* rather than a service of its own. Not settled: whether
-that application lives in cadenza's `src/adapters/` layer or in its own package -- the working
-assumption is cadenza, the counter-proposal and the asymmetry favouring it are in section 0, and the
-trigger is the first line of application code. One consequence holds either way and belongs here:
-**the application must be able to import continuo, and today nothing can** (6.4). That, with the
-schema choice, is what actually gates cadenza#22.
+**Where it will be built is settled** (section 0). The console is the web surface of a *single host
+application* rather than a service of its own, and that application is `rondo`, a third repository
+consuming continuo and cadenza as libraries (`D-0087`). The consequence that held under either
+answer, and still does, belongs here: **the host must be able to import continuo, and today nothing
+can** (6.4). That, with the schema choice, is what actually gates cadenza#22 -- and under the settled
+premise the importer is rondo rather than cadenza, which subtracts nothing from the requirement.
 
 **The ownership split the console forces** matches what section 6.3 concluded independently, with one
 open item. cadenza#22 assigns the delegation record to continuo -- citing continuo's own `task` known
@@ -519,8 +565,10 @@ nor claude-org-ja is in the catalog.**
 
 *Deferrable for lap 1 -- the workspace can be cut from an operator-named path and base branch. Not
 deferrable once an application exists, at which point "no callable artifact" stops being a seam and
-becomes the packaging decision in 6.4 -- and if the application is hosted in cadenza (section 0,
-premise 2), cadenza needs a `bin` and a build of its own on top of that.*
+becomes the packaging decision in 6.4. Under section 0's premise 2 the host is rondo, so cadenza needs
+no `bin` and no build **for a host** on top of that -- but it does need to be importable by one, and
+6.4 packages continuo only. Cadenza's own `private: true`, with no `exports`, `main` or build, is a
+separate packaging question in cadenza's band (`D-0087`, consequence 3), not a corollary of 6.4.*
 
 ### 4.9 The lease must not span the human wait, and a longer TTL is not the fix
 
@@ -1071,12 +1119,14 @@ G2 rather than promoted into it.
 
 ---
 
-### 6.4 How cadenza takes a dependency on continuo
+### 6.4 How the host takes a dependency on continuo
 
 **This decision survives premise 2 either way, which is why it is here rather than parked behind it.**
-The host application needs continuo whether it lives in cadenza or in its own package; only the
-identity of the importer changes, and obstacles 1 and 3 below do not change at all. Today **nothing
-can import continuo**, by three independent obstacles, none of them hard -- just undecided.
+The host application needs continuo whether it lives in cadenza or in a package of its own; only the
+identity of the importer changes, and section 0 settles it as **rondo**. This section was written
+against the open question and named three obstacles; two of them are the importer's whoever it is,
+and the third was cadenza's alone. Today **nothing can import continuo**, and none of the obstacles
+is hard -- just undecided.
 
 1. **continuo refuses to publish.** `"private": true` at `0.0.0`, and `D-0008` says `npm publish`
    refuses until that entry is superseded. The same entry is unusually helpful about the cost,
@@ -1084,11 +1134,14 @@ can import continuo**, by three independent obstacles, none of them hard -- just
    eventual first publish is a decision rather than a packaging project." Verified -- `exports`,
    `files` and `bin` are all present, and `check:package` already runs `publint --strict` and `attw`
    against the packed tarball.
-2. **cadenza's import gate does not admit it** -- *this obstacle applies only if the application is
-   hosted in cadenza.* `ALLOWED_EXTERNALS_BY_LAYER` is per-binding, and `src/adapters` admits two
-   `node:fs` functions. `FORBIDDEN_PACKAGES` blocks `interlock` and `claude-org-runtime` -- continuo
-   is neither, so there is no conflict to resolve, only an allowlist to extend, binding by binding
-   (section 0). A separate application package has no such gate to widen.
+2. ~~**cadenza's import gate does not admit it.**~~ *Retired by section 0: this obstacle applied only
+   if the application was hosted in cadenza, and it is not.* Kept as the record of what it was.
+   `ALLOWED_EXTERNALS_BY_LAYER` is per-binding, and `src/adapters` admits two `node:fs` functions;
+   `FORBIDDEN_PACKAGES` blocks `interlock` and `claude-org-runtime` -- continuo is neither, so there
+   was no conflict to resolve, only an allowlist to extend binding by binding. Rondo is the outermost
+   layer and has no such gate to widen. What cadenza does still owe is the ordinary library packaging
+   its own band holds (`D-0087`, consequence 3), because rondo imports cadenza too -- that is a
+   different obstacle from this one and it is not continuo's to record.
 3. **continuo carries a native runtime dependency.** `better-sqlite3` plus its types, under `D-0009`'s
    prebuilt-binary-and-`--ignore-scripts` policy and a Node floor of `>=22.14.0`. Whatever consumes
    continuo inherits all three.
@@ -1097,9 +1150,9 @@ can import continuo**, by three independent obstacles, none of them hard -- just
 
 | | What it means | Assessment |
 |---|---|---|
-| **A. Supersede `D-0008` and publish** `@suisya-systems/continuo` | An ordinary npm dependency in cadenza. | **Recommended.** `D-0008`'s own consequence clause says the packaging work is already done, and the entry exists to make publication *deliberate* rather than to prevent it -- superseding it is the intended path, not a workaround. It is also the only option that makes the version cadenza builds against a stated fact rather than a checkout state, which matters once two repositories ship one application. |
+| **A. Supersede `D-0008` and publish** `@suisya-systems/continuo` | An ordinary npm dependency in the host. | **Recommended.** `D-0008`'s own consequence clause says the packaging work is already done, and the entry exists to make publication *deliberate* rather than to prevent it -- superseding it is the intended path, not a workaround. It is also the only option that makes the version the host builds against a stated fact rather than a checkout state, which matters once two repositories ship one application. |
 | **B. Git dependency pinned by sha** | `"@suisya-systems/continuo": "github:suisya-systems/continuo#<sha>"`, no registry. | **Does not work as things stand, and the reason is concrete.** npm builds a git dependency by running its `prepare` script, and continuo has none -- `scripts` has `build`, `pretest` and `check:package` but no `prepare` or `prepack`. So the install produces a package whose `main: ./dist/index.js` points at nothing. Adding `prepare` then collides with `D-0009`'s `--ignore-scripts` install policy, which exists to keep a C++ toolchain off every platform. Choosing B means reopening `D-0009`'s blast radius to avoid superseding `D-0008`, which is the worse trade. |
-| **C. One workspace across both repositories** | An npm workspace or a monorepo move; cadenza resolves continuo from the local tree. | Cheapest to start and it defers both other decisions, which is its whole appeal and its whole problem: it works on a developer's machine and answers nothing about how the application is distributed. Reasonable as a temporary measure **if** the entry says so and names A as the destination; a bad end state, because it makes "which continuo is this running" a property of a checkout. |
+| **C. One workspace across the repositories** | An npm workspace or a monorepo move; the host resolves continuo from the local tree. | Cheapest to start and it defers both other decisions, which is its whole appeal and its whole problem: it works on a developer's machine and answers nothing about how the application is distributed. Reasonable as a temporary measure **if** the entry says so and names A as the destination; a bad end state, because it makes "which continuo is this running" a property of a checkout. |
 
 **A carries a prerequisite, and it is the same trap B fails on.** Superseding `D-0008` is not by
 itself enough to publish something that works. `dist/` is gitignored (`.gitignore:2`) and `npm
@@ -1119,14 +1172,15 @@ built. Whichever is taken, the entry should record the two inherited constraints
 dependency and the Node floor -- because they become the *application's* constraints the moment it
 depends on continuo.
 
-**Band: continuo, plus cadenza if premise 2 holds.** Superseding `D-0008` is continuo's either way.
-Extending the import allowlist is cadenza's only if cadenza hosts the application; if it does not,
-this stops being a paired decision entirely -- which is one more small argument for the
-counter-proposal, since section 8 records that nothing in either repository can hold a decision
+**Band: continuo.** Superseding `D-0008` was continuo's either way, and is done -- `D-0045` takes
+option A. The **"plus cadenza"** half this paragraph originally carried was extending cadenza's
+import allowlist, which was cadenza's obligation only if cadenza hosted the application. Section 0
+settles that it does not, so this is not a paired decision -- which was one of the small arguments
+for the answer taken, since section 8 records that nothing in either repository can hold a decision
 binding both.
 
 **Where it sits on the critical path: off it, for lap 1.** Section 7 builds the lap as continuo CLI
-verbs plus an operator, and none of that needs cadenza to import anything. The dependency becomes
+verbs plus an operator, and none of that needs the host to import anything. The dependency becomes
 blocking at the point cadenza#22's console is built, which is after the lap by section 2.1. It should
 be decided early anyway -- it gates cadenza#22, it is cheap, and leaving it open invites option C to
 become the end state by inertia.
@@ -1204,11 +1258,12 @@ disposition; the `migrate` belt status; the curator errata; S1's post-lap promot
 - **The catalog's contents.** `config/projects.toml` registers `interlock` and `cadenza` and neither
   continuo nor claude-org-ja. A registry that cannot name the projects the successor stack operates on
   is a cheaper decision than G2 and probably a more urgent one.
-- **Packaging, and it is now a bigger question than it was.** `private: true`, no `bin`, no `exports`,
-  no `build`. If section 0's premise 2 holds, cadenza is not a library continuo imports but **the host
-  of the application**, and it needs a `bin`, a build, and a widened import allowlist on top of the
-  continuo dependency (6.4). If the counter-proposal holds instead, cadenza stays a library and this
-  bullet stays the small question it was -- which is part of what the trigger in section 0 decides.
+- **Packaging, and it stayed the smaller of the two questions it could have been.** `private: true`,
+  no `bin`, no `exports`, no `build`. Section 0's premise 2 is settled against cadenza hosting, so
+  cadenza is not the host and needs neither a `bin`, nor a build for one, nor a widened import
+  allowlist. It stays a library -- one that rondo imports beside continuo -- and this bullet stays the
+  ordinary question of making a library consumable, asked of cadenza in its own band. 6.4 does not
+  answer it: that section packages continuo.
 - **`LocalPathVerifier`'s owner** -- unimplemented in both languages, and the G1 design document calls
   it mandatory before a clone.
 
