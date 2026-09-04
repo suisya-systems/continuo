@@ -13267,8 +13267,11 @@ agent sessions are still the only other processes.
 1. **Cadenza's import allowlist is not widened.** Those bindings are rondo's, and rondo has no such
    gate to widen because it is the outermost layer by construction. Cadenza needs no `bin` and no
    build for a host it does not run (`minimal-operating-loop.md` 4.8, 8).
-2. **The paired half of 6.4's band is gone.** That section gave its band as "continuo, plus cadenza if
-   premise 2 holds", the cadenza half being the allowlist widening above. Its recommendation was
+2. **The paired half of 6.4's band is gone, and with it that section's second obstacle.** 6.4 gave its
+   band as "continuo, plus cadenza if premise 2 holds" and listed cadenza's import gate as one of
+   three things standing between the host and continuo; both were the allowlist widening above, and
+   both were conditional on cadenza hosting. The obstacle is struck through in place rather than
+   deleted, and 6.4 now names the importer as the host rather than as cadenza. Its recommendation was
    already taken as `D-0045`, which is continuo's alone and whose own text says it survives either
    answer. So this settlement removes a conditional obligation rather than creating work: what is
    outstanding for the host is `D-0045`'s release path -- continuo is still `"private": true` at
@@ -13283,7 +13286,7 @@ agent sessions are still the only other processes.
 5. **Nothing else in the document moves.** The same data model, the same ports, the same continuo
    dependency; the schema choice, the lap's scope and every recommendation stand as written. Four
    passages that were conditionals on premise 2, or stated the question as open, are resolved in
-   place (2.1, 4.8, 6.4's band, 8's packaging bullet) and **none changes its recommendation** -- which
+   place (2.1, 4.8, 6.4, 8's packaging bullet) and **none changes its recommendation** -- which
    is the concrete form of the document's own claim that the choice was never structural. Had it been,
    the trigger would not have been "cheap until an application exists" and this entry would have had
    to re-judge the sections underneath it.

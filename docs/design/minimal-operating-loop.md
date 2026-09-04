@@ -125,8 +125,9 @@ that the choice was never structural:
   that need does not arise; what remains is the ordinary requirement that a library be importable.
 - **6.4** was written to survive premise 2 either way and does -- its recommendation was taken as
   `D-0045`, whose own text says the same. What the settlement removes is the **"plus cadenza"** half
-  of its band: extending cadenza's import allowlist was cadenza's obligation only if cadenza hosted
-  the application.
+  of its band, and with it the second of its three obstacles: extending cadenza's import allowlist
+  was cadenza's obligation only if cadenza hosted the application. The obstacle is struck through
+  rather than deleted, and the section now names the importer as the host rather than as cadenza.
 - **8**'s packaging bullet loses its larger reading: cadenza stays a library, and rondo imports it.
   The defect section 8 actually names gets **wider**, not narrower -- a third repository, itself with
   no `DECISIONS.md`, now sits above two that cannot record a decision binding each other, so every
@@ -1118,13 +1119,14 @@ G2 rather than promoted into it.
 
 ---
 
-### 6.4 How cadenza takes a dependency on continuo
+### 6.4 How the host takes a dependency on continuo
 
 **This decision survives premise 2 either way, which is why it is here rather than parked behind it.**
-The host application needs continuo whether it lives in cadenza or in its own package; only the
-identity of the importer changes -- section 0 settles it as rondo -- and obstacles 1 and 3 below do
-not change at all. Today **nothing
-can import continuo**, by three independent obstacles, none of them hard -- just undecided.
+The host application needs continuo whether it lives in cadenza or in a package of its own; only the
+identity of the importer changes, and section 0 settles it as **rondo**. This section was written
+against the open question and named three obstacles; two of them are the importer's whoever it is,
+and the third was cadenza's alone. Today **nothing can import continuo**, and none of the obstacles
+is hard -- just undecided.
 
 1. **continuo refuses to publish.** `"private": true` at `0.0.0`, and `D-0008` says `npm publish`
    refuses until that entry is superseded. The same entry is unusually helpful about the cost,
@@ -1132,11 +1134,14 @@ can import continuo**, by three independent obstacles, none of them hard -- just
    eventual first publish is a decision rather than a packaging project." Verified -- `exports`,
    `files` and `bin` are all present, and `check:package` already runs `publint --strict` and `attw`
    against the packed tarball.
-2. **cadenza's import gate does not admit it** -- *this obstacle applies only if the application is
-   hosted in cadenza.* `ALLOWED_EXTERNALS_BY_LAYER` is per-binding, and `src/adapters` admits two
-   `node:fs` functions. `FORBIDDEN_PACKAGES` blocks `interlock` and `claude-org-runtime` -- continuo
-   is neither, so there is no conflict to resolve, only an allowlist to extend, binding by binding
-   (section 0). A separate application package has no such gate to widen.
+2. ~~**cadenza's import gate does not admit it.**~~ *Retired by section 0: this obstacle applied only
+   if the application was hosted in cadenza, and it is not.* Kept as the record of what it was.
+   `ALLOWED_EXTERNALS_BY_LAYER` is per-binding, and `src/adapters` admits two `node:fs` functions;
+   `FORBIDDEN_PACKAGES` blocks `interlock` and `claude-org-runtime` -- continuo is neither, so there
+   was no conflict to resolve, only an allowlist to extend binding by binding. Rondo is the outermost
+   layer and has no such gate to widen. What cadenza does still owe is the ordinary library packaging
+   its own band holds (`D-0087`, consequence 3), because rondo imports cadenza too -- that is a
+   different obstacle from this one and it is not continuo's to record.
 3. **continuo carries a native runtime dependency.** `better-sqlite3` plus its types, under `D-0009`'s
    prebuilt-binary-and-`--ignore-scripts` policy and a Node floor of `>=22.14.0`. Whatever consumes
    continuo inherits all three.
@@ -1145,9 +1150,9 @@ can import continuo**, by three independent obstacles, none of them hard -- just
 
 | | What it means | Assessment |
 |---|---|---|
-| **A. Supersede `D-0008` and publish** `@suisya-systems/continuo` | An ordinary npm dependency in cadenza. | **Recommended.** `D-0008`'s own consequence clause says the packaging work is already done, and the entry exists to make publication *deliberate* rather than to prevent it -- superseding it is the intended path, not a workaround. It is also the only option that makes the version cadenza builds against a stated fact rather than a checkout state, which matters once two repositories ship one application. |
+| **A. Supersede `D-0008` and publish** `@suisya-systems/continuo` | An ordinary npm dependency in the host. | **Recommended.** `D-0008`'s own consequence clause says the packaging work is already done, and the entry exists to make publication *deliberate* rather than to prevent it -- superseding it is the intended path, not a workaround. It is also the only option that makes the version the host builds against a stated fact rather than a checkout state, which matters once two repositories ship one application. |
 | **B. Git dependency pinned by sha** | `"@suisya-systems/continuo": "github:suisya-systems/continuo#<sha>"`, no registry. | **Does not work as things stand, and the reason is concrete.** npm builds a git dependency by running its `prepare` script, and continuo has none -- `scripts` has `build`, `pretest` and `check:package` but no `prepare` or `prepack`. So the install produces a package whose `main: ./dist/index.js` points at nothing. Adding `prepare` then collides with `D-0009`'s `--ignore-scripts` install policy, which exists to keep a C++ toolchain off every platform. Choosing B means reopening `D-0009`'s blast radius to avoid superseding `D-0008`, which is the worse trade. |
-| **C. One workspace across both repositories** | An npm workspace or a monorepo move; cadenza resolves continuo from the local tree. | Cheapest to start and it defers both other decisions, which is its whole appeal and its whole problem: it works on a developer's machine and answers nothing about how the application is distributed. Reasonable as a temporary measure **if** the entry says so and names A as the destination; a bad end state, because it makes "which continuo is this running" a property of a checkout. |
+| **C. One workspace across the repositories** | An npm workspace or a monorepo move; the host resolves continuo from the local tree. | Cheapest to start and it defers both other decisions, which is its whole appeal and its whole problem: it works on a developer's machine and answers nothing about how the application is distributed. Reasonable as a temporary measure **if** the entry says so and names A as the destination; a bad end state, because it makes "which continuo is this running" a property of a checkout. |
 
 **A carries a prerequisite, and it is the same trap B fails on.** Superseding `D-0008` is not by
 itself enough to publish something that works. `dist/` is gitignored (`.gitignore:2`) and `npm
@@ -1175,7 +1180,7 @@ for the answer taken, since section 8 records that nothing in either repository 
 binding both.
 
 **Where it sits on the critical path: off it, for lap 1.** Section 7 builds the lap as continuo CLI
-verbs plus an operator, and none of that needs cadenza to import anything. The dependency becomes
+verbs plus an operator, and none of that needs the host to import anything. The dependency becomes
 blocking at the point cadenza#22's console is built, which is after the lap by section 2.1. It should
 be decided early anyway -- it gates cadenza#22, it is cheap, and leaving it open invites option C to
 become the end state by inertia.
