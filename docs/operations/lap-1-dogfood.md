@@ -676,9 +676,16 @@ state root are section 1's, reused. Worker CLI: `2.1.260 (Claude Code)`.
 
 ### 10.1 The lap, with nothing added
 
-`run admit` is section 3's command **with neither `--cli-arg` line**, as in 9.2. Run 007's prompt is
-9.2's with the commit spelled out as two separate `Bash` calls, plus four observations written to an
-uncommitted `sandbox-report.txt`:
+`run admit` is section 3's command **with neither `--cli-arg` line**, as in 9.2, and with every
+per-run identifier moved on -- `--run-id lap1-dogfood-007`, `--topic-branch dogfood/lap1-007`,
+`--workspace .../continuo-dogfood/workspace-007`. All three must change together: the run id is
+already taken in the control plane, and the branch and the workspace already exist, so a command
+that only drops the `--cli-arg` lines fails at admission rather than producing this run.
+`lap perform` likewise takes `--endpoint-destination-dir .../dropbox-007`, which must *not* exist
+(F-4). Run 008 is the same with `008` throughout.
+
+Run 007's prompt is 9.2's with the commit spelled out as two separate `Bash` calls, plus four
+observations written to an uncommitted `sandbox-report.txt`:
 
 ```text
 コミットメッセージ "docs(dogfood): 締めの一文を追加" で commit せよ。push はしてはならない。
@@ -874,8 +881,10 @@ Nothing on section 7's list moved, and none of it blocked this lap:
   `gate show` into `head -1` while scripting section 10.3 killed the CLI with
   `Error: write EPIPE ... at Object.write (dist/gate/cli.js:135:24)`. The gate had already closed;
   the crash is in the printing.
-- **F-7 (#125)** unchanged: both runs sit at status `created` with a real commit in the worktree and
-  no verb to move them. This is now the *only* thing between this lap and step 11.
+- **F-7 (#125)** unchanged: both runs sit at status `created` with no verb to move them, and run
+  007's has a real commit on `dogfood/lap1-007` waiting behind it. (Run 008 committed nothing; it
+  was a probe, and its worktree holds only the two files its probes wrote.) For run 007 this is now
+  the *only* thing between this lap and step 11.
 - **F-3 (#121)**, **F-4 (#122)** and the unchecked `--role` (#126) were not exercised again.
 - **#133**, the `cli_args` door, is **open by construction and needs no run to confirm**. It was
   settled by reading rather than by deliberately spawning a fence-disabled child.
