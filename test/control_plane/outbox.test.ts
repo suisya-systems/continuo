@@ -1392,6 +1392,33 @@ describe("criterion 5 -- duplicate delivery causes exactly one effect", () => {
     expectRefusal(() => dropbox.apply("k", "payload"), DestinationRefusal, "complete record");
   });
 
+  test("a non-ASCII payload is published to disk unescaped (continuo#123)", () => {
+    // `<sha256>.effect.json` is the surface an operator reads directly -- see
+    // `docs/operations/lap-1-dogfood.md` F-5. A worker's rationale is
+    // operator-written prose and this organisation writes it in Japanese, so
+    // the file on disk must carry the raw UTF-8 bytes rather than
+    // `json.dumps`'s default `\uXXXX` escaping, which is unreadable without a
+    // second decode step.
+    const destinationRoot = join(caseRoot("s7"), "destination");
+    const dropbox = new KeyedDropbox(destinationRoot);
+    const payload = JSON.stringify({ rationale: "\u65e5\u672c\u8a9e\u306e\u7406\u7531" });
+
+    dropbox.apply("k", payload);
+
+    const records = globOf(destinationRoot, ".effect.json");
+    expect(records.length).toBe(1);
+    const raw = readFileSync(join(destinationRoot, records[0] as string), "utf-8");
+
+    expect(raw).toContain("\u65e5\u672c\u8a9e\u306e\u7406\u7531");
+    expect(raw).not.toContain("\\u65e5");
+
+    // The record still parses back to the same payload, and the digest and
+    // file name -- both keyed off the raw strings, not off this rendering --
+    // are unaffected.
+    expect(JSON.parse(raw).payload).toBe(payload);
+    expect(dropbox.payloadOf("k")).toBe(payload);
+  });
+
   test("a destination refuses an empty idempotency key", () => {
     // Every effect deduplicating against every other is the failure that looks
     // most like success.

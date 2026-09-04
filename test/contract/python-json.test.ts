@@ -102,4 +102,24 @@ describe("python_json (contract)", () => {
       /flat string\/number payloads/,
     );
   });
+
+  test("ensureAscii: false is json.dumps(..., ensure_ascii=False): raw non-ASCII, quotes and controls unchanged", () => {
+    // Measured: json.dumps('caf\u00e9', ensure_ascii=False) -> '"caf\u00e9"'.
+    // Non-ASCII values below are \uXXXX escapes in the SOURCE (this repo's
+    // own ASCII-only-source policy, test/contract/ascii-output-policy.test.ts)
+    // and a raw character in the runtime string they produce.
+    expect(pythonJsonString("caf\u00e9", false)).toBe('"caf\u00e9"');
+    expect(pythonJsonString("\u65e5\u672c\u8a9e", false)).toBe('"\u65e5\u672c\u8a9e"');
+    // Quotes, backslashes and C0 controls are untouched by the option.
+    expect(pythonJsonString('a"b\\c', false)).toBe('"a\\"b\\\\c"');
+    expect(pythonJsonString("\u001f", false)).toBe('"\\u001f"');
+    // Threaded recursively through the document form, and the default is
+    // unchanged -- every other caller keeps `ensure_ascii=True` output.
+    expect(pythonJsonDocumentSorted({ rationale: "\u65e5\u672c\u8a9e" }, false)).toBe(
+      '{"rationale": "\u65e5\u672c\u8a9e"}',
+    );
+    expect(pythonJsonDocumentSorted({ rationale: "\u65e5\u672c\u8a9e" })).toBe(
+      '{"rationale": "\\u65e5\\u672c\\u8a9e"}',
+    );
+  });
 });
