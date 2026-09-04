@@ -220,6 +220,39 @@ export async function mainAsync(argv: readonly string[]): Promise<number> {
 }
 
 /**
+ * Stop a closed stdout/stderr pipe from crashing the process.
+ *
+ * Every subtree's write seam (`gateCliSeams.write`, `lapCliSeams.write` and the
+ * rest) ends at a bare `process.stdout.write` / `process.stderr.write`, and
+ * Node ignores `SIGPIPE` on these streams -- a reader that closes early (`| head`,
+ * `| less`, a script that stops draining) turns the next write into an `EPIPE`
+ * on the stream's `error` event instead of killing the process outright. With
+ * no listener that event is unhandled and Node rethrows it, which is `#124`:
+ * a stack trace and exit 1 from a build that was writing correctly, timed by
+ * when the reader happened to hang up. One listener here, ahead of every
+ * subtree's first write, is what "consistently across the CLI subtrees" (the
+ * issue's acceptance criterion) means in this codebase: the subtrees do not
+ * share a write function to hang a `try`/`catch` off of (`withControlPlane`'s
+ * own docstring is why -- each subtree's seam is deliberately its own), but
+ * they do share this one process and its two streams.
+ *
+ * Any other stream error is rethrown: an `EPIPE` is an operator's pipe closing
+ * on schedule, not a defect, and folding every stream error into a quiet exit
+ * would hide the next one instead of fixing it.
+ */
+export function installEpipeGuard(
+  streams: readonly NodeJS.WritableStream[] = [process.stdout, process.stderr],
+): void {
+  for (const stream of streams) {
+    stream.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") {
+        throw error;
+      }
+    });
+  }
+}
+
+/**
  * Is this file the process's entry point?
  *
  * Asked so the suite can import the module without a command running, and
@@ -250,5 +283,6 @@ function isEntryPoint(): boolean {
 }
 
 if (isEntryPoint()) {
+  installEpipeGuard();
   process.exitCode = await mainAsync(process.argv.slice(2));
 }
