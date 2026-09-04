@@ -515,6 +515,79 @@ export function resolveBranchCommit(name: string, options: GitOptions): string {
   return runGitChecked(["rev-parse", "--verify", `refs/heads/${name}^{commit}`], options).stdout;
 }
 
+/**
+ * The git metadata a checkout at `options.cwd` writes through, as absolute
+ * paths (D-0082).
+ *
+ * A linked worktree's `.git` is a *file* pointing at
+ * `<base>/.git/worktrees/<name>`, so every write git makes on behalf of that
+ * checkout -- the index, new objects, the branch it is on -- lands outside the
+ * checkout. This is the list of places it lands, and it is derived from what
+ * git says about this checkout rather than assembled from a layout convention:
+ * a hard-coded `<worktree>/../.git/worktrees/<basename>` is wrong for a
+ * worktree whose directory was renamed, for `$GIT_DIR`, for a plain clone, and
+ * for a submodule, and it is wrong silently.
+ *
+ * The four are `claude-org`'s Pattern B union
+ * (`docs/contracts/worker-git-guardrails-design.md` categories B1+B2), which
+ * this reproduces rather than re-derives:
+ *
+ * 1. **the checkout's own admin directory** -- its `index`, `HEAD`, its locks;
+ * 2. **the shared object store** -- `git add` writes the blob there, not in the
+ *    admin directory, which is why staging alone needs it;
+ * 3. **this branch's ref**, and only this one. `refs/heads` whole would let the
+ *    worker rewrite a sibling worktree's branch, which is the cross-task
+ *    isolation the union exists to keep;
+ * 4. **`packed-refs`** -- git rewrites this file itself during ordinary commit
+ *    and `pack-refs` work, so leaving it out breaks operations nobody asked
+ *    for.
+ *
+ * For a plain clone (1) is the whole `.git` and the rest are inside it; the
+ * union is then redundant rather than wrong, and saying it costs nothing.
+ *
+ * A detached HEAD yields no (3): there is no branch ref to name, and inventing
+ * `refs/heads/HEAD` would allow a path that means nothing.
+ *
+ * @throws {GitCommandFailed} if `cwd` is not inside a work tree.
+ */
+export function gitMetadataRoots(options: GitOptions): readonly string[] {
+  const gitDir = runGitChecked(
+    ["rev-parse", "--path-format=absolute", "--git-dir"],
+    options,
+  ).stdout;
+  const commonDir = runGitChecked(
+    ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    options,
+  ).stdout;
+  const roots = [gitDir, posixJoin(commonDir, "objects")];
+  // `symbolic-ref --quiet` is the question "is HEAD on a branch", asked in the
+  // one form that answers no by exit status instead of by echoing `HEAD` back
+  // the way `rev-parse --abbrev-ref` does -- a detached checkout would
+  // otherwise produce `refs/heads/HEAD`.
+  const head = runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], options);
+  if (isNoOnExitOne(head)) {
+    roots.push(posixJoin(commonDir, "refs/heads", head.stdout));
+  }
+  roots.push(posixJoin(commonDir, "packed-refs"));
+  // De-duplicated in place: in a plain clone `--git-dir` and `--git-common-dir`
+  // are the same directory, and the same path twice in a fence is noise in a
+  // file an operator reads.
+  return Object.freeze([...new Set(roots)]);
+}
+
+/**
+ * Join path segments the way the *settings file* spells them: with `/`.
+ *
+ * Not `node:path.join`, which on Windows would emit `\` into a document whose
+ * other paths come from `git rev-parse --path-format=absolute` and are
+ * forward-slashed. One document, one separator.
+ */
+function posixJoin(...segments: readonly string[]): string {
+  return segments
+    .map((segment, index) => (index === 0 ? segment.replace(/\/+$/, "") : segment))
+    .join("/");
+}
+
 /** One `git worktree add`. */
 export interface WorktreeRequest {
   /** Absolute path the worktree is created at. Must not exist. */

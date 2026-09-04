@@ -28,6 +28,7 @@ import { accessSync, constants as fsConstants, readFileSync, statSync } from "no
 import { isAbsolute, delimiter as pathDelimiter, sep as pathSep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pyJsonLoads } from "./pyjson.js";
+import { normalizePath } from "./pypath.js";
 import { compilePythonRegex } from "./pyregex.js";
 import { pyRepr } from "./pyrepr.js";
 import {
@@ -384,6 +385,143 @@ export function roleNames(document?: RoleDocument): readonly string[] {
 export const NON_INTERACTIVE_PERMISSION_MODE = "acceptEdits";
 
 /**
+ * Rewrite the rendered `sandbox` block into the spelling the CLI can read
+ * (D-0082).
+ *
+ * Three edits, and only to the block the *child* reads. The fence's own rules
+ * are parsed from the document before this runs and are not touched by it, so
+ * the deny set a restart diffs and the deny hook enforces is byte-identical
+ * either way; what changes is how the same rules are spelled to the CLI.
+ *
+ * ## 1. The deny entries are flattened to strings
+ *
+ * `roles.json` spells one entry structurally -- `{"path": "~/.ssh"}`, a form
+ * interlock's renderer grew and {@link parseSandboxEntry} still accepts -- and
+ * the whole block was then forwarded to `settings.local.json` verbatim. The CLI
+ * has no such form. Measured against CLI `2.1.260` in a target carrying no
+ * settings of its own, one structured entry anywhere in `denyRead`:
+ *
+ * - **turns the sandbox off entirely.** The child reports no sandbox at all,
+ *   where the same file with that one entry spelled `"~/.ssh"` gives it one,
+ *   and that sandbox's read-deny list then names the expanded home path --
+ *   the rule is not weakened by the flattening, it is what makes it exist.
+ * - **says nothing.** No warning, no non-zero exit, nothing on stderr.
+ * - **and a sandbox that was declared and could not be built makes every
+ *   write-capable `Bash` require approval**, allow list or not. A `claude -p`
+ *   child has nobody to approve, so the turn ends refused. That is the whole of
+ *   `#130`'s "the fence refuses the writes its own allow list permits": not a
+ *   sandbox too tight to commit in, a sandbox that was never there.
+ *
+ * The flattening is {@link normalizePath}, which is the same function the rule
+ * spec goes through, so the settings and the fence now name one path rather
+ * than two spellings of one intent -- and `~` is expanded here rather than
+ * relied on to be expanded by the CLI.
+ *
+ * ## 2. `additionalDirectories` gains the worktree's real git metadata
+ *
+ * `writableRoots` is what the caller derived from the worktree's own `.git`
+ * pointer; see `gitMetadataRoots`. Today's CLI resolves that itself -- measured:
+ * the base clone's `.git` is in the child's writable set with nothing declared
+ * -- so this widens nothing that is not already open. It is here because that
+ * derivation is undocumented CLI behaviour that the fence would otherwise be
+ * silently depending on, and because a fence that cannot say what it allows
+ * cannot record it. Roots are appended to whatever the document declared,
+ * de-duplicated, and never replace it.
+ */
+function repairSandbox(rendered: Record<string, unknown>, writableRoots: readonly string[]): void {
+  const sandbox = getOwn(rendered, "sandbox");
+  if (!isPlainObject(sandbox) || !isPlainObject(getOwn(sandbox, "filesystem"))) {
+    // Validation has already refused this shape; there is nothing to repair.
+    return;
+  }
+  const filesystem = getOwn(sandbox, "filesystem") as Record<string, unknown>;
+
+  const newFilesystem: Record<string, unknown> = {};
+  const filesystemKeys = pyKeys(filesystem);
+  for (const key of filesystemKeys) {
+    setOwn(newFilesystem, key, getOwn(filesystem, key));
+  }
+  carryNumberSpellings(filesystem, rememberKeyOrder(newFilesystem, filesystemKeys));
+
+  for (const key of ["denyRead", "denyWrite"] as const) {
+    const entries = Object.hasOwn(filesystem, key) ? filesystem[key] : undefined;
+    if (!Array.isArray(entries)) {
+      // `null`, absent, or a shape validation refused. Left exactly as authored:
+      // this function repairs a spelling, it does not invent a list.
+      continue;
+    }
+    setOwn(
+      newFilesystem,
+      key,
+      entries.map((entry) => {
+        const path =
+          typeof entry === "string"
+            ? entry
+            : isPlainObject(entry) && typeof getOwn(entry, "path") === "string"
+              ? (getOwn(entry, "path") as string)
+              : null;
+        // An entry neither form recognises is one `parseSandboxEntry` refused,
+        // so this is unreachable from a rendered fence -- and if it ever is
+        // reached, passing it through unchanged keeps the authored value in
+        // front of whoever has to read it.
+        return path === null ? entry : normalizePath(pyStrip(path));
+      }),
+    );
+  }
+
+  // De-duplicated against what the document declared, in first-seen order: the
+  // roots are a union, and the same path twice is noise in a file an operator
+  // reads and a restart diffs.
+  const declared = Object.hasOwn(filesystem, "additionalDirectories")
+    ? filesystem["additionalDirectories"]
+    : undefined;
+  const merged: unknown[] = Array.isArray(declared) ? [...declared] : [];
+  const seen = new Set(merged.filter((entry): entry is string => typeof entry === "string"));
+  for (const root of writableRoots) {
+    if (seen.has(root)) {
+      continue;
+    }
+    seen.add(root);
+    merged.push(root);
+  }
+  // Only when there is something to say. A role that declared no
+  // `additionalDirectories` and was handed no roots keeps the key absent, which
+  // is the contract the settings generator states for the same field.
+  if (merged.length > 0 || Array.isArray(declared)) {
+    setOwn(newFilesystem, "additionalDirectories", merged);
+  }
+
+  const newSandbox: Record<string, unknown> = {};
+  const sandboxKeys = pyKeys(sandbox);
+  for (const key of sandboxKeys) {
+    setOwn(newSandbox, key, getOwn(sandbox, key));
+  }
+  carryNumberSpellings(sandbox, rememberKeyOrder(newSandbox, sandboxKeys));
+  setOwn(newSandbox, "filesystem", newFilesystem);
+  // ## 3. The block is switched on
+  //
+  // The CLI builds a sandbox only for `sandbox.enabled`, and `roles.json`
+  // declares no such key -- so the layer this fence has always claimed has
+  // never once existed. Measured on the repaired fence: without it the child
+  // reports no sandbox at all and the `denyRead` / `denyWrite` entries beside
+  // it are inert; with it the child has one, and `git add` and `git commit`
+  // still go through. Setting it is what makes `#130`'s human gate --
+  // "keep the sandbox layer" -- true rather than nominal.
+  //
+  // Only when the key is ABSENT. A document that says `enabled: false` has
+  // taken a position, and overriding it here would render a fence its author
+  // did not write -- the silent widening D-0023 part 2 refuses, pointed the
+  // other way. Such a document declares a sandbox it has switched off, which is
+  // the "claims a layer it does not have" shape this repair exists to end; no
+  // role in `roles.json` is in that state, and refusing it is left to whoever
+  // first writes one.
+  if (!Object.hasOwn(sandbox, "enabled")) {
+    setOwn(newSandbox, "enabled", true);
+  }
+  setOwn(rendered, "sandbox", newSandbox);
+}
+
+/**
  * Render one role's fence, or refuse.
  *
  * There is no `strict=false`. A renderer with a lenient mode grows a caller
@@ -395,11 +533,22 @@ export const NON_INTERACTIVE_PERMISSION_MODE = "acceptEdits";
  * never sees the argv the caller will build -- and a fence that guessed at it
  * would guess wrong for exactly the caller that spawns both kinds. It widens
  * nothing but the permission mode; see the promotion inside.
+ *
+ * `sandboxWritableRoots` is the git metadata the worker's checkout writes
+ * through -- derived by the caller from the worktree's own `.git` pointer,
+ * because this module runs no subprocess and a renderer that shelled out to git
+ * would make every render depend on a repository being there. See
+ * {@link repairSandbox} for what is done with it and why it is not the fix it
+ * looks like.
  */
 export function renderFence(
   role: string,
   ctx: FenceContext,
-  options?: { readonly document?: RoleDocument; readonly nonInteractive?: boolean },
+  options?: {
+    readonly document?: RoleDocument;
+    readonly nonInteractive?: boolean;
+    readonly sandboxWritableRoots?: readonly string[];
+  },
 ): Fence {
   const doc = options?.document ?? loadDocument();
   const nonInteractive = options?.nonInteractive ?? false;
@@ -605,6 +754,11 @@ export function renderFence(
   if (reasons.length > 0) {
     throw new FenceRefusal(role, reasons);
   }
+
+  // AFTER the refusal, never before it: every reason above quotes the entry as
+  // its author spelled it, and a repair applied first would put this function's
+  // spelling into a refusal detail the ledger stores verbatim (D-0082).
+  repairSandbox(rendered, options?.sandboxWritableRoots ?? []);
 
   // The source passes `permission_mode` to `_settings_payload` WITHOUT a
   // `str()` -- the annotation says `str`, but the value handed over is

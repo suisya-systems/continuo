@@ -648,16 +648,32 @@ export class FencedSpawner {
    */
   readonly nonInteractive: boolean;
 
+  /**
+   * The git metadata the admitted child's checkout writes through (D-0082).
+   *
+   * Held here for the same reason `nonInteractive` is: it describes the
+   * checkout this spawner starts children in, not one admission of one role,
+   * and a caller free to vary it per call could record one fence and run
+   * another. Derived by that caller with `gitMetadataRoots`, because rendering
+   * runs no subprocess.
+   *
+   * Empty by default: a spawner that says nothing about a checkout gets a fence
+   * that claims nothing about one.
+   */
+  readonly sandboxWritableRoots: readonly string[];
+
   constructor(init: {
     ledger: FenceLedger;
     document?: RoleDocument | undefined;
     settingsName?: string;
     nonInteractive?: boolean;
+    sandboxWritableRoots?: readonly string[];
   }) {
     this.ledger = init.ledger;
     this.document = init.document;
     this.settingsName = init.settingsName ?? "settings.local.json";
     this.nonInteractive = init.nonInteractive ?? false;
+    this.sandboxWritableRoots = Object.freeze([...(init.sandboxWritableRoots ?? [])]);
   }
 
   /**
@@ -718,10 +734,14 @@ export class FencedSpawner {
         // `exactOptionalPropertyTypes`, hence the branch.
         fence =
           this.document === undefined
-            ? renderFence(role, ctx, { nonInteractive: this.nonInteractive })
+            ? renderFence(role, ctx, {
+                nonInteractive: this.nonInteractive,
+                sandboxWritableRoots: this.sandboxWritableRoots,
+              })
             : renderFence(role, ctx, {
                 document: this.document,
                 nonInteractive: this.nonInteractive,
+                sandboxWritableRoots: this.sandboxWritableRoots,
               });
       } catch (exc) {
         if (exc instanceof FenceRefusal) {
@@ -841,6 +861,12 @@ export class FencedSpawner {
         permission_mode: fence.permissionMode,
         fence_path: fencePath,
         settings_path: settingsPath,
+        // D-0082, and `#130`'s acceptance in as many words: the area the fence
+        // opened outside the checkout is written down where a refusal or a
+        // surprising commit can be read against it. The list, not a count: the
+        // question an operator brings here is *which* paths a worker could
+        // write, and a number cannot answer it.
+        sandbox_writable_roots: [...this.sandboxWritableRoots],
       });
       return new SpawnOutcome({ admitted: true, role, fence, plan, battery });
     });

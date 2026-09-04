@@ -78,6 +78,7 @@ import {
   GitCommandFailed,
   type GitOptions,
   GitRefusal,
+  gitMetadataRoots,
   removeWorktree,
   repositoryRoot,
   runGitChecked,
@@ -1895,5 +1896,93 @@ describe("the request is validated before anything is created", () => {
       WorkspaceMaterializationUsageError,
       /printable ASCII/,
     );
+  });
+});
+
+describe("the fence's writable surface is derived from the worktree's own git (D-0082)", () => {
+  test("gitMetadataRoots names this worktree's admin dir, the shared store, this branch and packed-refs", () => {
+    const f = fixture("materialize-git-roots");
+    materializeWorkspace(f.connection, f.request);
+
+    const worktreeGit: GitOptions = { ...f.git, cwd: f.workspace };
+    const commonDir = runGitChecked(
+      ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      worktreeGit,
+    ).stdout;
+    const gitDir = runGitChecked(
+      ["rev-parse", "--path-format=absolute", "--git-dir"],
+      worktreeGit,
+    ).stdout;
+
+    // Asked of git rather than assembled from the layout, on both sides: a case
+    // that spelled `<repo>/.git/worktrees/<basename>` by hand would agree with
+    // an implementation that did the same and would be wrong with it.
+    expect(gitMetadataRoots(worktreeGit)).toStrictEqual([
+      gitDir,
+      `${commonDir}/objects`,
+      `${commonDir}/refs/heads/${TOPIC_BRANCH}`,
+      `${commonDir}/packed-refs`,
+    ]);
+    // The premise the whole decision rests on: the worktree's git metadata is
+    // NOT inside the worktree, so a writable surface that stops at the checkout
+    // stops short of where `git add` writes.
+    expect(gitDir.startsWith(f.workspace)).toBe(false);
+  });
+
+  test("a detached HEAD contributes no branch ref rather than refs/heads/HEAD", () => {
+    const f = fixture("materialize-git-roots-detached");
+    materializeWorkspace(f.connection, f.request);
+
+    const worktreeGit: GitOptions = { ...f.git, cwd: f.workspace };
+    runGitChecked(["checkout", "--detach", "HEAD"], worktreeGit);
+
+    const roots = gitMetadataRoots(worktreeGit);
+    expect(roots.some((root) => root.includes("refs/heads/"))).toBe(false);
+    // The other three are unaffected: a detached checkout still stages and
+    // still writes objects.
+    expect(roots).toHaveLength(3);
+  });
+
+  test("the published settings carry them, switched on and spelled in strings", () => {
+    const f = fixture("materialize-settings-sandbox");
+    materializeWorkspace(f.connection, f.request);
+
+    const settings = JSON.parse(
+      readFileSync(join(f.artifactDir, "settings.local.json"), "utf8"),
+    ) as Record<string, unknown>;
+    const sandbox = settings["sandbox"] as Record<string, unknown>;
+    const filesystem = sandbox["filesystem"] as Record<string, unknown>;
+
+    // Without this the CLI builds no sandbox at all, and the deny entries
+    // beside it are inert (D-0082).
+    expect(sandbox["enabled"]).toBe(true);
+    // The union the materialiser derived, verbatim -- this is the acceptance's
+    // "derived from the worktree's actual .git pointer, not hard-coded".
+    expect(filesystem["additionalDirectories"]).toStrictEqual([
+      ...gitMetadataRoots({ ...f.git, cwd: f.workspace }),
+    ]);
+    // And the shape the CLI can actually read: one structured entry anywhere in
+    // here turns the sandbox off silently, which is what `#130` was.
+    for (const key of ["denyRead", "denyWrite"]) {
+      for (const entry of filesystem[key] as unknown[]) {
+        expect(typeof entry).toBe("string");
+      }
+    }
+  });
+
+  test("the fence ledger records the area that was opened, as paths", () => {
+    const f = fixture("materialize-ledger-roots");
+    materializeWorkspace(f.connection, f.request);
+
+    const admitted = readFileSync(join(f.artifactDir, "fence-ledger.jsonl"), "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((row) => row["event"] === "spawn-admitted");
+
+    expect(admitted).toHaveLength(1);
+    expect((admitted[0] as Record<string, unknown>)["sandbox_writable_roots"]).toStrictEqual([
+      ...gitMetadataRoots({ ...f.git, cwd: f.workspace }),
+    ]);
   });
 });

@@ -177,6 +177,8 @@ spaces distinct.
 | D-0079 | The reconcile pass is its own verb, the operator owns its cadence, and it pronounces no verdicts | accepted |
 | D-0080 | After the lap there is no endpoint, so a verb drives delivery: `gate deliver` | accepted |
 | D-0081 | The fence is the child's only configuration, and it renders a mode the child can work under | accepted |
+| D-0082 | The fence's sandbox is switched on, spelled in strings, and told where the worktree's git writes | accepted |
+| D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | accepted |
 
 ---
 
@@ -12713,3 +12715,136 @@ one function -- but the evidence for it is a measurement against `2.1.260` and n
 real-child cases are what would notice. A CLI too old to know the flag exits with `error: unknown
 option`, which is the fail-closed direction: a spawn that refuses loudly rather than one that quietly
 runs unfenced.
+
+## D-0082 -- The fence's sandbox is switched on, spelled in strings, and told where the worktree's git writes
+
+**Context.** The second lap 1 dogfood (`docs/operations/lap-1-dogfood.md` section 9.5, F-8; issue
+#130) found that a fenced `claude -p` worker cannot produce a commit: `git add novel.md` comes back
+as `This command requires approval` with `Bash(git add:*)` in the fence's own `permissions.allow`,
+and with nobody at the prompt to approve, the turn ends refused. Removing the `sandbox` key from the
+rendered settings fixed it, so the key was the cause. The issue -- and the human gate that ruled on
+it -- read that as a sandbox too *tight*: a worktree's `.git` is a file pointing into
+`<base>/.git/worktrees/<name>`, so `git add` writes the index outside the sandbox's writable surface.
+The decision recorded on 2026-09-04 was to keep the layer and add the worktree's real `.git` to the
+allowed area.
+
+**That reading was wrong, and measuring it is what found the real defect.** Measured on CLI
+`2.1.260` from the dogfood's `workspace-005`, a worktree carrying no settings of its own so that no
+ambient layer is in play, varying only the `sandbox` block. Whether the child has a sandbox at all is
+asked of the child, which is told to answer with the presence or absence of the CLI's own "Bash
+command sandbox" system message:
+
+| `sandbox` block | the child's sandbox | `git add` |
+|---|---|---|
+| the rendered fence, as shipped (`denyRead` carries `{"path": "~/.ssh"}`) | **none** | `This command requires approval` |
+| the same, plus the four `additionalDirectories` the gate asked for | **none** | `This command requires approval` |
+| the same, with that entry spelled `"~/.ssh"` and no `additionalDirectories` at all | **none** | succeeds |
+| that, plus `"enabled": true` | **present** | succeeds |
+
+Three findings, and the first two invert the issue:
+
+1. **The structured deny entry silently destroys the sandbox.** `roles.json` spells one entry
+   `{"path": "~/.ssh"}` -- a form interlock's renderer grew and `parseSandboxEntry` still accepts --
+   and the whole block was forwarded to `settings.local.json` verbatim. The CLI has no such form. It
+   emits no warning, exits zero, and builds no sandbox; and a sandbox that was *declared* and could
+   not be built makes every write-capable `Bash` require approval, allow list or not. That, not a
+   writable surface stopping at the checkout, is the whole of #130's "too tight" half.
+2. **The writable surface was never the problem.** With the entry flattened and nothing else
+   declared, the child's sandbox already lists `<base>/.git` as writable: today's CLI resolves the
+   worktree's gitdir itself.
+3. **The sandbox has never existed.** The CLI builds one only for `sandbox.enabled`, and `roles.json`
+   carries no such key. Every fence this repository has ever rendered declared a sandbox the CLI then
+   did not build, and the `denyRead` / `denyWrite` entries beside it were inert.
+
+**Decision.** Taken at the human gate on 2026-09-04, in three parts, after the measurement above was
+put to it. `renderFence` repairs the `sandbox` block on its way into the settings the child reads,
+and only there -- the fence's own rules are parsed from the document before the repair runs, so the
+rule set the deny hook enforces and a restart diffs is byte-identical either way:
+
+- **the deny entries are flattened to strings**, through `normalizePath`, which is the same function
+  the rule spec goes through. The settings and the fence now name one path rather than two spellings
+  of one intent, and `~` is expanded here rather than relied on to be expanded by the CLI. This is
+  the part that closes #130;
+- **`enabled: true` is set when the document does not say otherwise**, so the layer the gate voted to
+  keep is one that exists. A document that says `enabled: false` has taken a position and is left
+  alone; no role is in that state, and refusing such a document is left to whoever writes one;
+- **`additionalDirectories` gains the worktree's git metadata**, derived by the caller with
+  `gitMetadataRoots` from what git says about the checkout (`--git-dir`, `--git-common-dir` and
+  `symbolic-ref HEAD`), and never from the layout. It is claude-org's Pattern B union
+  (`docs/contracts/worker-git-guardrails-design.md`, categories B1+B2): the checkout's admin
+  directory, the shared object store, **this branch's ref only**, and `packed-refs`. `refs/heads`
+  whole would let a worker rewrite a sibling worktree's branch; `packed-refs` is in because git
+  rewrites it itself during ordinary commit and `pack-refs` work. A detached HEAD contributes no ref
+  rather than an invented `refs/heads/HEAD`.
+
+**Why the third part is kept even though the measurement says it is redundant.** Because "the CLI
+happens to derive it" is undocumented behaviour that the fence would otherwise be silently depending
+on, and because a fence that cannot say what it allows cannot record it -- which #130's acceptance
+requires. The roots are appended to whatever the document declared, de-duplicated, never replacing
+it, and they are written into the `spawn-admitted` ledger row as *paths* rather than a count: the
+question an operator brings to that row is which paths a worker could write, and a number cannot
+answer it.
+
+**The rejected alternatives, both named by the gate.** *Drop the `sandbox` block and rest on
+`permissions` plus the deny hook* -- the dogfood's own workaround, and it gives up a layer
+permanently for every role, which is the direction D-0023 part 2 forbids; it is also now known to
+give up a layer that was never running, which makes it look cheaper than it is rather than making it
+right. *Render the block only for an interactive spawn* -- the narrowest-looking option and the one
+that matches D-0081's precedent, but it makes the layer absent exactly for the child that has nobody
+watching it, which is backwards. A third alternative appeared only once the measurement was in:
+*implement the gate's decision literally and add the writable surface alone*. It is rejected because
+it is measurably inert -- with the structured entry still there, `git add` is refused exactly as
+before.
+
+**What records it.** `test/fencing/hermetic-child.test.ts` asserts, on the rendered fence, that the
+block arrives switched on while the carried document still has no such key; that every deny entry is
+a string while the document's is still structured, so the case fails if the repair is ever moved into
+the carried document; that the settings' deny list and the fence's own rule specs are now the same
+strings; and that adding the roots moves neither the rule ids nor the permissions block.
+`test/workspace/materializer.test.ts` pins the derivation against git's own answers on a real
+worktree, the detached-HEAD case, the published settings and the ledger row. One opt-in real-child
+case starts a `claude -p` in a real linked worktree, and the observation is split in two: the commit
+is read out of the repository afterwards (not from the child's account of itself), and the child is
+asked whether it has a sandbox -- because a fence that renders `enabled: true` into a file the CLI
+declines to act on would pass every other case in the file.
+
+**What would falsify it.** A CLI release that accepts the structured entry, that stops auto-deriving
+the worktree's gitdir, or that changes what `enabled` means. The first two would make parts of this
+harmless rather than wrong; the third is the one to watch, and the real-child case is what would
+notice, because it is the only observation here that is not of continuo's own output.
+
+## D-0083 -- The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays
+
+**Context.** The same dogfood (section 9.5, F-9; issue #132) found that the worker role's
+`Write(~/.claude/settings.json)` deny is dead in both layers. The CLI says so itself, on stderr, on
+every spawn: a file-permission rule is applied only under `Edit(path)`, which covers every
+file-editing tool. And `matches` in `src/fencing/rules.ts` compares an exact tool name, so the fence's
+own hook consulted the rule only for the literal `Write` tool. A child reaching that file with `Edit`
+was matched by neither layer. `curator` and `secretary` already carry both spellings of their
+equivalent rules; `worker` was the only role whose `Write(...)` stood alone.
+
+**Decision.** Taken at the human gate on 2026-09-04. `worker.permissions.deny` gains
+`Edit(~/.claude/settings.json)` beside the `Write(...)` form, which closes the CLI's permission layer
+for every file-editing tool and the fence's hook layer for `Edit`, while the `Write(...)` half keeps
+the hook layer closed for a literal `Write`. `src/fencing/roles.json` is carried verbatim from
+interlock, so this is the first recorded deviation in it; `test/contract/carried-documents.test.ts`
+grew a `deviations` field to say so out loud rather than let a bumped digest sit under a comment that
+still claims byte-identity.
+
+**Known limitation, measured: the warning does not go away.** #132's acceptance asked for it, on the
+assumption that the warning was about the missing `Edit`. It is not. Measured on CLI `2.1.260` over
+three settings files differing only in that list: `Write(...)` alone warns, `Write(...)` and
+`Edit(...)` together warn, `Edit(...)` alone does not. The warning names the `Write` spelling's
+presence, so it stays for as long as that spelling does -- for `curator` and `secretary` too, which
+already carried both. It is now noise about a redundant rule rather than a signal about a dead one.
+
+**The rejected alternatives.** *Drop `Write(...)` and keep `Edit(...)` alone* silences the warning
+and costs the hook layer's match on a literal `Write`, leaving that path to the CLI's permission
+layer alone -- one layer where this repository's whole argument for the hook is that it does not
+depend on the CLI. *Widen the hook's own matching, so an `Edit(...)` rule covers every file-editing
+tool as the CLI's does* is the only option that closes both layers and silences the warning; it is
+also a deliberate semantic deviation in a ported function and reaches every role's rules at once, so
+it is tracked separately rather than folded into a two-line document fix.
+
+**What records it.** `test/fencing/hermetic-child.test.ts` asserts that the rendered worker fence
+refuses both an `Edit` and a `Write` of that path at the hook layer, with the reason naming the rule.
