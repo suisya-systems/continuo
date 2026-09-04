@@ -12781,9 +12781,11 @@ rule set the deny hook enforces and a restart diffs is byte-identical either way
 happens to derive it" is undocumented behaviour that the fence would otherwise be silently depending
 on, and because a fence that cannot say what it allows cannot record it -- which #130's acceptance
 requires. The roots are appended to whatever the document declared, de-duplicated, never replacing
-it, and they are written into the `spawn-admitted` ledger row as *paths* rather than a count: the
+it, and the `spawn-admitted` ledger row carries the surface as *paths* rather than as a count: the
 question an operator brings to that row is which paths a worker could write, and a number cannot
-answer it.
+answer it. The row is read off the ADMITTED FENCE rather than off the spawner's own input, because
+the two differ whenever a role document declared `additionalDirectories` of its own -- and a row
+that under-reported the published surface would fail in the one direction an audit field must not.
 
 **The rejected alternatives, both named by the gate.** *Drop the `sandbox` block and rest on
 `permissions` plus the deny hook* -- the dogfood's own workaround, and it gives up a layer

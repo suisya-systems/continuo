@@ -251,6 +251,28 @@ function canonicalSettingsJson(settings: unknown): string {
 }
 
 /**
+ * The writable surface the admitted fence actually opened (D-0082).
+ *
+ * Read out of the settings the child will parse rather than out of what the
+ * caller asked for, because those are two different lists whenever a role
+ * document declared `additionalDirectories` of its own. Defensive about the
+ * shape rather than casting through it: this runs on the admission path, and a
+ * ledger row is not worth throwing a rendered fence away for.
+ */
+function renderedWritableRoots(fence: Fence): unknown[] {
+  const sandbox = fence.settings["sandbox"];
+  if (typeof sandbox !== "object" || sandbox === null) {
+    return [];
+  }
+  const filesystem = (sandbox as Record<string, unknown>)["filesystem"];
+  if (typeof filesystem !== "object" || filesystem === null) {
+    return [];
+  }
+  const roots = (filesystem as Record<string, unknown>)["additionalDirectories"];
+  return Array.isArray(roots) ? [...roots] : [];
+}
+
+/**
  * Append-only JSONL record of spawn admissions and refusals.
  *
  * "Recorded durably" is taken literally: every event is flushed and `fsync`ed
@@ -658,7 +680,9 @@ export class FencedSpawner {
    * runs no subprocess.
    *
    * Empty by default: a spawner that says nothing about a checkout gets a fence
-   * that claims nothing about one.
+   * that claims nothing about one. It is an INPUT to the rendered surface and
+   * not a description of it -- what the fence finally opened is read back off
+   * the admitted fence; see {@link renderedWritableRoots}.
    */
   readonly sandboxWritableRoots: readonly string[];
 
@@ -866,7 +890,14 @@ export class FencedSpawner {
         // surprising commit can be read against it. The list, not a count: the
         // question an operator brings here is *which* paths a worker could
         // write, and a number cannot answer it.
-        sandbox_writable_roots: [...this.sandboxWritableRoots],
+        //
+        // Read off the ADMITTED FENCE, not off this spawner's own input. The
+        // two differ whenever the role document declared
+        // `additionalDirectories` of its own -- the child can write through
+        // those too, and a row that listed only the derived roots would report
+        // a narrower surface than the one that was published, which is the one
+        // direction an audit field must not fail in. (Found by codex review.)
+        sandbox_writable_roots: renderedWritableRoots(fence),
       });
       return new SpawnOutcome({ admitted: true, role, fence, plan, battery });
     });

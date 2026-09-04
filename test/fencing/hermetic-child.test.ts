@@ -343,6 +343,44 @@ describe("the sandbox the fence renders is one the CLI can actually build (D-008
   });
 });
 
+describe("the admission record says what the fence actually opened (D-0082)", () => {
+  test("a root the document declared is in the ledger row too, not only the derived ones", () => {
+    const root = fenceCaseRoot();
+    const document = deepCopyDocument(fenceDocument());
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    ((worker["sandbox"] as Record<string, unknown>)["filesystem"] as Record<string, unknown>)[
+      "additionalDirectories"
+    ] = ["/shared"];
+
+    const ledgerPath = join(root, "declared-roots.jsonl");
+    const outcome = new FencedSpawner({
+      ledger: fenceLedger(root, "declared-roots.jsonl"),
+      document,
+      nonInteractive: true,
+      sandboxWritableRoots: ["/base/.git/objects"],
+    }).prepare("worker", fenceContext(root));
+    expect(outcome.admitted).toBe(true);
+
+    const admitted = readFileSync(ledgerPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((row) => row["event"] === "spawn-admitted");
+
+    // The child can write through `/shared` as surely as through the derived
+    // root, so a row that listed only what the caller supplied would report a
+    // narrower surface than the one published -- the one direction this field
+    // must not fail in.
+    expect((admitted[0] as Record<string, unknown>)["sandbox_writable_roots"]).toStrictEqual([
+      "/shared",
+      "/base/.git/objects",
+    ]);
+  });
+});
+
 describe("the worker's settings.json deny closes the tool a child would reach for (#132)", () => {
   test("an Edit of ~/.claude/settings.json is refused by the fence's own hook layer", () => {
     const fence = renderFence("worker", fenceContext(), {
