@@ -495,9 +495,32 @@ export class SpawnPlan {
    * file, because i01 section 3.9 showed `permissionMode` is the one part of
    * the fence the provider reads back -- so it is the one part a restart can be
    * checked against directly.
+   *
+   * `--setting-sources ''` is what makes the fence the child's ONLY settings
+   * source (D-0081, #119). `--settings` is additive: the CLI loads the user,
+   * project and local settings files as well, so the target repository's own
+   * `.claude/settings.local.json` -- its hooks included -- arrives underneath a
+   * fence that can add rules but cannot take them away. Measured on CLI
+   * `2.1.260`: with the flag absent a write-refusing hook in the target's local
+   * settings refuses every `Write` the child attempts; with the flag present
+   * that hook is gone and the fence's own hooks still fire. Managed settings
+   * are unaffected either way, which is the one source that should outrank a
+   * fence.
    */
   cliArgs(): string[] {
-    return ["--settings", this.settingsPath, "--permission-mode", this.fence.permissionMode];
+    return [
+      "--settings",
+      this.settingsPath,
+      "--permission-mode",
+      this.fence.permissionMode,
+      // The empty string is the flag's "no sources" spelling: the value is a
+      // comma-separated subset of `user,project,local`, and the empty subset is
+      // the whole point. A CLI too old to know the flag exits with
+      // `error: unknown option`, which is the fail-closed direction -- a spawn
+      // that refuses loudly rather than one that quietly runs unfenced.
+      "--setting-sources",
+      "",
+    ];
   }
 }
 
@@ -611,14 +634,30 @@ export class FencedSpawner {
   // recorded here instead, where a reader comparing the two files finds the
   // answer rather than a discrepancy.
 
+  /**
+   * Whether the children this spawner admits are `claude -p` sessions.
+   *
+   * Held on the spawner rather than passed to {@link prepare}, because it is a
+   * property of what this spawner starts and not of one admission: a caller
+   * that could vary it per call could admit a plan under one meaning and
+   * execute it under the other, and the fence the ledger recorded would not be
+   * the fence the child ran under.
+   *
+   * Default `false`, so nothing that does not say so gets the promotion
+   * (D-0081).
+   */
+  readonly nonInteractive: boolean;
+
   constructor(init: {
     ledger: FenceLedger;
     document?: RoleDocument | undefined;
     settingsName?: string;
+    nonInteractive?: boolean;
   }) {
     this.ledger = init.ledger;
     this.document = init.document;
     this.settingsName = init.settingsName ?? "settings.local.json";
+    this.nonInteractive = init.nonInteractive ?? false;
   }
 
   /**
@@ -679,8 +718,11 @@ export class FencedSpawner {
         // `exactOptionalPropertyTypes`, hence the branch.
         fence =
           this.document === undefined
-            ? renderFence(role, ctx)
-            : renderFence(role, ctx, { document: this.document });
+            ? renderFence(role, ctx, { nonInteractive: this.nonInteractive })
+            : renderFence(role, ctx, {
+                document: this.document,
+                nonInteractive: this.nonInteractive,
+              });
       } catch (exc) {
         if (exc instanceof FenceRefusal) {
           return this.#refuse(role, exc.reasons);

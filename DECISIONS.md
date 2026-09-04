@@ -176,6 +176,7 @@ spaces distinct.
 | D-0078 | The gate verbs, and why the ack closes the gate rather than a ninth verb | accepted |
 | D-0079 | The reconcile pass is its own verb, the operator owns its cadence, and it pronounces no verdicts | accepted |
 | D-0080 | After the lap there is no endpoint, so a verb drives delivery: `gate deliver` | accepted |
+| D-0081 | The fence is the child's only configuration, and it renders a mode the child can work under | accepted |
 
 ---
 
@@ -12624,3 +12625,91 @@ delivering and acking the same relays -- so the two delivery paths are demonstra
 **What would falsify it.** An endpoint that outlives its lap, or the supervisor `D-0079` names. Either
 makes this verb a manual fallback rather than the only driver, and nothing about it needs to change
 for that: it already refuses when somebody else holds the lease.
+
+## D-0081 -- The fence is the child's only configuration, and it renders a mode the child can work under
+
+**Context.** Lap 1's dogfood (`docs/operations/lap-1-dogfood.md` section 7, F-1 and F-2; issues #119
+and #120) ran the real thing end to end for the first time and found two P1 defects that a green
+suite could not have shown, because both are properties of a CLI this repository does not own.
+
+**F-1: the fence was not hermetic.** `--settings` is *additive*. The child also loads the user,
+project and local settings files, so the target repository's own `.claude/settings.local.json` -- its
+hooks included -- arrives underneath a fence that can add rules and cannot take any away. The dogfood
+target was a claude-org worker checkout carrying `check-worker-boundary.sh`; the child inherited it,
+every write inside the worktree was refused, and the lap produced no work at all while the gate
+opened and closed normally. That is the most expensive failure mode available: everything Interlock
+can see says the run was fine.
+
+**F-2: the fence let the child do nothing.** The role document renders `permissionMode: default`,
+which means "ask a person", and the allow list is six `Bash(git ...)` entries with no `Edit` and no
+`Write` anywhere. A `claude -p` child has nobody at its prompt, so every edit was refused and the
+turn ended having changed nothing. Lap 003 reached a commit only by an operator passing
+`--allowedTools` by hand.
+
+**Decision, F-1. The rendered plan passes `--setting-sources ''`, and the materialiser passes
+`--strict-mcp-config`.** Two candidates were on the table for F-1 and the choice was settled by
+measurement rather than by argument, because it turns on what the CLI can be told rather than on what
+would be tidy. Measured against CLI `2.1.260`, in a target carrying a write-refusing `PreToolUse`
+hook in its own `.claude/settings.local.json`:
+
+- without the flag, the target's hook fires and the child writes nothing -- the dogfood, reproduced;
+- with `--setting-sources ''`, the target's hook does not run at all and the child writes;
+- with `--setting-sources ''` *and* a deny hook in the fence itself, the fence's hook still fires.
+
+So the fence keeps every rule it had and loses the surroundings, which is the whole property F-1 is
+about. Managed settings are unaffected either way, which is the one source that should outrank a
+fence. `--strict-mcp-config` closes the same hole on the other axis: `--mcp-config` names the control
+plane the worker talks to and, alone, adds it to whatever `.mcp.json` the target already carried.
+
+**The rejected candidate: refuse at spawn time when the target carries `.claude/settings*.json`.**
+It was not taken because it does not fix the severity it answers. #119 is P1 for "lap 1 cannot do work
+against any repository that already has local Claude settings", and a pre-spawn refusal makes exactly
+that population permanently unrunnable -- it converts a silent failure into a loud one and stops
+there. It was the right candidate only if the CLI had no way to confine its own discovery, and the
+measurement above shows it has.
+
+**Decision, F-2. A non-interactive spawn renders `default` as `acceptEdits`, and nothing else
+moves.** Taken at the human gate on 2026-09-04. `FencedSpawner` carries `nonInteractive`, the
+materialiser sets it (there is no path through step 7 that produces an interactive child), and
+`renderFence` promotes the mode -- so the settings file the child parses and the `--permission-mode`
+argument it is started with come from one field and cannot disagree. The role document's allow list is
+**not** widened and its deny rules are byte-identical; `test/fencing/hermetic-child.test.ts` asserts
+that over the rendered settings rather than over the document, which is where a promotion that took
+something with it would show.
+
+**Why the promotion is narrow.** Only `default` is promoted. `default` is the one mode that cannot be
+honoured without a person, so it is the one this is about; `plan` means "look, do not touch", and
+promoting it would hand a role write access its author declined to give it -- the silent widening
+D-0023 part 2 refuses. The promoted value is then put through the same `permission_mode` gate the
+authored one went through, so a document whose `global.permission_modes` omits `acceptEdits` refuses
+rather than being promoted into a mode it forbade.
+
+**The rejected alternative: add `Edit` and `Write` to the worker role.** It reaches the same worker
+and widens every interactive spawn of that role at the same time, permanently and invisibly, where
+the mode is scoped to the spawns that actually have nobody to ask.
+
+**Both flags are fence-owned.** They join `--settings`, `--permission-mode` and `--mcp-config` in
+`FENCE_OWNED_FLAGS`, so an admitted run's own `cli_args` may not restate either. They are not more
+configuration for the child: each is what makes one of the other flags exclusive rather than
+additive, and an operator argument restating one would put the surroundings back through the single
+door the fence leaves open.
+
+**What records it.** `test/fencing/hermetic-child.test.ts`. Five cases render and read; two start a
+real `claude -p` in a target carrying the dogfood's settings file and look at the filesystem
+afterwards. The target's hook writes a witness before it refuses, so the observation is "were the
+target's settings read at all" rather than "did a write happen" -- a write that merely succeeded
+would look the same whether the hook was absent, outranked, or firing for another tool. The
+reproduction half removes the flag pair from the argv the real plan rendered, by subtraction rather
+than by hand-writing an argv, so it cannot drift away from the fence. Its hook matches every tool,
+not `Write|Edit`: measured, a turn refused at `Write` reached for `Bash` and wrote the file anyway,
+and a reproduction the model can work around is one that reports the defect fixed on a lucky turn.
+The two real-child cases are opt-in (`CONTINUO_REAL_CLAUDE_CHILD=1` and a `claude` on `PATH`) because
+they bill an API turn and nothing else in this suite does; the approval and its reason are in
+`parity/fencing.spawn-precondition.ledger.json`.
+
+**What would falsify it.** A CLI release that changes what `--setting-sources` with the empty subset
+means, or that stops honouring it. The flag pair is rendered from one place, so the blast radius is
+one function -- but the evidence for it is a measurement against `2.1.260` and not a contract, and the
+real-child cases are what would notice. A CLI too old to know the flag exits with `error: unknown
+option`, which is the fail-closed direction: a spawn that refuses loudly rather than one that quietly
+runs unfenced.

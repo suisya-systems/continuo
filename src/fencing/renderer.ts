@@ -373,17 +373,36 @@ export function roleNames(document?: RoleDocument): readonly string[] {
 }
 
 /**
+ * The mode a spawn with no human at the prompt renders `default` as (D-0081).
+ *
+ * Named rather than inlined because it is a value two places must agree on:
+ * the settings file the child reads and the `--permission-mode` argument the
+ * plan renders. Those come from one field here, so the agreement is structural
+ * -- but the constant is what a test asserts against without restating the
+ * literal.
+ */
+export const NON_INTERACTIVE_PERMISSION_MODE = "acceptEdits";
+
+/**
  * Render one role's fence, or refuse.
  *
  * There is no `strict=false`. A renderer with a lenient mode grows a caller
  * that uses it, and that caller is the downgraded spawn D-0023 forbids.
+ *
+ * `nonInteractive` says the child this fence is for is a `claude -p` session:
+ * one that cannot be asked to approve anything, because there is nobody at its
+ * prompt. It is an input rather than something inferred, because the renderer
+ * never sees the argv the caller will build -- and a fence that guessed at it
+ * would guess wrong for exactly the caller that spawns both kinds. It widens
+ * nothing but the permission mode; see the promotion inside.
  */
 export function renderFence(
   role: string,
   ctx: FenceContext,
-  options?: { readonly document?: RoleDocument },
+  options?: { readonly document?: RoleDocument; readonly nonInteractive?: boolean },
 ): Fence {
   const doc = options?.document ?? loadDocument();
+  const nonInteractive = options?.nonInteractive ?? false;
   const reasons: Reason[] = [];
   const roles = isPlainObject(getOwn(doc, "roles"))
     ? (getOwn(doc, "roles") as Record<string, unknown>)
@@ -427,8 +446,23 @@ export function renderFence(
     : {};
   // `body.get("permission_mode", "default")`: own key or the default. `in`
   // would find an inherited `permission_mode` that no author wrote.
-  const permissionMode = Object.hasOwn(body, "permission_mode") ? body.permission_mode : "default";
-  reasons.push(...checkPermissionMode(permissionMode, globalCfg));
+  const authoredMode = Object.hasOwn(body, "permission_mode") ? body.permission_mode : "default";
+  reasons.push(...checkPermissionMode(authoredMode, globalCfg));
+  // D-0081. `default` means "ask a person"; a `claude -p` child has none, so
+  // every Edit and Write it attempts is refused and the turn ends having
+  // changed nothing (#120). The promotion is the whole of the fix, and it is
+  // deliberately the narrowest one that closes it: the allow list is not
+  // widened and the deny list is untouched, so the mode is the only byte that
+  // moves.
+  const permissionMode =
+    nonInteractive && authoredMode === "default" ? NON_INTERACTIVE_PERMISSION_MODE : authoredMode;
+  if (permissionMode !== authoredMode) {
+    // A document whose `global.permission_modes` omits `acceptEdits` has said
+    // this mode may not be rendered. Promoting into it anyway would render a
+    // fence its author forbade -- the silent widening D-0023 part 2 refuses --
+    // so the promoted value goes through the same gate the authored one did.
+    reasons.push(...checkPermissionMode(permissionMode, globalCfg));
+  }
 
   const mapping = ctx.mapping();
   const rendered = substitute(stripMeta(body), mapping) as Record<string, unknown>;
