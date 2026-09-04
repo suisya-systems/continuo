@@ -98,11 +98,46 @@ function namesFlag(argument: string, flag: string): boolean {
  * entry outright would make the escape hatch useless for the only case ever
  * observed; leaving the corpus advisory would make it not a check at all.
  *
- * `reason` is matched as a substring rather than parsed. The field exists to be
- * read by the reviewer of the edit, and what is being asserted is that the flag
- * was named at all -- no phrasing is prescribed, because prescribing one would
- * turn a record rule into a spelling rule.
+ * `reason` is searched for the flag's name rather than parsed. The field exists
+ * to be read by the reviewer of the edit, and what is being asserted is that
+ * the flag was named at all -- no phrasing is prescribed, because prescribing
+ * one would turn a record rule into a spelling rule. The one thing the search
+ * does insist on is that the name is a whole token; see {@link reasonNames} for
+ * the prefix collisions that costs nothing to close and everything to leave.
  */
+/**
+ * Does `reason` name `flag` as a flag, rather than merely contain its letters?
+ *
+ * A bare `reason.includes(flag)` reads as the obvious spelling and it has a
+ * hole in exactly the direction this gate cannot afford: the corpus holds
+ * names that are prefixes of other names on it. `--agent` is a prefix of
+ * `--agents`, so an entry authorising `--agent` would be recorded by a reason
+ * that discusses only `--agents` -- a different flag, loading a different
+ * thing -- and `-w` is a substring of `--worktree`, so an entry authorising
+ * the short spelling would be recorded by a sentence that never mentions it.
+ * Both are the same failure: CI green over an authorisation whose written
+ * reason is about something else, which is the one thing decision D7 asks this
+ * scan to make impossible.
+ *
+ * So the occurrence has to be a whole token. A flag name may sit against
+ * punctuation -- backticks, a comma, a full stop, the `=` of an attached value
+ * -- but not against a character that would make it part of a longer flag
+ * name. That is the narrowest rule that closes the prefix hole without
+ * prescribing phrasing, which the docstring above is careful not to do.
+ */
+function reasonNames(reason: string, flag: string): boolean {
+  const CONTINUES_A_FLAG = /[A-Za-z0-9_-]/;
+  for (let at = reason.indexOf(flag); at !== -1; at = reason.indexOf(flag, at + 1)) {
+    const before = at === 0 ? "" : reason.charAt(at - 1);
+    const after = reason.charAt(at + flag.length);
+    if (CONTINUES_A_FLAG.test(before) || CONTINUES_A_FLAG.test(after)) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 function unrecordedCorpusFlags(
   entries: readonly CliArgsAllowEntry[],
 ): readonly { readonly index: number; readonly flag: string }[] {
@@ -112,7 +147,7 @@ function unrecordedCorpusFlags(
       if (!entry.cliArgs.some((argument) => namesFlag(argument, flag))) {
         continue;
       }
-      if (!entry.reason.includes(flag)) {
+      if (!reasonNames(entry.reason, flag)) {
         missing.push({ index, flag });
       }
     }
@@ -338,6 +373,67 @@ describe("src/fencing/cli_args_allow.json checks, observed red", () => {
     expect(unrecordedCorpusFlags(loadCliArgsAllowlist(path))).toStrictEqual([
       { index: 0, flag: "--allowedTools" },
     ]);
+  });
+
+  test("a reason naming a longer flag does not record the shorter one inside it", () => {
+    // The prefix collision, which a bare `reason.includes(flag)` would wave
+    // through, and it is the subtler of the two holes this scan has had. The
+    // corpus carries names that are prefixes of other names on it: `--agent`
+    // sits inside `--agents`, and `-w` sits inside `--worktree`. An entry
+    // authorising `--agent` -- one agent definition, loaded from the argv --
+    // whose reason discusses `--agents` has recorded a decision about a
+    // different flag, and an entry authorising the short worktree spelling
+    // whose reason says `--worktree` never mentions the argument it took. Both
+    // read as green under a substring test and both are exactly the unrecorded
+    // widening D7 exists to catch, so both are asserted red here.
+    const path = writeDocument(
+      JSON.stringify({
+        entries: [
+          {
+            role: "worker",
+            cli_args: ["--agent"],
+            reason: "the lap needs --agents to load its own definitions",
+          },
+          {
+            role: "worker",
+            cli_args: ["-wscratch"],
+            reason: "the lap needs --worktree for a scratch checkout",
+          },
+        ],
+      }),
+      "corpus-prefix",
+    );
+    expect(unrecordedCorpusFlags(loadCliArgsAllowlist(path))).toStrictEqual([
+      { index: 0, flag: "--agent" },
+      { index: 1, flag: "-w" },
+    ]);
+  });
+
+  test("a reason may name a flag against punctuation, which is how prose spells one", () => {
+    // The other side of the token rule, and the reason it is a token rule
+    // rather than a whitespace rule: a reason written the way this repository
+    // writes prose puts the flag in backticks, or against a comma, or in its
+    // attached-value form. Requiring spaces around the name would refuse every
+    // one of those and make the gate a spelling rule after all -- which the
+    // scan's own docstring promises it is not.
+    const path = writeDocument(
+      JSON.stringify({
+        entries: [
+          {
+            role: "worker",
+            cli_args: ["--agents"],
+            reason: "measured on lap 2: `--agents`, and nothing wider",
+          },
+          {
+            role: "worker",
+            cli_args: ["--allowedTools=Edit"],
+            reason: "measured on lap 2: --allowedTools=Edit, and nothing wider",
+          },
+        ],
+      }),
+      "corpus-punctuation",
+    );
+    expect(unrecordedCorpusFlags(loadCliArgsAllowlist(path))).toStrictEqual([]);
   });
 
   test("a document with no corpus flag in it reports nothing", () => {
