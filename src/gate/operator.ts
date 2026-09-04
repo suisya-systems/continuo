@@ -466,31 +466,59 @@ export function gateDetail(connection: SqliteDatabase, gateId: string): GateDeta
  * rationale the ingress recorded and the options the gate was opened with
  * (`D-0056`), and a payload that reached for anything else would put words in
  * front of an approver that the gate never promised were the subject's.
+ *
+ * `ensureAscii: false` (continuo#123). This payload -- unlike the event
+ * payload, the `consumption_skipped` audit body and a gate's own `options`
+ * column that `pythonJsonObject`'s other callers write, all compared
+ * byte-for-byte against interlock's Python output -- is written straight into
+ * `outbox.payload` and, unmodified, is what `NotifyDestinationHandler` hands
+ * to {@link import("../control_plane/destination.js").KeyedDropbox} for
+ * `NOTIFY_RECIPIENT` ("external-notify"): the ONLY outbox producer that
+ * reaches it. So this string, not the digest wrapper `KeyedDropbox` builds
+ * around it, is where a worker's Japanese rationale was
+ * actually escaped to `\uXXXX` before continuo#123 -- the wrapper's own
+ * `ensureAscii: false` cannot undo escaping already baked into a string it
+ * receives as opaque. No test in this repository asserts these bytes against
+ * a Python `json.dumps(ensure_ascii=True)` fixture, so this is a deliberate,
+ * disclosed deviation for the one payload an operator reads directly, not a
+ * parity break.
  */
 function presentedPayload(gate: GateDetail): string {
-  return pythonJsonObject([
-    ["gate_id", gate.gateId],
-    ["gate_type", gate.gateType],
-    ["options", gate.options],
-    ["rationale", gate.rationale],
-    ["run_id", gate.runId ?? ""],
-    ["stage", "presented"],
-    ["subject_id", gate.subjectId],
-    ["subject_kind", gate.subjectKind],
-  ]);
+  return pythonJsonObject(
+    [
+      ["gate_id", gate.gateId],
+      ["gate_type", gate.gateType],
+      ["options", gate.options],
+      ["rationale", gate.rationale],
+      ["run_id", gate.runId ?? ""],
+      ["stage", "presented"],
+      ["subject_id", gate.subjectId],
+      ["subject_kind", gate.subjectKind],
+    ],
+    false,
+  );
 }
 
-/** The answer, as the payload the forward relay carries onward. */
+/**
+ * The answer, as the payload the forward relay carries onward.
+ *
+ * `ensureAscii: false` for the same reason as {@link presentedPayload}: this
+ * is the payload `KeyedDropbox` publishes to `<sha256>.effect.json`, and an
+ * operator's answer may itself be Japanese prose.
+ */
 function forwardedPayload(gate: GateDetail, body: string): string {
-  return pythonJsonObject([
-    ["answer", body],
-    ["gate_id", gate.gateId],
-    ["gate_type", gate.gateType],
-    ["run_id", gate.runId ?? ""],
-    ["stage", "forwarded"],
-    ["subject_id", gate.subjectId],
-    ["subject_kind", gate.subjectKind],
-  ]);
+  return pythonJsonObject(
+    [
+      ["answer", body],
+      ["gate_id", gate.gateId],
+      ["gate_type", gate.gateType],
+      ["run_id", gate.runId ?? ""],
+      ["stage", "forwarded"],
+      ["subject_id", gate.subjectId],
+      ["subject_kind", gate.subjectKind],
+    ],
+    false,
+  );
 }
 
 /**

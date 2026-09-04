@@ -59,17 +59,17 @@ export function pythonJsonString(value: string, ensureAscii = true): string {
 }
 
 /** One JSON number or string, as `json.dumps` renders it. */
-function pythonJsonScalar(value: string | number): string {
-  return typeof value === "string" ? pythonJsonString(value) : JSON.stringify(value);
+function pythonJsonScalar(value: string | number, ensureAscii: boolean): string {
+  return typeof value === "string" ? pythonJsonString(value, ensureAscii) : JSON.stringify(value);
 }
 
 /** `json.dumps(list)` for a list of strings. */
-export function pythonJsonList(values: readonly string[]): string {
+export function pythonJsonList(values: readonly string[], ensureAscii = true): string {
   // NOT `values.map(pythonJsonString)`: `Array#map` passes the index as a
   // second argument, and `pythonJsonString`'s second parameter is now
   // `ensureAscii` -- so `map` would call it as `pythonJsonString(v, 0)` for
   // the first element, and `0` is falsy, silently turning off escaping there.
-  return `[${values.map((value) => pythonJsonString(value)).join(", ")}]`;
+  return `[${values.map((value) => pythonJsonString(value, ensureAscii)).join(", ")}]`;
 }
 
 /**
@@ -78,9 +78,19 @@ export function pythonJsonList(values: readonly string[]): string {
  * Python dicts keep insertion order and `json.dumps` follows it, so a payload
  * written as a dict literal is stored in the order the source wrote it -- which
  * is generally not alphabetical.
+ *
+ * `ensureAscii` defaults to `true`, matching every existing caller.
  */
-export function pythonJsonObject(entries: readonly (readonly [string, string | number])[]): string {
-  return `{${entries.map(([key, value]) => `${pythonJsonString(key)}: ${pythonJsonScalar(value)}`).join(", ")}}`;
+export function pythonJsonObject(
+  entries: readonly (readonly [string, string | number])[],
+  ensureAscii = true,
+): string {
+  return `{${entries
+    .map(
+      ([key, value]) =>
+        `${pythonJsonString(key, ensureAscii)}: ${pythonJsonScalar(value, ensureAscii)}`,
+    )
+    .join(", ")}}`;
 }
 
 /**

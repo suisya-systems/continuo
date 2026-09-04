@@ -325,13 +325,18 @@ verb exists to move it. Five events remain: `run_created`, `run_delegation_recor
 - **Workaround.** Read it with `gate show`, which prints the text as written.
 - **Real fix.** The dropbox is the surface an operator reads, so emit non-ASCII as-is. If the
   escaping is a deliberate interoperability contract, say so in `gate deliver`'s help.
-- **Fixed (continuo#123).** `KeyedDropbox._applyLocked` now serialises the effect record with
-  `pythonJsonDocumentSorted(record, false)` -- `ensure_ascii=False` for this one call site only.
-  Every other caller of `pythonJsonDocumentSorted` (the event payload, the `consumption_skipped`
-  audit body, a gate's `options` list -- all database columns compared byte-for-byte against
-  CPython) is unchanged: the new `ensureAscii` parameter defaults to `true`. The idempotency key's
-  sha256 file name and the payload's own digest are computed over the raw strings, not over this
-  rendering, so neither moves.
+- **Fixed (continuo#123).** Two layers escaped the rationale, and both needed the fix. `gate/operator.ts`'s
+  `presentedPayload`/`forwardedPayload` build the `outbox.payload` string `NotifyDestinationHandler`
+  hands `KeyedDropbox` unmodified -- `NOTIFY_RECIPIENT` ("external-notify") is the only outbox
+  recipient this destination serves -- so a rationale was already `\uXXXX` text before
+  `KeyedDropbox` ever saw it; wrapping only the outer effect record `ensure_ascii=False` (as an
+  earlier pass here did) could not undo escaping baked into a string it receives as opaque. Both
+  `pythonJsonObject` (the two payload builders) and `pythonJsonDocumentSorted`
+  (`KeyedDropbox._applyLocked`'s effect record) now take an `ensureAscii` parameter, defaulting to
+  `true`. Every other caller -- the event payload, the `consumption_skipped` audit body, a gate's
+  own `options` column, all compared byte-for-byte against CPython -- is unchanged. The idempotency
+  key's sha256 file name and the payload's own digest are computed over the raw strings, not over
+  this rendering, so neither moves.
 
 ### F-6. Truncating output through a pipe can kill the CLI with EPIPE
 

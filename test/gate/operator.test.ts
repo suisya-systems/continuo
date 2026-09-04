@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
@@ -277,6 +279,56 @@ describe("the operator's gate walk", () => {
     deliver(cp, dir, T0 + 2 * MINUTE);
     expect(effectCount(dir, dedupKey)).toBe(1);
     expect(statusOf(cp, relay.messageId)).toBe("delivered");
+  });
+
+  test("a Japanese rationale reaches the dropbox file unescaped (continuo#123)", () => {
+    // The production path, not a hand-built payload: `presentGate` builds the
+    // relay through `presentedPayload` (`pythonJsonObject`), `deliverRelays`
+    // hands it to `NotifyDestinationHandler`, which hands it to `KeyedDropbox`
+    // unmodified. Escaping any layer of that chain reproduces continuo#123 --
+    // in particular, wrapping the record `ensureAscii: false` inside
+    // `KeyedDropbox` alone is not enough if `presentedPayload` already
+    // rendered the rationale as `\uXXXX` text before it got there.
+    const cp = cpFixture("gate-dropbox-ja");
+    const dir = destinationDir("gate-dropbox-ja");
+    // "whether to use Japanese in the file name" -- a rationale, in Japanese.
+    const rationale =
+      "\u30d5\u30a1\u30a4\u30eb\u540d\u306b\u65e5\u672c\u8a9e\u3092\u4f7f\u3046\u304b\u3069\u3046\u304b";
+    addRun(cp, RUN_ID, "running", T0);
+    const seq = addOriginEvent(cp);
+    openGate(cp, {
+      gateId: GATE_ID,
+      gateType: "worker_escalation",
+      subjectKind: "run",
+      subjectId: RUN_ID,
+      rationale,
+      originEventSeq: seq,
+      createdAtMs: T0,
+      actorKind: "worker",
+      actorId: "worker-7",
+      options: ["force-push", "abandon"],
+      runId: RUN_ID,
+    });
+
+    presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    deliver(cp, dir, T0 + MINUTE);
+
+    const dropbox = new KeyedDropbox(dir, "case");
+    const dedupKey = `${GATE_RELAY_RECIPIENT}:notify:gate/${GATE_ID}/presented`;
+    expect(dropbox.effectCount(dedupKey)).toBe(1);
+
+    const payload = dropbox.payloadOf(dedupKey);
+    expect(payload).not.toBeNull();
+    expect(payload).toContain(rationale);
+    expect(payload).not.toContain("\\u30d5");
+
+    // And the record on disk carries it raw too -- `payloadOf` only proves
+    // `JSON.parse` can recover it, which a `\uXXXX`-escaped file would also
+    // satisfy.
+    const stem = createHash("sha256").update(dedupKey, "utf-8").digest("hex");
+    const raw = readFileSync(join(dir, `${stem}.effect.json`), "utf-8");
+    expect(raw).toContain(rationale);
+    expect(raw).not.toContain("\\u30d5");
   });
 
   test("a second present returns the message id already in force", () => {
