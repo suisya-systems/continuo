@@ -19,13 +19,17 @@ import { type Destination, KeyedDropbox } from "../control_plane/destination.js"
 import { appendEvent } from "../control_plane/events.js";
 import { spikeRegistry } from "../control_plane/handlers.js";
 // The flags this step generates and refuses an admitted run from restating.
-// The list lives beside `FENCE_ALTERING_FLAGS` in `lap_run_intent.ts` rather
-// than here, because `D-0086` needs the two concepts stated in one place and
-// admission -- which runs before any workspace exists -- checks both. A sixth
-// generated flag goes on that list, not on a copy of it here.
+// The list lives in `lap_run_intent.ts` rather than here because the record's
+// own constructor applies the same rule at admission -- which runs before any
+// workspace exists -- and one list read from both sites is the only way the two
+// can stay in agreement. It used to sit beside `FENCE_ALTERING_FLAGS`, which
+// `D-0088` deleted from `src/`: those twenty-four names are a test corpus now,
+// and the rule they stood for is the whole-vector allowlist this file consults
+// below. A sixth generated flag goes on the surviving list, not on a copy here.
 import { FENCE_OWNED_FLAGS } from "../control_plane/lap_run_intent.js";
 import { pythonJsonDocumentSorted } from "../control_plane/python_json.js";
 import { pythonRepr } from "../control_plane/python_repr.js";
+import { cliArgsRefusal } from "../fencing/cli_args_allow.js";
 import { FenceContext } from "../fencing/renderer.js";
 import {
   defaultHookScript,
@@ -344,6 +348,11 @@ export interface MaterializationRequest {
    *
    * They are placed **before** the fence's own flags and are refused if they
    * name one. See {@link FENCE_OWNED_FLAGS}.
+   *
+   * The whole vector is also refused unless `src/fencing/cli_args_allow.json`
+   * authorises it for {@link MaterializationRequest.role} (`D-0088`). The
+   * shipped document authorises nothing, so anything but an empty vector is
+   * refused here until that document is edited.
    */
   readonly cliArgs?: readonly string[];
   /** The caller's clock, taken once. Epoch milliseconds. */
@@ -613,13 +622,32 @@ function requireRunId(field: string, value: unknown): string {
 /**
  * The admitted run's own CLI arguments, checked.
  *
- * The same three spellings `claude_cli_provider.ts`'s `matchesOwnedFlag`
- * recognises, minus the attached-value form, which only applies to its
- * single-dash short flags and none of these are: the exact form and the
- * `--flag=value` form. A rejection that knew one of the two would be a
- * rejection with a doorway in it.
+ * The owned-flag rule below recognises the same three spellings
+ * `claude_cli_provider.ts`'s `matchesOwnedFlag` does, minus the attached-value
+ * form, which only applies to its single-dash short flags and none of these
+ * are: the exact form and the `--flag=value` form. A rejection that knew one of
+ * the two would be a rejection with a doorway in it.
+ *
+ * **Why the allowlist is checked here at all** (`D-0088`, decision D5). Two
+ * earlier sites already refuse an unauthorised vector: `admitRun`, beside the
+ * roster check, and the head of `lap perform`'s preflight. This site is the one
+ * that runs when neither of those did -- a run admitted by an older build
+ * before the document existed, a `run_delegation_recorded` payload edited by
+ * hand after admission, or a caller reaching {@link materializeWorkspace}
+ * directly rather than through `performLap`. That gap is not new; what changed
+ * is its size. `D-0086` refused twenty-four named flags, so what slipped
+ * through the earlier checks was a *named* flag on a hand-edited payload. The
+ * allowlist refuses **every** vector the document does not authorise, which as
+ * shipped is every non-empty vector, so leaving this step at
+ * {@link FENCE_OWNED_FLAGS} would hand the new and far broader rule exactly the
+ * gap `D-0086` built the old one to cover -- the last step before a child
+ * process runs would be the one step that never learned the rule.
+ *
+ * The check is deliberately in the validation block and not later: see the call
+ * site for why a refusal that arrives after the worktree exists costs the
+ * operator the run identifier itself.
  */
-function requireCliArgs(value: unknown): readonly string[] {
+function requireCliArgs(value: unknown, role: string): readonly string[] {
   if (value === undefined) {
     return Object.freeze([]);
   }
@@ -661,6 +689,21 @@ function requireCliArgs(value: unknown): readonly string[] {
         );
       }
     }
+  }
+  // The whole-vector allowlist, after the owned-flag loop rather than before
+  // it. Both orders refuse the same set, but an operator who restated a flag
+  // this step generates is better served by the refusal that names the flag and
+  // says why it is generated than by "this vector is not authorised", which
+  // would be true of that vector for a second, less specific reason.
+  //
+  // Loaded on every call, never cached: the document is the live answer, so a
+  // vector whose authorising entry was removed after admission is refused here
+  // even though admission accepted it. That is the direction the rule is
+  // allowed to move without a new decision -- narrowing takes effect at once,
+  // widening still needs the reviewed edit.
+  const refusal = cliArgsRefusal(role, args);
+  if (refusal !== undefined) {
+    throw new WorkspaceMaterializationUsageError(refusal);
   }
   return Object.freeze(args);
 }
@@ -916,7 +959,18 @@ export function materializeWorkspace(
   const nowMs = requireInteger("now_ms", request.nowMs);
   requireInteger("endpoint.epoch", request.endpoint.epoch);
   requireText("prompt", request.prompt);
-  const cliArgs = requireCliArgs(request.cliArgs);
+  // `role` as validated a few lines above, not re-derived and not re-checked:
+  // the allowlist is keyed by role, and a second reading of the same field is
+  // a second chance for the two readings to disagree.
+  //
+  // This stays in the validation block, ahead of the branch, the worktree and
+  // the fence rendered at step 3. A refusal that arrived after the worktree
+  // existed would be no safer and strictly worse for the operator: `D-0057`
+  // refuses a second materialisation of the same run, so a late refusal does
+  // not merely leave a directory behind -- it costs the run identifier itself,
+  // and the operator has to admit a fresh run to retry a vector the document
+  // could have refused before anything was created (`D-0088`).
+  const cliArgs = requireCliArgs(request.cliArgs, role);
   // Kept rather than discarded, and `resolve`d for the same two reasons the
   // workspace is: the containment guard below is lexical, and these are written
   // into the fence a later process reads.

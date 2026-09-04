@@ -1,9 +1,13 @@
 # Inverting the fence-altering flag check into an allowlist
 
-**Status: propose-only.** Nothing under `src/` changes with this document and no entry is written to
-[`DECISIONS.md`](../../DECISIONS.md); the draft entry is in section 8 of this file, for a human to
-accept, amend or reject. Issue: continuo#149, which is the door continuo#133 opened and `D-0086`
-narrowed without closing.
+**Status: adopted and implemented.** The human gate accepted section 9's decision table wholesale on
+2026-09-05, and continuo#149 implements it: `src/fencing/cli_args_allow.json` ships authorising
+nothing, the three enforcement points of D5 read it, `FENCE_ALTERING_FLAGS` leaves `src/` for a test
+corpus, and `D-0086` is superseded. The entry drafted in section 8 is written to
+[`DECISIONS.md`](../../DECISIONS.md) as `D-0088`. Everything below is left as it was argued, because
+it is the working the entry rests on and a later reader needs to see what the decision was weighed
+against; where this document and `D-0088` disagree about what was **built**, `D-0088` is the record.
+Issue: continuo#149, which is the door continuo#133 opened and `D-0086` narrowed without closing.
 
 `D-0086` refuses a named list of twenty-four flags, and states its own limit in as many words:
 
@@ -377,7 +381,7 @@ A second exported constant that no longer enforces anything is that trap rebuilt
 - **The prose** -- why `--bare` matters, why `--cloud` is a different kind of hole, why `-w` needs the
   attached-value spelling -- is already written down permanently. `DECISIONS.md` is append-only, and
   `D-0086` is the record of six review passes finding six different kinds of gap. Nothing needs to be
-  copied anywhere for it to survive; `D-0087` points at it.
+  copied anywhere for it to survive; `D-0088` points at it.
 - **The names** become a corpus in `test/control_plane/`, not an export from `src/`, and the case it
   drives **reads the document rather than submitting arguments**. Submitting each flag on its own and
   asserting refusal is the obvious shape and it is close to vacuous: if a role authorised
@@ -453,11 +457,16 @@ residual risk of the whole design and section 7 states it as such.
 
 ## 8. Draft `DECISIONS.md` entry
 
-Not written to `DECISIONS.md` by this change. `D-0087` is the next free ID in the control-plane range
-(`D-0019`..`D-0099`) as of `9212f2b`; it also needs a row in the index table at the top of that file.
+Written to [`DECISIONS.md`](../../DECISIONS.md) by continuo#149, as **`D-0088`** and with a row in the
+index table at the top of that file. The ID is not the one this section first drafted: `D-0087` was
+taken by #153 while this design sat at the gate, so the entry took the next free ID in the
+control-plane range (`D-0019`..`D-0099`) instead, and the draft below is relabelled to match. The
+adopted entry differs from this draft in two places only -- its `Status` line, and its "What records
+it" paragraph, which follows the checks as they were actually built rather than as this section
+predicted them.
 
 ```markdown
-## D-0087 -- An admitted run may pass only what a role document authorised: the cli_args check is an allowlist
+## D-0088 -- An admitted run may pass only what a role document authorised: the cli_args check is an allowlist
 
 **Context.** `D-0086` refuses twenty-four named flags, and states its own limit: a denylist over an
 option surface this repository does not own cannot be shown complete. Six review passes found six
@@ -523,7 +532,7 @@ did and why, and red when done silently.
 was that the constructor refuses both lists; that stops being true here, so under `AGENTS.md`'s rule
 it cannot stay `accepted` -- two accepted entries giving different answers to "what refuses
 `cli_args`?" is the drift that rule exists to prevent. `D-0086` keeps its ID and gains
-`Status: superseded by D-0087`, its index row is updated, and its text is otherwise untouched: it
+`Status: superseded by D-0088`, its index row is updated, and its text is otherwise untouched: it
 remains the record of what six review passes found and the argument this entry is built on.
 
 **The part of `D-0086` that survives, restated so this entry stands alone.** *Flags the fence
@@ -601,7 +610,7 @@ Each row is a question this design had to answer and that the gate can overturn 
 | D5 | Which module enforces the allowlist? | **`admitRun`, first in `lap perform`'s preflight, and the materialiser's validation block -- not the constructor, which keeps `FENCE_OWNED_FLAGS` and the bare `--`** | The preflight is load-bearing rather than belt-and-braces: `performLap` takes the one global delivery lease *before* it materialises, so a check first met at the materialiser lets a run that will be refused consume an epoch and a resource. The constructor is excluded from the *allowlist* only, because it also runs at `lap perform` -- teaching it a mutable document would make an admitted run *unreadable* once its entry was removed. The owned-flag list stays there: it is this build's own output, closed by construction and role-independent |
 | D6 | What happens to `FENCE_ALTERING_FLAGS`? | **Delete from `src/`; the names become a corpus that scans the document, not one that submits arguments** | A non-enforcing exported list rebuilds the exact trap `D-0086` names. The scan direction is load-bearing: under exact whole-vector matching a submitted bare flag is refused even when the document authorises a vector containing it, so a submit-and-assert corpus stays green over the widening it exists to catch |
 | D7 | Does the corpus bar an escape-hatch entry, or inform review of one? | **Neither, exactly: it gates the *record*.** CI is red until that entry's `reason` names the corpus flag it authorises, and green once it does | A bar makes the hatch useless for the only case ever observed (`--allowedTools` is on the corpus). A purely advisory corpus is not a check at all. Gating on whether the decision was written down is enforceable without deciding for the reviewer -- and it works only because D3's document owns its own schema, so the reason is a field rather than prose to be string-matched |
-| D8 | Is `D-0086` superseded? | **Yes. `D-0087` supersedes it and restates the surviving owned-flag rule** | Its central decision -- the constructor refuses both lists -- stops being true, and `AGENTS.md` says a decision that stops being true gains `Status: superseded by D-XXXX`. Leaving it accepted would give a reader two accepted answers to "what refuses `cli_args`?". The price is that `D-0087` must restate `FENCE_OWNED_FLAGS` and the bare `--` rule so nothing is only recorded in a superseded entry, which it does |
+| D8 | Is `D-0086` superseded? | **Yes. `D-0088` supersedes it and restates the surviving owned-flag rule** | Its central decision -- the constructor refuses both lists -- stops being true, and `AGENTS.md` says a decision that stops being true gains `Status: superseded by D-XXXX`. Leaving it accepted would give a reader two accepted answers to "what refuses `cli_args`?". The price is that `D-0088` must restate `FENCE_OWNED_FLAGS` and the bare `--` rule so nothing is only recorded in a superseded entry, which it does |
 | D9 | Does `--cli-arg` survive as a CLI flag? | **Yes, with rewritten help** | Removing it would make an authorised argument unpassable. The help must say the refusal is the default and that the role document is where the answer is authored |
 | D10 | How is "no operator arguments" expressed? | **An unconditional rule: `cli_args` of length zero is always authorised** | Exact matching against an absent entry list matches nothing, so a literal implementation would refuse the no-argument run every lap has performed. Writing `[[]]` on each role instead makes a deletable line load-bearing -- a documentation tidy-up would stop every lap |
 | D11 | Is the enforcement change one PR or several? | **One**, after this gate | The pieces are not independently shippable: deleting `FENCE_ALTERING_FLAGS` before the allowlist exists opens the door `D-0086` closed, and adding the allowlist while the denylist stands leaves two rules with one meaning |

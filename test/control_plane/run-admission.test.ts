@@ -28,6 +28,13 @@
  *   to fail just as loudly when one appears that nobody decided to put on the
  *   spine. `LapRunIntent`'s own field rules are `lap-run-intent.test.ts`'s
  *   subject and are deliberately not restated here.
+ * * **The operator's own arguments must be authorised as a whole vector.**
+ *   `D-0088` inverted `D-0086`'s named denylist into an allowlist keyed by
+ *   role, and the shipped document authorises nothing -- so the cases here are
+ *   mostly refusals, and the one that matters most refuses a vector no denylist
+ *   ever named. The zero-length vector is admitted by a rule rather than by an
+ *   entry, and that rule is what keeps every lap this repository performs
+ *   admissible against an empty document.
  * * **A second admission is refused, not absorbed.** The spine underneath
  *   treats a re-appended fact as an idempotent no-op, so "refused" here is a
  *   deliberate difference from it rather than the default, and what is asserted
@@ -48,7 +55,7 @@
  * clock wrote.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
@@ -71,6 +78,7 @@ import {
 import {
   ADMITTED_RUN_STATUS,
   admitRun,
+  CliArgsNotAuthorised,
   RUN_ADMISSION_PRODUCER,
   RUN_CREATED_EVENT_TYPE,
   RUN_DELEGATION_RECORDED_EVENT_TYPE,
@@ -87,6 +95,7 @@ import {
   readRun,
 } from "../../src/control_plane/run_lifecycle.js";
 import { transaction } from "../../src/control_plane/txn.js";
+import { bundledCliArgsAllowPath, cliArgsRefusal } from "../../src/fencing/cli_args_allow.js";
 import { roleNames } from "../../src/fencing/renderer.js";
 import { caseRoot, databasePath, suiteTemplate, writeStep } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
@@ -426,7 +435,15 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
         baseBranch: "release/1.x",
         topicBranch: "fix/leak",
         prompt: "close the handle",
-        cliArgs: ["--verbose"],
+        // The empty vector, and under `D-0088` it is the only one this case
+        // could carry: the shipped `src/fencing/cli_args_allow.json` authorises
+        // nothing, so an admission with any argument at all is refused before
+        // it reaches the spine and there would be no payload to assert over.
+        // The equality below is what this case is for, and it still fails when
+        // `cli_args` stops being persisted or when a key nobody decided on
+        // appears; the vector's own round trip is asserted where it can be, off
+        // a payload the reader is handed rather than one admission wrote.
+        cliArgs: [],
       }),
       nowMs: T0,
     });
@@ -446,7 +463,7 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
       base_branch: "release/1.x",
       topic_branch: "fix/leak",
       prompt: "close the handle",
-      cli_args: ["--verbose"],
+      cli_args: [],
     });
     // The run identifier is deliberately NOT in it. `run_created`'s payload
     // names no run either: `subject_id` and `run_id` are the columns the
@@ -703,6 +720,148 @@ describe("admitRun refuses a role outside the fence renderer's roster", () => {
       expect(payload["role"]).toBe(role);
     },
   );
+});
+
+// --------------------------------------------------------------------------
+// the cli_args allowlist (continuo#149, D-0088)
+// --------------------------------------------------------------------------
+
+describe("admitRun refuses a cli_args vector the allowlist does not authorise", () => {
+  test("refuses a plain --model=sonnet, which no denylist ever refused", () => {
+    // The anti-vacuity case for the whole inversion, and the reason it is
+    // written with THIS vector. `D-0086` named twenty-four fence-altering flags
+    // and refused those; `--model=sonnet` is not one of them and never was, so
+    // before this change it was admitted without comment. If the allowlist were
+    // silently a restatement of the old denylist -- or if it were being
+    // consulted only for the names the old list carried -- this case would go
+    // green by admitting, and every case below that refuses a fence-altering
+    // flag would still pass. It is the one that says the rule actually
+    // inverted.
+    const { connection } = cpFixture();
+
+    const refusal = expectRefusal(
+      () => admitRun(connection, { intent: intent({ cliArgs: ["--model=sonnet"] }), nowMs: T0 }),
+      CliArgsNotAuthorised,
+      /is not authorised for role/,
+    );
+
+    // The role it was refused FOR and the document that would authorise it,
+    // because the operator has to be told where the answer is written: under
+    // the shipped empty document "not authorised" without a path names every
+    // non-empty vector and points at nothing.
+    expect(refusal.message).toContain("'worker'");
+    expect(refusal.message).toContain(bundledCliArgsAllowPath());
+    // Repr'd rather than interpolated raw, so an argument carrying a quote or a
+    // newline cannot forge a second line of CLI output (`D-0006`).
+    expect(refusal.message).toContain("['--model=sonnet']");
+
+    // Refused BEFORE the transaction, which is what makes this a cheap refusal
+    // rather than a rollback: no run row, no `run_created`, no
+    // `run_delegation_recorded`. Asserted the way the roster cases assert it.
+    expect(runRows(connection)).toEqual([]);
+    expect(eventRows(connection)).toEqual([]);
+  });
+
+  test("the refusal is in the ControlPlaneRefusal family", () => {
+    // Same reason the roster refusal asserts it: `run_cli.ts` catches that
+    // family and nothing narrower, so a refusal outside it reaches the operator
+    // as a stack trace with this message buried above it.
+    const { connection } = cpFixture();
+
+    const refusal = expectRefusal(
+      () => admitRun(connection, { intent: intent({ cliArgs: ["--verbose"] }), nowMs: T0 }),
+      CliArgsNotAuthorised,
+    );
+    expect(refusal.name).toBe("CliArgsNotAuthorised");
+  });
+
+  test("an empty cli_args is admitted by a rule, not by an entry", () => {
+    // `D-0088`, decision D10, and the case a literal reading of "the vector
+    // must equal an authorised entry" gets wrong: the shipped document has no
+    // entries at all, so exact matching against it matches nothing, and a
+    // literal implementation would refuse the no-argument run -- which is every
+    // lap this repository has ever performed. The zero-length vector is
+    // authorised unconditionally by a rule ahead of the document read, so it
+    // survives an empty document and would survive an unreadable one.
+    const { connection } = cpFixture();
+
+    const admittedRun = admitRun(connection, { intent: intent({ cliArgs: [] }), nowMs: T0 });
+
+    expect(admittedRun.status).toBe(ADMITTED_RUN_STATUS);
+    expect(runRows(connection)).toHaveLength(1);
+    expect(eventRows(connection)).toHaveLength(2);
+  });
+
+  test("an unknown role with unauthorised arguments is refused as a role, not as arguments", () => {
+    // The ordering decision, asserted rather than left to the reading order of
+    // two adjacent `if`s. Both refusals fire on this intent, both cost the
+    // database nothing, so which one the operator is told is the whole
+    // difference -- and the allowlist authorises a vector FOR A ROLE, so a
+    // mistyped `--role` makes every vector unauthorised for it. Reporting that
+    // would send the operator off to add an entry for a role that does not
+    // exist, and the entry would never match anything. A typo is named as a
+    // typo.
+    const { connection } = cpFixture();
+
+    const refusal = expectRefusal(
+      () =>
+        admitRun(connection, {
+          intent: intent({ role: "reviewer", cliArgs: ["--model=sonnet"] }),
+          nowMs: T0,
+        }),
+      UnknownRoleRefused,
+      /not in the role roster/,
+    );
+    expect(refusal).not.toBeInstanceOf(CliArgsNotAuthorised);
+    expect(runRows(connection)).toEqual([]);
+    expect(eventRows(connection)).toEqual([]);
+  });
+
+  test("an authorised vector is authorised for that role and for no other", () => {
+    // What makes the allowlist role-scoped rather than global, and the only
+    // shape of this case available from outside: neither `admitRun` nor the
+    // materialiser takes a document path, so there is no seam a case can point
+    // at a fixture, and the two enforcement sites can only ever be driven
+    // against the shipped document. So the role scoping is exercised through
+    // `cliArgsRefusal` itself, one frame below `admitRun`, over a document this
+    // case writes -- which is the function `admitRun` calls, with the argument
+    // it passes.
+    //
+    // Both directions are asserted from the SAME document, which is the point:
+    // an implementation that matched on the vector alone and ignored `role`
+    // would pass the first assertion and fail only the second.
+    const document = join(caseRoot("cli-args-allow-fixture"), "cli_args_allow.json");
+    writeFileSync(
+      document,
+      JSON.stringify({
+        entries: [
+          {
+            role: "worker",
+            cli_args: ["--model=sonnet"],
+            reason: "a fixture entry; this document is written by a test and shipped nowhere",
+          },
+        ],
+      }),
+    );
+
+    expect(cliArgsRefusal("worker", ["--model=sonnet"], document)).toBeUndefined();
+    const refused = cliArgsRefusal("curator", ["--model=sonnet"], document);
+    expect(refused).toBeDefined();
+    expect(refused).toContain("'curator'");
+
+    // And the whole-vector rule, from the authorising side: an entry authorises
+    // ITS vector, not a prefix of it and not a superset. A window or subset
+    // rule would let two separately reviewed fragments be concatenated into an
+    // argv nobody reviewed.
+    expect(cliArgsRefusal("worker", ["--model=sonnet", "--verbose"], document)).toBeDefined();
+    expect(cliArgsRefusal("worker", ["--model", "sonnet"], document)).toBeDefined();
+
+    // The anti-vacuity half of this case: the same vector, against the document
+    // the enforcement sites actually read, is refused. Without it a fixture
+    // that authorised everything -- or a `cliArgsRefusal` that never refused
+    // anything -- would look identical here.
+    expect(cliArgsRefusal("worker", ["--model=sonnet"])).toBeDefined();
+  });
 });
 
 // --------------------------------------------------------------------------
@@ -974,21 +1133,43 @@ describe("continuo run admit", () => {
     // The `=` form is the escape, it is argparse's own, and pinning it here is
     // what stops the first operator to pass a flag through from concluding the
     // option is broken.
+    //
+    // **Read off the refusal rather than off the payload, since `D-0088`.** The
+    // shipped `src/fencing/cli_args_allow.json` authorises nothing, so the
+    // two-argument admission is refused and writes no payload to inspect --
+    // but the refusal detail reprs the vector admission was handed, in order,
+    // which is the same evidence: a parser that dropped the second `--cli-arg`,
+    // or reordered them, or that split `--model=sonnet` at the `=`, produces a
+    // different line here. What is no longer covered end to end is the vector
+    // reaching the *spine*, and there is nowhere left to cover it from -- the
+    // CLI writes through the real `admitRun` and the document it consults has
+    // no seam a case could point at a fixture.
     const withNone = productionTemplate.copyInto(caseRoot("run-admit-noargs"));
     const withSome = productionTemplate.copyInto(caseRoot("run-admit-args"));
-    captureStreams();
+    const streams = captureStreams();
 
     expect(main(admitArgv(withNone, { "--now-ms": String(T0) }))).toBe(0);
+    expect(delegationPayload(withNone)["cli_args"]).toEqual([]);
+
+    // Both `main` calls share one capture, so the successful admission above
+    // has already written to stdout; the assertion that matters is that the
+    // refused one adds nothing to it.
+    const outBefore = streams.out();
     expect(
       main([
         ...admitArgv(withSome, { "--now-ms": String(T0) }),
         "--cli-arg=--verbose",
         "--cli-arg=--model=sonnet",
       ]),
-    ).toBe(0);
+    ).toBe(2);
+    expect(streams.out()).toBe(outBefore);
+    expect(streams.err()).toContain("['--verbose', '--model=sonnet']");
 
-    expect(delegationPayload(withNone)["cli_args"]).toEqual([]);
-    expect(delegationPayload(withSome)["cli_args"]).toEqual(["--verbose", "--model=sonnet"]);
+    const connection = openProductionControlPlane(withSome);
+    onTestFinished(() => {
+      connection.close();
+    });
+    expect(runRows(connection)).toEqual([]);
   });
 
   test("is reachable from the top-level parser, and says what it does", () => {
@@ -1010,7 +1191,7 @@ describe("continuo run admit", () => {
 
 describe("reading the delegation record back (D-0063)", () => {
   /** Admit one run through the real writer, and hand back its plane. */
-  function admitted(cliArgs: readonly string[] = ["--verbose"]): {
+  function admitted(cliArgs: readonly string[] = []): {
     connection: SqliteDatabase;
     intent: LapRunIntent;
   } {
@@ -1088,7 +1269,16 @@ describe("reading the delegation record back (D-0063)", () => {
     // The anti-vacuity half, and the reason the reader exists at all: `D-0055`
     // fixed the execution intent at admission so a later process could act on
     // it, and until this function there was no way to read it back.
-    const { connection, intent } = admitted(["--verbose", "--model=sonnet"]);
+    //
+    // The vector is empty because under `D-0088` that is the only one admission
+    // will fix: the shipped allowlist authorises nothing. The non-empty vector
+    // is round-tripped in the case below instead, off a payload handed to the
+    // reader -- which is not a workaround but the reader's own rule, since the
+    // reader deliberately does not consult the allowlist (`D-0088`, decision
+    // D5: a document-aware reader would make an already admitted run
+    // unreadable the moment its authorising entry was removed, and unreadable
+    // means the run cannot be reported or closed either).
+    const { connection, intent } = admitted();
     const read = readLapRunIntent(connection, RUN_ID);
 
     expect(read).toBeInstanceOf(LapRunIntent);
@@ -1099,11 +1289,34 @@ describe("reading the delegation record back (D-0063)", () => {
     expect(read.baseBranch).toBe(intent.baseBranch);
     expect(read.topicBranch).toBe(intent.topicBranch);
     expect(read.prompt).toBe(intent.prompt);
-    expect(read.cliArgs).toEqual(["--verbose", "--model=sonnet"]);
+    expect(read.cliArgs).toEqual([]);
     // The payload it would write again is the payload it was read from, which
     // is the strongest statement of the round trip available without comparing
     // field by field a second time.
     expect(read.payload).toBe(intent.payload);
+  });
+
+  test("a recorded vector is read back in order, whatever the allowlist now says", () => {
+    // The half of the round trip admission can no longer reach (`D-0088`), and
+    // the case that pins the reader's exemption from the allowlist rather than
+    // merely describing it. The payload here carries two arguments the shipped
+    // document authorises for nobody -- `cliArgsRefusal` is asked directly,
+    // above the reader, so the case fails rather than passing vacuously if the
+    // document is ever widened to cover them -- and the reader still returns
+    // them, in the order they were recorded.
+    //
+    // Without this, a reader "hardened" by learning the document would look
+    // correct: every run in this suite would still be admitted and read. The
+    // run it would strand is the one admitted while an entry existed and read
+    // back after the entry was removed, which is exactly the run an operator
+    // needs to report on and close out.
+    const payload = wellFormedPayload();
+    payload["cli_args"] = ["--verbose", "--model=sonnet"];
+    expect(cliArgsRefusal("worker", ["--verbose", "--model=sonnet"])).toBeDefined();
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const read = readLapRunIntent(connection, CRAFTED_RUN_ID);
+    expect(read.cliArgs).toEqual(["--verbose", "--model=sonnet"]);
   });
 
   test("a run that was never admitted is refused, not answered", () => {

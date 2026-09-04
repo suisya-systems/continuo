@@ -62,6 +62,7 @@ const SRC_NON_MODULE_FILES: readonly string[] = [
   "control_plane/migrations/0003_outbox_cancelled_status.sql",
   "control_plane/migrations/0004_run_writer_epoch.sql",
   "control_plane/spike_schema.sql",
+  "fencing/cli_args_allow.json",
   "fencing/hook.mjs",
   "fencing/roles.json",
   "settings/role_configs_schema.json",

@@ -122,6 +122,18 @@ laps 1 and 2 of this dogfood did.
 > `permissionMode: acceptEdits`, so the run above admits without either `--cli-arg` line. They are
 > left in place because this section records what these three laps actually took; see F-2.
 
+> **And since `D-0088` the command above does not admit at all.** continuo#149 inverted the
+> `cli_args` check into an allowlist: an admitted run's arguments must equal, element by element and
+> in order, a vector `src/fencing/cli_args_allow.json` authorises for its `--role`, and the shipped
+> document authorises none. So both `--cli-arg` lines are refused at `run admit` now -- not as a
+> workaround that has merely stopped being necessary, but as arguments no role is authorised to pass,
+> with the run neither created nor recorded. This section is deliberately not rewritten for that: it
+> is the record of what these three laps actually took, and that record is what made the empty
+> document defensible. One of eight runs ever passed operator arguments, these two; the defect they
+> worked around is closed (F-2, by `D-0081`/#120); and run 007's `record.json` in section 10 is the
+> lap that reached a commit and a closed gate carrying the fence's own flags and nothing else.
+> Re-running section 3 today means dropping both lines, which is what 9.2 and section 10 already do.
+
 Pass a value that starts with `-` as `--cli-arg=--allowedTools`. Written with a space,
 `--cli-arg --allowedTools`, argparse reads the next token as a flag and exits with
 `expected one argument`.

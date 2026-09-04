@@ -108,7 +108,11 @@ const PROMPT_HELP =
   "rather than printed back by this command.";
 const CLI_ARG_HELP =
   "one extra argument for the worker's CLI. Repeat the flag to give several, " +
-  "in order; omit it for none.";
+  "in order; omit it for none. The complete list is refused unless the role " +
+  "document src/fencing/cli_args_allow.json authorises exactly that list, in " +
+  "that order, for this --role: the shipped document authorises none, so any " +
+  "argument at all is refused until it is edited. Widening is an edit to that " +
+  "document, reviewed and with a written reason, not a per-run decision.";
 
 const ADMIT_DESCRIPTION =
   "Admit a run: insert its row at status 'created', append the run_created " +

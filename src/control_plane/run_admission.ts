@@ -1,5 +1,6 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
+import { cliArgsRefusal } from "../fencing/cli_args_allow.js";
 import { roleNames } from "../fencing/renderer.js";
 import { appendEvent } from "./events.js";
 import { LapRunIntent, PAYLOAD_KEYS } from "./lap_run_intent.js";
@@ -207,6 +208,46 @@ export class UnknownRoleRefused extends ControlPlaneRefusal {
   }
 }
 
+/**
+ * `--cli-arg` submitted a vector `src/fencing/cli_args_allow.json` does not
+ * authorise for this role.
+ *
+ * In the {@link ControlPlaneRefusal} family, for the same reason
+ * {@link UnknownRoleRefused} is: a refusal here is the *ordinary* outcome of an
+ * operator passing `--cli-arg`, not a defect in this code. The document ships
+ * authorising nothing (`D-0088`), so on a stock build every non-empty vector
+ * lands on this line, and it has to read as an answer -- here is what you
+ * submitted, here is the document that would have to name it -- rather than as
+ * something that went wrong inside continuo.
+ *
+ * **Why this is checked at admission rather than left to the fence.** The same
+ * argument `UnknownRoleRefused` makes one line above, applied to the other half
+ * of the intent. Without it, admission would insert the run row, append both
+ * admission events, and only refuse later, at `lap perform` or in the
+ * materialiser, for a run that has already caused a branch and a worktree to
+ * exist -- a failure an operator has to clean up rather than one that never
+ * happened. Refused here, before the transaction opens, an unauthorised
+ * argument costs no row, no event, no worktree.
+ *
+ * **And it is checked against the same document the fence renderer reads, not a
+ * copy**, again exactly as the roster check is. A second list of authorised
+ * vectors compiled into admission would be a second answer to a question that
+ * has one, and the two would drift the first time only one of them was edited
+ * -- admission accepting what render refuses, or worse, admission accepting
+ * what render no longer refuses. `cliArgsRefusal` re-reads
+ * `src/fencing/cli_args_allow.json` on every call for the same reason
+ * (`D-0088`, decision D5): the later checks at `lap perform` and in the
+ * materialiser are not this one's duplicates but its re-statements, so a
+ * document narrowed after admission narrows a run that is already pending.
+ */
+export class CliArgsNotAuthorised extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "CliArgsNotAuthorised";
+    Object.setPrototypeOf(this, CliArgsNotAuthorised.prototype);
+  }
+}
+
 // --------------------------------------------------------------------------
 // admission
 // --------------------------------------------------------------------------
@@ -282,6 +323,16 @@ function factId(eventType: string, runId: string): string {
  * @throws {RunAdmissionUsageError} for a malformed argument, before any write.
  * @throws {LapRunIntentUsageError} from the intent's own constructor, before
  *   this function is ever called.
+ * @throws {UnknownRoleRefused} when `--role` names no role in the roster,
+ *   before the transaction opens.
+ * @throws {CliArgsNotAuthorised} when `cli_args` is not a vector
+ *   `src/fencing/cli_args_allow.json` authorises for that role, also before the
+ *   transaction opens.
+ * @throws {CliArgsAllowlistUnreadable} when that document is missing or is not
+ *   the shape this build reads. Deliberately not caught and turned into a
+ *   refusal here: a refusal says the *submitted arguments* were not authorised,
+ *   and an unreadable document says nothing about them -- absorbing it would
+ *   report a decision the build was never in a position to make.
  * @throws {RunAlreadyAdmitted} if the run identifier is already on the table.
  *   Nothing is written: the whole block rolls back.
  */
@@ -316,6 +367,21 @@ export function admitRun(
         `(${roster.map((name) => pythonRepr(name)).join(", ")}); nothing was ` +
         "admitted",
     );
+  }
+
+  // **After the roster check, and the order is a decision.** Both refusals read
+  // the same fence-owned documents and both cost nothing, so nothing forces one
+  // before the other except what an operator is told when both are true at
+  // once. `cli_args_allow.json` authorises a vector *for a role*, so a mistyped
+  // `--role` makes every vector unauthorised for it -- and reporting that would
+  // send the operator to the allowlist to add an entry for a role that does not
+  // exist, when the one thing wrong is the four letters they typed. The roster
+  // check runs first so a typo is named as a typo. See
+  // {@link CliArgsNotAuthorised} for why this check is here at all rather than
+  // left to the fence.
+  const argsRefusal = cliArgsRefusal(intent.role, intent.cliArgs);
+  if (argsRefusal !== undefined) {
+    throw new CliArgsNotAuthorised(`${argsRefusal}; nothing was admitted`);
   }
 
   const runId = intent.runId;

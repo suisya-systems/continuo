@@ -12,29 +12,55 @@
  *
  * **This file starts no child process.** The end-to-end lap -- git, a fenced
  * spawn, a real transcript, a CLI verb -- is `test/lap/cli.test.ts`, which is
- * in `SPAWNING_TESTS` for that reason. What is here is the three decisions step
+ * in `SPAWNING_TESTS` for that reason. What is here is the four decisions step
  * 8 took that a whole-lap case would exercise only incidentally and could not
- * pin: the artifact layout (`D-0061`), the workspace veto (`D-0062`) and what
- * "the turn is over" means (`D-0060`). Each of them has a failure mode that an
+ * pin: the artifact layout (`D-0061`), the workspace veto (`D-0062`), what
+ * "the turn is over" means (`D-0060`) and where the `cli_args` allowlist is
+ * asked inside the lap (`D-0088`). Each of them has a failure mode that an
  * end-to-end green would not notice.
+ *
+ * The `D-0088` cases do call `performLap`, which the three older groups do not,
+ * and they still start no child and run no git -- because what they are about is
+ * a refusal that happens before either. That is the assertion, not a
+ * convenience: the check is first in the preflight precisely so that an
+ * unauthorised run costs no worktree, no state root and, above all, no delivery
+ * lease, and a case that reached git would no longer be able to see that.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import process from "node:process";
 
-import { describe, expect, test } from "vitest";
+import type { Database as SqliteDatabase } from "better-sqlite3";
+import { describe, expect, onTestFinished, test } from "vitest";
 
-import { isFullyQualified } from "../../src/control_plane/lap_run_intent.js";
+import { appendEvent } from "../../src/control_plane/events.js";
+import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
+import { isFullyQualified, LapRunIntent } from "../../src/control_plane/lap_run_intent.js";
+import { acquire, LeaseHeld, readLease } from "../../src/control_plane/lease.js";
+import {
+  createProductionControlPlane,
+  openProductionControlPlane,
+} from "../../src/control_plane/migrator.js";
+import {
+  RUN_ADMISSION_PRODUCER,
+  RUN_DELEGATION_RECORDED_EVENT_TYPE,
+} from "../../src/control_plane/run_admission.js";
+import { DELIVERY_LEASE_TTL_MS } from "../../src/lap/endpoint_lease.js";
 
 import {
   awaitTerminalReport,
   CREATE_WORKSPACE_TRANSITION,
   LapRefused,
+  type LapRequest,
   type LapTerminalReadout,
   LapUsageError,
   lapArtifactDir,
   MaterializedWorkspaceRequired,
+  performLap,
   type TerminalReportReader,
 } from "../../src/lap/root.js";
+import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import {
   Failure,
   FailureKind,
@@ -44,6 +70,8 @@ import {
   WorkspaceTransition,
   WorkspaceVerdict,
 } from "../../src/session/provider.js";
+import { ScriptedProvider } from "../gate_item2/helpers.js";
+import { caseRoot } from "../testkit/cases.js";
 import { expectRefusalAsync } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -560,5 +588,242 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
       LapUsageError,
       /poll_interval_ms/,
     );
+  });
+});
+
+// --------------------------------------------------------------------------
+// D-0088: the cli_args allowlist, asked again at the head of the lap
+// --------------------------------------------------------------------------
+
+const RUN_ID = "run-cli-args-1";
+const HOLDER = "operator-1";
+
+/** A second claimant, for the case that needs `outbox-delivery` already taken. */
+const OTHER_HOLDER = "operator-2";
+
+/** A role on the fence roster, so nothing here is refused for being unknown. */
+const ROLE = "worker";
+
+/**
+ * A vector `src/fencing/cli_args_allow.json` does not authorise -- and cannot
+ * today, because the shipped document's entry list is empty (`D-0088`, decision
+ * D1), which is what makes "not authorised" the answer for every non-empty
+ * vector rather than for a chosen few. It is spelled as a flag `D-0086` named
+ * outright so that the case reads as the successor to that decision rather than
+ * as a case about an arbitrary string.
+ */
+const UNAUTHORISED: readonly string[] = ["--dangerously-skip-permissions"];
+
+/** A reader every case below must fail before reaching. */
+const UNREACHED_READER: TerminalReportReader = {
+  readTerminalReport(): Promise<ProviderResult<LapTerminalReadout>> {
+    throw new Error("the transcript must not be read: these laps fail before the turn");
+  },
+};
+
+interface LapFixture {
+  readonly connection: SqliteDatabase;
+  readonly provider: ScriptedProvider;
+  readonly request: LapRequest;
+  /**
+   * `request.providerStateRoot`, named separately because whether it EXISTS is
+   * an assertion here rather than a path a case passes along.
+   */
+  readonly stateRoot: string;
+}
+
+/**
+ * A control plane holding one run admitted to perform with `cliArgs`, and a
+ * `performLap` request over it.
+ *
+ * **The admission is written here rather than taken from `admitRun`, and both
+ * halves of why are load-bearing.** `admitRun` now refuses exactly the vector
+ * the first two cases need (`D-0088`, the check beside the roster check), so it
+ * cannot produce this fixture at all; and the event spine is append-only by
+ * trigger -- `event_rows_are_immutable` -- so a row `admitRun` did write cannot
+ * have its payload edited afterwards either. What is on the table here is
+ * therefore the state this preflight check exists for and no other: a run
+ * admitted while the document still authorised its vector, or by a build older
+ * than `D-0088`, sitting on the spine waiting to perform. The payload is
+ * produced by the record's own writer (`LapRunIntent.payload`) rather than
+ * hand-typed JSON, so the fixture cannot drift from the shape
+ * `readLapRunIntent` demands and go green on a run this build could not read.
+ *
+ * The empty-vector case is built the same way rather than through `admitRun`,
+ * because two fixtures differing in a second respect would leave "the empty
+ * vector was carried through" arguable on the difference that was not the point.
+ * That `admitRun` accepts an empty vector is admission's own case to make.
+ *
+ * `run_created` is deliberately not appended: `readLapRunIntent` reads the
+ * delegation payload alone, and every lap here refuses before anything consults
+ * the run's status.
+ */
+function admittedRun(label: string, cliArgs: readonly string[]): LapFixture {
+  const root = caseRoot(label);
+  const databasePath = join(root, "production.sqlite3");
+  createProductionControlPlane(databasePath, { nowMs: T0 }).close();
+  const connection = openProductionControlPlane(databasePath);
+  onTestFinished(() => {
+    connection.close();
+  });
+
+  const intent = new LapRunIntent({
+    runId: RUN_ID,
+    leaseClaimantId: HOLDER,
+    workspace: join(root, "worktree"),
+    role: ROLE,
+    baseBranch: "main",
+    topicBranch: "feat/topic",
+    prompt: "do the work",
+    cliArgs,
+  });
+  connection
+    .prepare<{ run_id: string; created_at_ms: number }>(
+      "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms) " +
+        "VALUES (:run_id, 'created', :created_at_ms, :created_at_ms)",
+    )
+    .run({ run_id: RUN_ID, created_at_ms: T0 });
+  const factId = `${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${RUN_ID}`;
+  appendEvent(connection, {
+    eventId: factId,
+    eventType: RUN_DELEGATION_RECORDED_EVENT_TYPE,
+    subjectKind: "run",
+    subjectId: RUN_ID,
+    dedupKey: factId,
+    producer: RUN_ADMISSION_PRODUCER,
+    occurredAtMs: T0,
+    ingestedAtMs: T0,
+    runId: RUN_ID,
+    payload: intent.payload,
+  });
+
+  const stateRoot = join(root, "state");
+  return {
+    connection,
+    provider: new ScriptedProvider(),
+    stateRoot,
+    request: {
+      runId: RUN_ID,
+      // Never reached: every case here refuses before the materialiser, which
+      // is what keeps this file free of git. A path to a repository that does
+      // not exist is therefore the honest value -- a real checkout here would
+      // suggest something in this group depends on one.
+      repository: join(root, "repo"),
+      artifactRoot: join(root, "artifacts"),
+      providerStateRoot: stateRoot,
+      workerCommand: [process.execPath],
+      endpoint: {
+        recipient: NOTIFY_RECIPIENT,
+        destinationDir: join(root, "destination"),
+        endpointModule: join(root, "endpoint.js"),
+        node: process.execPath,
+      },
+      fence: { interlockRoot: root, claudeOrgPath: join(root, "claude-org") },
+      nowMs: () => T0,
+      sessionUuidFactory: () => SESSION,
+      completion: { pollIntervalMs: 0, timeoutMs: 1_000 },
+      gitTimeoutMs: 60_000,
+    },
+  };
+}
+
+describe("D-0088: the lap asks the cli_args allowlist again, first, before it takes anything", () => {
+  test("a run whose arguments the document does not authorise is refused by name", async () => {
+    // **Why the lap asks a question `run admit` already answered, and why this
+    // is not a duplicate check.** The allowlist is a document. It can be
+    // narrowed AFTER a run is admitted -- an entry withdrawn because the flag it
+    // authorised turned out to widen the fence -- and the later read is the one
+    // that wins. If the lap trusted admission, narrowing the document would stop
+    // only FUTURE admissions: every run already sitting admitted would still
+    // reach a child with the arguments the document has just stopped
+    // authorising, and an operator who removed an entry would have removed
+    // nothing they could point at. `cliArgsRefusal` re-reads on every call for
+    // exactly that reason, and this is the last read before the spawn.
+    //
+    // The detail is asserted in three parts because an operator refused here
+    // can act on none of them alone: the ROLE (the allowlist authorises a
+    // vector for a role, so the answer depends on which one), the VECTOR as
+    // submitted, and the DOCUMENT -- "this is not authorised" without a path
+    // names no place to go and, under the shipped empty document, is what every
+    // non-empty vector gets.
+    const f = admittedRun("cli-args-unauthorised", UNAUTHORISED);
+    const refusal = await expectRefusalAsync(
+      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      LapRefused,
+      /is not authorised for role 'worker'/,
+    );
+    expect(refusal.message).toContain("--dangerously-skip-permissions");
+    expect(refusal.message).toContain(join("src", "fencing", "cli_args_allow.json"));
+    expect(refusal.message).toContain("must equal an authorised vector exactly");
+  });
+
+  test("the refusal costs nothing: no delivery lease, no state root, no spawn", async () => {
+    // **The case that would catch a future reorder**, and the only reason the
+    // check is FIRST in the preflight rather than merely present in it. A
+    // refusal that fires one line later has already run
+    // `requireUsableStateRoot`, which creates the provider's state root; two
+    // lines later, `holdDeliveryLease` has written a lease row and consumed an
+    // epoch on `outbox-delivery` -- ONE global resource (`D-0053` rule 4), so
+    // for as long as this doomed lap holds it a second lap that would have
+    // succeeded is refused `LeaseHeld`. A run that is going to be refused must
+    // not first take a resource away from the lap that could have used it.
+    //
+    // Each assertion is a different kind of cost and none implies the others:
+    // the lease is a resource taken from somebody else, the state root is a
+    // directory left on an operator's disk by a run that never ran, and the
+    // spawn is the child itself. A build that moved the check below the lease
+    // acquisition would still refuse, still say the right thing, and still pass
+    // the case above.
+    const f = admittedRun("cli-args-costs-nothing", UNAUTHORISED);
+    await expectRefusalAsync(
+      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      LapRefused,
+      /is not authorised for role/,
+    );
+
+    expect(readLease(f.connection, DELIVERY_LEASE_RESOURCE)).toBeUndefined();
+    expect(existsSync(f.stateRoot)).toBe(false);
+    expect(f.provider.startCalls).toEqual([]);
+  });
+
+  test("an empty cli_args vector is carried past the check, as every lap is", async () => {
+    // The anti-vacuity half, and it is not a hypothetical shape: a zero-length
+    // vector is what every lap this repository has ever performed submits, so a
+    // check that refused it -- which a literal exact match against an empty
+    // entry list does -- would stop the whole system rather than the arguments
+    // it was written for. `D-0088` decision D10 makes the empty vector
+    // authorised by a RULE, and this is the case that observes the rule from
+    // inside the lap.
+    //
+    // Observed by where the lap gets to rather than by a green lap: this file
+    // starts no child and runs no git (see the module docstring), and the
+    // question here is only whether the preflight's first entry lets the vector
+    // through. So the delivery resource is taken by somebody else first, and
+    // the lap is watched arriving at step 1b and being refused `LeaseHeld` --
+    // the step immediately after the whole preflight. The state root pins the
+    // same thing from the other end: it exists only because
+    // `requireUsableStateRoot`, which is the second-to-last preflight entry,
+    // ran. A build that refused the empty vector would fail both, with a
+    // `LapRefused` naming the document. The end-to-end laps that then go on to
+    // materialise and spawn with an empty vector are in `test/lap/cli.test.ts`,
+    // `test/lap/teardown.test.ts` and `test/lap/endpoint-lease.test.ts`.
+    const f = admittedRun("cli-args-empty", []);
+    acquire(f.connection, {
+      resource: DELIVERY_LEASE_RESOURCE,
+      holder: OTHER_HOLDER,
+      nowMs: T0,
+      ttlMs: DELIVERY_LEASE_TTL_MS,
+    });
+
+    await expectRefusalAsync(
+      () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
+      LeaseHeld,
+      /outbox-delivery/,
+    );
+
+    expect(existsSync(f.stateRoot)).toBe(true);
+    // And the lap stopped there rather than going on: nothing below step 1b ran,
+    // which is what makes the refusal above evidence about the preflight only.
+    expect(f.provider.startCalls).toEqual([]);
   });
 });
