@@ -74,13 +74,23 @@ const INTERVAL_MS = 2_000;
 /**
  * The wait: past the expiry the lease was acquired with, and no further.
  *
- * It used to be two TTLs and a half. The acceptance criterion says "more than
- * one", and one is all the claim needs -- an expiry read after this wait cannot
- * be the one the acquisition wrote -- so the second TTL bought emphasis with
- * the only budget that matters here, which is how large the TTL can be for a
- * given running time. Spent on the TTL instead, it is worth five times as much.
+ * It used to be two TTLs and a half, and the second TTL was doing real work:
+ * it outlasted the expiry a **single** tick would have written, so a build
+ * whose timer was armed once and never re-armed failed here rather than
+ * passing. Shortening the wait without saying so would have retired that claim
+ * silently -- an expiry of `acquisition + INTERVAL_MS + TTL_MS` is later than
+ * this wait ends, and still live -- so the claim moves rather than going away:
+ * {@link sleepWatchingRenewals} counts the advances instead, and two advances
+ * cannot come from one tick at any ratio of these numbers.
+ *
+ * What is left for the clock is the acceptance criterion itself, which says
+ * "more than one TTL", and one is all of it. The TTL bought with the second is
+ * worth five times as much (see {@link TTL_MS}).
  */
 const ACROSS_A_TTL_MS = TTL_MS + 1_000;
+
+/** How often {@link sleepWatchingRenewals} reads the lease row during the wait. */
+const SAMPLE_MS = 250;
 
 /**
  * How long the dying holder's lease still stands in the second case.
@@ -154,17 +164,51 @@ function watchForStalls(): { worstMs: () => number; stop: () => void } {
  * renewal that is genuinely refused; and no failure at all is a timer that was
  * armed and never re-armed, which is the regression this case was written for.
  */
-function renewalDiagnosis(worstStallMs: number, failure: Error | null): string {
+function renewalDiagnosis(advances: number, worstStallMs: number, failure: Error | null): string {
   return (
-    `the lease expiry did not advance across a ${ACROSS_A_TTL_MS}ms wait on a ${TTL_MS}ms ` +
-    "lease, so no renewal landed at all. The latched renewal failure is " +
+    `the lease row advanced ${advances} time(s) across a ${ACROSS_A_TTL_MS}ms wait on a ` +
+    `${TTL_MS}ms lease renewed every ${INTERVAL_MS}ms, where about ` +
+    `${Math.floor(ACROSS_A_TTL_MS / INTERVAL_MS)} were due. The latched renewal failure is ` +
     `${failure === null ? "absent" : failure.message}, and the worst lateness this file's own ` +
     `timer suffered -- a peer of the renewal's, armed at the same ${INTERVAL_MS}ms -- was ` +
     `${worstStallMs}ms. Lateness near or past the ${TTL_MS}ms TTL is a runner that stopped ` +
     "scheduling this process (continuo#150), which latches renewal off by design and is not a " +
-    "defect here; small lateness with a failure present is a renewal genuinely refused; small " +
-    "lateness with no failure is a timer that was never re-armed."
+    "defect here; small lateness with a failure present is a renewal genuinely refused; exactly " +
+    "one advance with no failure is a timer that was armed and never re-armed."
   );
+}
+
+/**
+ * Wait `totalMs`, and answer how many times the lease row's expiry moved.
+ *
+ * Sampled rather than spent in one `sleep`, because the count is a claim the
+ * clock alone can no longer make. The expiry assertion after the wait says
+ * *some* renewal landed; it cannot say more than one did, and "armed once, never
+ * re-armed" is exactly the regression this case names in its own comment. Two
+ * advances settle it -- one tick can write one expiry -- and settle it without
+ * depending on how the wait compares to `INTERVAL_MS + TTL_MS`, which is what
+ * made the old two-TTL wait load-bearing in a way nothing said out loud.
+ *
+ * Reading the row rather than instrumenting the holder, for this file's
+ * standing reason: the shipped timer and the shipped renewal are the subject,
+ * and the row is what the endpoint's own fenced writes are validated against.
+ */
+async function sleepWatchingRenewals(env: BusEnv, totalMs: number): Promise<number> {
+  const startedAt = nowMs();
+  let last = readLease(env.connection, RESOURCE)?.expiresAtMs ?? 0;
+  let advances = 0;
+  for (;;) {
+    const remaining = totalMs - (nowMs() - startedAt);
+    if (remaining <= 0) {
+      return advances;
+    }
+    await sleep(Math.min(SAMPLE_MS, remaining));
+    const seen = readLease(env.connection, RESOURCE)?.expiresAtMs ?? 0;
+    if (seen > last) {
+      advances += 1;
+      last = seen;
+    }
+  }
 }
 
 function requireBuiltEndpoint(): void {
@@ -358,19 +402,25 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     expect(JSON.parse(first.text)["messages"]).toHaveLength(1);
 
     const beforeWait = readLease(env.connection, RESOURCE)?.expiresAtMs ?? 0;
-    await sleep(ACROSS_A_TTL_MS);
+    const advances = await sleepWatchingRenewals(env, ACROSS_A_TTL_MS);
     stalls.stop();
 
     // The lease outlived the expiry it was taken with, and it did so without
     // changing epoch: the endpoint is writing under exactly the number it was
     // started with. Both halves are read out of SQL, because the row is what
     // the endpoint's own fenced writes are validated against.
+    const diagnosis = renewalDiagnosis(advances, stalls.worstMs(), hold.failure);
     const renewed = readLease(env.connection, RESOURCE);
     expect(renewed?.epoch).toBe(hold.epoch);
-    expect(renewed?.expiresAtMs, renewalDiagnosis(stalls.worstMs(), hold.failure)).toBeGreaterThan(
-      beforeWait,
-    );
-    expect(hold.failure, renewalDiagnosis(stalls.worstMs(), hold.failure)).toBeNull();
+    expect(renewed?.expiresAtMs, diagnosis).toBeGreaterThan(beforeWait);
+    // **Twice, not once.** A timer armed at construction and never re-armed
+    // writes exactly one expiry -- `acquisition + INTERVAL_MS + TTL_MS`, which
+    // outlasts this wait and would satisfy every other assertion here. Two is
+    // the smallest number that cannot come from one tick, and it is far below
+    // the five or so due: a runner would have to eat three consecutive ticks
+    // to fall short, which is the same tolerance the lease itself has.
+    expect(advances, diagnosis).toBeGreaterThanOrEqual(2);
+    expect(hold.failure, diagnosis).toBeNull();
 
     const second = await client.callTool("poll");
     expect(second.isError, second.text).toBe(false);
