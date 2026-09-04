@@ -181,8 +181,9 @@ spaces distinct.
 | D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | accepted |
 | D-0084 | `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do | accepted |
 | D-0085 | The endpoint destination directory is created if missing and reused if present, for both verbs that take one | accepted |
-| D-0086 | Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both | accepted |
+| D-0086 | Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both | superseded by D-0088 |
 | D-0087 | The host application is `rondo`, a third repository, and `minimal-operating-loop.md`'s premise 2 is settled against the working assumption | accepted |
+| D-0088 | An admitted run may pass only what a role document authorised: the cli_args check is an allowlist | accepted |
 
 ---
 
@@ -13210,6 +13211,10 @@ it is an operator-visible change of contract that needs its own decision and an 
 arguments nobody has enumerated yet. Until then the list is only ever as current as the last time
 someone read the CLI's own option set against it, and the next dogfood is what would notice.
 
+**Status.** superseded by `D-0088`
+
+---
+
 ## D-0087 -- The host application is `rondo`, a third repository, and `minimal-operating-loop.md`'s premise 2 is settled against the working assumption
 
 **Context.** `docs/design/minimal-operating-loop.md` is written under two operator premises stated in
@@ -13325,3 +13330,197 @@ keeps out of the tarball. Either would make the host's placement structural afte
 reasoning the trigger rested on. Separately, a change to cadenza#22's ownership table moving the
 majority of what a console renders to cadenza would weaken the asymmetry ground, though not the
 allowlist one.
+
+---
+
+## D-0088 -- An admitted run may pass only what a role document authorised: the cli_args check is an allowlist
+
+**Context.** `D-0086` refuses twenty-four named flags, and states its own limit: a denylist over an
+option surface this repository does not own cannot be shown complete. Six review passes found six
+different gaps, three of them different *kinds* of gap, with no sign of the sequence terminating
+(#149). The complementary question is bounded: `docs/operations/lap-1-dogfood.md` records eight runs
+across three laps, and exactly one passed operator `cli_args` -- run 003's `--allowedTools`, named in
+§3 as the workaround for F-2, a defect `D-0081`/#120 closed. Run 007's `record.json` carries the
+fence's own flags and nothing else, and run 007 is the lap that reached a commit and a closed gate.
+
+**Decision.** An admitted run's `cli_args` must be one of the complete argument vectors a role
+document authorises, and everything else is refused. Four parts:
+
+1. **The allowlist is per-role and lives in a continuo-owned document**,
+   `src/fencing/cli_args_allow.json`, pinned by byte count and SHA-256 in a contract test of its own,
+   exactly as `roles.json` is pinned. An entry is an object -- `{role, cli_args, reason}` -- and the
+   schema requires `reason` to be present and non-empty. That is the review gate, and the reason the
+   list is *not* a key inside the carried `roles.json`: `deviations` there is free-form metadata no
+   assertion reads, and a check looking for a rationale in it could not tell a reason from a restated
+   vector, so the gate would rest on a digest bump being conspicuous in a diff rather than on an
+   enforced record. A structured field is a rationale a test can actually see. It also keeps the
+   carried document undiverged.
+2. **An entry is a complete `cli_args` vector, and a submitted list must equal one of them exactly**
+   -- `[["--allowedTools", "Edit,Write"]]` admits that two-element list and nothing else. Not a flag
+   name, because a name plus an arity is a model of the CLI's option grammar, which is the thing
+   `D-0086` established this repository cannot own. And not a fragment matched against a window,
+   because fragments compose: two individually reviewed entries could be concatenated, reordered and
+   repeated into an argv nobody reviewed, and CLI options interact in ways this decision rests on
+   refusing to model. Whole vectors have no composition rule to get wrong. Attached-value forms,
+   camelCase spellings and short-flag bundling stop being questions too, because none can produce a
+   matching byte sequence.
+3. **A `cli_args` of length zero is authorised unconditionally**, by a rule rather than by an entry:
+   it is the absence of operator arguments, not an argument. Exact matching against an absent or
+   empty entry list would otherwise refuse the no-argument run every lap has performed, and spelling
+   it as an entry (`[[]]` per role) would make a deletable line load-bearing. **No role's
+   `cli_args_allow` is present as shipped**, so the lap-1 rule is "no operator arguments at all" --
+   the measurement above, not an aspiration.
+4. **The check runs where the role document is already read, at every point before something
+   irreversible**: in `admitRun` beside the roster check; first in `lap perform`'s preflight, which
+   is before the delivery lease -- `holdDeliveryLease` writes a row and consumes an epoch on the one
+   global `outbox-delivery` resource (`D-0053` rule 4), so a refusal after it has already taken a
+   resource from a lap that could have used it; and in the materialiser's validation block, for a
+   caller that reaches it without going through `performLap`. `LapRunIntent`'s constructor keeps the
+   shape rules and the bare `--` refusal and gains nothing, for the reason `UnknownRoleRefused` gives
+   about the roster -- a record's constructor owns shape, not policy read out of a mutable document.
+   Concretely: the constructor also runs at `lap perform` via `readLapRunIntent`, so a
+   document-aware constructor would make an already admitted run unreadable the moment its
+   authorising entry was removed.
+
+**What happens to `FENCE_ALTERING_FLAGS`.** It stops being enforcement and is removed from `src/`.
+Its prose stays in `D-0086`, which is append-only and is the record of what six review passes found.
+Its twenty-four names become a test corpus, and the case that corpus drives **reads the document
+rather than submitting arguments**: it scans every vector in every role's `cli_args_allow` for a
+corpus member, and fails unless that entry's `reason` **names the flag it authorises**.
+Submitting each flag and asserting refusal would be close to vacuous -- a role authorising
+`["--dangerously-skip-permissions", "--foo"]` still refuses the bare flag under exact matching, so CI
+would stay green over a document that had just re-opened the largest hole `D-0086` names. And a scan
+that simply failed would **bar** the entries this decision deliberately permits: `--allowedTools` is
+on the corpus and is the only argument the dogfood ever needed. So the corpus gates the **record**
+and not the decision -- authorising a corpus flag is green once somebody has written down that they
+did and why, and red when done silently.
+
+**This supersedes `D-0086`, and restates the half of it that survives.** `D-0086`'s central decision
+was that the constructor refuses both lists; that stops being true here, so under `AGENTS.md`'s rule
+it cannot stay `accepted` -- two accepted entries giving different answers to "what refuses
+`cli_args`?" is the drift that rule exists to prevent. `D-0086` keeps its ID and gains
+`Status: superseded by D-0088`, its index row is updated, and its text is otherwise untouched: it
+remains the record of what six review passes found and the argument this entry is built on.
+
+**The part of `D-0086` that survives, restated so this entry stands alone.** *Flags the fence
+generates* and *flags that alter what the fence means* are still two concepts, and the first is still
+enforced by name. `FENCE_OWNED_FLAGS` -- `--settings`, `--permission-mode`, `--mcp-config`,
+`--setting-sources`, `--strict-mcp-config` -- stays in `src/control_plane/lap_run_intent.ts`, stays
+refused by the constructor and by the materialiser's own check, and stays refused for its own reason:
+the fence generates these, so a second one is a duplicate whose winner is a property of a CLI this
+repository does not own. A denylist is sound *there* because the list is closed by construction --
+it is this build's own output, not somebody else's option surface. The bare `--` refusal stays in the
+constructor for the same kind of reason: it is a statement about argv structure, true whatever the
+allowlist holds. What this entry replaces is only the second concept's enforcement.
+
+**The four flags `D-0086` asserts are admitted** -- `--restricted`, `--disable-slash-commands`,
+`--permission-prompts`, `--tmux` -- are now refused with everything else, and those cases are deleted
+rather than left failing. A child safer than the one admission asked for is refused too. That is the
+cost of a rule that does not read the CLI's mind, and it is recorded rather than absorbed.
+
+**Alternatives.** *Keep the denylist and keep extending it* (rejected: `D-0086`'s own falsifier, six
+for six). *Refuse `cli_args` entirely and let the role document carry arguments the fence renders*
+(rejected, narrowly: it is safer, but the child's argv would then carry arguments no
+`run_delegation_recorded` payload mentions, and `D-0055` makes that payload the complete statement of
+what a run was asked to do). *A top-level `cli_args_allow` key inside the carried `roles.json`*
+(rejected, and it is the closest call: it answers "what fences this role?" in one file and touches no
+ported rendering code, but its only rationale slot is the free-form `deviations` list, which no
+assertion reads and in which a restated vector is indistinguishable from a reason -- so the gate
+would be a conspicuous digest bump rather than an enforced record. It also diverges a carried
+document further. Kept as the fallback if the gate prefers one file, with that limitation recorded).
+*A key on the role body rather than a top-level one* (rejected: `stripMeta` keeps unknown role keys,
+so the value would pass through placeholder substitution and scanning; making it inert means editing
+`META_KEYS` in a module ported faithfully from interlock). *The corpus bars the hatch* (rejected: it
+would bar the only argument ever needed).
+
+**What records it.** Five files: one new contract file, one new corpus file, and three existing
+suites adapted, because enforcement at three points is not one check.
+
+*(1) The three enforcement points.* `test/control_plane/run-admission.test.ts` drives `admitRun` with
+`--model=sonnet` -- deliberately a flag no denylist ever named, so the block goes red the day the
+allowlist is quietly reduced to a restatement of `D-0086`'s twenty-four -- and asserts the `run` and
+event tables are both empty afterwards, that the refusal is in the `ControlPlaneRefusal` family
+`run_cli.ts` catches, that an empty `cli_args` is admitted by the rule of part 3 rather than by an
+entry, and that an unknown role carrying unauthorised arguments is reported as a role and not as
+arguments (a mistyped `--role` makes every vector unauthorised for it, and reporting *that* would
+send the operator to add an entry for a role that does not exist). The same file holds the in-suite
+proof of the reader exemption: a two-argument payload the shipped document refuses is nonetheless
+read back, in order, by `readLapRunIntent`. `test/lap/root.test.ts` drives `performLap` over a run
+admitted **by hand** -- a `run` row plus one `run_delegation_recorded` event, because `admitRun` now
+refuses exactly the vectors the case needs and the spine is append-only by trigger, so the row can be
+written neither through the verb nor by editing afterwards -- which is precisely the state this
+preflight exists for: a run admitted while the document still authorised its vector, waiting to
+perform. It asserts the refusal names the role, the flag and the document, and then asserts the
+ordering the placement is *for*: the `outbox-delivery` lease is unheld, the provider state root does
+not exist, and nothing was spawned. `test/workspace/materializer.test.ts` refuses an unauthorised
+vector and asserts all three of the workspace directory, the topic branch and the materialization
+event are absent.
+
+*(2) The document's own contract.* `test/contract/cli-args-allow-document.test.ts` pins
+`src/fencing/cli_args_allow.json` at twenty bytes and its SHA-256, exactly as `roles.json` is pinned,
+and asserts beside it that `bundledCliArgsAllowPath()` resolves to the file the pin guards -- without
+that companion case a moved document would leave the pin standing over a file nothing reads. It
+checks the schema by calling the real `loadCliArgsAllowlist()` rather than restating the rules,
+asserts every entry's `role` is on `roleNames()`, asserts the shipped entry list is `[]` (the
+eight-run measurement, pinned), and runs the corpus scan. The corpus is
+`test/control_plane/fence-altering-flags.ts`, which holds the twenty-four names, all four grouping
+comments, and nothing that enforces anything; the scan matches a corpus flag by name, by `flag=`
+prefix, and -- for single-dash members only -- by attached value, and deliberately not by prefix for
+double-dash members, since `--agent` is a prefix of `--agents` and would make a report name a flag
+that is not there.
+
+*(3) The inversion, recorded from the constructor's side.*
+`test/control_plane/lap-run-intent.test.ts` deletes the twenty-four per-flag refusal cases and puts a
+case in their place asserting those same flags -- `--worktree`, `-wscratch`, `--allowedTools`,
+`--allowed-tools=Bash`, `--bare`, `--safe-mode`, `--cloud`, `--debug-file=/tmp/x`, `--plugin-dir` --
+now round-trip through the constructor unrefused. Without it the deletion would read as a suite that
+merely stopped checking, and a constructor that quietly regrew a policy check would stay green.
+
+**Anti-vacuity, which is where most of the work is.** Every absence above has a presence beside it.
+The materialiser's no-argument case now asserts the workspace and the branch *are* created, so its
+three absences are known to be capable of failing. The lap's empty-vector case cannot assert a green
+lap -- that file starts no child and runs no git -- so it pre-acquires `outbox-delivery` under
+another holder and asserts the lap reached step 1b and was refused `LeaseHeld`, which is where "the
+whole preflight passed" is visible; deleting the check from `preflight` was **observed red**, and the
+refusal then arrived from the materialiser instead, after the lease and the state root had already
+been taken, which is the ordering argument demonstrated rather than asserted. The contract file
+carries six fixtures over real temporary documents: a whitespace-only `reason`, an unknown entry key,
+two malformed top-level shapes, a document with no corpus flag at all (which must report *nothing*,
+or the scan is a check that always fires), and the headline pair -- an entry authorising
+`--allowedTools` whose `reason` does not name it is reported, while a second entry in the same
+document whose reason does name it is clean, which is what makes the corpus gate the *record* and not
+the decision. The attached-value spelling `--allowedTools=Edit` has a fixture of its own, so that
+nobody simplifies the matcher back to equality.
+
+**Two things the shipped tests could not do, recorded rather than absorbed.** Neither `admitRun` nor
+`requireCliArgs` takes a document path -- both call `cliArgsRefusal` against the bundled document --
+so no test *at* an enforcement point can exercise an *authorised* vector. Role scoping (a vector
+authorised for `worker` and refused for `curator` out of one document, together with the superset and
+re-tokenisation rejections that make "exactly" mean exactly) is therefore driven one frame below,
+through `cliArgsRefusal` itself over a temporary document, with a line asserting the same vector is
+still refused against the bundled one so the case cannot pass vacuously. And one existing assertion
+is genuinely lost: `test/workspace/materializer.test.ts` can no longer check that operator arguments
+are rendered *ahead of* the flags this step generates, since a materialisation carrying operator
+arguments is now unreachable from outside the module. The loss is written into the case that replaced
+it rather than left to be noticed; the generated half is still pinned. Threading an optional document
+path through `MaterializationRequest` and `AdmitRunOptions` would restore both, and is deliberately
+not done here.
+
+**Consequences.** `continuo run admit --cli-arg X` refuses X under the shipped document, for every
+role; the flag stays, because an authorised argument must be passable, and its help says so.
+`docs/operations/lap-1-dogfood.md` §3's command no longer admits even as a workaround, and is
+annotated. The refusal names the role and the document, so an operator is told where the answer is
+authored. `src/fencing/cli_args_allow.json` is a new shipped artifact and joins the build's copy
+step beside `roles.json`; the carried `roles.json` is untouched. `D-0086`'s `Status` line and its index row take the supersession edit -- the only
+edit `AGENTS.md` permits to a standing entry -- and nothing else in it changes.
+
+**Status.** accepted
+
+**Falsifier.** A lap that legitimately needs operator arguments often enough that the allowlist is
+widened repeatedly. The review gate is a digest bump and a sentence, both cheap to perform and easy
+to wave through; a document accumulating entries is this decision failing, and it fails quietly, because
+every individual widening looks reasonable. The counting is the check: more than one or two entries
+across all roles means the bounded question ("what does a lap need?") was not bounded after all.
+
+**Source.** #149, on `D-0086`'s stated limit. The eight-run measurement is
+`docs/operations/lap-1-dogfood.md` §3, §8, §9.2 and §10.1.

@@ -1497,50 +1497,75 @@ describe("path identity is one rule, and the platform decides what it says", () 
   });
 });
 
-describe("the admitted run's own CLI arguments survive", () => {
-  test("they reach the child, before the flags this step generates", () => {
-    // `LapRunIntent` carries cliArgs and the provider consumes them through
-    // settings["cli_args"]. A materialiser that overwrote that key would drop
-    // half the durable execution intent between the record and the child --
-    // silently, because `cli_args` would still be present and would still look
-    // right, carrying only the flags this step generated.
-    const f = fixture("materialize-cli-args");
-    const materialized = materializeWorkspace(f.connection, {
-      ...f.request,
-      cliArgs: ["--model", "sonnet"],
-    });
+describe("the admitted run's own CLI arguments", () => {
+  test("a vector the allowlist does not authorise is refused, and nothing is created", () => {
+    // `D-0088`. This is the third and last of the three places the vector is
+    // checked (`admitRun` beside the roster check, then the head of `lap
+    // perform`'s preflight), and the one that runs for a run admitted by an
+    // older build, for a hand-edited `run_delegation_recorded` payload, and for
+    // a caller reaching `materializeWorkspace` directly rather than through
+    // `performLap`.
+    //
+    // `--model sonnet` is what makes the case worth writing rather than a
+    // restatement of the check above it: `D-0086` named twenty-four
+    // fence-altering flags and refused those, and this is not one of them, so
+    // before this change it materialised without comment. It is refused here
+    // only because the shipped document authorises nothing -- which is the
+    // inversion itself.
+    //
+    // The negatives carry the rest. A refusal in the validation block costs a
+    // stray directory at worst; a refusal after the branch and the worktree
+    // exist costs the run identifier itself, because `D-0057` refuses a second
+    // materialisation of the same run.
+    const f = fixture("materialize-cli-args-unauthorised");
+    const refusal = expectRefusal(
+      () => materializeWorkspace(f.connection, { ...f.request, cliArgs: ["--model", "sonnet"] }),
+      WorkspaceMaterializationUsageError,
+      /is not authorised for role/,
+    );
+    // The role it was refused FOR and the document that would authorise it: a
+    // refusal saying only "not authorised" names every non-empty vector under
+    // the shipped document and points the operator at nothing.
+    expect(refusal.message).toContain("'worker'");
+    expect(refusal.message).toContain("cli_args_allow.json");
+    expect(existsSync(f.workspace)).toBe(false);
+    expect(branchExists(TOPIC_BRANCH, f.git)).toBe(false);
+    expect(materializationEvents(f.connection)).toEqual([]);
 
-    const cliArgs = (materialized.options.settings as Record<string, unknown>)[
-      "cli_args"
-    ] as string[];
-    expect(cliArgs.slice(0, 2)).toEqual(["--model", "sonnet"]);
-    // The generated flags come after, so a parser resolving a repeated option
-    // last-wins resolves it in the fence's favour.
-    const fenceFlags = materialized.plan.cliArgs();
-    expect(cliArgs.slice(2, 2 + fenceFlags.length)).toEqual(fenceFlags);
-    expect(cliArgs.slice(2 + fenceFlags.length)).toEqual([
-      "--mcp-config",
-      join(f.artifactDir, MCP_CONFIG_FILENAME),
-      "--strict-mcp-config",
-    ]);
+    // What this case replaced, recorded so that its absence reads as a
+    // consequence rather than as an oversight: the operator's arguments used to
+    // be asserted reaching `settings["cli_args"]` AHEAD of the flags this step
+    // generates, so that a child parser resolving a repeated option last-wins
+    // resolves it in the fence's favour. That assertion needs a materialisation
+    // that carries operator arguments, and there is no longer one to be had
+    // from outside this module -- every non-empty vector is refused before the
+    // settings are assembled, and neither this step nor `admitRun` takes a
+    // document path a case could point at a fixture. The generated half is
+    // still pinned by "no arguments means only the generated flags" below.
   });
 
-  test("an empty argument is carried, because the intent permits one", () => {
+  test("a vector the record itself permits is refused by the document, not by this step", () => {
     // `LapRunIntent` allows an empty string as an argv element in as many words
-    // -- "refusing it would be a rule this record invented" -- so an intent
-    // with `cliArgs: [""]` is admitted and must then be materialisable. This is
-    // the SECOND time this module was stricter than the record it consumes (the
-    // first refused non-ASCII paths), which is why D-0057 states the general
-    // form rather than only the instance.
+    // -- "refusing it would be a rule this record invented" -- so this vector is
+    // one the record admits and this step used to materialise. It is refused
+    // now, and the distinction worth pinning is WHERE the refusal comes from:
+    // the message names the document, so this is the allowlist declining to
+    // authorise a vector nobody has asked for yet, and it goes away the day an
+    // entry is added. It is not this module inventing a rule the record does
+    // not have -- the hazard `D-0057` states the general form of, after this
+    // module was twice stricter than the record it consumes.
     const f = fixture("materialize-cli-args-empty");
-    const materialized = materializeWorkspace(f.connection, {
-      ...f.request,
-      cliArgs: ["--append-system-prompt", ""],
-    });
-    const cliArgs = (materialized.options.settings as Record<string, unknown>)[
-      "cli_args"
-    ] as string[];
-    expect(cliArgs.slice(0, 2)).toEqual(["--append-system-prompt", ""]);
+    const refusal = expectRefusal(
+      () =>
+        materializeWorkspace(f.connection, {
+          ...f.request,
+          cliArgs: ["--append-system-prompt", ""],
+        }),
+      WorkspaceMaterializationUsageError,
+      /is not authorised for role/,
+    );
+    expect(refusal.message).toContain("cli_args_allow.json");
+    expect(existsSync(f.workspace)).toBe(false);
   });
 
   test("a control character in an argument is still refused", () => {
@@ -1595,6 +1620,16 @@ describe("the admitted run's own CLI arguments survive", () => {
   });
 
   test("no arguments means only the generated flags (the anti-vacuity half)", () => {
+    // Anti-vacuity for every refusal above it -- a step that refused every
+    // request would pass all of them -- and, since `D-0088`, the case that
+    // stands in front of the whole verb seizing up. The shipped
+    // `cli_args_allow.json` has no entries, so exact matching against it
+    // matches nothing, and a literal "the vector must equal an authorised
+    // entry" would refuse the no-argument run: every lap this repository has
+    // ever performed. The zero-length vector is authorised unconditionally by
+    // a rule ahead of the document read (`D-0088`, decision D10), which is why
+    // this materialises against an empty document and would against an
+    // unreadable one.
     const f = fixture("materialize-cli-args-none");
     const materialized = materializeWorkspace(f.connection, f.request);
     const cliArgs = (materialized.options.settings as Record<string, unknown>)[
@@ -1602,6 +1637,10 @@ describe("the admitted run's own CLI arguments survive", () => {
     ] as string[];
     const fenceFlags = materialized.plan.cliArgs();
     expect(cliArgs.slice(0, fenceFlags.length)).toEqual(fenceFlags);
+    // The worktree and the branch the refusal cases assert the ABSENCE of, so
+    // that those assertions are known to be capable of failing.
+    expect(existsSync(f.workspace)).toBe(true);
+    expect(branchExists(TOPIC_BRANCH, f.git)).toBe(true);
   });
 });
 

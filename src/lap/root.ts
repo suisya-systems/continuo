@@ -10,6 +10,7 @@ import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { type IngestedReport, ingestTerminalReport } from "../control_plane/report_ingress.js";
 import { readLapRunIntent } from "../control_plane/run_admission.js";
 import { activeBinding } from "../control_plane/session_binding.js";
+import { cliArgsRefusal } from "../fencing/cli_args_allow.js";
 import type { SpawnOutcome } from "../fencing/spawn.js";
 import {
   Failure,
@@ -473,7 +474,11 @@ const DEFAULT_ELAPSED_MS = (): number => performance.now();
  * - the **artifact directory's length** was left to the filesystem;
  * - the **provider's state root** is where the worker's transcript is written,
  *   and a transcript inside the worktree is a gate opened over words its own
- *   subject wrote (`D-0067`).
+ *   subject wrote (`D-0067`);
+ * - the **operator arguments** were refused by name and only at admission
+ *   (`D-0086`), so a vector the role document stopped authorising after the run
+ *   was admitted still reached the child. `D-0088` moved that to whole-vector
+ *   equality and asks it again here, first, ahead of every other entry.
  *
  * They were each fixed as they were found, which is how five separate late
  * refusals came to exist: the discipline was stated and then applied one
@@ -484,7 +489,33 @@ const DEFAULT_ELAPSED_MS = (): number => performance.now();
  * `materializeWorkspace` keeps the same rule for its own request and says so;
  * this is `performLap` keeping it for the arguments the materialiser never sees.
  */
-function preflight(request: LapRequest, provider: SessionProvider, workspace: string): void {
+function preflight(request: LapRequest, provider: SessionProvider, intent: LapRunIntent): void {
+  const workspace = intent.workspace;
+  // **First, ahead of every other entry in the list above** (`D-0088`). The
+  // other entries refuse before the branch and the worktree exist; this one
+  // refuses before `requireUsableStateRoot` creates the provider's state root
+  // and before the capability probe writes `probe-evidence.txt` into it, so a
+  // run this document does not authorise leaves nothing behind on disk. Above
+  // all it refuses before step 1b takes the delivery lease: `outbox-delivery`
+  // is ONE global resource (`D-0053` rule 4), taking it writes a lease row and
+  // consumes an epoch, and a second concurrent lap is refused `LeaseHeld` for
+  // as long as this one holds it. A run that is going to be refused must not
+  // first take a resource away from the lap that could have used it.
+  //
+  // **Asked again, though admission already answered it.** That is not a
+  // duplicate check: the allowlist is a document, the document can be narrowed
+  // AFTER a run is admitted, and the later read is the one that wins. Narrowing
+  // it must stop the runs it stopped authorising -- including the ones already
+  // sitting admitted, waiting to perform -- or the document only describes
+  // future admissions and an operator who removes an entry has not removed
+  // anything. `cliArgsRefusal` re-reads the document on every call for exactly
+  // that reason. It is not the last such read -- the materialiser asks again in
+  // its own validation block -- but it is the last one that happens before this
+  // lap takes anything, which is what makes it the one that has to be here.
+  const argumentRefusal = cliArgsRefusal(intent.role, intent.cliArgs);
+  if (argumentRefusal !== undefined) {
+    throw new LapRefused(argumentRefusal);
+  }
   requireCompletion(request.completion);
   requireGateDeadline(request);
   // The artifact directory's name, which the encoding can push past a
@@ -980,7 +1011,7 @@ export async function performLap(
 
   // 1a. Everything this lap can refuse, refused before anything irreversible.
   //     See {@link preflight} for the list and for why it is a list.
-  preflight(request, provider, intent.workspace);
+  preflight(request, provider, intent);
 
   // 1b. The endpoint's lease, taken and armed (`D-0072`).
   //

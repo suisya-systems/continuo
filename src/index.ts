@@ -425,6 +425,7 @@ export {
   ADMITTED_RUN_STATUS,
   type AdmittedRun,
   admitRun,
+  CliArgsNotAuthorised,
   RUN_ADMISSION_PRODUCER,
   RUN_CREATED_EVENT_TYPE,
   RUN_DELEGATION_RECORDED_EVENT_TYPE,
