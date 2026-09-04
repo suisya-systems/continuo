@@ -63,9 +63,10 @@ too:
    2026-09-05 on cadenza#40 and recorded as `D-0087`.
 
 **Both premises are structural and this document is written on both.** Premise 2 was not, when it was
-written, and the rest of section 0 is the record of why it was held open and what closed it. It is
-kept rather than deleted because several sections below still read as conditionals on it, and a
-reader who meets "if premise 2 holds" in section 4.8 or section 8 needs the antecedent on the page.
+written, and the rest of section 0 is the record of why it was held open and what closed it. That
+record is kept rather than deleted because the sections below were written against the open question
+and a reader needs to know which answer they were written against; the conditionals themselves are
+resolved in place, so nothing below still asks the reader to pick.
 
 **What premise 2 used to say.** *That application is hosted by cadenza*, as an outermost adapter
 beside the existing catalog adapter -- marked a working assumption, not a settled decision, on the
@@ -110,21 +111,24 @@ it was cheap to change until an application existed and should be settled at tha
 before or long after. It was settled at that moment. The answer taken is the counter-proposal's
 *third repository* branch rather than its *workspace package* branch.
 
-**What the settlement changes for the sections below, which still read as conditionals on it.** Each
-is a conditional whose antecedent is now false, and none of them changes its own recommendation:
+**What the settlement changed elsewhere in this document.** Four passages had been written as
+conditionals on premise 2 or as statements that the question was open. Each is resolved where it
+stands, and **none of them changes its recommendation** -- which is the concrete form of the claim
+that the choice was never structural:
 
-- **4.8** -- cadenza does not need a `bin` or a build in order to host anything. It may still need a
-  build to be *importable*, which is the packaging question in 6.4 and is now rondo's requirement
-  rather than the host's own.
-- **6.4** -- the decision was written to survive premise 2 either way and does. What collapses is its
-  **band**: extending cadenza's import allowlist was cadenza's half only if cadenza hosted the
-  application, so what is left is continuo's supersession of `D-0008` plus the same question asked of
-  cadenza as a library. The importer is rondo.
-- **8** -- the packaging bullet's larger reading is retired: cadenza stays a library continuo does not
-  import and rondo does. The defect section 8 actually names gets **wider**, not narrower: a third
-  repository with no `DECISIONS.md` of its own now sits above two that cannot record a decision
-  binding each other, and every decision about the host is a decision none of the three files can
-  hold. That is the price of this answer, and it is named here rather than discovered later.
+- **2.1** stated the placement as not settled. It now states it, and keeps the consequence that held
+  under either answer: the host must be able to import continuo.
+- **4.8** conditioned cadenza's need for a `bin` and a build on cadenza hosting. It does not host, so
+  that need does not arise; what remains is the ordinary requirement that a library be importable.
+- **6.4** was written to survive premise 2 either way and does -- its recommendation was taken as
+  `D-0045`, whose own text says the same. What the settlement removes is the **"plus cadenza"** half
+  of its band: extending cadenza's import allowlist was cadenza's obligation only if cadenza hosted
+  the application.
+- **8**'s packaging bullet loses its larger reading: cadenza stays a library, and rondo imports it.
+  The defect section 8 actually names gets **wider**, not narrower -- a third repository, itself with
+  no `DECISIONS.md`, now sits above two that cannot record a decision binding each other, so every
+  decision about the host is one none of the three files can hold. That is the price of this answer,
+  and it is named here rather than discovered later.
 
 ---
 
@@ -557,8 +561,8 @@ nor claude-org-ja is in the catalog.**
 
 *Deferrable for lap 1 -- the workspace can be cut from an operator-named path and base branch. Not
 deferrable once an application exists, at which point "no callable artifact" stops being a seam and
-becomes the packaging decision in 6.4 -- and if the application is hosted in cadenza (section 0,
-premise 2), cadenza needs a `bin` and a build of its own on top of that.*
+becomes the packaging decision in 6.4. Cadenza does not need a `bin` or a build of its own on top of
+that: under section 0's premise 2 the host is rondo, so what cadenza needs is only to be importable.*
 
 ### 4.9 The lease must not span the human wait, and a longer TTL is not the fix
 
@@ -1113,7 +1117,8 @@ G2 rather than promoted into it.
 
 **This decision survives premise 2 either way, which is why it is here rather than parked behind it.**
 The host application needs continuo whether it lives in cadenza or in its own package; only the
-identity of the importer changes, and obstacles 1 and 3 below do not change at all. Today **nothing
+identity of the importer changes -- section 0 settles it as rondo -- and obstacles 1 and 3 below do
+not change at all. Today **nothing
 can import continuo**, by three independent obstacles, none of them hard -- just undecided.
 
 1. **continuo refuses to publish.** `"private": true` at `0.0.0`, and `D-0008` says `npm publish`
@@ -1157,10 +1162,11 @@ built. Whichever is taken, the entry should record the two inherited constraints
 dependency and the Node floor -- because they become the *application's* constraints the moment it
 depends on continuo.
 
-**Band: continuo, plus cadenza if premise 2 holds.** Superseding `D-0008` is continuo's either way.
-Extending the import allowlist is cadenza's only if cadenza hosts the application; if it does not,
-this stops being a paired decision entirely -- which is one more small argument for the
-counter-proposal, since section 8 records that nothing in either repository can hold a decision
+**Band: continuo.** Superseding `D-0008` was continuo's either way, and is done -- `D-0045` takes
+option A. The **"plus cadenza"** half this paragraph originally carried was extending cadenza's
+import allowlist, which was cadenza's obligation only if cadenza hosted the application. Section 0
+settles that it does not, so this is not a paired decision -- which was one of the small arguments
+for the answer taken, since section 8 records that nothing in either repository can hold a decision
 binding both.
 
 **Where it sits on the critical path: off it, for lap 1.** Section 7 builds the lap as continuo CLI
@@ -1242,11 +1248,11 @@ disposition; the `migrate` belt status; the curator errata; S1's post-lap promot
 - **The catalog's contents.** `config/projects.toml` registers `interlock` and `cadenza` and neither
   continuo nor claude-org-ja. A registry that cannot name the projects the successor stack operates on
   is a cheaper decision than G2 and probably a more urgent one.
-- **Packaging, and it is now a bigger question than it was.** `private: true`, no `bin`, no `exports`,
-  no `build`. If section 0's premise 2 holds, cadenza is not a library continuo imports but **the host
-  of the application**, and it needs a `bin`, a build, and a widened import allowlist on top of the
-  continuo dependency (6.4). If the counter-proposal holds instead, cadenza stays a library and this
-  bullet stays the small question it was -- which is part of what the trigger in section 0 decides.
+- **Packaging, and it stayed the smaller of the two questions it could have been.** `private: true`,
+  no `bin`, no `exports`, no `build`. Section 0's premise 2 is settled against cadenza hosting, so
+  cadenza is not the host and needs neither a `bin`, nor a build for one, nor a widened import
+  allowlist. It stays a library -- one that rondo imports beside continuo (6.4) -- and this bullet
+  stays the ordinary question of making a library consumable.
 - **`LocalPathVerifier`'s owner** -- unimplemented in both languages, and the G1 design document calls
   it mandatory before a clone.
 
