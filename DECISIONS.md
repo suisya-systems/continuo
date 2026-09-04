@@ -180,6 +180,7 @@ spaces distinct.
 | D-0082 | The fence's sandbox is switched on, spelled in strings, and told where the worktree's git writes | accepted |
 | D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | accepted |
 | D-0084 | `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do | accepted |
+| D-0085 | Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both | accepted |
 
 ---
 
@@ -12973,3 +12974,154 @@ that a refusal this verb detects costs the database nothing (no epoch bumped, no
 the lease is taken under the actor and given back, that a `--now-ms` behind the run's own
 `updated_at_ms` is refused here rather than by the row's `CHECK` from inside the fenced statement,
 and that the spine is unchanged by a close.
+## D-0085 -- Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both
+
+**Context.** The second dogfood's write-up (`docs/operations/lap-1-dogfood.md` section 10.5; issue
+#133) settled one finding by reading rather than by running: the `cli_args` door is open by
+construction. `requireCliArgs` in `src/workspace/materializer.ts` refuses an admitted run's argument
+only when it repeats one of `FENCE_OWNED_FLAGS` -- `--settings`, `--permission-mode`, `--mcp-config`,
+`--setting-sources`, `--strict-mcp-config`. `--dangerously-skip-permissions`, `--allowedTools`,
+`--disallowedTools` and `--add-dir` are not on that list and are refused by nothing else: the
+provider's own `PROVIDER_OWNED_FLAGS` is a third, disjoint list about session identity and output
+format. Section 3's own `--allowedTools` workaround went through this door, which is what the door is
+for and also why it is one.
+
+**The two concepts, which the single list had been carrying as if they were one.**
+
+- **Flags the fence generates** (`FENCE_OWNED_FLAGS`). Each is rendered by the materialiser and
+  `FencedSpawner` from the fence, so an admitted run restating one hands the child two of the same
+  flag. They are refused because *which occurrence a CLI honours is not a property this repository
+  controls* -- a fence resting on "the last one wins" is a fence resting on a guess. The hazard is
+  **duplication**, and it exists only because the fence emits these flags itself.
+- **Flags that alter what the fence means** (`FENCE_ALTERING_FLAGS`, new). The fence generates none
+  of them, so there is no duplicate and no precedence question -- and nothing downstream that would
+  notice. Each one **changes what the rendered fence permits while leaving every generated flag
+  intact**, in one of three ways. *They remove a layer:* `--dangerously-skip-permissions` is the
+  whole fence off in one argument, `--allow-dangerously-skip-permissions` makes that bypass
+  available, and `--bare` ("skip hooks") and `--safe-mode` ("all customizations ... hooks ...
+  disabled") switch off the `PreToolUse` deny hook -- the layer `D-0083` keeps precisely because it
+  does not depend on the CLI's own permission evaluation. *They rewrite the fence's lists from the
+  argv:* `--allowedTools` widens the allow list the role document authored, `--disallowedTools`
+  restates the deny half, `--tools` replaces the built-in tool set that list was written against.
+  *They hand the child reach or configuration the fence did not author:* `--add-dir` extends the
+  fence past the worktree `D-0067` puts at the centre of it, and `--plugin-dir`, `--plugin-url` and
+  `--agents` bring hooks, agents and MCP servers the fence never rendered, and `--worktree` / `-w`
+  moves the child into a git worktree neither the materialiser nor the admitted intent has heard of,
+  doing the surgery inside the CLI where the role's `Bash(git worktree *)` deny never sees it.
+  *And a fourth group that widened the concept:* `--cloud` and `--environment` create a **cloud**
+  session, `--teleport` resumes one elsewhere, and `--bg` / `--background` and `--remote-control`
+  leave the work local but take it out from under the supervisor that spawned it. These do not
+  weaken the fence -- they make it **irrelevant**, by putting the work where the rendered files are
+  not. The group's existence is why the concept is phrased "alters what the fence means" rather than
+  the narrower "alters what the fence permits" this entry first used.
+- **And a fifth group, outside the tool layer entirely.** The deny hook and the sandbox sit under
+  *tools*; a file the CLI process writes on its own behalf passes neither. `--debug-file` writes logs
+  to any path it is given, and `--file` puts downloaded bytes on disk at startup -- before there is a
+  turn for the fence to be consulted on at all.
+
+The second is not a special case of the first, and the first does not imply the second. That is the
+whole of what #133 asked to be named, and the reason it could stay unnoticed: `FENCE_OWNED_FLAGS`
+reads like the list of dangerous flags, and it is not -- it is the list of *this build's own* flags.
+
+**Decision.** `FENCE_ALTERING_FLAGS` states the second concept beside the first in
+`src/control_plane/lap_run_intent.ts`, and `LapRunIntent`'s constructor -- the sole validation point
+for an execution intent, per its own docstring -- refuses both lists, each with a refusal naming
+which concept the argument fell under. Because the intent is constructed inside `run admit`
+(`admitRun`) before the run's row and its delegation event are appended, an offending `cli_args`
+never reaches the spine: the run is neither created nor recorded. All three spellings the CLI reads
+as one option are refused: the exact form, `--flag=value`, and -- for `-w`, the one single-dash flag
+on either list --
+the attached-value form, since `-wscratch` reaches the parser as `--worktree scratch`. That last rule
+is guarded on the argument not itself being a long flag, which `matchesOwnedFlag` is not: unguarded,
+`-w` matches every `--w...` option the CLI has and refuses an argument for naming a flag it does not
+name.
+
+**Both spellings of the camelCase options, because the CLI accepts both.** Measured on `claude
+--help`, CLI `2.1.260` -- the version `D-0081` measured -- `--allowedTools` and `--allowed-tools` are
+one option to the parser, as are `--disallowedTools` and `--disallowed-tools`. A list carrying one
+and not the other refuses the spelling someone typed and admits the spelling they would type next.
+
+**And one refusal that is not a flag at all: the bare `--`.** `materializer.ts` renders the child's
+argv as the operator's arguments **followed by** the fence's own, and says why in its own comment:
+where a parser resolves a repeated option last-wins, putting the generated flags last is what makes
+the fence the survivor. A bare `--` inverts exactly that. By the POSIX convention every option parser
+implements, it ends option parsing -- so every fence flag after it arrives as positional text, and the
+child starts with no fence at all while each individual flag is still visibly present in the argv. It
+is the largest hole of the set, it costs two characters, and a list of *flag names* structurally
+cannot hold it, which is why it is a check of its own.
+
+It is refused rather than answered by reordering the argv. Putting the fence first would surrender the
+last-wins property that order exists for, trading this hole for the one it was closing. The parser
+behaviour is also, deliberately, not rested upon: this repository does not own the CLI, and the
+refusal is what makes the question moot rather than a measurement that could go stale.
+
+**Where the list stops, which is a decision and not the edge of the search.** `--restricted` and
+`--disable-slash-commands` only ever *narrow* -- they remove code-running tools and skills -- and
+refusing them would refuse a child safer than the one admission asked for. `--permission-prompts`
+chooses between "host" and "none", and `2.1.260` exposes no `--permission-prompt-tool` flag for
+"host" to reach, so neither value widens a `claude -p` child that has no SDK host to begin with.
+`--tmux` says "requires `--worktree`", which is refused, so it is inert rather than permitted. All
+four are asserted *admitted* by the suite, so the boundary is a case someone has to delete rather
+than a silence.
+
+**And four options this entry saw and did not characterise**, named because an unnamed omission is
+indistinguishable from an unnoticed one: `--chrome`, `--ide` and `--from-pr`. Each plausibly touches
+what the child can reach; none is documented well enough in `--help` to say so, and none was
+measured. They are the concrete face of the limitation below, and adding any of them needs a
+measurement rather than an argument from resemblance.
+
+**Why `FENCE_OWNED_FLAGS` moved into `lap_run_intent.ts`.** Admission needs both lists, and it runs
+before a workspace exists; `materializer.ts` already imports from `control_plane`, so the shared list
+cannot live in `workspace` without `control_plane` depending on it. The list moved rather than being
+copied: two hand-kept copies of a refusal list drift, and the drift is silent in the direction that
+matters. `materializer.ts` imports it and its own check is otherwise **unchanged**, still standing
+immediately before the spawn -- a run admitted by an older build, or a `run_delegation_recorded`
+payload edited by hand, reaches the materialiser without having passed the constructor added here.
+Two checkpoints, one list, and the fence-render one is deliberately not taught the new concept: a
+refusal there would fire after a workspace had been built, which is strictly worse for the operator
+and no safer.
+
+**The rejected shape, which was written first and is worth recording.** A `FENCE_ALTERING_FLAGS`
+holding the same five flags as `FENCE_OWNED_FLAGS`, checked at admission. It names the concept in
+prose, passes a suite, moves an existing refusal earlier -- and closes no door at all, because the
+four flags #133 is actually about are on neither list. `test/control_plane/lap-run-intent.test.ts`
+asserts the two lists are **disjoint**, which is the assertion that would have failed on it.
+
+**Known limitation: this is a named list, not a rule.** It refuses the flags known today to alter a
+rendered fence. It cannot refuse one a future CLI release adds, and there is no general test for
+"does this argument widen the fence" -- the CLI's option set is not a contract this repository owns.
+The operator supplying `cli_args` is trusted for everything not on the list, which is why #133 is a
+door being narrowed rather than a hole being closed.
+
+**What records it.** `test/control_plane/lap-run-intent.test.ts`: one case per flag in each list,
+each checked bare and in `--flag=value` form; the disjointness assertion above; and four cases that
+a per-flag loop structurally cannot make, because a loop over the list passes whatever the list
+happens to hold -- that the hook-disabling pair is on it, that the configuration-loading three are
+on it, that both spellings of the camelCase options are on it, and that the three narrowing flags
+are *admitted*. `test/workspace/materializer.test.ts`'s existing cases for `FENCE_OWNED_FLAGS` are
+unchanged and still pass against the imported list, which is what says the move did not alter the
+fence-render checkpoint's behaviour.
+
+**What would falsify it.** A CLI release that adds a flag able to widen a rendered fence, or that
+renames one of these twenty-four, or an option-parsing convention that gives
+a bare `--` a different meaning. The list is read from one place, so the blast radius is one constant
+-- but nothing in this repository would notice on its own. That is not hypothetical: this entry's
+list was written three times. The second writing came from a review that read `claude --help` and
+found `--bare` and `--safe-mode` missing from the first; the third from a review that found
+`--worktree` missing from the second, along with the short-flag spelling the matcher had assumed
+could not arise. A fourth found the bare `--`, which is not on any option set at all; a fifth found
+`--cloud` and `--environment`, which do not weaken the fence but leave it behind; a sixth found
+`--debug-file` and `--file`, which never reach the tool layer the fence hooks. Six passes over one
+CLI's surface found six different gaps, and three of them were different *kinds* of gap from the ones
+before -- which is what this entry's "named list, not a rule" limitation is really reporting, and the
+reason the limitation is stated as loudly as the decision.
+
+**The honest reading of that record**: a denylist over an option surface this repository does not own
+cannot be shown complete, and **every** review pass so far has found the next thing it was missing --
+six for six, with no sign of the sequence terminating. The
+structural alternative is to invert it -- enumerate the flags an admitted run may legitimately pass
+and refuse the rest -- which turns an unbounded question about someone else's CLI into a bounded one
+about this lap's needs, and fails closed on every future CLI addition. It is not taken here because
+it is an operator-visible change of contract that needs its own decision and an escape hatch for
+arguments nobody has enumerated yet. Until then the list is only ever as current as the last time
+someone read the CLI's own option set against it, and the next dogfood is what would notice.

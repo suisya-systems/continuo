@@ -129,6 +129,226 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the range is the subject
 const CONTROL_CHARACTERS = /[\x00-\x1f\x7f-\x9f]/;
 
+/**
+ * **Concept one: the flags the fence generates.**
+ *
+ * These are the fence itself: `--settings` names the rendered settings file,
+ * `--permission-mode` is the one part of the fence the provider reads back
+ * (`D-0010`), and `--mcp-config` names the file that decides which control
+ * plane the worker talks to. `--setting-sources` and `--strict-mcp-config`
+ * joined them under `D-0081`: each is what makes one of the first three
+ * *exclusive* rather than *additive*, so restating either would put the target
+ * repository's own settings, or its own MCP servers, back underneath a fence
+ * that had just excluded them.
+ *
+ * Every one of them is rendered by `materializer.ts` and `FencedSpawner`, and
+ * an admitted run's `cli_args` restating one would hand the child two of the
+ * same flag. Refused rather than overridden, because "the last occurrence
+ * wins" is a property of a CLI this repository does not own: a fence that
+ * rests on an argument-precedence rule nobody here can test is a fence resting
+ * on a guess.
+ *
+ * **Why the list lives here rather than in `materializer.ts`, which generates
+ * them.** `D-0085` needs the two concepts stated side by side, and admission
+ * checks both -- it runs at `run admit`, before a workspace exists, so
+ * `materializer.ts` (which imports this) cannot be where the shared list is
+ * without `control_plane` depending on `workspace`. A sixth generated flag
+ * goes on this list; `materializer.ts` keeps its own check over it, unchanged,
+ * as the last line of defence immediately before the spawn.
+ */
+export const FENCE_OWNED_FLAGS: readonly string[] = [
+  "--settings",
+  "--permission-mode",
+  "--mcp-config",
+  "--setting-sources",
+  "--strict-mcp-config",
+];
+
+/**
+ * **Concept two: the flags that alter what the fence means** -- `D-0085`, and
+ * the door issue #133 was filed about.
+ *
+ * {@link FENCE_OWNED_FLAGS} is not this list and does not imply it. Those
+ * flags are refused because the fence *generates* them, so a second one is a
+ * duplicate whose winner nobody here can predict. These are refused for the
+ * opposite reason: the fence generates none of them, nothing downstream would
+ * notice one, and each **changes what the rendered fence permits** while
+ * leaving every generated flag intact. A `cli_args` carrying one is a fence
+ * the operator has quietly rewritten through the single door the fence hands
+ * them -- and `docs/operations/lap-1-dogfood.md` section 10.5 records that the
+ * lap's own `--allowedTools` workaround went through exactly this door.
+ *
+ * Read against CLI `2.1.260`, the version `D-0081` measured, `claude --help`
+ * spells them -- in three groups, because they weaken the fence in three
+ * different ways:
+ *
+ * **They remove a layer of the fence.**
+ *
+ * - `--dangerously-skip-permissions` -- "Bypass all permission checks". The
+ *   whole fence, off, in one argument.
+ * - `--allow-dangerously-skip-permissions` -- makes that bypass available
+ *   rather than applying it. A fence that refused only the first would refuse
+ *   the act and admit its enabling.
+ * - `--bare` -- "Minimal mode: **skip hooks**, LSP, plugin sync, ...". The
+ *   fence's `PreToolUse` deny hook is the layer `D-0083` keeps precisely
+ *   because it does *not* depend on the CLI's own permission evaluation, and
+ *   this is the argument that switches that layer off while every generated
+ *   flag stays in place and still looks right.
+ * - `--safe-mode` -- "Start with all customizations (CLAUDE.md, skills,
+ *   plugins, **hooks**, MCP servers, ...) disabled". The same hole as
+ *   `--bare`, reached through the flag whose name reads like the safe choice.
+ *
+ * **They rewrite the fence's own lists from the argv.**
+ *
+ * - `--allowedTools` / `--allowed-tools` -- widens the allow list the role
+ *   document authored. This is the one the dogfood actually used.
+ * - `--disallowedTools` / `--disallowed-tools` -- restates the deny half from
+ *   the argv, where the fence states it from a rendered file.
+ * - `--tools` -- replaces the built-in tool set the role document's allow list
+ *   was written against.
+ *
+ * **They hand the child reach, or configuration, the fence did not author.**
+ *
+ * - `--add-dir` -- "Additional directories to allow tool access to", which is
+ *   the fence's *reach*: `D-0067` puts the worktree at the centre of what the
+ *   child may touch, and this extends it to anywhere.
+ * - `--plugin-dir` / `--plugin-url` -- load a plugin, and with it hooks, agents
+ *   and MCP servers the fence never rendered. `--setting-sources ''` and
+ *   `--strict-mcp-config` shut the settings and MCP doors `D-0081` found open;
+ *   these are the same surroundings arriving through a third one, which those
+ *   two flags say nothing about.
+ * - `--agents` -- "JSON object defining custom agents", which can carry tool
+ *   access of their own -- and `--agent`, which selects one by name and
+ *   "Overrides the 'agent' setting", reaching the same place through the
+ *   fence's own settings file rather than past it.
+ * - `--worktree` / `-w` -- "Create a new git worktree for this session". The
+ *   fence is rendered *for* the workspace `materializer.ts` built and the
+ *   admitted intent names; this moves the child into a checkout that neither
+ *   of them has ever heard of, and does the `git worktree` surgery from inside
+ *   the CLI, where the role's `Bash(git worktree *)` deny never sees it.
+ *
+ * **They move execution, or control of it, out from under this run.** This
+ * fourth group is a widening of the concept, and the phrasing it corrects is
+ * this docstring's own: "alters what the fence permits" was too narrow, because
+ * these do not weaken the fence -- they make it *irrelevant*, by putting the
+ * work somewhere the rendered files are not.
+ *
+ * - `--cloud` -- "Create a cloud session". The settings file, the sandbox and
+ *   the deny hook this step rendered are on a machine the child is not running
+ *   on, and neither is the worktree.
+ * - `--environment` -- "Create a new cloud session that runs on the given
+ *   self-hosted environment", which is the same departure by another door.
+ * - `--teleport` -- resumes a session elsewhere. Refused by the class it
+ *   belongs to rather than by a measurement of its own; `--help` says little,
+ *   and the fail-closed reading of "little" is refusal.
+ * - `--bg` / `--background` -- "Start the session in the background and return
+ *   immediately". The supervisor's whole model is a child *this* process owns:
+ *   the process group it tracks, the orphan sweep, the session record. A
+ *   session that outlives the spawn and is reattached by id is none of those.
+ * - `--remote-control` -- opens an external control channel into the fenced
+ *   child, which hands the turn to somebody the fence never named.
+ *
+ * **The CLI itself touches a path, outside the tool layer the fence hooks.**
+ * The deny hook and the sandbox sit under *tools*; a file the CLI process
+ * writes on its own behalf passes neither.
+ *
+ * - `--debug-file` -- "Write debug logs to a specific file path". An arbitrary
+ *   path, written by the CLI, with no tool call to intercept: the hook never
+ *   sees it and the sandbox does not contain it.
+ * - `--file` -- "File resources to download at startup", spelled
+ *   `file_id:relative_path`. It puts bytes on disk before the first turn, so
+ *   there is not even a turn for the fence to be consulted on.
+ *
+ * `-w` is the one single-dash spelling on either list, and it is why {@link
+ * LapRunIntent} matches the attached-value form as well: `-wname` reaches the
+ * CLI's parser as `--worktree name`.
+ *
+ * **What is deliberately NOT here**, so the next reader sees a decision rather
+ * than a gap. `--restricted` and `--disable-slash-commands` only ever *narrow*
+ * (they remove tools and skills), and refusing them would refuse a safer child
+ * than the one admission asked for. `--permission-prompts` chooses between
+ * "host" and "none", and `2.1.260` has no `--permission-prompt-tool` flag for
+ * "host" to reach, so neither value widens a `claude -p` child that has no SDK
+ * host in the first place. `--tmux` says "requires `--worktree`", which is
+ * refused above, so it is inert rather than permitted.
+ *
+ * **And what is not characterised**, named rather than passed over in silence:
+ * `--chrome`, `--ide` and `--from-pr`. Each plausibly touches what the child
+ * can reach, none is documented in `--help` well enough to say so, and none was
+ * measured. They are the concrete face of the limitation below -- a reader
+ * adding one of them here needs a measurement, not this comment.
+ *
+ * **Both spellings of each, because the CLI accepts both.** `--allowedTools`
+ * and `--allowed-tools` are one option to the parser, so a list carrying one
+ * and not the other is a rejection with a doorway in it -- the same argument
+ * `matchesOwnedFlag` in `claude_cli_provider.ts` makes for its own three
+ * spellings.
+ *
+ * **A named list, not a rule, and that is its limit.** It refuses the flags
+ * that are known today to alter a rendered fence; it cannot refuse one a
+ * future CLI release adds. `D-0085` says so in as many words rather than
+ * leaving the reader to assume this is exhaustive.
+ */
+export const FENCE_ALTERING_FLAGS: readonly string[] = [
+  // Remove a layer of the fence.
+  "--dangerously-skip-permissions",
+  "--allow-dangerously-skip-permissions",
+  "--bare",
+  "--safe-mode",
+  // Rewrite the fence's own lists from the argv.
+  "--allowedTools",
+  "--allowed-tools",
+  "--disallowedTools",
+  "--disallowed-tools",
+  "--tools",
+  // Hand the child reach, or configuration, the fence did not author.
+  "--add-dir",
+  "--plugin-dir",
+  "--plugin-url",
+  "--agents",
+  "--agent",
+  // Move the child out of the workspace the fence was rendered for. The long
+  // spelling is checked before the short one, so a refusal of `--worktree`
+  // names `--worktree` rather than `-w`.
+  "--worktree",
+  "-w",
+  // Move execution, or control of it, out from under this run entirely -- the
+  // fence is not weakened here, it is somewhere the child is not.
+  "--cloud",
+  "--environment",
+  "--teleport",
+  "--background",
+  "--bg",
+  "--remote-control",
+  // The CLI writes a path itself, under no tool and so under no hook.
+  "--debug-file",
+  "--file",
+];
+
+/**
+ * Would `argument` reach the CLI's parser as `flag`?
+ *
+ * The same three spellings `matchesOwnedFlag` in `claude_cli_provider.ts`
+ * recognises, for the same reason: a rejection that knew two of the three would
+ * be a rejection with a doorway in it.
+ *
+ * 1. the exact form, `--worktree`;
+ * 2. the `--flag=value` form, `--worktree=scratch`;
+ * 3. for a single-dash short flag only, the attached-value form: `-wscratch`
+ *    reaches the parser as `--worktree scratch`.
+ *
+ * The third is guarded on `argument` not being a long flag itself, which the
+ * provider's version is not. Without that guard `-w` would swallow every
+ * `--w...` option the CLI has -- an argument refused for naming a flag it does
+ * not name, with a message quoting a flag the operator never typed.
+ */
+function matchesFlag(argument: string, flag: string): boolean {
+  if (argument === flag || argument.startsWith(`${flag}=`)) {
+    return true;
+  }
+  return !flag.startsWith("--") && !argument.startsWith("--") && argument.startsWith(flag);
+}
+
 /** Keyword arguments of {@link LapRunIntent}, in field order. */
 export interface LapRunIntentFields {
   readonly runId: string;
@@ -353,6 +573,47 @@ export class LapRunIntent {
       if (CONTROL_CHARACTERS.test(argument)) {
         throw new LapRunIntentUsageError(
           `cli_args[${index}] must not contain a control character, got ` + pythonRepr(argument),
+        );
+      }
+      // The end-of-options marker, which is not a flag and is the reason this
+      // check is not only a list. `materializer.ts` renders the child's argv as
+      // the operator's arguments **followed by** the fence's own -- an order it
+      // chose deliberately, so that a parser resolving a repeated option
+      // last-wins leaves the fence the survivor. A bare `--` inverts that: by
+      // the POSIX convention every option parser implements, it ends option
+      // parsing, so every generated flag after it arrives as positional text
+      // and the child starts with no fence at all. One argument, two
+      // characters, the whole fence -- and each individual flag still present
+      // in the argv, so it reads fenced.
+      //
+      // Refused here rather than answered by reordering the argv: putting the
+      // fence first would give up the last-wins property that order exists for,
+      // trading this hole for the one it was closing.
+      if (argument === "--") {
+        throw new LapRunIntentUsageError(
+          `cli_args[${index}] is '--', the end-of-options marker (D-0085). This step renders ` +
+            "the operator's arguments before the fence's own, so a '--' among them ends option " +
+            "parsing and hands the child every fence flag as positional text -- a run admitted " +
+            "with it would spawn a child with no fence at all",
+        );
+      }
+      // `D-0085`'s two concepts, refused here for two different reasons and
+      // named separately so the refusal says which one this argument is.
+      const owned = FENCE_OWNED_FLAGS.find((flag) => matchesFlag(argument, flag));
+      if (owned !== undefined) {
+        throw new LapRunIntentUsageError(
+          `cli_args[${index}] is ${pythonRepr(argument)}, which repeats ${owned} -- a flag ` +
+            "the fence generates. An admitted run may not restate the fence's own arguments, " +
+            "because which occurrence a CLI honours is not a property this repository controls",
+        );
+      }
+      const altering = FENCE_ALTERING_FLAGS.find((flag) => matchesFlag(argument, flag));
+      if (altering !== undefined) {
+        throw new LapRunIntentUsageError(
+          `cli_args[${index}] is ${pythonRepr(argument)}, which is ${altering} -- a flag that ` +
+            "alters what the fence permits (D-0085). The fence does not generate it, so nothing " +
+            "downstream would refuse it, and a run admitted with it would spawn a child fenced " +
+            "by something other than its role document",
         );
       }
     }

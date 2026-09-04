@@ -37,11 +37,18 @@ import { resolve, win32 } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
+  FENCE_ALTERING_FLAGS,
+  FENCE_OWNED_FLAGS,
   LapRunIntent,
   type LapRunIntentFields,
   LapRunIntentUsageError,
 } from "../../src/control_plane/lap_run_intent.js";
 import { expectRefusal } from "../testkit/errors.js";
+
+/** A flag spelled for a `RegExp`, so `--flag` cannot read as a quantifier. */
+function escapeForRegExp(flag: string): string {
+  return flag.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
 
 /**
  * An absolute path on whichever platform the suite is running on.
@@ -448,6 +455,221 @@ describe("cli args are a list of strings, in order", () => {
       LapRunIntentUsageError,
       /cli_args\[1\] must be a string, got 7/,
     );
+  });
+});
+
+// --------------------------------------------------------------------------
+// fence-altering flags (D-0085)
+// --------------------------------------------------------------------------
+
+describe("cli args may not restate a flag the fence generates", () => {
+  // One case per flag. `materializer.ts` has its own cases over the same list
+  // at the fence-render checkpoint; these assert the earlier one, where the
+  // refusal costs an operator a failed `run admit` rather than a half-built
+  // workspace.
+  for (const flag of FENCE_OWNED_FLAGS) {
+    test(`refuses ${flag}, bare and with an attached value`, () => {
+      for (const argument of [flag, `${flag}=some-value`]) {
+        expectRefusal(
+          () => new LapRunIntent(fields({ cliArgs: ["--model=sonnet", argument] })),
+          LapRunIntentUsageError,
+          new RegExp(
+            `cli_args\\[1\\] is .*, which repeats ${escapeForRegExp(flag)} -- a flag the fence generates`,
+          ),
+        );
+      }
+    });
+  }
+});
+
+describe("cli args may not name a flag that alters what the fence permits", () => {
+  // `D-0085`, and the substance of issue #133. Nothing downstream refuses
+  // these: they are not generated, so the fence-render checkpoint's
+  // duplicate-flag argument never reaches them, and the provider's own owned
+  // flags are a third list that does not overlap either. Admission is the only
+  // place they are refused, so one case per flag -- a list that quietly
+  // covered six of the seven would leave a door open and a green suite.
+  for (const flag of FENCE_ALTERING_FLAGS) {
+    test(`refuses ${flag}, bare and with an attached value`, () => {
+      for (const argument of [flag, `${flag}=Bash`]) {
+        expectRefusal(
+          () => new LapRunIntent(fields({ cliArgs: ["--model=sonnet", argument] })),
+          LapRunIntentUsageError,
+          new RegExp(
+            `cli_args\\[1\\] is .*, which is ${escapeForRegExp(flag)} -- a flag that alters what the fence permits`,
+          ),
+        );
+      }
+    });
+  }
+
+  test("the flags that switch the fence's hook layer off are on the list", () => {
+    // Named rather than left to the loop above, because these are the two the
+    // per-flag loop cannot notice are *missing*: a loop over the list passes
+    // whatever the list happens to hold. Measured on `claude --help`, 2.1.260:
+    // `--bare` is "skip hooks", `--safe-mode` disables "all customizations
+    // (... hooks ...)". The fence's `PreToolUse` deny hook is the layer
+    // `D-0083` keeps because it does not depend on the CLI's own permission
+    // evaluation, so an argument that switches it off removes the half of the
+    // fence this repository actually controls -- while every generated flag
+    // stays in place and the argv still looks fenced.
+    for (const flag of ["--bare", "--safe-mode"]) {
+      expect(FENCE_ALTERING_FLAGS).toContain(flag);
+    }
+  });
+
+  test("the flags that load configuration the fence never rendered are on the list", () => {
+    // `--setting-sources ''` and `--strict-mcp-config` (D-0081) shut the
+    // settings and MCP doors. A plugin loaded from the argv brings hooks,
+    // agents and MCP servers through a third door those two say nothing
+    // about, which is the same failure arriving by another route.
+    for (const flag of ["--plugin-dir", "--plugin-url", "--agents"]) {
+      expect(FENCE_ALTERING_FLAGS).toContain(flag);
+    }
+  });
+
+  test("the end-of-options marker is refused, though it is not a flag", () => {
+    // The one that a list of flag names structurally cannot catch, and the
+    // largest hole of the set: `materializer.ts` renders the operator's
+    // arguments *before* the fence's own, so a bare `--` ends option parsing
+    // and every generated flag after it arrives as positional text. The child
+    // starts with no fence, and the argv still reads fenced because each flag
+    // is still in it.
+    expectRefusal(
+      () => new LapRunIntent(fields({ cliArgs: ["--"] })),
+      LapRunIntentUsageError,
+      /cli_args\[0\] is '--', the end-of-options marker/,
+    );
+    // Anywhere in the list, not only first: everything after it is what the
+    // marker converts, so its position is not what makes it dangerous.
+    expectRefusal(
+      () => new LapRunIntent(fields({ cliArgs: ["--model=sonnet", "--"] })),
+      LapRunIntentUsageError,
+      /cli_args\[1\] is '--', the end-of-options marker/,
+    );
+  });
+
+  test("an argument that merely starts with the marker is still admitted", () => {
+    // `--` is refused as a whole token, not as a prefix. Refusing every
+    // argument that begins with two dashes would refuse the entire long-option
+    // namespace, which is most of what `cli_args` legitimately carries.
+    expect(new LapRunIntent(fields({ cliArgs: ["--model=sonnet"] })).cliArgs).toEqual([
+      "--model=sonnet",
+    ]);
+  });
+
+  test("the flag that moves the child out of its workspace is on the list", () => {
+    // `-w, --worktree [name]` creates a new git worktree for the session. The
+    // fence is rendered for the workspace the materialiser built and the
+    // intent names; this puts the child in a checkout neither has heard of,
+    // and does the surgery inside the CLI where the role's
+    // `Bash(git worktree *)` deny never sees it.
+    for (const flag of ["--worktree", "-w"]) {
+      expect(FENCE_ALTERING_FLAGS).toContain(flag);
+    }
+  });
+
+  test("a short flag is refused in its attached-value spelling too", () => {
+    // `-wscratch` reaches the CLI's parser as `--worktree scratch`. The exact
+    // and `=` forms are not the whole door for a single-dash flag, and `-w` is
+    // the one such flag on either list.
+    expectRefusal(
+      () => new LapRunIntent(fields({ cliArgs: ["-wscratch"] })),
+      LapRunIntentUsageError,
+      /cli_args\[0\] is '-wscratch', which is -w -- a flag that alters what the fence permits/,
+    );
+  });
+
+  test("a short flag does not swallow the long options that share its letter", () => {
+    // The guard on the attached-value rule. Without it `-w` matches every
+    // `--w...` option the CLI has, and an operator gets an argument refused
+    // for naming a flag it does not name -- quoting a flag they never typed.
+    expect(new LapRunIntent(fields({ cliArgs: ["--wait-for-it"] })).cliArgs).toEqual([
+      "--wait-for-it",
+    ]);
+  });
+
+  test("the flags that move execution out from under the fence are on the list", () => {
+    // The group that made the concept's original phrasing too narrow. These do
+    // not weaken the fence: they make it irrelevant. `--cloud` and
+    // `--environment` create a cloud session, so the settings file, the
+    // sandbox, the deny hook and the worktree this step rendered are all on a
+    // machine the child is not running on. `--bg` / `--background` and
+    // `--remote-control` leave the work local but take it out from under the
+    // supervisor that spawned it, whose model is a child this process owns.
+    for (const flag of [
+      "--cloud",
+      "--environment",
+      "--teleport",
+      "--background",
+      "--bg",
+      "--remote-control",
+    ]) {
+      expect(FENCE_ALTERING_FLAGS).toContain(flag);
+    }
+  });
+
+  test("the flags the CLI uses to touch a path itself are on the list", () => {
+    // The deny hook and the sandbox sit under *tools*. A file the CLI process
+    // writes on its own behalf passes neither, so these are outside the fence
+    // by construction rather than by widening it: `--debug-file` writes logs
+    // to any path given, and `--file` puts downloaded bytes on disk before the
+    // first turn -- before there is a turn for the fence to be consulted on.
+    for (const flag of ["--debug-file", "--file"]) {
+      expect(FENCE_ALTERING_FLAGS).toContain(flag);
+    }
+  });
+
+  test("flags that only narrow the child are deliberately admitted", () => {
+    // The other half of the judgement, asserted so it is a decision rather
+    // than an oversight: refusing these would refuse a child *safer* than the
+    // one admission asked for, which is a rule this record would have
+    // invented. `--permission-prompts` is here too -- 2.1.260 has no
+    // `--permission-prompt-tool` flag for its "host" value to reach.
+    // `--tmux` is here for a different reason: it says "requires --worktree",
+    // which is refused, so it is inert rather than permitted.
+    for (const flag of [
+      "--restricted",
+      "--disable-slash-commands",
+      "--permission-prompts",
+      "--tmux",
+    ]) {
+      expect(FENCE_ALTERING_FLAGS).not.toContain(flag);
+      expect(new LapRunIntent(fields({ cliArgs: [flag] })).cliArgs).toEqual([flag]);
+    }
+  });
+
+  test("both spellings of every option the CLI accepts twice are on the list", () => {
+    // `--allowedTools` and `--allowed-tools` are one option to the CLI's
+    // parser (measured: `claude --help`, 2.1.260). A list carrying one and not
+    // the other refuses the spelling someone typed and admits the spelling
+    // they would type next.
+    for (const [camel, kebab] of [
+      ["--allowedTools", "--allowed-tools"],
+      ["--disallowedTools", "--disallowed-tools"],
+    ]) {
+      expect(FENCE_ALTERING_FLAGS).toContain(camel);
+      expect(FENCE_ALTERING_FLAGS).toContain(kebab);
+    }
+  });
+
+  test("the list's length is pinned, so prose that counts it cannot drift", () => {
+    // `D-0085` states the size in words. A flag added or removed without the
+    // entry being updated leaves a decision record that miscounts its own
+    // decision -- and the count is how a reader checks they are looking at the
+    // same list the entry describes.
+    expect(FENCE_ALTERING_FLAGS).toHaveLength(24);
+    expect(FENCE_OWNED_FLAGS).toHaveLength(5);
+  });
+
+  test("the two lists are disjoint, because they are two reasons and not one", () => {
+    // The failure this stands in front of is the one the first draft of this
+    // change actually shipped: a `FENCE_ALTERING_FLAGS` that merely repeated
+    // `FENCE_OWNED_FLAGS` moves an existing refusal earlier and closes no
+    // door at all. A flag on both lists is a flag whose reason nobody stated.
+    const overlap = FENCE_ALTERING_FLAGS.filter((flag) => FENCE_OWNED_FLAGS.includes(flag));
+
+    expect(overlap).toEqual([]);
   });
 });
 

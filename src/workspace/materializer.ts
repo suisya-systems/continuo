@@ -17,6 +17,12 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import type { Destination } from "../control_plane/destination.js";
 import { appendEvent } from "../control_plane/events.js";
 import { spikeRegistry } from "../control_plane/handlers.js";
+// The flags this step generates and refuses an admitted run from restating.
+// The list lives beside `FENCE_ALTERING_FLAGS` in `lap_run_intent.ts` rather
+// than here, because `D-0085` needs the two concepts stated in one place and
+// admission -- which runs before any workspace exists -- checks both. A sixth
+// generated flag goes on that list, not on a copy of it here.
+import { FENCE_OWNED_FLAGS } from "../control_plane/lap_run_intent.js";
 import { pythonJsonDocumentSorted } from "../control_plane/python_json.js";
 import { pythonRepr } from "../control_plane/python_repr.js";
 import { FenceContext } from "../fencing/renderer.js";
@@ -602,36 +608,6 @@ function requireRunId(field: string, value: unknown): string {
   }
   return text;
 }
-
-/**
- * The flags this step generates, which an admitted run's own arguments may not
- * repeat.
- *
- * These are the fence: `--settings` names the rendered settings file,
- * `--permission-mode` is the one part of the fence the provider reads back
- * (`D-0010`), and `--mcp-config` names the file that decides which control
- * plane the worker talks to. `ClaudeCliSessionProvider` refuses its own owned
- * flags (`-p`, `--resume`, `--session-id` and the rest) but knows nothing about
- * these -- they are this step's, and nothing else would refuse them.
- *
- * `--setting-sources` and `--strict-mcp-config` join them under `D-0081`. They
- * are the two halves of the same property: each of the first three flags names
- * what the child should read, and neither says anything about what the child
- * reads *besides* it. An operator argument that restated either one would put
- * the surroundings back -- which is the failure they exist to remove, arriving
- * through the one door the fence hands the operator.
- *
- * Refused rather than overridden, because "the last occurrence wins" is a
- * property of a CLI this repository does not own. A fence that rests on an
- * argument-precedence rule nobody here can test is a fence resting on a guess.
- */
-const FENCE_OWNED_FLAGS: readonly string[] = [
-  "--settings",
-  "--permission-mode",
-  "--mcp-config",
-  "--setting-sources",
-  "--strict-mcp-config",
-];
 
 /**
  * The admitted run's own CLI arguments, checked.
