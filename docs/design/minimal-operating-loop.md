@@ -7,8 +7,11 @@ operator can call", judges the five items the port left open, and puts the decis
 order.
 
 **Status: propose-only.** No implementation accompanies this document, and it files no `DECISIONS.md`
-entry. Every decision named below is proposed to continuo's human gate (`D-0031`, `D-0036`) or, where
-said so explicitly, to cadenza's. The recommendations are recommendations, not decisions taken.
+entry *for anything it proposes*. Every decision named below is proposed to continuo's human gate
+(`D-0031`, `D-0036`) or, where said so explicitly, to cadenza's. The recommendations are
+recommendations, not decisions taken. The one entry that cites this document, `D-0087`, is the
+opposite case: it records a **premise supplied to** the document being revised by the operator, not a
+recommendation of the document being accepted.
 
 **What this document deliberately does not do.** It does not treat claude-org-ja's implementation as
 the specification the successor must reproduce. Roughly a third of ja's delegation machinery exists
@@ -39,8 +42,10 @@ wrong one changes the answer:
 Citations to `DECISIONS.md` are by entry id only, per that file's own rule that it is never cited by
 line number. Citations to source are `path:line` at the revisions above.
 
-**Two operator premises this document is written under.** Both were settled after the survey and are
-recorded on cadenza#22. They are **premises supplied to this document, not findings of it** -- the
+**Two operator premises this document is written under.** Both were settled after the survey. The
+first was recorded on cadenza#22 and stands as written; the second was recorded there as a **working
+assumption** with a revisit trigger, that trigger has fired, and it was settled differently on
+2026-09-05 (cadenza#40). They are **premises supplied to this document, not findings of it** -- the
 sections they touch say what they change and, where a judgement survives them unchanged, say that
 too:
 
@@ -49,24 +54,38 @@ too:
    record of truth, serves a human-facing web UI, and speaks MCP over localhost to agent sessions
    (the host-local exception, ratified 2026-06-14 -- an org-doctrine ratification this document takes
    as given rather than verifies). **The only other processes are the agent sessions themselves.**
-2. **Working assumption, not a settled decision: that application is hosted by cadenza**, as an
-   outermost adapter beside the existing catalog adapter. The provider-agnostic constraint binds
-   cadenza's `domain`, `application` and `ports` layers rather than the repository, so the placement
-   is architecturally available.
+   Unchanged by the revision below.
+2. **That application is hosted by `rondo`, a third repository, which consumes continuo and cadenza
+   as libraries.** The host is neither existing repository's outermost adapter layer. Continuo stays
+   the control-plane library, cadenza stays the catalog and gate-semantics library, and everything
+   the host needs that neither of them owns -- the HTTP server, the web UI, the localhost MCP
+   endpoint, and the SQLite driver reached through continuo's exports -- lives in rondo. Settled
+   2026-09-05 on cadenza#40 and recorded as `D-0087`.
 
-**Premise 1 is structural and this document is written on it. Premise 2 is not**, and it is recorded
-as a working assumption deliberately: fixing it here without a counter-proposal on the page would be
-the same error this document criticises elsewhere -- a position hardened by repetition rather than by
-grounds -- just pointed inward instead of upstream. So both readings, and the trigger that settles it.
+**Both premises are structural and this document is written on both.** Premise 2 was not, when it was
+written, and the rest of section 0 is the record of why it was held open and what closed it. It is
+kept rather than deleted because several sections below still read as conditionals on it, and a
+reader who meets "if premise 2 holds" in section 4.8 or section 8 needs the antecedent on the page.
 
-**Why cadenza.** The command surface -- approving a gate, issuing a delegation -- is the semantic
-half cadenza's charter claims, so a surface over it is a surface over cadenza's own vocabulary. And
-it adds no repository: this document already records that neither `DECISIONS.md` can hold a decision
-binding both repositories (section 8), so a shape that multiplies cross-repository decisions walks
-straight into a defect that is already named.
+**What premise 2 used to say.** *That application is hosted by cadenza*, as an outermost adapter
+beside the existing catalog adapter -- marked a working assumption, not a settled decision, on the
+ground that the provider-agnostic constraint binds cadenza's `domain`, `application` and `ports`
+layers rather than the repository, so the placement was architecturally available.
 
-**The counter-proposal, and the fact that supports it.** Put the application in its own package --
-a third repository, or a separate workspace package -- and keep cadenza pure. What argues for it is an
+**Why it was held open rather than fixed.** Fixing it here without a counter-proposal on the page
+would have been the same error this document criticises elsewhere -- a position hardened by
+repetition rather than by grounds -- just pointed inward instead of upstream. So both readings were
+recorded, and the trigger that would settle it.
+
+**The argument for cadenza, which is what the settlement rejected.** The command surface -- approving
+a gate, issuing a delegation -- is the semantic half cadenza's charter claims, so a surface over it is
+a surface over cadenza's own vocabulary. And it adds no repository: this document already records
+that neither `DECISIONS.md` can hold a decision binding both repositories (section 8), so a shape
+that multiplies cross-repository decisions walks straight into a defect that is already named. That
+second half is the part the settlement pays for, and section 8's note below says so.
+
+**The counter-proposal, and the fact that supported it.** Put the application in its own package --
+a third repository, or a separate workspace package -- and keep cadenza pure. What argued for it is an
 asymmetry visible in cadenza#22's own ownership table: of the four things a console renders, **three
 are continuo's** (the delegation record, run and belt state with `awaiting_user` events, the outbox)
 and one is cadenza's (gate semantics), with the operator conversation undecided. A host placed in
@@ -74,18 +93,38 @@ cadenza therefore lives in the repository that owns the minority of what it draw
 majority across a package boundary. Keeping it separate also leaves cadenza's layer discipline intact
 rather than widening it (below).
 
-**The cost of premise 2, which is checkable and easy to under-read as "just another adapter".**
-Cadenza's import-boundary gate is not a layer allowlist alone; it is a **per-binding external
-allowlist**, and `src/adapters` -- described in the test as "the one layer that is allowed I/O, and
-only this much of it" -- currently admits exactly `node:fs`'s `readFileSync` and `statSync`
+**The cost of the cadenza reading, which is checkable and was easy to under-read as "just another
+adapter".** Cadenza's import-boundary gate is not a layer allowlist alone; it is a **per-binding
+external allowlist**, and `src/adapters` -- described in the test as "the one layer that is allowed
+I/O, and only this much of it" -- currently admits exactly `node:fs`'s `readFileSync` and `statSync`
 (`cadenza@origin/main test/architecture/import-boundaries.test.ts`, `ALLOWED_EXTERNALS_BY_LAYER`). A
 web host needs an HTTP server, continuo's exports, and a SQLite driver reached through them, each
-named binding by binding. That is a deliberate widening of the one check keeping cadenza I/O-minimal.
+named binding by binding. That would have been a deliberate widening of the one check keeping cadenza
+I/O-minimal, and under the settled premise it does not happen: those bindings are rondo's, and rondo
+has no such gate to widen because it is the outermost layer by construction.
 
-**Revisit trigger: the first line of application code.** Unlike premise 1, this choice is not
-structural -- the same data model, the same ports, the same continuo dependency (6.4) under either
-answer; only the directory changes. It is therefore cheap to change until an application exists, and
-should be settled at that moment rather than before or long after.
+**The revisit trigger, and that it fired.** The trigger this document set was **the first line of
+application code**, on the reasoning that the choice was not structural -- the same data model, the
+same ports, the same continuo dependency (6.4) under either answer; only the directory changed -- so
+it was cheap to change until an application existed and should be settled at that moment rather than
+before or long after. It was settled at that moment. The answer taken is the counter-proposal's
+*third repository* branch rather than its *workspace package* branch.
+
+**What the settlement changes for the sections below, which still read as conditionals on it.** Each
+is a conditional whose antecedent is now false, and none of them changes its own recommendation:
+
+- **4.8** -- cadenza does not need a `bin` or a build in order to host anything. It may still need a
+  build to be *importable*, which is the packaging question in 6.4 and is now rondo's requirement
+  rather than the host's own.
+- **6.4** -- the decision was written to survive premise 2 either way and does. What collapses is its
+  **band**: extending cadenza's import allowlist was cadenza's half only if cadenza hosted the
+  application, so what is left is continuo's supersession of `D-0008` plus the same question asked of
+  cadenza as a library. The importer is rondo.
+- **8** -- the packaging bullet's larger reading is retired: cadenza stays a library continuo does not
+  import and rondo does. The defect section 8 actually names gets **wider**, not narrower: a third
+  repository with no `DECISIONS.md` of its own now sits above two that cannot record a decision
+  binding each other, and every decision about the host is a decision none of the three files can
+  hold. That is the price of this answer, and it is named here rather than discovered later.
 
 ---
 
@@ -218,13 +257,12 @@ its scope.
 - **Explicitly out of scope:** the console itself. No UI, no HTTP server, no identity provider.
   cadenza#22 is not scheduled by this document and this document does not schedule it.
 
-**What is settled about where it will be built, and what is not** (section 0). Settled: the console is
-the web surface of a *single host application* rather than a service of its own. Not settled: whether
-that application lives in cadenza's `src/adapters/` layer or in its own package -- the working
-assumption is cadenza, the counter-proposal and the asymmetry favouring it are in section 0, and the
-trigger is the first line of application code. One consequence holds either way and belongs here:
-**the application must be able to import continuo, and today nothing can** (6.4). That, with the
-schema choice, is what actually gates cadenza#22.
+**Where it will be built is settled** (section 0). The console is the web surface of a *single host
+application* rather than a service of its own, and that application is `rondo`, a third repository
+consuming continuo and cadenza as libraries (`D-0087`). The consequence that held under either
+answer, and still does, belongs here: **the host must be able to import continuo, and today nothing
+can** (6.4). That, with the schema choice, is what actually gates cadenza#22 -- and under the settled
+premise the importer is rondo rather than cadenza, which subtracts nothing from the requirement.
 
 **The ownership split the console forces** matches what section 6.3 concluded independently, with one
 open item. cadenza#22 assigns the delegation record to continuo -- citing continuo's own `task` known

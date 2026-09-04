@@ -182,6 +182,7 @@ spaces distinct.
 | D-0084 | `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do | accepted |
 | D-0085 | The endpoint destination directory is created if missing and reused if present, for both verbs that take one | accepted |
 | D-0086 | Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both | accepted |
+| D-0087 | The host application is `rondo`, a third repository, and `minimal-operating-loop.md`'s premise 2 is settled against the working assumption | accepted |
 
 ---
 
@@ -13208,3 +13209,105 @@ about this lap's needs, and fails closed on every future CLI addition. It is not
 it is an operator-visible change of contract that needs its own decision and an escape hatch for
 arguments nobody has enumerated yet. Until then the list is only ever as current as the last time
 someone read the CLI's own option set against it, and the next dogfood is what would notice.
+
+## D-0087 -- The host application is `rondo`, a third repository, and `minimal-operating-loop.md`'s premise 2 is settled against the working assumption
+
+**Context.** `docs/design/minimal-operating-loop.md` is written under two operator premises stated in
+its section 0. Premise 1 -- the end state is a single web application, one host process, agent
+sessions the only other processes -- was settled when the document was written. Premise 2 was not: it
+was recorded as a **working assumption** that the application is hosted by cadenza, as an outermost
+adapter beside the existing catalog adapter, and it carried a counter-proposal (its own package, a
+third repository or a workspace package) and an explicit **revisit trigger: the first line of
+application code**. The document said why it was held open rather than fixed -- fixing a position
+without a counter-proposal on the page is a position hardened by repetition rather than by grounds --
+and why the trigger was placed where it was: the choice is not structural, so it is cheap to change
+until an application exists and should be settled at that moment rather than before or long after.
+
+The trigger has fired. The operator settled it on 2026-09-05 in the cadenza#40 comments.
+
+**Decision.** The host application is **`rondo`, a third repository, which consumes continuo and
+cadenza as libraries.** It is neither existing repository's outermost adapter layer: continuo remains
+the control-plane library, cadenza remains the catalog and gate-semantics library, and everything the
+host needs that neither of them owns -- the HTTP server, the web UI, the localhost MCP endpoint, and
+the SQLite driver reached through continuo's exports -- lives in rondo. Section 0 of
+`minimal-operating-loop.md` is revised to state this as a settled premise, and it keeps the working
+assumption, the argument that supported it, the counter-proposal, and the trigger on the page as the
+record of what changed.
+
+**Premise 1 is unchanged by this.** The answer moves a directory, not a process count. One host
+process still owns the SQLite record of truth, serves the web UI, and speaks MCP over localhost; the
+agent sessions are still the only other processes.
+
+**What the answer buys.** The counter-proposal's two grounds, both of which the document had already
+checked:
+
+- **The ownership asymmetry.** Of the four things cadenza#22's own table says a console renders,
+  **three are continuo's** (the delegation record, run and belt state with `awaiting_user` events,
+  the outbox) and one is cadenza's (gate semantics), with the operator conversation undecided. A host
+  inside cadenza would live in the repository owning the minority of what it draws and reach for the
+  majority across a package boundary.
+- **Cadenza's import-boundary gate is not widened.** That gate is a **per-binding external
+  allowlist**, not a layer allowlist alone: `src/adapters` -- "the one layer that is allowed I/O, and
+  only this much of it" -- admits exactly `node:fs`'s `readFileSync` and `statSync`
+  (`cadenza@origin/main test/architecture/import-boundaries.test.ts`, `ALLOWED_EXTERNALS_BY_LAYER`).
+  Hosting there meant naming an HTTP server, continuo's exports and a SQLite driver into it binding
+  by binding -- a deliberate widening of the one check keeping cadenza I/O-minimal. Under this
+  answer those bindings are rondo's, and rondo has no such gate to widen because it is the outermost
+  layer by construction.
+
+**What it costs, which is the argument this answer rejected and is worth recording as paid rather
+than as absent.** The case for cadenza was partly that it *adds no repository*, and
+`minimal-operating-loop.md` section 8 already names the defect that makes an added repository
+expensive: neither repository's `DECISIONS.md` can record a decision that binds both. This answer
+makes that **wider, not narrower** -- a third repository, itself with no `DECISIONS.md` yet, now sits
+above two that cannot bind each other, and every decision about the host is a decision none of the
+three files can hold today. Choosing rondo is choosing to owe that answer. It is not owed by this
+entry: rondo's creation, its own decision record, and how a host-band decision is recorded across
+three repositories are each outside what the operator settled and outside what this entry takes.
+
+**What does not change, and is the reason this is a small entry rather than a large one.** The same
+data model, the same ports, the same continuo dependency; the schema choice, the lap's scope, and
+every recommendation in the document stand as written. The document's own reasoning for the trigger
+is what makes this true -- if the choice had been structural, the trigger would not have been "cheap
+until an application exists" and this entry would have had to re-judge the sections underneath it.
+Three passages in the document read as conditionals on premise 2 and none of them changes its
+recommendation; section 0 now resolves each by name (4.8's `bin`, 6.4's band, section 8's packaging
+bullet) rather than editing a judgement that did not move.
+
+**One band does collapse.** `minimal-operating-loop.md` 6.4 gives its band as "continuo, plus cadenza
+if premise 2 holds", because extending cadenza's import allowlist was cadenza's half only if cadenza
+hosted the application. It does not, so what is left is continuo's: `D-0008`'s supersession is still
+required, because rondo must be able to import continuo and today nothing can. Cadenza acquires the
+same packaging question in its own right -- rondo imports it too -- but as a library, which is the
+small version of the question section 8 records, not the host version.
+
+**Why this is filed in continuo's `DECISIONS.md` at all**, given that the host is in neither
+repository and that `minimal-operating-loop.md` says it files no entry. The document's status line is
+about the decisions it *proposes*: those are recommendations awaiting the gate. This is the opposite
+case -- a **premise supplied to** the document, revised by the operator, on which continuo's own
+design document is written. Continuo is where that document lives, so continuo is where the revision
+is recorded; the status line is amended to distinguish the two. This entry does not bind cadenza and
+does not purport to: what it records about cadenza is that cadenza is not the host, which is a fact
+about this document's premise rather than an instruction to that repository.
+
+**What this entry does not decide.** Whether rondo exists yet or what it is called on disk; rondo's
+own decision record; the schema choice (`minimal-operating-loop.md` section 5); when the console is
+built (cadenza#22 is still not scheduled by that document); the gate-ownership overlap section 8
+names; and where the operator conversation lives, which cadenza#22 marks undecided and nothing in any
+repository claims.
+
+**What records it.** `docs/design/minimal-operating-loop.md` section 0, which now states premise 2 as
+settled and keeps the superseded working assumption, its supporting argument, the counter-proposal
+and the fired trigger beside it; section 2.1's "where it will be built", which had stated the
+question as open and is corrected; and the status line's distinction above. There is no code and no
+test -- the subject is a premise of a propose-only document, and a test asserting a document's prose
+would assert nothing about the system.
+
+**What would falsify it.** A measurement showing the host cannot in fact be assembled from continuo
+and cadenza as libraries -- for instance, if some capability the console needs turns out to be
+reachable only from inside cadenza's `application` layer rather than across its published surface, or
+if continuo's `exports` cannot expose the gate and run surface a host requires without exporting
+internals `D-0008`'s packaging discipline keeps private. Either would make the host's placement
+structural after all, contrary to the reasoning the trigger rested on. A change to cadenza#22's
+ownership table that moved the majority of what a console renders to cadenza would weaken the
+asymmetry ground, though not the allowlist one.
