@@ -654,9 +654,9 @@ nobody at the child's prompt to approve anything?
 
 **The answer is yes.** Run 007's worker edited with `Edit`, staged with `git add`, and committed,
 under the fence exactly as `lap perform` rendered it; the gate then closed
-`answered_and_forwarded`. F-8 and F-9 are both closed in the field. What is left of section 7's list
-is unchanged, and one thing that was open -- #131, the read that slipped past the fence -- did not
-reproduce.
+`answered_and_forwarded`. F-8's write half and F-9 are both closed in the field. What is left of
+section 7's list is unchanged, and #131 -- F-8's read half, the read that slipped past the fence --
+did not reproduce, which is not the same as being fixed (10.4).
 
 | Run id | What it was for | `--cli-arg` | Result |
 |---|---|---|---|
@@ -838,15 +838,18 @@ node "$CLI" gate reconcile --db "$DB" --actor-id operator-dogfood --stalled-tole
 
 ### 10.4 F-8 and F-9, checked in the field
 
-**F-8 (#130) is closed.** Under the fence exactly as rendered, with no `--allowedTools` anywhere,
-`git add novel.md` returned no output and `git commit` produced a commit. That is the write half.
-The read half -- `git worktree list` running despite two deny rules -- is also gone: it is now
-refused by the hook. `D-0082`'s account is confirmed in both directions, including its correction of
-its own first diagnosis: the writable surface was never too tight, the sandbox had never been built,
-and building it fixes the write side and the read side at once. **#131, the read-side hole that
-`D-0082` explicitly left open, did not reproduce here.** Whether it was closed by the same change or
-is merely quiet under this CLI is not something one lap can say, so it is recorded as
-non-reproducing rather than as fixed.
+**F-8's write half (#130) is closed.** Under the fence exactly as rendered, with no `--allowedTools`
+anywhere, `git add novel.md` returned no output and `git commit` produced a commit. `D-0082`'s
+account of that half is confirmed, including its correction of its own first diagnosis: the writable
+surface was never too tight, the sandbox had never been built, and a sandbox that could not be built
+is what made every write-capable `Bash` need an approval nobody was there to give.
+
+**F-8's read half -- #131 -- is a separate question, and this lap only observed it not happening.**
+`git worktree list`, which ran in section 9 despite two deny rules, was refused here, by the hook,
+naming the rule. That is one denial in one run on one CLI version. `D-0082` left #131 explicitly
+open, and nothing here establishes a cause, so **#131 stays open and is recorded as
+non-reproducing, not as fixed.** Whether building the sandbox closed it, or it is merely quiet under
+`2.1.260`, is not something this lap can say.
 
 **F-9 (#132) is closed, and its residue is gone too.** The worker role's deny list now carries both
 spellings:
