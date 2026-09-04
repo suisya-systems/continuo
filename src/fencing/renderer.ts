@@ -742,6 +742,24 @@ export function renderFence(
         }
       }
     }
+    // The third axis, refused on the same terms as the two above (D-0082).
+    // `repairSandbox` merges the derived roots into this list, and a merge over
+    // a value that is not a list would REPLACE it -- publishing a fence that
+    // says something the document does not, which is the silent substitution
+    // this module refuses everywhere else. Absent and `null` are both fine and
+    // both mean "declared nothing"; a present non-list is an authoring error.
+    if (
+      Object.hasOwn(filesystem, "additionalDirectories") &&
+      filesystem["additionalDirectories"] !== null &&
+      filesystem["additionalDirectories"] !== undefined &&
+      !Array.isArray(filesystem["additionalDirectories"])
+    ) {
+      reasons.push([
+        RefusalReason.RULE_SYNTAX,
+        "sandbox.filesystem.additionalDirectories must be a list, got " +
+          pyTypeNameOf(filesystem, "additionalDirectories"),
+      ]);
+    }
   }
 
   reasons.push(...checkHooks(getOwn(rendered, "hooks"), ctx, role));

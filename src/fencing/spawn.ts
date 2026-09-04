@@ -251,17 +251,35 @@ function canonicalSettingsJson(settings: unknown): string {
 }
 
 /**
- * The writable surface the admitted fence actually opened (D-0082).
+ * The writable roots the admitted fence DECLARES, outside the checkout (D-0082).
  *
  * Read out of the settings the child will parse rather than out of what the
  * caller asked for, because those are two different lists whenever a role
- * document declared `additionalDirectories` of its own. Defensive about the
- * shape rather than casting through it: this runs on the admission path, and a
- * ledger row is not worth throwing a rendered fence away for.
+ * document declared `additionalDirectories` of its own.
+ *
+ * **What it is not.** It is not "every path the child can write", and the
+ * ledger row must not be read as that. The CLI adds a writable surface of its
+ * own -- measured on `2.1.260`, a linked worktree's whole common `.git` is
+ * writable with nothing declared at all -- and that derivation is the CLI's,
+ * undocumented, and free to change. Recording it here would put a claim about
+ * another program's behaviour into a durable record and let a CLI release make
+ * that record retroactively false. What the fence *says* is a fact about this
+ * repository's output, and it is the fact this row is for.
+ *
+ * A rendered sandbox that is switched off opens nothing, so it reports nothing:
+ * `enabled: false` is a position a document may take, and a row listing paths
+ * beside it would say a layer that is not running had let them through.
+ *
+ * Defensive about the shape rather than casting through it: this runs on the
+ * admission path, and a ledger row is not worth throwing a rendered fence away
+ * for.
  */
 function renderedWritableRoots(fence: Fence): unknown[] {
   const sandbox = fence.settings["sandbox"];
   if (typeof sandbox !== "object" || sandbox === null) {
+    return [];
+  }
+  if ((sandbox as Record<string, unknown>)["enabled"] !== true) {
     return [];
   }
   const filesystem = (sandbox as Record<string, unknown>)["filesystem"];
@@ -885,18 +903,20 @@ export class FencedSpawner {
         permission_mode: fence.permissionMode,
         fence_path: fencePath,
         settings_path: settingsPath,
-        // D-0082, and `#130`'s acceptance in as many words: the area the fence
-        // opened outside the checkout is written down where a refusal or a
-        // surprising commit can be read against it. The list, not a count: the
-        // question an operator brings here is *which* paths a worker could
-        // write, and a number cannot answer it.
+        // D-0082, and `#130`'s acceptance: the area the fence DECLARES outside
+        // the checkout is written down where a refusal or a surprising commit
+        // can be read against it. The list, not a count: the question an
+        // operator brings here is *which* paths this fence opened, and a number
+        // cannot answer it. It is not the whole of what the child can write --
+        // see {@link renderedWritableRoots} for what is deliberately left out
+        // of a durable record and why.
         //
         // Read off the ADMITTED FENCE, not off this spawner's own input. The
         // two differ whenever the role document declared
         // `additionalDirectories` of its own -- the child can write through
         // those too, and a row that listed only the derived roots would report
         // a narrower surface than the one that was published, which is the one
-        // direction an audit field must not fail in. (Found by codex review.)
+        // direction this field must not fail in. (Found by codex review.)
         sandbox_writable_roots: renderedWritableRoots(fence),
       });
       return new SpawnOutcome({ admitted: true, role, fence, plan, battery });

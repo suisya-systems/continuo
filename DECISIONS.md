@@ -12781,11 +12781,23 @@ rule set the deny hook enforces and a restart diffs is byte-identical either way
 happens to derive it" is undocumented behaviour that the fence would otherwise be silently depending
 on, and because a fence that cannot say what it allows cannot record it -- which #130's acceptance
 requires. The roots are appended to whatever the document declared, de-duplicated, never replacing
-it, and the `spawn-admitted` ledger row carries the surface as *paths* rather than as a count: the
-question an operator brings to that row is which paths a worker could write, and a number cannot
-answer it. The row is read off the ADMITTED FENCE rather than off the spawner's own input, because
-the two differ whenever a role document declared `additionalDirectories` of its own -- and a row
-that under-reported the published surface would fail in the one direction an audit field must not.
+it, and the `spawn-admitted` ledger row carries them as *paths* rather than as a count: the question
+an operator brings to that row is which paths this fence opened, and a number cannot answer it. The
+row is read off the ADMITTED FENCE rather than off the spawner's own input, because the two differ
+whenever a role document declared `additionalDirectories` of its own -- and a row that under-reported
+what was published would fail in the one direction this field must not.
+
+**What the row deliberately does not claim.** It records what the fence *declares*, not every path
+the child can write. The CLI opens a surface of its own -- the whole common `.git` of a linked
+worktree, measured above -- and that derivation is the CLI's, undocumented, and free to change.
+Putting it in a durable record would let a CLI release make an old row retroactively false, so the
+row states this repository's own output and `renderedWritableRoots` says so where a reader will find
+it. A rendered sandbox that is switched off reports nothing at all: `enabled: false` is a position a
+document may take, and a row listing paths beside a layer that is not running would be a claim that
+it let them through. The third axis is also validated now: a `additionalDirectories` that is present
+and is not a list refuses with `rule-syntax`, exactly as a non-list `denyRead` does, because merging
+over it would replace an authored value with a valid-looking one this repository invented. (All
+three found by codex review of this change.)
 
 **The rejected alternatives, both named by the gate.** *Drop the `sandbox` block and rest on
 `permissions` plus the deny hook* -- the dogfood's own workaround, and it gives up a layer

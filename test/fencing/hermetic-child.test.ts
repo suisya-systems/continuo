@@ -314,6 +314,34 @@ describe("the sandbox the fence renders is one the CLI can actually build (D-008
     expect(Object.hasOwn(filesystem, "additionalDirectories")).toBe(false);
   });
 
+  test("a non-list additionalDirectories refuses rather than being replaced", () => {
+    const document = deepCopyDocument(fenceDocument());
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    const filesystem = (worker["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+      string,
+      unknown
+    >;
+    filesystem["additionalDirectories"] = "/shared";
+
+    // Merging the derived roots over this would publish `["/base/.git/objects"]`
+    // -- a valid-looking list the document does not contain -- so it is refused
+    // on the same terms as a non-list `denyRead`. (Found by codex review.)
+    const refusal = expectRefusal(
+      () =>
+        renderFence("worker", fenceContext(), {
+          document,
+          nonInteractive: true,
+          sandboxWritableRoots: ["/base/.git/objects"],
+        }),
+      FenceRefusal,
+      /additionalDirectories must be a list, got str/,
+    );
+    expect(refusal.codes).toContain(RefusalReason.RULE_SYNTAX);
+  });
+
   test("a root the document already declared is not added twice", () => {
     const document = deepCopyDocument(fenceDocument());
     const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
@@ -378,6 +406,37 @@ describe("the admission record says what the fence actually opened (D-0082)", ()
       "/shared",
       "/base/.git/objects",
     ]);
+  });
+
+  test("a sandbox the document switched off reports no opened roots", () => {
+    const root = fenceCaseRoot();
+    const document = deepCopyDocument(fenceDocument());
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    (worker["sandbox"] as Record<string, unknown>)["enabled"] = false;
+
+    const ledgerPath = join(root, "disabled-sandbox.jsonl");
+    const outcome = new FencedSpawner({
+      ledger: fenceLedger(root, "disabled-sandbox.jsonl"),
+      document,
+      nonInteractive: true,
+      sandboxWritableRoots: ["/base/.git/objects"],
+    }).prepare("worker", fenceContext(root));
+    expect(outcome.admitted).toBe(true);
+
+    // The document's position is kept -- the repair sets `enabled` only where
+    // the document is silent -- and a row listing paths beside a switched-off
+    // sandbox would say a layer that is not running had let them through.
+    const sandbox = outcome.fence?.settings["sandbox"] as Record<string, unknown>;
+    expect(sandbox["enabled"]).toBe(false);
+    const admitted = readFileSync(ledgerPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((row) => row["event"] === "spawn-admitted");
+    expect((admitted[0] as Record<string, unknown>)["sandbox_writable_roots"]).toStrictEqual([]);
   });
 });
 
