@@ -358,3 +358,265 @@ verb exists to move it. Five events remain: `run_created`, `run_delegation_recor
 All three opened a gate, and all three closed `answered_and_forwarded`. Steps 1-10 of the control
 plane behave as designed; step 11, which is what ends the lap, is untested here. What did not run is
 the worker inside the fence, and the reasons for that are F-1 and F-2.
+
+
+---
+
+## 9. Lap 2, on `5a6d75d`: what #119 and #120 changed, and what still stops the lap
+
+A second dogfood, run on 2026-09-04 against continuo at `5a6d75d` -- the revision at which `D-0081`
+(#119, the hermetic fence; #120, `acceptEdits` for a non-interactive spawn) was on main. The question
+it was run to answer: does lap 1 now reach a commit and a closed gate **without the operator passing
+`--allowedTools` by hand**?
+
+**The answer is no, and the reason is new.** #119 and #120 both do what they say. The worker edited
+the file under `acceptEdits` with nobody at its prompt, which is what #120 was for, and the target
+repository's own settings did not reach it, which is what #119 was for. What stopped the commit is
+the `sandbox` block in the fence itself (F-8), a defect lap 1 never saw because lap 1 never got far
+enough to meet it.
+
+| Run id | Target repository | `--allowedTools` | Result |
+|---|---|---|---|
+| `lap1-dogfood-004` | `dogfood-sandbox` (carries a write-refusing `.claude/settings.local.json`) | no | The worker appended with `Bash`; `git add` / `git commit` refused. Gate closed `answered_and_forwarded` |
+| `lap1-dogfood-005` | `sandbox-clone` (carries none) | no | Same shape. **Run on a locally modified build** -- see the note below -- so it is cited here only for its transcript, never for the fence's behaviour |
+| `lap1-dogfood-006` | `dogfood-sandbox` | no | The prompt required `Edit`. The edit landed, the commit did not. Gate closed `answered_and_forwarded` |
+
+**Read 006 as the lap of record.** It is the one run on an unmodified `5a6d75d` whose worker used the
+tool that the target's own hook matches, which is what makes its F-1 result mean anything (9.4).
+Run 005 was performed while this worktree carried an experimental change to `SpawnPlan.cliArgs()`,
+and its `record.json` accordingly lacks `--setting-sources ''`; the change was reverted before 006
+and is in no commit, but 005 cannot be quoted as an observation of the shipped fence.
+
+### 9.1 The paths this lap used
+
+Everything in section 1 still holds. What changed run to run is only the paths that must be fresh,
+and the target:
+
+| What | Value |
+|---|---|
+| Dropbox (endpoint destination) | `.../continuo-dogfood/dropbox-004`, `-005`, `-006` |
+| Workspace | `.../continuo-dogfood/workspace-004`, `-005`, `-006` |
+| Target, runs 004 and 006 | `/home/happy_ryo/work/org/workers/dogfood-sandbox` |
+| Target, run 005 | `/home/happy_ryo/work/org/workers/continuo-dogfood/sandbox-clone` |
+| Control plane database | unchanged from lap 1, and reused rather than recreated |
+
+The database is reused: `db create` refuses an existing path, but `run admit` is happy to add a run
+to a control plane that already holds three. `db verify` first -- 0.10 s, `schema version 4 of 4`.
+
+**One environment note that costs a confusing minute.** If the CLI is driven from a shell whose
+filesystem sandbox does not include the control plane's directory, `run admit` dies with
+`SqliteError: attempt to write a readonly database` and a Node stack, not with continuo's own exit 2.
+The database file is not readonly; the caller is. What needs the write access is every verb that
+changes something -- `run admit`, `lap perform`, `gate present`, `gate answer`, `gate deliver`,
+`gate ack`, `gate reconcile`. Inspection does not: `db verify`, `gate list` and `gate show` all run
+from a caller that can only read, which is what makes them the right thing to reach for when a run
+has gone sideways and you are not sure what you are allowed to touch.
+
+### 9.2 The lap, without the lap 1 workaround
+
+`run admit` is section 3's command **minus both `--cli-arg` lines**, which is the whole point of the
+run. Run 006's prompt is section 3's with one sentence added -- the third line below -- and that
+sentence is load-bearing rather than stylistic, so `$PROMPT` must be reassigned rather than reused
+from section 3:
+
+```bash
+PROMPT='ワークツリー直下の novel.md の末尾に、作品の締めの一文を 1 文だけ追加し、
+コミットメッセージ "docs(dogfood): 締めの一文を追加" で commit せよ。push はしてはならない。
+追記は必ず Edit ツールで行うこと (Bash のリダイレクトや sed で書き換えてはならない)。
+ただし締めの文体には A 案 (体言止め) と B 案 (常体の完結文) の 2 案があり、どちらを採るかは
+人間の判断が要る。まず A 案で 1 文を追記して commit し、turn の最後に
+「判断仰ぎ: 締めの文体は A 案 (体言止め) と B 案 (常体の完結文) のどちらを採用すべきか」と
+明記して turn を終えよ。'
+```
+
+Without that sentence the worker is free to append with `printf >>`, which is what run 004 did -- and
+a `Bash` write does not exercise the target's `Edit|Write` hook, so the run cannot say anything about
+whether that hook was inherited. Pinning the tool is what turns the run into a measurement.
+
+```bash
+node "$CLI" run admit --db "$DB" \
+  --run-id lap1-dogfood-006 --lease-claimant-id operator-dogfood \
+  --workspace /home/happy_ryo/work/org/workers/continuo-dogfood/workspace-006 \
+  --role worker --base-branch main --topic-branch dogfood/lap1-006 --prompt "$PROMPT"
+# admitted lap1-dogfood-006 ...: status created,
+#   run_created/lap1-dogfood-006 at seq 25, run_delegation_recorded/lap1-dogfood-006 at seq 26
+```
+
+`lap perform` is section 4's command with the paths above. Wall clock: **29.4 s** (004), **30.4 s**
+(006) -- the same shape as lap 1's 52 / 17 / 32 s, and dominated by the worker's turn.
+
+The rendered `settings.local.json` now says `"permissionMode": "acceptEdits"` where lap 1's said
+`"default"`, and `record.json`'s `cli_args` is
+
+```json
+["--settings", ".../artifacts/lap1-dogfood-006/settings.local.json",
+ "--permission-mode", "acceptEdits", "--setting-sources", "",
+ "--mcp-config", ".../artifacts/lap1-dogfood-006/mcp.json", "--strict-mcp-config"]
+```
+
+where lap 1's carried the operator's `--allowedTools`. Both are `D-0081`, arriving as designed.
+
+What the worker did, from `session-state/4289eb20-c47b-40fa-a6b0-4dd2dfc2dda2/events-000.jsonl`:
+
+```text
+TOOL_USE: Edit  {"file_path": ".../workspace-006/novel.md", "old_string": "届いた、と思った。", ...}
+RESULT: The file ... has been updated successfully.        <-- #120: nobody at the prompt, and it wrote
+TOOL_USE: Bash  {"command": "git add novel.md && git commit -m \"docs(dogfood): 締めの一文を追加\" ..."}
+system permission_denied: This Bash command contains multiple operations. The following parts
+  require approval: git add novel.md, git commit -m "docs(dogfood): 締めの一文を追加"
+TOOL_USE: Bash  {"command": "git add novel.md"}
+system permission_denied: This command requires approval  <-- and `Bash(git add:*)` IS in the fence
+```
+
+`git status --short` at the end of the turn: ` M novel.md`. `git log --oneline -1`: still the base
+commit. The worker then raised its escalation and said in its own words that the commit had not
+happened -- the right behaviour under a fence it cannot argue with, and the reason the gate below is
+worth reading even though the lap did not finish its work.
+
+### 9.3 Step 10 again, and it closes
+
+Identical to section 5, against `G=gate/worker_escalation/4289eb20-c47b-40fa-a6b0-4dd2dfc2dda2/0`:
+`gate present` -> `gate deliver` -> `gate ack` -> `gate answer` -> `gate deliver` -> `gate ack`, each
+0.09-0.14 s, ending at
+
+```text
+gate/worker_escalation/4289eb20-.../0 ... stage=forwarded deadline=- outcome=answered_and_forwarded
+transition 23 advance received->presented  by=secretary/operator-dogfood
+transition 24 advance presented->answered  by=human/operator-dogfood     body=adopt-a-taigendome ...
+transition 25 advance answered->forwarded  by=secretary/operator-dogfood
+transition 26 close   forwarded->forwarded by=system/operator-dogfood
+```
+
+**And this time `reconcile` found something**, which is worth more than lap 1's four zeros:
+
+```bash
+node "$CLI" gate reconcile --db "$DB" --actor-id operator-dogfood --stalled-tolerance-ms 300000
+# settled: subject_gone=0 advanced=0 closed=0
+# found: relay_gaps=1
+#   gap gate/worker_escalation/a20e849b-6a2f-4d6b-b36e-c7c77a6f49c5/0 at received age=854383
+# found: stalled_relays=0
+# found: past_deadline=0
+```
+
+That gap is run 005's gate, which was opened and then left at `received` because the run was
+abandoned. A gate with no relay behind it is exactly what `relay_gaps` is for, and the age is in
+milliseconds. Lap 1's all-zero pass showed the verb runs; this one shows it can see.
+
+What it still says nothing about is the run sitting at `created` with uncommitted work in its
+worktree, because no gate is stalled -- F-7 seen from another angle rather than a reconcile defect.
+
+`F-5` is unchanged: the dropbox's `<sha256>.effect.json` still escapes the payload to ASCII, so the
+answer reads `\"answer\": \"adopt-a-taigendome \\u3092\\u63a1\\u7528\\u3059\\u308b\\u3002...\"`.
+
+### 9.4 F-1, checked in the field
+
+Runs 004 and 006 pointed `--repository` at `dogfood-sandbox`, which still carries the
+`.claude/settings.local.json` whose `PreToolUse` hooks refused every write in lap 1's run 001. **Under
+the hermetic fence it did not apply**, and run 006 is what shows it:
+
+- that file's hook matches `Edit|Write` and runs `check-worker-boundary.sh` with `WORKER_DIR` set to
+  the repository root. Run 006's worker edited `.../workspace-006/novel.md` -- a path outside that
+  root -- **with the `Edit` tool**, and the edit succeeded. Inherited, the hook would have answered
+  with the `ブロック: ... は許可パス外です` it produced for every write in run 001.
+
+Run 004 cannot carry this conclusion, and the difference is the reason 006 exists. Its worker
+appended with `printf >>`, which the target's hook does not match, so the hook's silence there is
+what you would see either way. The other tempting argument from 004 -- that the target's
+`permissions.allow` contains `Bash(git add:*)` and `git add` was nonetheless refused -- does not work
+either: F-8 shows the fence's *own* allow list does not get `git add` through, so the refusal is
+overdetermined and says nothing about whose allow list was in force.
+
+So #119 works against the repository that produced F-1. **Section 7's F-1 clone workaround is no
+longer needed for that reason** -- though F-8 below means neither target reaches a commit yet.
+
+The canary this lap first intended to plant instead -- a purpose-built write-refusing
+`.claude/settings.local.json` in `sandbox-clone` -- could not be created: the operator was itself a
+claude-org worker, and `block-org-structure.sh` refuses any Bash command that creates a `.claude/`
+directory, wherever it points. Using the repository that already carried one is the stronger test
+anyway, since it is the file that produced the original defect.
+
+### 9.5 What got in the way (continued from section 7)
+
+Section 7's list is filed, and this lap changed nothing about the open half of it: F-3 is #121, F-4
+is #122, F-5 is #123, F-6 is #124, F-7 is #125, and section 3's note on an unchecked `--role` is
+#126. F-1 (#119) and F-2 (#120) are the two that shipped, and 9.4 is F-1's field check. F-8 and F-9
+below are new and have no issue yet.
+
+#### F-8. The fence's `sandbox` block refuses the writes its own allow list permits, and lets denied reads through
+
+- **Symptom.** Under the fence as rendered, `git add novel.md` comes back as
+  `This command requires approval` -- with `Bash(git add:*)` in the fence's `permissions.allow`. In
+  the same fence `git worktree list` **runs**, with `Bash(git worktree *)` in the fence's
+  `permissions.deny` *and* in the deny hook's rules.
+- **Cause.** The `sandbox.filesystem` block the fence renders. Measured on CLI `2.1.260` from
+  `workspace-005`, whose target carries no settings of its own so that nothing ambient is in play:
+
+  | settings passed to `claude -p` | `git add -n novel.md` | `git worktree list` |
+  |---|---|---|
+  | the rendered fence, as shipped | `This command requires approval` | **runs** |
+  | the same fence with only the `sandbox` key removed | `add 'novel.md'` | `worker: Bash denied by permission-deny rule 'git worktree *'` |
+  | a minimal file carrying only `permissions` | `add 'novel.md'` | denied |
+
+  Removing one key fixes both directions, so both are that key's. The read that slips through is a
+  command the sandbox can satisfy on its own, and it appears not to reach the permission decision or
+  the hook at all. The write that is refused is refused because a worktree's `.git` is a *file*
+  pointing into `<target>/.git/worktrees/<name>` -- outside the workspace -- so `git add`, which
+  writes the index, writes outside the sandbox's writable surface. With no person to approve the
+  escalation, `claude -p` turns that into a refusal.
+- **Workaround.** Lap 1's, unchanged, and re-measured under the current fence: admit the run with
+  `--cli-arg=--allowedTools --cli-arg='Bash(git add:*),Bash(git commit:*)'`. With it, `git add -n`
+  returns `add 'novel.md'` under the same fence that refuses it without. `--allowedTools` outranks
+  the sandbox escalation where the settings file's own allow list does not.
+- **Real fix.** A fence design decision, so nothing was changed here. Three candidates: drop the
+  `sandbox` block from the rendered settings and rest on `permissions` plus the deny hook; keep it
+  and add the worktree's real `.git` directory to the writable surface; or render it only for an
+  interactive spawn, the way `D-0081` scoped the `acceptEdits` promotion. The first loses a layer,
+  the second leaves the read-side hole, and the third is the narrowest and matches the precedent.
+
+#### F-9. One fence deny rule is spelled in a form the CLI does not apply
+
+- **Symptom.** Starting a child under the fence prints, on stderr,
+  `Permission deny rule (...): Write(~/.claude/settings.json) is not matched by file permission
+  checks — only Edit(path) rules are. Use Edit(~/.claude/settings.json) instead (Edit rules cover all
+  file-editing tools).`
+- **Cause.** The role document spells the rule `Write(...)`. The CLI applies file-permission rules
+  under `Edit(...)`, which covers every file-editing tool including `Write`.
+- **How deep the gap goes: both layers, for the tool that matters.** The tempting reading is that
+  the fence's own deny hook still carries the rule, so only the `permissions` layer is affected. It
+  does not. `matches` in [`../../src/fencing/rules.ts`](../../src/fencing/rules.ts) compares
+  `toolName !== rule.tool` -- an exact tool name -- so a `Write(...)` rule is consulted only for the
+  literal `Write` tool. A child that reaches `~/.claude/settings.json` with `Edit` is matched by
+  neither the hook (wrong tool name) nor the permission system (rule ignored, as the warning says).
+  The one path the rule does still close is a literal `Write`, at the hook layer only.
+- **Workaround.** None; nothing at spawn time recovers the rule. The warning on stderr is the only
+  signal, and it names the fix.
+- **Real fix.** Spell it `Edit(~/.claude/settings.json)` in the role document -- which covers every
+  file-editing tool at the permission layer, and matches the `Edit` tool at the hook layer. claude-org
+  hit the same warning and removed its `Write(...)` declarations for the same reason
+  (`docs/worker-permissions-design.md`), so the form is settled elsewhere and this is a transcription
+  to make -- and a one-line one. `src/fencing/roles.json` carries three `Write(...)` deny rules, but
+  the other two already have their twin beside them: `curator` has both
+  `Write(**/.claude/skills/**)` and `Edit(**/.claude/skills/**)`, and `secretary` has both
+  `Write(**/src/**)` and `Edit(**/src/**)`. **`worker` is the only role whose `Write(...)` rule
+  stands alone**, so it is the only one with the gap. The other two still draw the warning when
+  those roles are spawned, since the `Write(...)` half is ignored either way; whether to drop it as
+  noise or keep it for the hook's exact-match layer is a smaller question than this one.
+
+#### A methodological note that cost this lap a wrong conclusion
+
+The first pass at F-8 was run from `workspace-004`, and concluded that `--setting-sources` voids the
+`--settings` file. **It does not.** `workspace-004` is a worktree of `dogfood-sandbox`, so the
+ambient settings under test were also supplying the allow and the deny being attributed to the fence;
+removing the flag let them back in, and the fence appeared to come to life with them. Re-run from
+`workspace-005`, whose target carries no settings, the flag makes no difference at all: a minimal
+settings file is honoured identically with and without it, and the fence's own deny hook fires under
+it, exactly as `D-0081` recorded.
+
+Two rules follow, and they are cheap next to what they cost here:
+
+- **Measure a fence in a target that carries no settings of its own.** A target with ambient
+  configuration cannot tell you which layer refused.
+- **Read the refusal message, not just the refusal.** The two layers deny in different words --
+  `Permission to use Bash with command ... has been denied.` from the permission system, and
+  `worker: Bash denied by permission-deny rule '...'` from the fence's own hook. The second names the
+  rule; the first names nothing, and it is the one an ambient rule produces.
