@@ -105,7 +105,14 @@ const ENDPOINT_RECIPIENT_HELP =
   "the one recipient the worker's endpoint serves. Must be one the outbox has a handler " +
   "registered for (see the list this flag accepts above); a recipient with no handler is " +
   "refused here, before any worktree or fence is created.";
-const ENDPOINT_DESTINATION_DIR_HELP = "directory the endpoint's delivery files are written into.";
+const ENDPOINT_DESTINATION_DIR_HELP =
+  "directory the endpoint's delivery files are written into. Created if it " +
+  "does not exist, and reused if it does: the dropbox deduplicates per " +
+  "idempotency key and fences a superseded writer out by its own token, so " +
+  "sharing one with an earlier run of the same control plane is supported (one " +
+  "dropbox per control plane: the epochs it fences by are that plane's). Must be " +
+  "outside the workspace. " +
+  "'gate deliver --destination-dir' takes the same directory under the same rule.";
 const ENDPOINT_DB_HELP =
   "path the worker reaches the control plane by, when that is a different " +
   "spelling of --db (a symlink). Derived from --db when omitted, which is the " +

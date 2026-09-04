@@ -100,7 +100,11 @@ const HOLDER_HELP =
   "serialisation: one delivery resource, one writer.";
 const DESTINATION_DIR_HELP =
   "the dropbox directory the relay's effect is written into, and the one the " +
-  "operator reads. Created if it does not exist.";
+  "operator reads. Created if it does not exist, and reused if it does: the " +
+  "dropbox deduplicates per idempotency key and fences a superseded writer out " +
+  "by its own token, so this is normally the directory a lap of the same control " +
+  "plane already ran " +
+  "against ('lap perform --endpoint-destination-dir'), under the same rule.";
 const OUTCOME_HELP =
   "the terminal outcome. 'answered_and_forwarded' is not here on purpose: it " +
   "is the consequence of the forward relay's ack and is written by 'gate " +

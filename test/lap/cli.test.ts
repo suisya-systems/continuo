@@ -101,6 +101,8 @@ interface Lap {
   readonly workspace: string;
   readonly artifactDir: string;
   readonly stateRoot: string;
+  /** The dropbox the endpoint is configured to write into (`continuo#122`). */
+  readonly destinationDir: string;
   readonly out: string[];
   readonly err: string[];
   /** The `lap perform` command line, so a case can dispatch it either way. */
@@ -232,6 +234,7 @@ function lap(
     workspace,
     artifactDir: join(artifactRoot, runId),
     stateRoot,
+    destinationDir,
     out,
     err,
     argv(overrides = {}) {
@@ -402,6 +405,50 @@ describe("the help text and the implementation say the same thing", () => {
     expect(written).toContain("did not finish its turn");
     expect(written).toContain("session is stopped");
     expect(written).toContain("workspace and the fence are left exactly as they are");
+  });
+});
+
+describe("continuo#122: one rule for the endpoint destination directory", () => {
+  // The rule is `KeyedDropbox`'s, because the dropbox is what owns the
+  // directory: it opens the path with `mkdir -p` and deduplicates per
+  // idempotency key, and a writer that has been superseded is refused by the
+  // fencing watermark kept beside the effects rather than by the directory's
+  // absence. Materialisation used to refuse an existing one anyway -- the
+  // dropbox rode along on the list of paths this step *creates* -- which made
+  // the one dropbox an operator polls unusable for the next lap pointed at it
+  // and contradicted `gate deliver`'s help about the same directory (D-0085).
+  test("perform accepts a dropbox that already exists, and leaves what is in it", async () => {
+    const f = lap("lap-destination-exists");
+    mkdirSync(f.destinationDir, { recursive: true });
+    // An earlier lap's effect, spelled as a file this run has no reason to
+    // touch. Its survival is the half that says "reused" rather than "emptied".
+    const earlier = join(f.destinationDir, "earlier.effect.json");
+    writeFileSync(earlier, '{"idempotency_key":"earlier"}\n', "utf8");
+
+    expect(await f.perform(), f.err.join("")).toBe(0);
+
+    expect(readFileSync(earlier, "utf8")).toBe('{"idempotency_key":"earlier"}\n');
+    // And the run really did materialise, so the case is not green because the
+    // lap stopped somewhere before the check that used to refuse.
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).toContain(WORKSPACE_MATERIALIZED_EVENT_TYPE);
+    // The artifacts this step *does* create keep the old rule, which is the
+    // anti-vacuity half: the refusal was narrowed, not deleted.
+    expect(existsSync(join(f.artifactDir, FENCE_FILENAME))).toBe(true);
+  });
+
+  test("--help states the rule, in the words gate deliver's help uses", () => {
+    const help = helpStrings(buildParser()).join("\n");
+    const at = help.indexOf("directory the endpoint's delivery files are written into");
+    expect(at, "the --endpoint-destination-dir help is no longer findable").toBeGreaterThanOrEqual(
+      0,
+    );
+    const text = help.slice(at, at + 600);
+    expect(text).toContain("Created if it does not exist, and reused if it does");
+    expect(text).toContain("one dropbox per control plane");
+    // The two verbs are named in each other's help on purpose: #122 is a
+    // contradiction an operator hit by reading them side by side.
+    expect(text).toContain("gate deliver --destination-dir");
   });
 });
 

@@ -180,6 +180,7 @@ spaces distinct.
 | D-0082 | The fence's sandbox is switched on, spelled in strings, and told where the worktree's git writes | accepted |
 | D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | accepted |
 | D-0084 | `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do | accepted |
+| D-0085 | The endpoint destination directory is created if missing and reused if present, for both verbs that take one | accepted |
 
 ---
 
@@ -12973,3 +12974,84 @@ that a refusal this verb detects costs the database nothing (no epoch bumped, no
 the lease is taken under the actor and given back, that a `--now-ms` behind the run's own
 `updated_at_ms` is refused here rather than by the row's `CHECK` from inside the fenced statement,
 and that the spine is unchanged by a close.
+
+---
+
+## D-0085 -- The endpoint destination directory is created if missing and reused if present, for both verbs that take one
+
+**Context.** The lap 1 dogfood (runbook section 7, F-4; issue #122) read the two helps for one
+directory side by side and found them contradictory. `gate deliver --destination-dir` says the
+directory is created if it does not exist; `lap perform --endpoint-destination-dir` said nothing and
+exited 2 for a directory that was already there, with a message about another materialisation's
+artifacts. Both flags name the same dropbox -- the runbook hands `dropbox-003` to `lap perform` in
+section 5 and to `gate deliver` in section 7 -- so an operator cannot hold both readings at once.
+
+The refusal was not designed for the dropbox. `materializeWorkspace` builds one list of planned paths
+and states three rules over it: containment (nothing inside the worktree), distinctness (no two
+artifacts at one path), and unclaimed (nothing already there). The dropbox is on that list for the
+first two, and the entry says so in its own words -- it is the one configured path whose contents
+appear inside the checkout later. The third rule swept it up, and that rule's own justification does
+not reach it: "materialisation creates what it names, so finding it already there means somebody else
+owns it" is false of a path materialisation never creates. `D-0058`'s bullet about this directory
+stands unedited: the rules it holds the dropbox to are containment and distinctness, which are about
+*where* a path is and hold for a directory this step never writes.
+
+**Decision.** Taken 2026-09-05. **One rule, and it is `KeyedDropbox`'s, because the dropbox owns the
+directory's semantics:** the directory is created if it does not exist and reused if it does. It is
+stated in the help of both verbs, each naming the other, and the unclaimed check in
+`materializeWorkspace` is narrowed to `publishedArtifactPaths` -- the four paths this step (or
+`prepare` on its behalf) actually writes. Containment and distinctness still cover the dropbox
+unchanged; an endpoint destination directory inside the worktree is refused exactly as before.
+
+**Why reuse is safe, stated over the mechanism rather than over the habit.** `KeyedDropbox` opens its
+root with `mkdirSync(..., {recursive: true})` in its constructor, and every consumer does that
+repeatedly by design: the endpoint at every worker start, `gate deliver` at every invocation. What a
+shared dropbox has to defend against is a second effect for one key and a writer that has been
+superseded, and the dropbox holds both defences itself -- an effect is published by `link`, so a key
+already present deduplicates and reports `payloadConflict` rather than applying twice, and
+`_honourToken` refuses a stale epoch against a per-scope fencing watermark kept beside the effects.
+Directory-level exclusivity adds nothing to either, and it costs the operator the workflow the
+dropbox exists for: one directory they poll, across the laps and the deliveries that feed it.
+
+**What the narrowing must not lose, and does not.** Two preflight refusals replace the one that was
+dropped, and both refuse where this error family promises a malformed request is refused -- with
+nothing built. A destination that exists and **does not resolve to a directory** is refused: the
+dropbox opens it as one, so a file there would surface as a raw filesystem error at endpoint startup,
+after the branch, the worktree, the artifacts and the event. That check is asked with `lstatSync` and
+answered with `statSync` rather than with `existsSync`, because the two disagree on a dangling
+symlink -- `existsSync` follows it, finds nothing and reports the path absent, while `mkdir -p` sees
+the link itself and refuses with `EEXIST`. And a dropbox **another control plane already drove past
+this run's epoch** is refused: the fencing watermark is keyed by the lease resource name
+(`outbox-delivery`), a constant with no database in it, while the epochs measured against it are one
+plane's lease sequence -- so a dropbox at epoch 5 would refuse every effect a fresh plane's epoch 1
+delivers, again at first delivery rather than here. "One dropbox per control plane" was already the
+operating rule (`deliverRelays`' known-limitation note, `D-0026`); it is now enforced rather than
+only written down. Same-plane reuse -- the case #122 is about -- passes, because lease epochs on one
+resource only rise.
+
+**This changes observable behaviour of an existing verb**, which is why this entry exists rather than
+a help-text fix alone. `lap perform` accepted no pre-existing dropbox before and accepts one now.
+Nothing that used to succeed now fails.
+
+**The rejected alternative: refuse an existing directory in both verbs**, which is what the dogfood's
+F-4 proposed ("the refusal is right; the help text should say the directory must not exist"). It is
+rejected because it breaks the workflow the runbook itself walks -- `gate deliver` runs after the lap,
+against the directory the lap's endpoint already created, so a refusal there would refuse every
+delivery the lap 1 loop is made of. Making the rule uniform in that direction would mean a second,
+fresh dropbox per delivery, which scatters the operator's own reading surface across directories and
+gives the deduplication nothing to deduplicate against.
+
+**What records it.** `test/lap/cli.test.ts` drives `lap perform` end to end against a pre-created
+dropbox holding an earlier effect file and asserts the run materialises with that file untouched;
+`test/gate/cli.test.ts` does the same for `gate deliver` and asserts the relay's effect lands beside
+it. Both files assert their verb's `--help` states the rule and names the other verb.
+`test/workspace/materializer.test.ts` holds the narrowing itself and the two preflights, each with an
+anti-vacuity half beside it: a fence that already exists is still refused, so the check was narrowed
+and not deleted, and a dropbox carrying this plane's own earlier epoch is reused, so the epoch check
+refuses the foreign plane rather than every watermark.
+
+**What would falsify it.** A destination that is not a directory of independently keyed files -- a
+real transport, which is what `KeyedDropbox` is a stand-in for -- where reopening an existing endpoint
+is a claim on a resource rather than a `mkdir -p`. Also falsified by a dropbox growing per-directory
+state that a second writer would corrupt, since the argument here is precisely that the only shared
+state it keeps (the fencing watermark) is the thing that makes sharing safe.
