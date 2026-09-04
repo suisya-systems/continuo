@@ -78,6 +78,7 @@ import {
   RunAlreadyAdmitted,
   RunNotAdmitted,
   readLapRunIntent,
+  UnknownRoleRefused,
 } from "../../src/control_plane/run_admission.js";
 import { runCliSeams } from "../../src/control_plane/run_cli.js";
 import {
@@ -86,6 +87,7 @@ import {
   readRun,
 } from "../../src/control_plane/run_lifecycle.js";
 import { transaction } from "../../src/control_plane/txn.js";
+import { roleNames } from "../../src/fencing/renderer.js";
 import { caseRoot, databasePath, suiteTemplate, writeStep } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
@@ -420,7 +422,7 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     admitRun(connection, {
       intent: intent({
         leaseClaimantId: "secretary-7",
-        role: "reviewer",
+        role: "curator",
         baseBranch: "release/1.x",
         topicBranch: "fix/leak",
         prompt: "close the handle",
@@ -440,7 +442,7 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     expect(payload).toEqual({
       lease_claimant_id: "secretary-7",
       workspace: WORKSPACE,
-      role: "reviewer",
+      role: "curator",
       base_branch: "release/1.x",
       topic_branch: "fix/leak",
       prompt: "close the handle",
@@ -632,6 +634,75 @@ describe("a run identifier is admitted once", () => {
     );
     expect(refusal.name).toBe("RunAlreadyAdmitted");
   });
+});
+
+// --------------------------------------------------------------------------
+// the role roster (continuo#126)
+// --------------------------------------------------------------------------
+
+describe("admitRun refuses a role outside the fence renderer's roster", () => {
+  test("refuses an unknown role before anything is written, naming the roster", () => {
+    const { connection } = cpFixture();
+
+    const refusal = expectRefusal(
+      () => admitRun(connection, { intent: intent({ role: "reviewer" }), nowMs: T0 }),
+      UnknownRoleRefused,
+      /not in the role roster/,
+    );
+
+    // The roster it names is the fence renderer's own, not a copy admission
+    // could drift from -- proven by reading it independently and asserting
+    // every name is present rather than pinning a literal list here.
+    for (const role of roleNames()) {
+      expect(refusal.message).toContain(role);
+    }
+    expect(refusal.message).toContain("reviewer");
+    expect(runRows(connection)).toEqual([]);
+    expect(eventRows(connection)).toEqual([]);
+  });
+
+  test("the refusal is in the ControlPlaneRefusal family", () => {
+    const { connection } = cpFixture();
+
+    const refusal = expectRefusal(
+      () => admitRun(connection, { intent: intent({ role: "reviewer" }), nowMs: T0 }),
+      UnknownRoleRefused,
+    );
+    expect(refusal.name).toBe("UnknownRoleRefused");
+  });
+
+  test("refuses end to end through the mounted command, exit 2, nothing on stdout", () => {
+    const path = productionTemplate.copyInto(caseRoot("run-admit-unknown-role"));
+    const streams = captureStreams();
+
+    const code = main(admitArgv(path, { "--role": "reviewer", "--now-ms": String(T0) }));
+
+    expect(code).toBe(2);
+    expect(streams.out()).toBe("");
+    expect(streams.err()).toContain("not in the role roster");
+
+    const connection = openProductionControlPlane(path);
+    onTestFinished(() => {
+      connection.close();
+    });
+    expect(runRows(connection)).toEqual([]);
+  });
+
+  test.each(roleNames().map((role) => [role] as const))(
+    "admits a run whose --role is roster role %s",
+    (role) => {
+      const { connection } = cpFixture();
+
+      const admitted = admitRun(connection, { intent: intent({ role }), nowMs: T0 });
+
+      expect(admitted.status).toBe(ADMITTED_RUN_STATUS);
+      const payload = JSON.parse(String(eventRows(connection)[1]?.["payload"])) as Record<
+        string,
+        unknown
+      >;
+      expect(payload["role"]).toBe(role);
+    },
+  );
 });
 
 // --------------------------------------------------------------------------

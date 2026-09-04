@@ -432,6 +432,7 @@ export {
   RunAlreadyAdmitted,
   RunNotAdmitted,
   readLapRunIntent,
+  UnknownRoleRefused,
 } from "./control_plane/run_admission.js";
 // `run_close.ts` re-exports nothing of `run_lifecycle.ts`'s under a second name
 // for the reason the comment above gives: `RUN_CLOSE_OUTCOMES` is an alias of

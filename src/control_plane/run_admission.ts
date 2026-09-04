@@ -1,5 +1,6 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
+import { roleNames } from "../fencing/renderer.js";
 import { appendEvent } from "./events.js";
 import { LapRunIntent, PAYLOAD_KEYS } from "./lap_run_intent.js";
 import { pythonJsonObject } from "./python_json.js";
@@ -179,6 +180,33 @@ export class RunAlreadyAdmitted extends ControlPlaneRefusal {
   }
 }
 
+/**
+ * `--role` names no role the fence renderer knows.
+ *
+ * In the {@link ControlPlaneRefusal} family, for the same reason
+ * {@link RunAlreadyAdmitted} is: an unrecognised role is the ordinary outcome of
+ * a typo an operator made, not a defect in this code.
+ *
+ * **Why this is checked at admission rather than left to discovery at render
+ * time (continuo#126).** `LapRunIntent`'s constructor holds `role` to no more
+ * than quotable text, because the record's own field rules are the record's
+ * *shape*, not the roster -- the roster is `src/fencing/roles.json`'s, read
+ * through {@link roleNames}, and a shape check has no business owning a second
+ * module's vocabulary. Without this check, admission would insert the run row,
+ * append both admission events, and only fail later when the fence is
+ * rendered for the topic branch and worktree this run already caused to
+ * exist -- a failure an operator has to clean up rather than one that never
+ * happened. Refusing here, before the transaction opens, means an unknown role
+ * costs nothing: no row, no worktree, no branch.
+ */
+export class UnknownRoleRefused extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "UnknownRoleRefused";
+    Object.setPrototypeOf(this, UnknownRoleRefused.prototype);
+  }
+}
+
 // --------------------------------------------------------------------------
 // admission
 // --------------------------------------------------------------------------
@@ -273,6 +301,20 @@ export function admitRun(
   if (typeof nowMs !== "number" || !Number.isInteger(nowMs)) {
     throw new RunAdmissionUsageError(
       `now_ms must be an int of epoch milliseconds, got ${pythonRepr(nowMs)}`,
+    );
+  }
+
+  // Refused before the transaction opens, and against the same roster the
+  // fence renderer checks (`roleNames`, `src/fencing/roles.json`) rather than
+  // a copy of it, so admission and render cannot drift apart on which roles
+  // exist. See `UnknownRoleRefused` for why this lives here instead of at
+  // render time.
+  const roster = roleNames();
+  if (!roster.includes(intent.role)) {
+    throw new UnknownRoleRefused(
+      `role ${pythonRepr(intent.role)} is not in the role roster ` +
+        `(${roster.map((name) => pythonRepr(name)).join(", ")}); nothing was ` +
+        "admitted",
     );
   }
 
