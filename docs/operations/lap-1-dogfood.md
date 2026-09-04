@@ -682,19 +682,60 @@ per-run identifier moved on -- `--run-id lap1-dogfood-007`, `--topic-branch dogf
 already taken in the control plane, and the branch and the workspace already exist, so a command
 that only drops the `--cli-arg` lines fails at admission rather than producing this run.
 `lap perform` likewise takes `--endpoint-destination-dir .../dropbox-007`, which must *not* exist
-(F-4). Run 008 is the same with `008` throughout.
+(F-4). Run 008 is the same with `008` throughout **and a different prompt** -- the two runs share
+nothing but their flags, so `$PROMPT` must be reassigned between them.
 
-Run 007's prompt is 9.2's with the commit spelled out as two separate `Bash` calls, plus four
-observations written to an uncommitted `sandbox-report.txt`:
+Run 007's prompt in full. It is 9.2's with the commit spelled out as two separate `Bash` calls, plus
+the four observations written to an uncommitted `sandbox-report.txt`:
 
-```text
+```bash
+PROMPT='ワークツリー直下の novel.md の末尾に、作品の締めの一文を 1 文だけ追加し、
 コミットメッセージ "docs(dogfood): 締めの一文を追加" で commit せよ。push はしてはならない。
 追記は必ず Edit ツールで行うこと (Bash のリダイレクトや sed で書き換えてはならない)。
 commit は Bash で `git add novel.md` と `git commit -m "docs(dogfood): 締めの一文を追加"` を
 それぞれ別々の Bash 呼び出しとして実行すること。
+
+commit を試みたあと、以下の観測を行い、結果を Write ツールでワークツリー直下の
+sandbox-report.txt に書き出せ (このファイルは commit してはならない):
+1. Bash ツールを 1 回でも使ったあとに system-reminder として渡された「Bash command sandbox」
+   の説明があれば、その全文をそのまま貼れ。無ければ「no sandbox system-reminder」と書け。
+2. `git add novel.md` と `git commit` の実行結果 (成功したか、拒否されたならその拒否メッセージ全文)。
+3. `git worktree list` を実行し、その結果 (成功した出力か、拒否メッセージ全文) を貼れ。
+4. `git log --oneline -2` と `git status --short` の出力。
+
+ただし締めの文体には A 案 (体言止め) と B 案 (常体の完結文) の 2 案があり、どちらを採るかは
+人間の判断が要る。まず A 案で 1 文を追記して commit し、turn の最後に
+「判断仰ぎ: 締めの文体は A 案 (体言止め) と B 案 (常体の完結文) のどちらを採用すべきか」と
+明記して turn を終えよ。'
 ```
 
-The two-call instruction matters for the same reason 9.2's `Edit` instruction did. Section 9's
+Run 008's, which edits and commits nothing. Its `--gate-option`s differ too
+(`stop-at-sandbox`, `stop-at-deny-rule`):
+
+```bash
+PROMPT='これは fence の sandbox が実際に張られているかを実測するための調査タスクである。
+ファイルの編集や commit は一切行わないこと。
+
+以下の 4 つの probe を Bash ツールで 1 つずつ実行せよ。**いずれかが拒否・失敗しても
+再試行してはならない** (特に dangerouslyDisableSandbox 等での回避を試みてはならない)。
+拒否された場合は、その拒否メッセージ / エラー出力を全文そのまま記録すること。
+
+probe A (read, fence の sandbox denyRead 対象): `ls -la /home/happy_ryo/.ssh`
+probe B (read, fence の sandbox denyRead 対象): `ls -la /home/happy_ryo/work/org/workers/interlock/.secrets`
+probe C (write, ワークツリー外 = sandbox の書込み許可外): `touch /home/happy_ryo/work/org/workers/continuo-dogfood/sandbox-probe-008.txt`
+probe D (write, ワークツリー内 = 許可されるはず): `touch probe-inside.txt`
+
+4 つすべてを実行したあと、Write ツールでワークツリー直下の probe-report.txt に
+「probe A / B / C / D それぞれのコマンド・終了状況・出力 (または拒否メッセージ) 全文」を書け。
+あわせて、Bash を 1 回以上使ったあとに system-reminder として渡された
+「Bash command sandbox」の説明の全文も貼れ (無ければ「no sandbox system-reminder」と書け)。
+
+最後に turn の締めとして
+「判断仰ぎ: probe C の書込みは sandbox で止まるべきか、fence の deny 規則で止まるべきか」
+と明記して turn を終えよ。'
+```
+
+Run 007's two-call instruction matters for the same reason 9.2's `Edit` instruction did. Section 9's
 worker issued `git add novel.md && git commit -m ...` as one command and met a *different* refusal
 first -- `This Bash command contains multiple operations. The following parts require approval` --
 which says nothing about whether either half would have passed on its own. Splitting them is what
@@ -940,16 +981,25 @@ untracked-inclusive stash fail part way through. So the eleven are environment l
 cause, not a view of anyone's home directory, and the question narrows to why they were listed for a
 worktree that does not contain them.
 
-That part is still unexplained. The listing is one coherent, sorted directory read, and it arrived
-in the same `Bash` call whose `git log` returned `workspace-007`'s own history, so the two halves
-disagree about which tree they are looking at. No candidate directory reproduces the full set: the
-operator's worktree has all eleven, but a status taken there would also list `src`, `docs`,
-`README.md` and the rest, which the child's output does not.
+That part is still unexplained, and the devices make one hypothesis much cheaper than the rest.
+**Nothing here needs a second tree.** The child's twelve entries are exactly what
+`git status --short` prints in `workspace-007` *if the ten devices were sitting in it at that
+moment*: `novel.md` is tracked and freshly committed, so it is not listed, and `.claude/` and
+`.mcp.json` are untracked there because `sandbox-clone`'s index carries `novel.md` and nothing
+else. Devices that appear and are gone again would explain both the listing and the fact that
+`ls -a workspace-007` finds nothing afterwards. This was not tested -- run 008's child was never
+asked for a status, so there is no second observation to hold it against.
+
+The operator's own worktree is a poorer fit than it first looks, and for a reason worth writing
+down rather than the one first reached for. Its tracked paths -- `src`, `docs`, `README.md` -- are
+clean under its own index and so would not be listed either, which rules nothing out. What rules it
+out is the other direction: its status lists `CLAUDE.md`, which the child's does not, and omits
+`.claude/` and `.mcp.json`, which the child's has, because continuo tracks both.
 
 It is recorded here rather than diagnosed, and it is not given an `F-` number because it obstructed
 nothing: the commit it sits next to was verified from outside the child, by an operator `git log` in
-the worktree, and does not rest on this output. It is filed as an open question about what a child's
-`git status` resolves to under the sandbox, with the character devices as the first thread to pull.
+the worktree, and does not rest on this output. It is filed as an open question about what leaves
+character devices in a fenced child's worktree and takes them away again.
 
 ### 10.7 Where the lap now stops
 
