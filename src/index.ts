@@ -433,6 +433,19 @@ export {
   RunNotAdmitted,
   readLapRunIntent,
 } from "./control_plane/run_admission.js";
+// `run_close.ts` re-exports nothing of `run_lifecycle.ts`'s under a second name
+// for the reason the comment above gives: `RUN_CLOSE_OUTCOMES` is an alias of
+// `TERMINAL_RUN_STATUSES`, which this entry point already carries as
+// `gates.ts`'s copy, so it stays inside its module rather than becoming a third
+// spelling here.
+export {
+  CLOSEABLE_RUN_STATUSES,
+  type ClosedRun,
+  closeRun,
+  RUN_CLOSE_LEASE_TTL_MS,
+  RunCloseRefused,
+  RunCloseUsageError,
+} from "./control_plane/run_close.js";
 export {
   ADVANCE_RUN_STATUS_EFFECT,
   acquireRunLease,

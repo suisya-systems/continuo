@@ -179,6 +179,7 @@ spaces distinct.
 | D-0081 | The fence is the child's only configuration, and it renders a mode the child can work under | accepted |
 | D-0082 | The fence's sandbox is switched on, spelled in strings, and told where the worktree's git writes | accepted |
 | D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | accepted |
+| D-0084 | `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do | accepted |
 
 ---
 
@@ -12862,3 +12863,113 @@ it is tracked separately rather than folded into a two-line document fix.
 
 **What records it.** `test/fencing/hermetic-child.test.ts` asserts that the rendered worker fence
 refuses both an `Edit` and a `Write` of that path at the hook layer, with the reason naming the rule.
+
+---
+
+## D-0084 -- `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do
+
+**Context.** `docs/design/minimal-operating-loop.md` section 2 ends the lap at L8 -- the merge is
+observed and the run reaches a terminal status -- and section 7 step 11 makes the publish the
+operator's manual leg. Lap 1's dogfood ran steps 1-10 three times and every run is still at status
+`created` (`docs/operations/lap-1-dogfood.md` sections 6 and 7, F-7; issue #125). The gate closes
+`answered_and_forwarded`, which closes the gate and not the lap, and nothing an operator can type
+moves the run afterwards. `advanceRunStatus` has existed since `D-0046` and has no caller.
+
+Section 6.2 says how the transition is *meant* to be reached: a watcher appends `pr_merged` and a
+**consumer** makes the transition, because collapsing the two once wrote a foreign PR's metadata onto
+a run row (`docs/production-schema.md` section 7.1). Lap 1 has neither half -- there is no watcher,
+and `D-0077` defers the privileged publisher to lap 2 -- so a verb is the only way the lap ends at
+all.
+
+**Decision.** Taken at the human gate on 2026-09-05. `continuo run close --db --run-id --outcome
+--actor-id [--now-ms]` records the close, in `src/control_plane/run_close.ts` with the CLI half in
+`run_cli.ts`. **The transition set is the whole of the decision**, and it is:
+
+| From | To | Admitted |
+|---|---|---|
+| `created`, `running`, `suspended` | `completed`, `failed`, `cancelled` | yes -- the nine steps this verb may take |
+| `completed`, `failed`, `cancelled` | anything | no: terminal is absorbing, and a wrong terminal fact is corrected by opening a new run |
+| any | `running`, `suspended` | no: a close names a terminal status. `run close` is not a general `run set-status` |
+| any | itself | no: a write that moves nothing would still stamp a `writer_epoch` and an `updated_at_ms` |
+
+Four things follow from that table and each is deliberate.
+
+- **`created -> <terminal>` is admitted directly**, skipping `running`. Nothing in this build moves a
+  run to `running`, so requiring the pass would make every run lap 1 has produced permanently
+  uncloseable. The step is already admissible to the DDL: `run_status_is_forward_only` ranks
+  `created` below every terminal word, so this opens no hole, it reads the existing rule out loud.
+- **`--outcome` is required and never defaulted.** Which terminal status a run reached is a fact
+  about the work, and a verb that guessed `completed` would write a fact nobody stated. The three
+  words are `TERMINAL_RUN_STATUSES` itself, read by the parser's `choices`, so `--help` and the
+  domain cannot disagree.
+- **The from-status is read back, never supplied.** An operator states the outcome, not the status
+  the run is currently in; a `--from` flag would let a typo aim a compare-and-set at a step the run
+  never took. The read is not a check-then-write race: the status it read becomes part of
+  `advanceRunStatus`'s own `WHERE`.
+- **The close takes the run lease under `--actor-id` and gives it back.** Taking it is the only way
+  to reach the single writer of `run.status` (`D-0046` rule 1), and a live claimant refuses the verb
+  -- a lap still driving this run holds that lease, and a close landing under it would transition a
+  run out from under a session that is still writing. Giving it back is what makes a corrected second
+  attempt immediate rather than a wait for the TTL.
+
+**Three things the verb does not do, stated because each was a live alternative.**
+
+1. **It does not publish.** Push, PR and merge stay the operator's manual leg (`D-0077`). Nothing
+   here talks to git or to GitHub and nothing here verifies that a merge happened: the operator
+   observed it, and this is where they write the observation down.
+2. **It appends no event.** There is no observed provider fact to append -- a `pr_merged` composed
+   here would be an unverified claim about a repository nothing read, written onto the spine as an
+   observation, which is the class of fault section 7.1 records. An event of its own could not be
+   atomic with the transition in any case: `advanceRunStatus` goes through `protectedWrite`, which
+   owns its `BEGIN IMMEDIATE` and refuses to run inside another transaction, so a second write here
+   would be a second commit and a kill between them would leave a run closed with no event or an
+   event with no close. What records the close is the `run` row: `status`, `updated_at_ms`, and
+   `writer_epoch` naming the `lease` row the actor's identity is on.
+3. **It does not read the gate**, even though #125 describes the close as following
+   `answered_and_forwarded`. Closing a run whose gate is still open is already adjudicated one layer
+   over: `sweepSubjectGone` closes every open gate whose subject run reached a terminal status, and
+   `gate reconcile` is what runs it. A gate precondition here would be a second, weaker copy of that
+   rule, and two copies eventually disagree about one database.
+
+**The collapse this takes, named so it can be undone.** For lap 1 the operator is the observer *and*
+the consumer, which is exactly the split section 6.2 warns about being collapsed. It is taken with
+the eyes open and it is bounded: the collapse is that a human's assertion substitutes for a provider
+observation, not that the transition escapes the single writer -- the write still goes through
+`advanceRunStatus`, still under a lease, still stamping the epoch. When a real `pr_merged` producer
+exists, its consumer transitions runs under this same table and `run close` stays what it is: the
+operator's own close, for the runs no publisher observed.
+
+**The rejected alternatives.** *A general `run set-status`* covers this case and every other one, and
+that is the objection: it would make `running <-> suspended` an operator's flag away, with no verb
+naming what it is for, in a build where nothing else writes those statuses. *A `run start` first, so
+the close always leaves `running`* buys a truer history and costs the lap: nothing observes a start,
+so the operator would be stating that too, and every dogfood run would need two invented facts
+instead of one. *Requiring the gate to be closed* is answered above. *Appending a `run_closed`
+event*, ordered before the transition so that a crash between them is recoverable, remains the shape
+to reach for if a reader ever needs the close on the spine; it is not taken now because the reader
+does not exist and the event would be a fact about an operator's act rather than an observation, so
+the vocabulary question (`event_type` is `subject_pastparticiple` and names objective facts) should
+be settled with that reader in hand.
+
+**What would falsify it.** A consumer that must close two runs in one transaction: the run-scoped
+lease (`D-0046` rule 3) makes that impossible, and this verb inherits the falsifier. Also, a lap that
+gains a `running` status writer -- at that point `created -> <terminal>` stops being the ordinary
+case and becomes the exception worth reporting rather than admitting silently.
+
+**A residual this leaves open, measured rather than assumed.** The refusals above are taken before
+the lease, so a close this verb can see is impossible costs the database nothing. Two closes *racing*
+are a different case and the verb does not close it: the status read and the acquire are separate
+transactions -- `lease.ts` gives `acquire` and `protectedWrite` a `BEGIN IMMEDIATE` each and refuses
+to join either to an outer one -- so a second closer that reads before the first commits will take
+the lease (raising the epoch and replacing the holder) and only then miss on the compare-and-set. The
+run is untouched and the refusal is correct; what is lost is that the `lease` row afterwards names an
+epoch that wrote nothing, so the row's `writer_epoch` no longer resolves to the actor who closed it.
+Making the precondition and the acquire one transaction is a change to `lease.ts`'s transaction
+ownership, which is `D-0046`'s territory and not this verb's, and it is worth taking when a second
+operator surface exists -- lap 1 has one operator.
+
+**What records it.** `test/control_plane/run-close.test.ts` walks all nine admitted steps, asserts
+that a refusal this verb detects costs the database nothing (no epoch bumped, no status moved), that
+the lease is taken under the actor and given back, that a `--now-ms` behind the run's own
+`updated_at_ms` is refused here rather than by the row's `CHECK` from inside the fenced statement,
+and that the spine is unchanged by a close.

@@ -242,8 +242,9 @@ per `D-0031`.
 ## 6. Where this stops
 
 Step 11 -- push the topic branch, open a PR against the recorded base branch, merge, close the run --
-is the operator's manual leg and was not performed. The run's status is still `created`, and no CLI
-verb exists to move it. Five events remain: `run_created`, `run_delegation_recorded`,
+is the operator's manual leg and was not performed. The run's status is still `created`. There was no
+CLI verb to move it when this ran; `run close` is that verb now (F-7, `D-0084`), and closing a run
+appends nothing, so the five events below are what a closed run would show too. Five events remain: `run_created`, `run_delegation_recorded`,
 `workspace_materialized`, `worker_escalation_raised`, `gate_closed`.
 
 ---
@@ -356,6 +357,12 @@ verb exists to move it. Five events remain: `run_created`, `run_delegation_recor
 - **Workaround.** None; this run left the status alone.
 - **Real fix.** Add the `run close` equivalent when step 11 gets a CLI. It carries a design decision,
   so this is a proposal only.
+- **Fixed (D-0084, #125).** `continuo run close --db --run-id --outcome --actor-id` records the
+  operator's close: it advances the run from its current status to a terminal one, as the single
+  fenced writer of `run.status`, under a run lease taken as `--actor-id`. It records step 11 rather
+  than performing it -- push, PR and merge stay manual -- and it deliberately appends no event and
+  reads no gate. `D-0084` holds the transition table and the reasons. Nothing else about this
+  record's laps changes: they ran before the verb existed, and their runs are still `created`.
 
 ---
 
@@ -1017,5 +1024,7 @@ character devices in a fenced child's worktree and takes them away again.
 
 One rung higher than section 6, and for a different reason. Steps 1-10 ran, the worker did the work
 it was delegated, the work is committed on `dogfood/lap1-007`, and the gate is closed. Step 11 --
-push, PR, merge, close the run -- is still the operator's manual leg, and F-7 is still the reason no
-verb reaches it. **The fence is no longer what stops the lap.**
+push, PR, merge, close the run -- is still the operator's manual leg, and it was still true when this
+pass ran that no verb reached its last rung; `run close` closes that rung since F-7's fix
+(`D-0084`), and push, PR and merge remain manual by design. **The fence is no longer what stops the
+lap.**

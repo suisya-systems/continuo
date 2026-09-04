@@ -10,7 +10,7 @@
  * - `sandbox doctor ...`   -> `src/settings/cli.ts`
  * - `attention scan|watch ...`   -> `src/attention/cli.ts`
  * - `db create|migrate|verify ...` -> `src/control_plane/cli.ts`
- * - `run admit ...`         -> `src/control_plane/run_cli.ts`
+ * - `run admit|close ...`   -> `src/control_plane/run_cli.ts`
  * - `lap perform ...`       -> `src/lap/cli.ts`
  * - `gate list|show|present|deliver|ack|answer|close|reconcile ...`
  *                           -> `src/gate/cli.ts`
@@ -144,11 +144,13 @@ export function buildParser(): ArgumentParser {
   );
   dbCli.addSubparsers(db.addSubparsers("cmd"));
 
-  // run (what the control plane holds: admission, and the spine event for it)
+  // run (what the control plane holds: admission, and the operator's close)
   const run = sub.addParser(
     "run",
     "Runs recorded in a production control plane: admit one, which creates " +
-      "its row at status 'created' and appends the run_created event for it.",
+      "its row at status 'created' and appends the run_created event for it, " +
+      "and close one, which records the operator's close by advancing it to a " +
+      "terminal status.",
   );
   runCli.addSubparsers(run.addSubparsers("cmd"));
 
