@@ -125,8 +125,16 @@ role's `cli_args_allow` is a list of whole argument lists, and a submitted `cli_
 only if it is **equal, element by element and in order, to one of them**. A role authorising
 `[["--allowedTools", "Edit,Write"]]` admits exactly that two-element list and nothing else -- not
 `["--allowedTools", "Edit,Write", "--allowedTools", "Bash"]`, and not the same two elements in the
-company of anything. The empty list is the vector every role authorises implicitly, which is what
-"the allowlist is empty" means in section 1.
+company of anything.
+
+**The empty `cli_args` is authorised unconditionally, by a rule and not by an entry.** Exact matching
+against an empty list of vectors would match nothing at all, including the no-argument run every lap
+has ever performed, so "the allowlist is empty" has to be spelled out rather than inferred: a
+`cli_args` of length zero is the *absence* of operator arguments, not an argument, and it is admitted
+for every role whether or not the document mentions that role. Written as an entry (`[[]]` on each
+role) it would be a line an author could delete, turning a documentation edit into a lap that cannot
+run at all. Section 1's measurement is therefore the statement that **no role's `cli_args_allow` is
+present**, and lap 1 runs entirely on the unconditional rule.
 
 Why a whole vector rather than a fragment matched against a window:
 
@@ -205,11 +213,26 @@ work: the digest pin. A new file has no pin, so editing it is a normal edit, and
 degrades to "somebody hopefully looked at the diff". It also splits the answer to "what fences this
 role?" across two files.
 
-**Recommendation: E2.** The digest pin is not a side effect here, it is the mechanism: because
-`roles.json` is pinned, an allowlist entry **cannot** be added without a red CI, a digest bump and a
-written reason in the `deviations` list. That is precisely "a reviewed change, not a per-run
-decision", and it arrives for free. E2 gets it without touching a single line of ported rendering
-code, which E1 does not.
+**Recommendation: E2**, with one addition, because the digest pin on its own does less than it
+looks like it does.
+
+*What the pin actually enforces.* `carried-documents.test.ts` compares `bytes` and `sha256` and
+nothing else; `deviations` is free-form metadata that no assertion reads. So an author adding an
+allowlist entry is forced to make a second, deliberate edit in the same commit -- the test's own
+failure message tells them to update the digest, the byte count and the revision -- but **nothing in
+CI makes them write the reason down**. "Reviewed change" rests on the digest bump being conspicuous
+in a diff, which is real, and not on an enforced record, which the current test does not provide.
+That is worth stating plainly rather than letting the recommendation borrow strength it does not
+have.
+
+*The addition that closes it.* A test in `test/contract/` asserting that **every vector in
+`cli_args_allow` appears verbatim in that document's `deviations` list**. It is mechanical (both
+sides are literal strings in files this repository owns), it fails closed (an authorised vector with
+no written reason is red), and it turns "somebody should explain this" into a check. It also gives
+the corpus in section 6 the thing it needs -- a place where every authorised vector is enumerated.
+
+With that addition E2 is the recommendation, and it gets there without touching a single line of
+ported rendering code, which E1 does not.
 
 The cost of E2, stated so it is not discovered later: continuo's `roles.json` diverges further from
 interlock's, and the `deviations` list is where that debt is tracked. It already has one entry; this
@@ -262,8 +285,14 @@ unconstructible the moment its authorising entry is removed -- and unconstructib
 `lap perform` or by anything else. Fail-closed in the direction that matters, and also fail-closed
 across reporting and closing a run that was legitimately admitted.
 
-So the constructor keeps exactly what it has minus the flag lists: the string rule, the
-control-character rule, and the bare `--`.
+**`FENCE_OWNED_FLAGS` stays in the constructor; only `FENCE_ALTERING_FLAGS` leaves.** The two are
+different in exactly the way that matters here: the owned list is *this build's own output*, closed
+by construction and role-independent, so refusing it is a fact about the record's shape and needs no
+document. Moving it out would let a `cli_args` restating `--settings` pass admission and the
+preflight and be refused only at the materialiser -- the late refusal this section exists to avoid.
+
+So the constructor keeps: the string rule, the control-character rule, the bare `--`, and
+`FENCE_OWNED_FLAGS`. It loses `FENCE_ALTERING_FLAGS` and gains nothing.
 
 ### 5.2 In `admitRun`, beside the roster check
 
@@ -318,8 +347,8 @@ pending run.
 
 | Moment | Check | Before what |
 |---|---|---|
-| `run admit` | shape + bare `--` (constructor), then allowlist (`admitRun`) | the run row and both events |
-| `lap perform`, step 1 | shape + bare `--` (constructor, via `readLapRunIntent`) | the preflight |
+| `run admit` | shape + bare `--` + `FENCE_OWNED_FLAGS` (constructor), then allowlist (`admitRun`) | the run row and both events |
+| `lap perform`, step 1 | shape + bare `--` + `FENCE_OWNED_FLAGS` (constructor, via `readLapRunIntent`) | the preflight |
 | `lap perform`, step 1a | allowlist, first in `preflight` | the state root, the probe, **the delivery lease** |
 | `lap perform`, materialise | allowlist (`requireCliArgs`) | the branch, the worktree, the fence |
 
@@ -338,11 +367,16 @@ A second exported constant that no longer enforces anything is that trap rebuilt
   attached-value spelling -- is already written down permanently. `DECISIONS.md` is append-only, and
   `D-0086` is the record of six review passes finding six different kinds of gap. Nothing needs to be
   copied anywhere for it to survive; `D-0087` points at it.
-- **The names** become a corpus in `test/control_plane/`, not an export from `src/`. Each still gets a
-  case asserting that an admitted run carrying it is refused -- which passes trivially under an empty
-  allowlist, and stops being trivial the moment the list is not empty. That is the regression the
-  corpus is actually for: it is what would catch an escape-hatch entry that quietly re-opens
-  `--dangerously-skip-permissions`.
+- **The names** become a corpus in `test/control_plane/`, not an export from `src/`, and the case it
+  drives **reads the document rather than submitting arguments**. Submitting each flag on its own and
+  asserting refusal is the obvious shape and it is close to vacuous: if a role authorised
+  `["--dangerously-skip-permissions", "--foo"]`, submitting the bare flag would still be refused under
+  exact whole-vector matching and CI would stay green over a document that had just re-opened the
+  largest hole `D-0086` names. The case that catches that scans **every vector in every role's
+  `cli_args_allow`** for a corpus member and fails naming the role, the vector and the flag.
+  `AGENTS.md`'s "green is not enough" rule applies directly -- this is a new check, so it ships with
+  an anti-vacuity fixture: a document that *does* authorise a corpus flag, over which the scan is
+  observed red.
 - The four *admitted* flags `D-0086` asserts on purpose (`--restricted`, `--disable-slash-commands`,
   `--permission-prompts`, `--tmux`) **invert**: under an allowlist they are refused like everything
   else, and the cases that assert they are admitted must be deleted rather than left to fail. That
@@ -415,8 +449,12 @@ document authorises, and everything else is refused. Four parts:
    refusing to model. Whole vectors have no composition rule to get wrong. Attached-value forms,
    camelCase spellings and short-flag bundling stop being questions too, because none can produce a
    matching byte sequence.
-3. **As shipped, every role's list is empty**, so the lap-1 rule is "no operator arguments at all".
-   That is the measurement above, not an aspiration.
+3. **A `cli_args` of length zero is authorised unconditionally**, by a rule rather than by an entry:
+   it is the absence of operator arguments, not an argument. Exact matching against an absent or
+   empty entry list would otherwise refuse the no-argument run every lap has performed, and spelling
+   it as an entry (`[[]]` per role) would make a deletable line load-bearing. **No role's
+   `cli_args_allow` is present as shipped**, so the lap-1 rule is "no operator arguments at all" --
+   the measurement above, not an aspiration.
 4. **The check runs where the role document is already read, at every point before something
    irreversible**: in `admitRun` beside the roster check; first in `lap perform`'s preflight, which
    is before the delivery lease -- `holdDeliveryLease` writes a row and consumes an epoch on the one
@@ -430,12 +468,15 @@ document authorises, and everything else is refused. Four parts:
    authorising entry was removed.
 
 **What happens to `FENCE_ALTERING_FLAGS`.** It stops being enforcement and is removed from `src/`.
-Its prose stays here, in `D-0086`, which is append-only and is the record of what six review passes
-found. Its twenty-four names become a test corpus asserting each is refused -- trivially true while
-every list is empty, and the regression that matters once one is not: it is what catches an
-escape-hatch entry re-opening `--dangerously-skip-permissions`. The corpus **informs** review of a
-hatch entry rather than barring one, because `--allowedTools` is on it and is the only argument the
-dogfood ever needed.
+Its prose stays in `D-0086`, which is append-only and is the record of what six review passes found.
+Its twenty-four names become a test corpus, and the case that corpus drives **reads the document
+rather than submitting arguments**: it scans every vector in every role's `cli_args_allow` for a
+corpus member and fails naming the role, the vector and the flag. Submitting each flag and asserting
+refusal would be close to vacuous -- a role authorising `["--dangerously-skip-permissions", "--foo"]`
+still refuses the bare flag under exact matching, so CI would stay green over a document that had
+just re-opened the largest hole `D-0086` names. The corpus **informs** review of a hatch entry rather
+than barring one, because `--allowedTools` is on it and is the only argument the dogfood ever
+needed.
 
 **This supersedes `D-0086`, and restates the half of it that survives.** `D-0086`'s central decision
 was that the constructor refuses both lists; that stops being true here, so under `AGENTS.md`'s rule
@@ -471,6 +512,16 @@ role?" splits across two files). *A key on the role body rather than a top-level
 scanning; making it inert means editing `META_KEYS` in a module ported faithfully from interlock).
 *The corpus bars the hatch* (rejected: it would bar the only argument ever needed).
 
+**What records it.** Three checks, all new. (1) The allowlist's own cases at each of the three
+enforcement points, including the unconditional empty-vector rule, which is the one a literal reading
+of "must equal an entry" gets wrong. (2) The corpus scan over the document, described above. (3) A
+`test/contract/` case asserting that **every vector in `cli_args_allow` appears verbatim in the
+`deviations` list** for `roles.json` -- because `carried-documents.test.ts` compares only `bytes` and
+`sha256`, and `deviations` is free-form metadata no assertion reads, so without it the digest pin
+forces a deliberate second edit but not a written reason. Checks (2) and (3) are new checks under
+`AGENTS.md`'s "green is not enough" rule and each ships with an anti-vacuity fixture: a document that
+authorises a corpus flag, and one that authorises a vector no deviation mentions, both observed red.
+
 **Consequences.** `continuo run admit --cli-arg X` refuses X under the shipped document, for every
 role; the flag stays, because an authorised argument must be passable, and its help says so.
 `docs/operations/lap-1-dogfood.md` §3's command no longer admits even as a workaround, and is
@@ -501,11 +552,12 @@ Each row is a question this design had to answer and that the gate can overturn 
 |---|---|---|---|
 | D1 | What does the lap-1 allowlist contain? | **Empty, for every role** | Measured: one of eight dogfood runs passed anything, and it was a workaround for a fence defect `D-0081`/#120 closed. Run 007 reached a commit with the fence's flags and nothing else |
 | D2 | What is an allowlist entry -- a flag name, a fragment, or a whole `cli_args` vector? | **A whole vector**, admitted only on element-by-element equality | A name plus an arity models the CLI's option grammar, the thing `D-0086` proved cannot be shown correct. A fragment is worse than it looks: fragments compose, so two reviewed entries can be concatenated and reordered into an argv nobody reviewed. Whole vectors also kill the `--flag=value` / camelCase / bundling spellings as a class |
-| D3 | Where does the escape hatch live? | **A top-level `cli_args_allow` key in `src/fencing/roles.json`** | The renderer reads only `roles` and `global`, so no ported code changes; and the file's digest pin makes widening a red CI until someone writes the reason down -- which *is* the "reviewed, not per-run" requirement |
+| D3 | Where does the escape hatch live? | **A top-level `cli_args_allow` key in `src/fencing/roles.json`, plus a test tying each vector to a `deviations` entry** | The renderer reads only `roles` and `global`, so no ported code changes. The digest pin alone is weaker than it looks -- `carried-documents.test.ts` compares only `bytes` and `sha256`, and `deviations` is metadata nothing reads -- so it forces a deliberate second edit but not a written reason. The added test is what makes "reviewed, not per-run" enforced rather than hoped for |
 | D4 | Permit an operator argument, or apply one from the document? | **Permit** | Applying is safer, but puts arguments in the child's argv that the `run_delegation_recorded` payload does not mention, and `D-0055` makes that payload the whole statement of what a run runs. Overturnable: if the gate values the closed door more than the complete record, H0 (§4.2) is the stronger design |
-| D5 | Which module enforces it? | **`admitRun`, first in `lap perform`'s preflight, and the materialiser's validation block; not the constructor** | The preflight is load-bearing rather than belt-and-braces: `performLap` takes the one global delivery lease *before* it materialises, so a check first met at the materialiser lets a run that will be refused consume an epoch and a resource. The constructor is excluded because it also runs at `lap perform`, so teaching it a mutable document would make an admitted run *unreadable* once its entry was removed, not merely unrunnable |
-| D6 | What happens to `FENCE_ALTERING_FLAGS`? | **Delete from `src/`, keep the names as a test corpus, keep the prose in `D-0086`** | A non-enforcing exported list rebuilds the exact trap `D-0086` names -- a list that reads like the dangerous-flag list and is not. The corpus keeps the regression value; `DECISIONS.md` is append-only so the prose is already permanent |
+| D5 | Which module enforces the allowlist? | **`admitRun`, first in `lap perform`'s preflight, and the materialiser's validation block -- not the constructor, which keeps `FENCE_OWNED_FLAGS` and the bare `--`** | The preflight is load-bearing rather than belt-and-braces: `performLap` takes the one global delivery lease *before* it materialises, so a check first met at the materialiser lets a run that will be refused consume an epoch and a resource. The constructor is excluded from the *allowlist* only, because it also runs at `lap perform` -- teaching it a mutable document would make an admitted run *unreadable* once its entry was removed. The owned-flag list stays there: it is this build's own output, closed by construction and role-independent |
+| D6 | What happens to `FENCE_ALTERING_FLAGS`? | **Delete from `src/`; the names become a corpus that scans the document, not one that submits arguments** | A non-enforcing exported list rebuilds the exact trap `D-0086` names. The scan direction is load-bearing: under exact whole-vector matching a submitted bare flag is refused even when the document authorises a vector containing it, so a submit-and-assert corpus would stay green over the widening it exists to catch |
 | D7 | Does the corpus bar an escape-hatch entry, or inform review of one? | **Inform** | `--allowedTools` is on the corpus and is the only argument the dogfood ever needed; a bar makes the hatch useless for the only observed case. This is the residual risk, stated in §7 |
 | D8 | Is `D-0086` superseded? | **Yes. `D-0087` supersedes it and restates the surviving owned-flag rule** | Its central decision -- the constructor refuses both lists -- stops being true, and `AGENTS.md` says a decision that stops being true gains `Status: superseded by D-XXXX`. Leaving it accepted would give a reader two accepted answers to "what refuses `cli_args`?". The price is that `D-0087` must restate `FENCE_OWNED_FLAGS` and the bare `--` rule so nothing is only recorded in a superseded entry, which it does |
 | D9 | Does `--cli-arg` survive as a CLI flag? | **Yes, with rewritten help** | Removing it would make an authorised argument unpassable. The help must say the refusal is the default and that the role document is where the answer is authored |
-| D10 | Is the enforcement change one PR or several? | **One**, after this gate | The pieces are not independently shippable: deleting `FENCE_ALTERING_FLAGS` before the allowlist exists opens the door `D-0086` closed, and adding the allowlist while the denylist stands leaves two rules with one meaning |
+| D10 | How is "no operator arguments" expressed? | **An unconditional rule: `cli_args` of length zero is always authorised** | Exact matching against an absent entry list matches nothing, so a literal implementation would refuse the no-argument run every lap has performed. Writing `[[]]` on each role instead makes a deletable line load-bearing -- a documentation tidy-up would stop every lap |
+| D11 | Is the enforcement change one PR or several? | **One**, after this gate | The pieces are not independently shippable: deleting `FENCE_ALTERING_FLAGS` before the allowlist exists opens the door `D-0086` closed, and adding the allowlist while the denylist stands leaves two rules with one meaning |
