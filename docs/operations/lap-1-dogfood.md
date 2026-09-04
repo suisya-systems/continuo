@@ -640,3 +640,308 @@ Two rules follow, and they are cheap next to what they cost here:
   `Permission to use Bash with command ... has been denied.` from the permission system, and
   `worker: Bash denied by permission-deny rule '...'` from the fence's own hook. The second names the
   rule; the first names nothing, and it is the one an ambient rule produces.
+
+---
+
+## 10. Lap 3, on `aa87f35`: the lap goes through
+
+A third dogfood, run on 2026-09-04 against continuo at `aa87f35` -- the revision at which `D-0082`
+(#130, the sandbox block the CLI can actually read) and `D-0083` (#132, the `Edit(...)` spelling of
+the worker's settings deny) were on main. The question it was run to answer is section 9's, one
+rung further up: does lap 1 now reach **a commit** and a closed gate with no workaround at all --
+no `--allowedTools`, no key removed from the rendered fence, no edit to any settings file, and
+nobody at the child's prompt to approve anything?
+
+**The answer is yes.** Run 007's worker edited with `Edit`, staged with `git add`, and committed,
+under the fence exactly as `lap perform` rendered it; the gate then closed
+`answered_and_forwarded`. F-8 and F-9 are both closed in the field. What is left of section 7's list
+is unchanged, and one thing that was open -- #131, the read that slipped past the fence -- did not
+reproduce.
+
+| Run id | What it was for | `--cli-arg` | Result |
+|---|---|---|---|
+| `lap1-dogfood-007` | the lap, with no workaround | none | `Edit` landed, `git add` and `git commit` **both succeeded**. Gate closed `answered_and_forwarded` |
+| `lap1-dogfood-008` | a four-probe measurement of the sandbox itself | none | Two reads denied, one out-of-tree write denied, one in-tree write allowed. Gate closed `answered_and_forwarded` |
+
+Both ran against `sandbox-clone`, which carries no `.claude/settings*.json` of its own, so nothing
+ambient is in play and every refusal below can be attributed to a layer (9.5's first rule). The one
+thing it does carry is an empty `.claude/.cc-writes/` directory the CLI itself made in an earlier
+lap; it holds no settings.
+
+Everything in section 1 still holds. What changed run to run is only the paths that must be fresh:
+`dropbox-007` / `-008` and `workspace-007` / `-008`. The control plane, the artifact root and the
+state root are section 1's, reused. Worker CLI: `2.1.260 (Claude Code)`.
+
+`lap perform` for run 007, end to end including the worker's turn: **55.7 s**.
+
+### 10.1 The lap, with nothing added
+
+`run admit` is section 3's command **with neither `--cli-arg` line**, as in 9.2. Run 007's prompt is
+9.2's with the commit spelled out as two separate `Bash` calls, plus four observations written to an
+uncommitted `sandbox-report.txt`:
+
+```text
+コミットメッセージ "docs(dogfood): 締めの一文を追加" で commit せよ。push はしてはならない。
+追記は必ず Edit ツールで行うこと (Bash のリダイレクトや sed で書き換えてはならない)。
+commit は Bash で `git add novel.md` と `git commit -m "docs(dogfood): 締めの一文を追加"` を
+それぞれ別々の Bash 呼び出しとして実行すること。
+```
+
+The two-call instruction matters for the same reason 9.2's `Edit` instruction did. Section 9's
+worker issued `git add novel.md && git commit -m ...` as one command and met a *different* refusal
+first -- `This Bash command contains multiple operations. The following parts require approval` --
+which says nothing about whether either half would have passed on its own. Splitting them is what
+makes the result a measurement of `Bash(git add:*)` rather than of the compound-command rule.
+
+`record.json`'s `cli_args` for run 007 is the fence's own and nothing else:
+
+```json
+["--settings", ".../artifacts/lap1-dogfood-007/settings.local.json",
+ "--permission-mode", "acceptEdits", "--setting-sources", "",
+ "--mcp-config", ".../artifacts/lap1-dogfood-007/mcp.json", "--strict-mcp-config"]
+```
+
+From `session-state/abf02de2-3b11-47f1-a927-eb734b38c0a9/events-000.jsonl`, in order:
+
+```text
+TOOL_USE: Edit  {"file_path": ".../workspace-007/novel.md", "old_string": "届いた、と思った。\n", ...}
+RESULT: The file ... has been updated successfully.
+TOOL_USE: Bash  {"command": "git add novel.md"}
+RESULT: (Bash completed with no output)                    <-- section 9's refusal, gone
+TOOL_USE: Bash  {"command": "git commit -m \"docs(dogfood): 締めの一文を追加\""}
+RESULT: [dogfood/lap1-007 5ecc816] docs(dogfood): 締めの一文を追加
+         1 file changed, 2 insertions(+)
+TOOL_USE: Bash  {"command": "git worktree list"}
+RESULT (is_error): worker: Bash denied by permission-deny rule 'git worktree *'
+```
+
+and, checked from outside the child:
+
+```bash
+git -C /home/happy_ryo/work/org/workers/continuo-dogfood/workspace-007 log --oneline -2
+# 5ecc816 docs(dogfood): 締めの一文を追加
+# fc94f02 feat(dogfood): 短編小説 novel.md を追加
+
+git -C /home/happy_ryo/work/org/workers/continuo-dogfood/workspace-007 status --short
+# ?? sandbox-report.txt
+```
+
+The last line of the transcript excerpt is worth as much as the commit. In section 9 the same
+command **ran**, with `Bash(git worktree *)` in the fence's deny list and in the deny hook's rules;
+that was F-8's read-side half, filed as #131. Here it is refused, and refused *by the fence's own
+hook* -- the message names the rule, which is the tell 9.5's second rule turns on.
+
+### 10.2 The sandbox, measured from inside the child
+
+Criterion (3) of this lap was to establish that a sandbox is not merely declared but built. The
+settings file says it is:
+
+```json
+"sandbox": {
+  "enabled": true,
+  "filesystem": {
+    "additionalDirectories": [
+      ".../sandbox-clone/.git/worktrees/workspace-007",
+      ".../sandbox-clone/.git/objects",
+      ".../sandbox-clone/.git/refs/heads/dogfood/lap1-007",
+      ".../sandbox-clone/.git/packed-refs"
+    ],
+    "denyRead":  ["/home/happy_ryo/work/org/workers/interlock/.secrets", "/home/happy_ryo/.ssh"],
+    "denyWrite": ["/home/happy_ryo/work/org/workers/interlock/.state",
+                  "/home/happy_ryo/work/org/claude-org-ja"]
+  }
+}
+```
+
+-- `enabled` present, the deny entries flat strings, `~` expanded. That is `D-0082` arriving as
+designed, and the entry section 9 found fatal (`{"path": "~/.ssh"}`) is now
+`"/home/happy_ryo/.ssh"`.
+
+**A declaration is not a measurement**, and the file above is only what the parent wrote. Two
+independent observations from inside the child close that gap.
+
+**First, what the child was told.** The `Bash command sandbox` system reminder the child received
+names the fence's own paths:
+
+```text
+Filesystem: {"read":{"denyOnly":[..., "/home/happy_ryo/work/org/workers/interlock/.secrets",
+                                 "/home/happy_ryo/.ssh"], "allowWithinDeny":[]},
+             "write":{"allowOnly":[..., ".", "$TMPDIR",
+                                 ".../continuo-dogfood/sandbox-clone/.git"], ...}}
+```
+
+Both `denyRead` entries are there, so the file was read and a sandbox was constructed from it. The
+writable set is the worktree (`.`) plus the base clone's `.git` -- the derivation `D-0082`'s note
+calls undocumented CLI behaviour, visible here doing exactly what that note predicted.
+
+One correction to the brief this lap was given, which said the sandbox can only be observed after a
+`Bash` has run. **The reminder arrives at the start of the turn, before any tool use** -- both
+children reported this independently and unprompted, and both quoted it in full. What a `Bash` run
+adds is not the reminder but the enforcement, which is the second observation.
+
+**Second, what actually happened when the child pushed on it.** Run 008 exists only for this. Its
+prompt runs four probes one at a time and forbids any retry, in particular any
+`dangerouslyDisableSandbox` -- which matters, because the reminder the child is handed *instructs*
+it to retry that way on a sandbox failure, and an unforbidden child would have turned the
+measurement into an approval prompt nobody was there to answer. From
+`session-state/a1db40a5-f0e8-4083-865b-ca6a4f4f4a1c/events-000.jsonl`:
+
+| probe | command | result |
+|---|---|---|
+| A, read of a `denyRead` path | `ls -la /home/happy_ryo/.ssh` | `worker: Bash denied by sandbox-deny-read rule '/home/happy_ryo/.ssh'` |
+| B, read of a `denyRead` path | `ls -la .../interlock/.secrets` | `worker: Bash denied by sandbox-deny-read rule '.../interlock/.secrets'` |
+| C, write outside the writable set | `touch .../continuo-dogfood/sandbox-probe-008.txt` | `touch: cannot touch '...': Read-only file system` |
+| D, write inside the worktree | `touch probe-inside.txt` | `(Bash completed with no output)` |
+
+`sandbox-probe-008.txt` does not exist afterwards; `probe-inside.txt` does. **Probe C is the
+decisive one**: `Read-only file system` is `EROFS` from the kernel, reported by `touch` itself. No
+rule engine produces that sentence. The command was launched, and the filesystem it was launched
+onto refused the write -- which is only possible if a sandbox was built. Compare F-8, where the
+sandbox was declared and silently not built: there, *every* write-capable `Bash` needed approval and
+nothing ever reached a syscall.
+
+Probes A and B are a different layer and read that way: they never ran. `worker: Bash denied by
+sandbox-deny-read rule` is continuo's own deny hook (`LAYER_SANDBOX` /
+`KIND_SANDBOX_DENY_READ` in [`../../src/fencing/rules.ts`](../../src/fencing/rules.ts)) matching
+before execution. So the two directions of the fence's `sandbox` block are enforced by two different
+mechanisms -- reads by continuo's hook, writes by the CLI's own sandbox -- and this lap saw both
+fire. The child noticed the split on its own and wrote it up in `probe-report.txt`.
+
+### 10.3 Step 10, twice
+
+Identical to section 5 for both runs, against
+`G=gate/worker_escalation/abf02de2-3b11-47f1-a927-eb734b38c0a9/0` (007) and
+`.../a1db40a5-f0e8-4083-865b-ca6a4f4f4a1c/0` (008): `present` -> `deliver` -> `ack` -> `answer` ->
+`deliver` -> `ack`. Run 007 ended at
+
+```text
+gate/worker_escalation/abf02de2-.../0 ... stage=forwarded deadline=- outcome=answered_and_forwarded
+transition 27 open    -->received        by=system/lap_composition_root
+transition 28 advance received->presented by=secretary/operator-dogfood
+transition 29 advance presented->answered by=human/operator-dogfood     body=adopt-a-taigendome ...
+transition 30 advance answered->forwarded by=secretary/operator-dogfood
+transition 31 close   forwarded->forwarded by=system/operator-dogfood
+```
+
+Run 008 closed the same way. Both gates were closed deliberately rather than abandoned, so this lap
+adds no new `relay_gaps` -- and `reconcile` proves it, still finding only run 005's abandoned gate
+from section 9, now aged four hours further:
+
+```bash
+node "$CLI" gate reconcile --db "$DB" --actor-id operator-dogfood --stalled-tolerance-ms 300000
+# settled: subject_gone=0 advanced=0 closed=0
+# found: relay_gaps=1
+#   gap gate/worker_escalation/a20e849b-6a2f-4d6b-b36e-c7c77a6f49c5/0 at received age=13052803
+# found: stalled_relays=0
+# found: past_deadline=0
+```
+
+### 10.4 F-8 and F-9, checked in the field
+
+**F-8 (#130) is closed.** Under the fence exactly as rendered, with no `--allowedTools` anywhere,
+`git add novel.md` returned no output and `git commit` produced a commit. That is the write half.
+The read half -- `git worktree list` running despite two deny rules -- is also gone: it is now
+refused by the hook. `D-0082`'s account is confirmed in both directions, including its correction of
+its own first diagnosis: the writable surface was never too tight, the sandbox had never been built,
+and building it fixes the write side and the read side at once. **#131, the read-side hole that
+`D-0082` explicitly left open, did not reproduce here.** Whether it was closed by the same change or
+is merely quiet under this CLI is not something one lap can say, so it is recorded as
+non-reproducing rather than as fixed.
+
+**F-9 (#132) is closed, and its residue is gone too.** The worker role's deny list now carries both
+spellings:
+
+```json
+"Write(~/.claude/settings.json)", "Edit(~/.claude/settings.json)"
+```
+
+`D-0083` predicted the CLI's startup warning would survive, because it names the `Write` spelling's
+*presence* rather than the `Edit` spelling's absence. **It did not appear.** `stderr-000.log` is
+**0 bytes for both runs 007 and 008** -- not "no warning of interest", no output at all. Measured on
+CLI `2.1.260`, the same version `D-0083` measured. The brief for this lap carried that warning
+forward as a known limitation not counting against the result; there was nothing to discount.
+
+### 10.5 What is left
+
+Nothing on section 7's list moved, and none of it blocked this lap:
+
+- **F-5 (#123)** reproduces exactly. `dropbox-007`'s `<sha256>.effect.json` still carries
+  `"payload": "{\"answer\": \"adopt-a-taigendome \\u3092\\u63a1\\u7528\\u3059\\u308b\\u3002...`
+- **F-6 (#124)** reproduced *by accident*, which is the best evidence of its shape: piping
+  `gate show` into `head -1` while scripting section 10.3 killed the CLI with
+  `Error: write EPIPE ... at Object.write (dist/gate/cli.js:135:24)`. The gate had already closed;
+  the crash is in the printing.
+- **F-7 (#125)** unchanged: both runs sit at status `created` with a real commit in the worktree and
+  no verb to move them. This is now the *only* thing between this lap and step 11.
+- **F-3 (#121)**, **F-4 (#122)** and the unchecked `--role` (#126) were not exercised again.
+- **#133**, the `cli_args` door, is **open by construction and needs no run to confirm**. It was
+  settled by reading rather than by deliberately spawning a fence-disabled child.
+  `requireCliArgs` in [`../../src/workspace/materializer.ts`](../../src/workspace/materializer.ts)
+  refuses an admitted argument only if it repeats one of `FENCE_OWNED_FLAGS` --
+  `--settings`, `--permission-mode`, `--mcp-config`, `--setting-sources`, `--strict-mcp-config`.
+  `--dangerously-skip-permissions`, `--allowedTools`, `--disallowedTools` and `--add-dir` are not on
+  that list. Section 3's own `--allowedTools` workaround went through this door, which is what the
+  door is for and also why it is one.
+
+### 10.6 One observation this lap could not explain
+
+Run 007's worker was asked for `git status --short` and the transcript records this as the tool
+result, in the same `Bash` call whose `git log --oneline -2` returned the workspace's own history:
+
+```text
+5ecc816 docs(dogfood): 締めの一文を追加
+fc94f02 feat(dogfood): 短編小説 novel.md を追加
+---STATUS---
+?? .bash_profile
+?? .bashrc
+?? .claude/
+?? .gitconfig
+?? .gitmodules
+?? .idea
+?? .mcp.json
+?? .profile
+?? .ripgreprc
+?? .vscode
+?? .zprofile
+?? .zshrc
+```
+
+Only `.claude/` is a real entry of `workspace-007`, and the same command run from that worktree
+immediately afterwards prints `?? sandbox-report.txt` and nothing else. **It does not reproduce**,
+and `ls -a workspace-007` finds none of the other eleven.
+
+What those eleven are was found by accident, in the operator's own worktree, whose
+`git status --short` prints the same set:
+
+```bash
+ls -la .../continuo-lap1-dogfood-3/.bashrc .../.gitmodules .../.ripgreprc .../.idea
+# crw-rw-rw- 1 nobody nogroup 1, 3 Sep  3 20:44 .../.bashrc
+# crw-rw-rw- 1 nobody nogroup 1, 3 Sep  3 20:44 .../.gitmodules
+# crw-rw-rw- 1 nobody nogroup 1, 3 Sep  3 20:44 .../.ripgreprc
+# crw-rw-rw- 1 nobody nogroup 1, 3 Sep  3 20:44 .../.idea
+```
+
+`crw-rw-rw-` with device numbers `1, 3` is `/dev/null`. They are not files at all: they are
+**character devices**, an artifact of this WSL environment that the worker instructions for this
+checkout already warn about in another context -- an untracked character device is what makes an
+untracked-inclusive stash fail part way through. So the eleven are environment litter with a known
+cause, not a view of anyone's home directory, and the question narrows to why they were listed for a
+worktree that does not contain them.
+
+That part is still unexplained. The listing is one coherent, sorted directory read, and it arrived
+in the same `Bash` call whose `git log` returned `workspace-007`'s own history, so the two halves
+disagree about which tree they are looking at. No candidate directory reproduces the full set: the
+operator's worktree has all eleven, but a status taken there would also list `src`, `docs`,
+`README.md` and the rest, which the child's output does not.
+
+It is recorded here rather than diagnosed, and it is not given an `F-` number because it obstructed
+nothing: the commit it sits next to was verified from outside the child, by an operator `git log` in
+the worktree, and does not rest on this output. It is filed as an open question about what a child's
+`git status` resolves to under the sandbox, with the character devices as the first thread to pull.
+
+### 10.7 Where the lap now stops
+
+One rung higher than section 6, and for a different reason. Steps 1-10 ran, the worker did the work
+it was delegated, the work is committed on `dogfood/lap1-007`, and the gate is closed. Step 11 --
+push, PR, merge, close the run -- is still the operator's manual leg, and F-7 is still the reason no
+verb reaches it. **The fence is no longer what stops the lap.**
