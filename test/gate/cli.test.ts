@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, test } from "vitest";
 import { helpStrings } from "../../src/cli/parser.js";
@@ -406,6 +407,69 @@ describe("what the verbs refuse", () => {
 
     expect(streams.err()).toMatch(/^error: /);
     expect(streams.out()).toBe("");
+  });
+});
+
+describe("continuo#122: one rule for the destination directory", () => {
+  // `gate deliver` is the second half of the rule stated in
+  // `test/lap/cli.test.ts`: the same dropbox, opened again by a verb that runs
+  // after the lap's endpoint is gone. The walk above already covers the
+  // create-if-missing half -- `aDatabaseWithAGate` hands out a path nothing has
+  // made -- so what is left is that an existing one is REUSED rather than
+  // refused or emptied, which is what makes the two helps one rule (D-0085).
+  test("deliver into a dropbox that already exists reuses it", () => {
+    const { path, destination } = aDatabaseWithAGate("gate-cli-destination-exists");
+    mkdirSync(destination, { recursive: true });
+    const earlier = join(destination, "earlier.effect.json");
+    writeFileSync(earlier, '{"idempotency_key":"earlier"}\n', "utf8");
+    const streams = captureStreams();
+
+    expect(
+      main([
+        "gate",
+        "present",
+        "--db",
+        path,
+        "--gate-id",
+        GATE_ID,
+        "--now-ms",
+        String(T0 + MINUTE),
+      ]),
+    ).toBe(0);
+    expect(
+      main([
+        "gate",
+        "deliver",
+        "--db",
+        path,
+        "--destination-dir",
+        destination,
+        "--holder",
+        ACTOR,
+        "--now-ms",
+        String(T0 + 2 * MINUTE),
+      ]),
+    ).toBe(0);
+
+    expect(streams.out()).toContain("delivered 1 message(s) to external-notify");
+    expect(streams.err()).toBe("");
+    // What was there is still there, and the relay's own effect landed beside
+    // it: the directory is shared, not claimed.
+    expect(readFileSync(earlier, "utf8")).toBe('{"idempotency_key":"earlier"}\n');
+    expect(
+      readdirSync(destination).some(
+        (name) => name.endsWith(".effect.json") && name !== basename(earlier),
+      ),
+    ).toBe(true);
+  });
+
+  test("--help states the rule, in the words lap perform's help uses", () => {
+    const help = helpStrings(buildParser()).join("\n");
+    const at = help.indexOf("the dropbox directory the relay's effect is written into");
+    expect(at, "the --destination-dir help is no longer findable").toBeGreaterThanOrEqual(0);
+    const text = help.slice(at, at + 600);
+    expect(text).toContain("Created if it does not exist, and reused if it does");
+    expect(text).toContain("lap perform --endpoint-destination-dir");
   });
 });
 

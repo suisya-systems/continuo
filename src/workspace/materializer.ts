@@ -2,6 +2,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   realpathSync,
@@ -14,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
-import type { Destination } from "../control_plane/destination.js";
+import { type Destination, KeyedDropbox } from "../control_plane/destination.js";
 import { appendEvent } from "../control_plane/events.js";
 import { spikeRegistry } from "../control_plane/handlers.js";
 // The flags this step generates and refuses an admitted run from restating.
@@ -1025,8 +1026,11 @@ export function materializeWorkspace(
       request.fenceLedgerPath ?? join(artifactDir, FENCE_LEDGER_FILENAME),
     ),
   );
-  const plannedArtifactPaths: readonly (readonly [string, string])[] = [
-    ["artifact_dir", artifactDir],
+  // The paths this step (or `prepare` on its behalf) CREATES. The unclaimed
+  // check below is stated over exactly this list, because "already there means
+  // somebody else owns it" is an argument about a path whose only maker is
+  // materialisation.
+  const publishedArtifactPaths: readonly (readonly [string, string])[] = [
     ["the fence", fencePath],
     ["the settings", settingsPath],
     ["the MCP configuration", mcpConfigPath],
@@ -1034,12 +1038,20 @@ export function materializeWorkspace(
     // trail -- the one artifact whose whole value is that its subject cannot
     // edit it.
     ["the fence ledger", fenceLedgerPath],
+  ];
+  const plannedArtifactPaths: readonly (readonly [string, string])[] = [
+    ["artifact_dir", artifactDir],
+    ...publishedArtifactPaths,
     // Not written by this step at all -- `KeyedDropbox` creates it at endpoint
     // startup and writes delivery files into it for the rest of the worker's
     // life. It belongs on this list for exactly that reason: it is the one
     // configured path whose contents appear inside the checkout *later*, where
     // no check of this step's would ever see them, and they are the operator's
-    // delivery artifacts rather than the worker's.
+    // delivery artifacts rather than the worker's. It is on THIS list and not
+    // on `publishedArtifactPaths`, and `D-0085` is why: the containment and
+    // distinctness rules below are about where the path is, which holds for a
+    // dropbox this step never makes, while the unclaimed rule is about who made
+    // it, which does not.
     ["the endpoint destination directory", destinationDir],
   ];
   // Unclaimed, before anything is created. Two runs pointed at one artifact
@@ -1054,13 +1066,87 @@ export function materializeWorkspace(
   // The same shape `git worktree add` already imposes on the checkout, applied
   // to the directory beside it: materialisation creates what it names, so
   // finding it already there means somebody else owns it.
-  for (const [what, path] of plannedArtifactPaths.slice(1)) {
+  //
+  // Which is why the endpoint destination directory is NOT here. Materialisation
+  // does not name it into existence -- `KeyedDropbox` opens it, `mkdir -p`, at
+  // endpoint startup and again on every `gate deliver` -- so its presence says
+  // nothing about another materialisation, and refusing it made the one dropbox
+  // an operator polls unusable for the second lap pointed at it (`D-0085`, #122).
+  // What a shared dropbox actually needs is a superseded writer refused, and the
+  // dropbox has that already: `KeyedDropbox` keeps a per-scope fencing watermark
+  // beside the effects and honours it before every apply.
+  for (const [what, path] of publishedArtifactPaths) {
     if (existsSync(path)) {
       throw new WorkspaceMaterializationRefused(
         `${what} would be written to ${pythonRepr(path)}, which already exists; ` +
           "materialisation creates its artifacts, so a path that is already there " +
           "belongs to another materialisation -- publishing over it would replace a " +
           "fence some worker may be running under",
+      );
+    }
+  }
+  // Exempt from the ownership rule above, NOT from being a directory. The
+  // reuse this step now permits is `KeyedDropbox`'s `mkdirSync(..., {recursive:
+  // true})`, and that call does not open an existing *file*: it throws a raw
+  // `EEXIST`/`ENOTDIR` at endpoint startup, which is after this step has cut a
+  // branch and a worktree, published four artifacts and appended the event. So
+  // the one thing the narrowing must not lose is the refusal of a destination
+  // that is not a directory, and it is refused here -- where this error family
+  // promises a malformed request is refused, with nothing built.
+  //
+  // Asked with `lstatSync` and answered with `statSync`, rather than with
+  // `existsSync`: the two disagree on a **dangling symlink**, and that is the
+  // spelling of "not a directory" a path check written the obvious way misses.
+  // `existsSync` follows the link, finds nothing, and reports the path absent --
+  // while `mkdirSync(..., {recursive: true})` sees the link itself and refuses
+  // with `EEXIST`. So the entry is asked for without following (present at all?)
+  // and then with (does it resolve to a directory?).
+  const destinationEntry = lstatSync(destinationDir, { throwIfNoEntry: false });
+  if (destinationEntry !== undefined) {
+    const resolved = statSync(destinationDir, { throwIfNoEntry: false });
+    if (resolved === undefined || !resolved.isDirectory()) {
+      throw new WorkspaceMaterializationUsageError(
+        `the endpoint destination directory ${pythonRepr(destinationDir)} exists and does not ` +
+          "resolve to a directory; the dropbox opens it as one, so the endpoint would fail to " +
+          "start under a materialisation this step had already recorded",
+      );
+    }
+  }
+  // Reuse is safe within ONE control plane, and this is where that qualifier is
+  // enforced rather than left in a docstring. The dropbox keeps its fencing
+  // watermark per scope, and the scope is the lease resource name
+  // (`outbox-delivery`) -- a constant, with no database in it -- while the
+  // epochs compared against it are a lease sequence local to one control plane.
+  // So a dropbox that another database already drove to epoch 5 refuses this
+  // run's epoch 1 as stale, and it refuses it at the endpoint's first delivery:
+  // after the branch, the worktree, the artifacts and the event. Same-plane
+  // reuse -- the case #122 is about -- passes, because a later lease epoch on
+  // one resource is always higher than the ones before it.
+  if (destinationEntry !== undefined) {
+    // The read is wrapped because the fence file is somebody else's artifact: a
+    // torn or hand-edited one raises out of `JSON.parse`, and the endpoint would
+    // raise the same way on its first apply. Refused here, as a refusal, rather
+    // than there, as a stack trace over a materialisation already recorded.
+    let honoured: number | null;
+    try {
+      honoured = new KeyedDropbox(destinationDir, "materialisation-preflight").honouredToken(
+        DELIVERY_LEASE_RESOURCE,
+      );
+    } catch (error) {
+      throw new WorkspaceMaterializationRefused(
+        `the endpoint destination directory ${pythonRepr(destinationDir)} holds a fence file ` +
+          "that cannot be read; the dropbox checks it before every effect, so the endpoint would " +
+          "fail the same way on its first delivery",
+        { cause: error },
+      );
+    }
+    if (honoured !== null && honoured >= request.endpoint.epoch) {
+      throw new WorkspaceMaterializationRefused(
+        `the endpoint destination directory ${pythonRepr(destinationDir)} has already honoured ` +
+          `fencing token ${honoured} for ${pythonRepr(DELIVERY_LEASE_RESOURCE)}, which is not ` +
+          `below this endpoint's epoch ${request.endpoint.epoch}; the dropbox would refuse every ` +
+          "effect this run delivers as stale. A dropbox belongs to one control plane, whose lease " +
+          "epochs only ever rise",
       );
     }
   }
