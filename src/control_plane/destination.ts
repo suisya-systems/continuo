@@ -446,12 +446,24 @@ export class KeyedDropbox implements Destination {
       });
     }
 
-    const record = pythonJsonDocumentSorted({
-      idempotency_key: idempotencyKey,
-      payload_sha256: digest,
-      payload,
-      fencing_token: fencingToken,
-    });
+    // `ensureAscii: false`: this file, unlike the database columns
+    // `pythonJsonDocumentSorted`'s other callers write, is the surface an
+    // operator reads directly (`gate show` aside) -- `<sha256>.effect.json` on
+    // disk. `payload` is operator-written prose and this organisation writes
+    // it in Japanese, so the default `ensure_ascii=True` escaping turned a
+    // rationale into an unreadable `\uXXXX` run for anyone opening the file by
+    // hand (continuo#123). The digest above is over the raw `payload` string,
+    // and `_effectPath` hashes `idempotencyKey`, not this record, so neither
+    // the stored digest nor the file name changes.
+    const record = pythonJsonDocumentSorted(
+      {
+        idempotency_key: idempotencyKey,
+        payload_sha256: digest,
+        payload,
+        fencing_token: fencingToken,
+      },
+      false,
+    );
 
     // Written complete to a private file, then published by link. There is
     // deliberately no reservation step: see the module docstring on why a

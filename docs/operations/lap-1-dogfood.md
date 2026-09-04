@@ -325,6 +325,13 @@ verb exists to move it. Five events remain: `run_created`, `run_delegation_recor
 - **Workaround.** Read it with `gate show`, which prints the text as written.
 - **Real fix.** The dropbox is the surface an operator reads, so emit non-ASCII as-is. If the
   escaping is a deliberate interoperability contract, say so in `gate deliver`'s help.
+- **Fixed (continuo#123).** `KeyedDropbox._applyLocked` now serialises the effect record with
+  `pythonJsonDocumentSorted(record, false)` -- `ensure_ascii=False` for this one call site only.
+  Every other caller of `pythonJsonDocumentSorted` (the event payload, the `consumption_skipped`
+  audit body, a gate's `options` list -- all database columns compared byte-for-byte against
+  CPython) is unchanged: the new `ensureAscii` parameter defaults to `true`. The idempotency key's
+  sha256 file name and the payload's own digest are computed over the raw strings, not over this
+  rendering, so neither moves.
 
 ### F-6. Truncating output through a pipe can kill the CLI with EPIPE
 

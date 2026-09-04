@@ -41,12 +41,21 @@
  * C0 controls identically, then escaping what `ensure_ascii` would. JavaScript
  * strings are UTF-16, so a character above the BMP is already two code units
  * and escaping each one produces exactly the surrogate pair Python emits.
+ *
+ * `ensureAscii` defaults to `true` -- `json.dumps`'s own default, and the one
+ * every existing caller relies on for byte-identical stored columns.
+ * `ensureAscii: false` is `json.dumps(..., ensure_ascii=False)`: quotes,
+ * backslashes and the C0 controls are still escaped (`JSON.stringify` already
+ * handles those), but `U+007F` and above are left as the raw character.
  */
-export function pythonJsonString(value: string): string {
-  return JSON.stringify(value).replace(
-    /[\u007f-\uffff]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
+export function pythonJsonString(value: string, ensureAscii = true): string {
+  const quoted = JSON.stringify(value);
+  return ensureAscii
+    ? quoted.replace(
+        /[\u007f-\uffff]/g,
+        (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      )
+    : quoted;
 }
 
 /** One JSON number or string, as `json.dumps` renders it. */
@@ -56,7 +65,11 @@ function pythonJsonScalar(value: string | number): string {
 
 /** `json.dumps(list)` for a list of strings. */
 export function pythonJsonList(values: readonly string[]): string {
-  return `[${values.map(pythonJsonString).join(", ")}]`;
+  // NOT `values.map(pythonJsonString)`: `Array#map` passes the index as a
+  // second argument, and `pythonJsonString`'s second parameter is now
+  // `ensureAscii` -- so `map` would call it as `pythonJsonString(v, 0)` for
+  // the first element, and `0` is falsy, silently turning off escaping there.
+  return `[${values.map((value) => pythonJsonString(value)).join(", ")}]`;
 }
 
 /**
@@ -110,8 +123,12 @@ export function pythonJsonDumpsSorted(value: Record<string, string | number>): s
  * has a single number type and cannot tell them apart, so a whole-number float
  * renders here as an integer. Every number this package persists is an integer
  * (timestamps, sequences, counts), so nothing currently reaches it.
+ *
+ * `ensureAscii` defaults to `true`, matching every existing caller, and is
+ * threaded recursively so a caller that passes `false` gets `json.dumps(...,
+ * ensure_ascii=False)` for the whole document rather than only its top level.
  */
-export function pythonJsonDocumentSorted(value: unknown): string {
+export function pythonJsonDocumentSorted(value: unknown, ensureAscii = true): string {
   if (value === null || value === undefined) {
     return "null";
   }
@@ -128,7 +145,7 @@ export function pythonJsonDocumentSorted(value: unknown): string {
     return String(value);
   }
   if (typeof value === "string") {
-    return pythonJsonString(value);
+    return pythonJsonString(value, ensureAscii);
   }
   if (Array.isArray(value)) {
     // Indexed rather than `.map`, because `.map` SKIPS the holes in a sparse
@@ -141,7 +158,7 @@ export function pythonJsonDocumentSorted(value: unknown): string {
     // the translation introduces rather than one the source has.
     const items: string[] = [];
     for (let index = 0; index < value.length; index += 1) {
-      items.push(pythonJsonDocumentSorted(value[index]));
+      items.push(pythonJsonDocumentSorted(value[index], ensureAscii));
     }
     return `[${items.join(", ")}]`;
   }
@@ -150,7 +167,8 @@ export function pythonJsonDocumentSorted(value: unknown): string {
       .sort(byCodePoint)
       .map(
         (key) =>
-          `${pythonJsonString(key)}: ${pythonJsonDocumentSorted((value as Record<string, unknown>)[key])}`,
+          `${pythonJsonString(key, ensureAscii)}: ` +
+          `${pythonJsonDocumentSorted((value as Record<string, unknown>)[key], ensureAscii)}`,
       );
     return `{${entries.join(", ")}}`;
   }
