@@ -359,8 +359,17 @@ function requirePrintableActor(actorId: unknown): asserts actorId is string {
   }
 }
 
+/**
+ * Non-empty text, with `trim()` deciding what empty means.
+ *
+ * The trim is not decoration: `lease.ts`'s `requireIdentifier` refuses a
+ * whitespace-only holder that way, so without it an `--actor-id` of spaces
+ * passes this module's checks, reaches `acquireRunLease`, and comes back as a
+ * `LeaseUsageError` from one layer down -- after the run has been read, and
+ * naming the wrong argument. `LapRunIntent` spells its own check the same way.
+ */
 function requireText(field: string, value: unknown): asserts value is string {
-  if (typeof value !== "string" || value === "") {
+  if (typeof value !== "string" || value.trim() === "") {
     throw new RunCloseUsageError(`${field} must be a non-empty string, got ${pythonRepr(value)}`);
   }
 }

@@ -511,6 +511,11 @@ describe("a close that cannot land writes nothing", () => {
     for (const options of [
       { runId: "", outcome: "completed" as RunStatus, actorId: ACTOR, nowMs: T1 },
       { runId: RUN_ID, outcome: "completed" as RunStatus, actorId: "", nowMs: T1 },
+      // Whitespace-only, which is empty to `lease.ts`'s own identifier check:
+      // without the same rule here it would reach `acquireRunLease` and come
+      // back as a LeaseUsageError naming the wrong argument, after the run had
+      // been read.
+      { runId: RUN_ID, outcome: "completed" as RunStatus, actorId: "   ", nowMs: T1 },
       { runId: RUN_ID, outcome: "completed" as RunStatus, actorId: ACTOR, nowMs: 1.5 },
     ]) {
       expect(() => closeRun(connection, options)).toThrow(RunCloseUsageError);
