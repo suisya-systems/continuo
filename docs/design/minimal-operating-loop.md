@@ -62,8 +62,11 @@ too:
    endpoint, and the SQLite driver reached through continuo's exports -- lives in rondo. Settled
    2026-09-05 on cadenza#40 and recorded as `D-0087`.
 
-**Both premises are structural and this document is written on both.** Premise 2 was not, when it was
-written, and the rest of section 0 is the record of why it was held open and what closed it. That
+**Both premises are now settled and this document is written on both.** They are settled for
+different reasons, and the difference is worth keeping: premise 1 is *structural*, so no later fact
+could cheaply move it, while premise 2 is not -- it was settled by an operator choice at the moment
+its trigger named, and the rest of section 0 is the record of why it was held open until then and
+what closed it. That
 record is kept rather than deleted because the sections below were written against the open question
 and a reader needs to know which answer they were written against; the conditionals themselves are
 resolved in place, so nothing below still asks the reader to pick.
@@ -561,8 +564,10 @@ nor claude-org-ja is in the catalog.**
 
 *Deferrable for lap 1 -- the workspace can be cut from an operator-named path and base branch. Not
 deferrable once an application exists, at which point "no callable artifact" stops being a seam and
-becomes the packaging decision in 6.4. Cadenza does not need a `bin` or a build of its own on top of
-that: under section 0's premise 2 the host is rondo, so what cadenza needs is only to be importable.*
+becomes the packaging decision in 6.4. Under section 0's premise 2 the host is rondo, so cadenza needs
+no `bin` and no build **for a host** on top of that -- but it does need to be importable by one, and
+6.4 packages continuo only. Cadenza's own `private: true`, with no `exports`, `main` or build, is a
+separate packaging question in cadenza's band (`D-0087`, consequence 3), not a corollary of 6.4.*
 
 ### 4.9 The lease must not span the human wait, and a longer TTL is not the fix
 
@@ -1251,8 +1256,9 @@ disposition; the `migrate` belt status; the curator errata; S1's post-lap promot
 - **Packaging, and it stayed the smaller of the two questions it could have been.** `private: true`,
   no `bin`, no `exports`, no `build`. Section 0's premise 2 is settled against cadenza hosting, so
   cadenza is not the host and needs neither a `bin`, nor a build for one, nor a widened import
-  allowlist. It stays a library -- one that rondo imports beside continuo (6.4) -- and this bullet
-  stays the ordinary question of making a library consumable.
+  allowlist. It stays a library -- one that rondo imports beside continuo -- and this bullet stays the
+  ordinary question of making a library consumable, asked of cadenza in its own band. 6.4 does not
+  answer it: that section packages continuo.
 - **`LocalPathVerifier`'s owner** -- unimplemented in both languages, and the G1 design document calls
   it mandatory before a clone.
 
