@@ -432,6 +432,7 @@ export {
   RunAlreadyAdmitted,
   RunNotAdmitted,
   readLapRunIntent,
+  UnknownRoleRefused,
 } from "./control_plane/run_admission.js";
 export {
   ADVANCE_RUN_STATUS_EFFECT,
