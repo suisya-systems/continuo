@@ -55,7 +55,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
-
+import { normalizePath } from "../../src/fencing/pypath.js";
 import {
   FenceRefusal,
   NON_INTERACTIVE_PERMISSION_MODE,
@@ -63,6 +63,7 @@ import {
   renderFence,
 } from "../../src/fencing/renderer.js";
 import { FencedSpawner } from "../../src/fencing/spawn.js";
+import { gitMetadataRoots, runGitChecked } from "../../src/workspace/git.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { skipIf } from "../testkit/marks.js";
 import {
@@ -72,6 +73,7 @@ import {
   fenceDocument,
   fenceLedger,
   mutate,
+  replaceFenceContext,
   shippedHookScript,
 } from "./helpers/fence-cases.js";
 
@@ -195,6 +197,276 @@ describe("the plan's argv makes the fence the only settings source", () => {
   });
 });
 
+describe("the sandbox the fence renders is one the CLI can actually build (D-0082)", () => {
+  /** The `sandbox.filesystem` block as the child's settings file carries it. */
+  function renderedFilesystem(roots: readonly string[] = []): Record<string, unknown> {
+    const fence = renderFence("worker", fenceContext(), {
+      document: fenceDocument(),
+      nonInteractive: true,
+      sandboxWritableRoots: roots,
+    });
+    const sandbox = fence.settings["sandbox"] as Record<string, unknown>;
+    return sandbox["filesystem"] as Record<string, unknown>;
+  }
+
+  test("the block arrives switched on, because a block without that is not a sandbox", () => {
+    const fence = renderFence("worker", fenceContext(), {
+      document: fenceDocument(),
+      nonInteractive: true,
+    });
+    const sandbox = fence.settings["sandbox"] as Record<string, unknown>;
+
+    expect(sandbox["enabled"]).toBe(true);
+    // The document does NOT say so, and that is the finding: `roles.json` has
+    // never carried the key, so every fence this repository has rendered
+    // declared a sandbox the CLI then did not build. The repair is the
+    // renderer's, and the document is left as interlock wrote it.
+    const document = fenceDocument() as Record<string, unknown>;
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    expect(Object.hasOwn(worker["sandbox"] as object, "enabled")).toBe(false);
+  });
+
+  test("every deny entry reaches the child as a string, expanded, and none as an object", () => {
+    const filesystem = renderedFilesystem();
+
+    for (const key of ["denyRead", "denyWrite"]) {
+      for (const entry of filesystem[key] as unknown[]) {
+        // One structured entry anywhere here silently turns the whole sandbox
+        // off -- measured on CLI 2.1.260 -- so this is not a tidiness
+        // assertion: it is the whole of the `#130` repair.
+        expect(typeof entry).toBe("string");
+      }
+    }
+    // The document's own spelling of that rule, still structured, so the case
+    // fails if the repair is ever moved into the carried document instead.
+    const document = fenceDocument() as Record<string, unknown>;
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    const authored = (
+      (worker["sandbox"] as Record<string, unknown>)["filesystem"] as Record<string, unknown>
+    )["denyRead"] as unknown[];
+    expect(authored.some((entry) => typeof entry === "object" && entry !== null)).toBe(true);
+    // And the rule survives the flattening rather than being dropped by it: the
+    // path the child is denied is the one `~/.ssh` names, expanded here rather
+    // than left for the CLI to expand.
+    expect(filesystem["denyRead"]).toContain(normalizePath("~/.ssh"));
+  });
+
+  test("the settings and the fence's own rules now name one path, not two spellings", () => {
+    const fence = renderFence("worker", fenceContext(), {
+      document: fenceDocument(),
+      nonInteractive: true,
+    });
+    const filesystem = (fence.settings["sandbox"] as Record<string, unknown>)[
+      "filesystem"
+    ] as Record<string, unknown>;
+
+    // The disagreement between these two lists is the shape of the defect: the
+    // hook layer flattened the structured entry and the settings layer did not,
+    // so the two layers enforced the same intent under different spellings and
+    // only one of them was a spelling the CLI could read.
+    const specs = fence.rules
+      .filter((rule) => rule.kind === "sandbox-deny-read")
+      .map((rule) => rule.spec);
+    expect(filesystem["denyRead"]).toStrictEqual(specs);
+  });
+
+  test("the derived roots are appended, and nothing else in the fence moves", () => {
+    const roots = [
+      "/base/.git/worktrees/topic",
+      "/base/.git/objects",
+      "/base/.git/refs/heads/feat/topic",
+      "/base/.git/packed-refs",
+    ];
+    const ctx = fenceContext();
+    const document = fenceDocument();
+    const without = renderFence("worker", ctx, { document, nonInteractive: true });
+    const with_ = renderFence("worker", ctx, {
+      document,
+      nonInteractive: true,
+      sandboxWritableRoots: roots,
+    });
+
+    expect(
+      (
+        (with_.settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+          string,
+          unknown
+        >
+      )["additionalDirectories"],
+    ).toStrictEqual(roots);
+    // `#130`'s acceptance in as many words: the deny list is byte-identical
+    // before and after. Over the rule set AND over the two lists the child
+    // reads, because those are the two places a widening could hide.
+    expect(with_.ruleIds()).toStrictEqual(without.ruleIds());
+    expect(with_.settings["permissions"]).toStrictEqual(without.settings["permissions"]);
+  });
+
+  test("a role handed no roots keeps the key absent rather than gaining an empty one", () => {
+    const filesystem = renderedFilesystem();
+    // The settings generator states the same contract for the same field, and a
+    // key that appears only sometimes is a diff a restart check has to explain.
+    expect(Object.hasOwn(filesystem, "additionalDirectories")).toBe(false);
+  });
+
+  test("a non-list additionalDirectories refuses rather than being replaced", () => {
+    const document = deepCopyDocument(fenceDocument());
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    const filesystem = (worker["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+      string,
+      unknown
+    >;
+    filesystem["additionalDirectories"] = "/shared";
+
+    // Merging the derived roots over this would publish `["/base/.git/objects"]`
+    // -- a valid-looking list the document does not contain -- so it is refused
+    // on the same terms as a non-list `denyRead`. (Found by codex review.)
+    const refusal = expectRefusal(
+      () =>
+        renderFence("worker", fenceContext(), {
+          document,
+          nonInteractive: true,
+          sandboxWritableRoots: ["/base/.git/objects"],
+        }),
+      FenceRefusal,
+      /additionalDirectories must be a list, got str/,
+    );
+    expect(refusal.codes).toContain(RefusalReason.RULE_SYNTAX);
+  });
+
+  test("a root the document already declared is not added twice", () => {
+    const document = deepCopyDocument(fenceDocument());
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    const filesystem = (worker["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+      string,
+      unknown
+    >;
+    filesystem["additionalDirectories"] = ["/base/.git/objects"];
+
+    const fence = renderFence("worker", fenceContext(), {
+      document,
+      nonInteractive: true,
+      sandboxWritableRoots: ["/base/.git/objects", "/base/.git/packed-refs"],
+    });
+
+    expect(
+      (
+        (fence.settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+          string,
+          unknown
+        >
+      )["additionalDirectories"],
+    ).toStrictEqual(["/base/.git/objects", "/base/.git/packed-refs"]);
+  });
+});
+
+describe("the admission record says what the fence actually opened (D-0082)", () => {
+  test("a root the document declared is in the ledger row too, not only the derived ones", () => {
+    const root = fenceCaseRoot();
+    const document = deepCopyDocument(fenceDocument());
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    ((worker["sandbox"] as Record<string, unknown>)["filesystem"] as Record<string, unknown>)[
+      "additionalDirectories"
+    ] = ["/shared"];
+
+    const ledgerPath = join(root, "declared-roots.jsonl");
+    const outcome = new FencedSpawner({
+      ledger: fenceLedger(root, "declared-roots.jsonl"),
+      document,
+      nonInteractive: true,
+      sandboxWritableRoots: ["/base/.git/objects"],
+    }).prepare("worker", fenceContext(root));
+    expect(outcome.admitted).toBe(true);
+
+    const admitted = readFileSync(ledgerPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((row) => row["event"] === "spawn-admitted");
+
+    // The child can write through `/shared` as surely as through the derived
+    // root, so a row that listed only what the caller supplied would report a
+    // narrower surface than the one published -- the one direction this field
+    // must not fail in.
+    expect((admitted[0] as Record<string, unknown>)["sandbox_writable_roots"]).toStrictEqual([
+      "/shared",
+      "/base/.git/objects",
+    ]);
+  });
+
+  test("a sandbox the document switched off reports no opened roots", () => {
+    const root = fenceCaseRoot();
+    const document = deepCopyDocument(fenceDocument());
+    const worker = (document["roles"] as Record<string, unknown>)["worker"] as Record<
+      string,
+      unknown
+    >;
+    (worker["sandbox"] as Record<string, unknown>)["enabled"] = false;
+
+    const ledgerPath = join(root, "disabled-sandbox.jsonl");
+    const outcome = new FencedSpawner({
+      ledger: fenceLedger(root, "disabled-sandbox.jsonl"),
+      document,
+      nonInteractive: true,
+      sandboxWritableRoots: ["/base/.git/objects"],
+    }).prepare("worker", fenceContext(root));
+    expect(outcome.admitted).toBe(true);
+
+    // The document's position is kept -- the repair sets `enabled` only where
+    // the document is silent -- and a row listing paths beside a switched-off
+    // sandbox would say a layer that is not running had let them through.
+    const sandbox = outcome.fence?.settings["sandbox"] as Record<string, unknown>;
+    expect(sandbox["enabled"]).toBe(false);
+    const admitted = readFileSync(ledgerPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((row) => row["event"] === "spawn-admitted");
+    expect((admitted[0] as Record<string, unknown>)["sandbox_writable_roots"]).toStrictEqual([]);
+  });
+});
+
+describe("the worker's settings.json deny closes the tool a child would reach for (#132)", () => {
+  test("an Edit of ~/.claude/settings.json is refused by the fence's own hook layer", () => {
+    const fence = renderFence("worker", fenceContext(), {
+      document: fenceDocument(),
+      nonInteractive: true,
+    });
+
+    // `matches` compares an exact tool name, so before the document carried the
+    // `Edit(...)` spelling this decision was `denied: false` -- and the CLI's
+    // permission layer ignored the `Write(...)` rule as well, which is what
+    // made the rule dead in both layers rather than in one.
+    const decision = fence.decide("Edit", { file_path: normalizePath("~/.claude/settings.json") });
+    expect(decision.denied).toBe(true);
+    // The reason names the rule that refused, which is how an operator tells
+    // this layer's refusal from the permission system's wordless one.
+    expect(decision.reason).toContain("Edit denied by permission-deny rule");
+    expect(decision.reason).toContain("~/.claude/settings.json");
+
+    // The `Write(...)` half is kept, so the literal `Write` tool stays closed at
+    // this layer too. It is also why the CLI still prints its warning about
+    // that spelling on every spawn; see D-0083.
+    expect(
+      fence.decide("Write", { file_path: normalizePath("~/.claude/settings.json") }).denied,
+    ).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // what a real child does
 // ---------------------------------------------------------------------------
@@ -304,6 +576,35 @@ const REAL_CHILD_REASON =
   `child by the cases above; what only a child can show is that the CLI HONOURS them, which ` +
   `is exactly what both defects turned on`;
 
+/**
+ * A base clone with one commit, and a LINKED WORKTREE checked out of it.
+ *
+ * The worktree is the whole point: its `.git` is a *file* pointing into
+ * `<base>/.git/worktrees/<name>`, so the index `git add` writes and the objects
+ * it creates land outside the checkout. A plain clone would run this case green
+ * against a fence with no writable surface at all, because there would be
+ * nothing outside the checkout to reach.
+ */
+function worktreeTarget(root: string): { readonly base: string; readonly workerDir: string } {
+  const base = join(root, "base");
+  mkdirSync(base, { recursive: true });
+  const git = { cwd: base, timeoutMs: 60_000 };
+  runGitChecked(["init", "--initial-branch=main", "."], git);
+  // The identity and the signing setting, because `git commit` refuses without
+  // the first on a machine that has never been configured and can hang on the
+  // second, and this case's whole observation is whether a commit happened.
+  runGitChecked(["config", "user.name", "continuo test"], git);
+  runGitChecked(["config", "user.email", "continuo@example.invalid"], git);
+  runGitChecked(["config", "commit.gpgsign", "false"], git);
+  writeFileSync(join(base, "seed.txt"), "seed\n", "utf8");
+  runGitChecked(["add", "seed.txt"], git);
+  runGitChecked(["commit", "-m", "seed"], git);
+
+  const workerDir = join(root, "worktree");
+  runGitChecked(["worktree", "add", "--no-track", "-b", "feat/topic", workerDir, "HEAD"], git);
+  return { base, workerDir };
+}
+
 describe("a real child under the fence", () => {
   skipIf(!REAL_CHILD_ENABLED, REAL_CHILD_REASON)(
     "writes inside its worktree, and never reads the target's own settings",
@@ -329,6 +630,55 @@ describe("a real child under the fence", () => {
 
       expect(existsSync(witness)).toBe(true);
       expect(existsSync(written)).toBe(false);
+    },
+  );
+
+  skipIf(!REAL_CHILD_ENABLED, REAL_CHILD_REASON)(
+    "commits inside a worktree with no prompt, and has a sandbox while doing it (D-0082)",
+    () => {
+      const root = fenceCaseRoot();
+      const { workerDir } = worktreeTarget(root);
+      const git = { cwd: workerDir, timeoutMs: 60_000 };
+      const ctx = replaceFenceContext(fenceContext(root, { hookScript: shippedHookScript() }), {
+        workerDir,
+      });
+      const outcome = new FencedSpawner({
+        ledger: fenceLedger(root, "worktree-commit.jsonl"),
+        document: fenceDocument(),
+        nonInteractive: true,
+        sandboxWritableRoots: gitMetadataRoots(git),
+      }).prepare("worker", ctx);
+      expect(outcome.admitted).toBe(true);
+
+      const stdout = execFileSync(
+        "claude",
+        [
+          "-p",
+          "Create a file named work.txt in the current directory containing the word OK, " +
+            "then run `git add work.txt` and then `git commit -m work`. " +
+            "The last line of your reply must be exactly SANDBOX YES if a system message " +
+            "describing a 'Bash command sandbox' is present in your context, and exactly " +
+            "SANDBOX NO if there is none.",
+          ...(outcome.plan?.cliArgs() ?? []),
+        ],
+        { cwd: workerDir, encoding: "utf8", timeout: 300_000, stdio: ["ignore", "pipe", "pipe"] },
+      );
+
+      // The observation that does not go through the child's own account of
+      // itself: the repository has the commit. `#130`'s acceptance is that this
+      // happens with nobody at the prompt to approve anything.
+      expect(runGitChecked(["log", "--oneline", "-1"], git).stdout).toContain("work");
+      expect(runGitChecked(["show", "--name-only", "--format=", "HEAD"], git).stdout).toContain(
+        "work.txt",
+      );
+      // And the layer the human gate voted to keep is actually there. This one
+      // can only be asked of the child: the sandbox is not visible from outside
+      // the process, and a fence that renders `enabled: true` into a file the
+      // CLI then declines to act on would pass every other case in this file.
+      // Measured before the repair: a fence whose deny entry was still
+      // structured answered SANDBOX NO here and could not stage at all.
+      expect(stdout).toContain("SANDBOX YES");
+      expect(stdout).not.toContain("SANDBOX NO");
     },
   );
 });

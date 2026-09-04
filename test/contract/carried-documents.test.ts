@@ -40,6 +40,14 @@ import { describe, expect, test } from "vitest";
  * follows -- update the digest and the revision in the same commit, and say why
  * in the message. A digest updated on its own is the silent edit this test is
  * about.
+ *
+ * **A carried document may also deviate, and then it stops being byte-identical.**
+ * `deviations` is where that is said out loud. A row carrying one no longer
+ * claims `cmp` against interlock succeeds; it claims the document is interlock's
+ * at the recorded revision *plus exactly the listed edits*, and the digest pins
+ * that. The field exists because the alternative -- bumping the digest and
+ * leaving the "byte-identical" claim standing in a comment -- is the silent edit
+ * this file was written after, wearing a green test.
  */
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -50,6 +58,8 @@ interface CarriedDocument {
   readonly revision: string;
   readonly sha256: string;
   readonly bytes: number;
+  /** Edits continuo made on top of the carried bytes, each with its reason. */
+  readonly deviations?: readonly string[];
 }
 
 const CARRIED: readonly CarriedDocument[] = [
@@ -57,8 +67,20 @@ const CARRIED: readonly CarriedDocument[] = [
     path: "src/fencing/roles.json",
     sourcePath: "src/claude_org_runtime/fencing/roles.json",
     revision: "65f36c5",
-    sha256: "9e788ce2ee1bb80cfb186738411b8acece3fea27dc0dc4f86a61688229751a17",
-    bytes: 5635,
+    sha256: "8f80d3550dfe4bf2ccfdad03df5b88f0b925ceb408169a84511e9e711034128d",
+    bytes: 5678,
+    deviations: [
+      // D-0083 / #132. The CLI applies a file-permission rule only under
+      // `Edit(...)`, which covers every file-editing tool -- it says so on
+      // stderr on every spawn -- and `matches` in `src/fencing/rules.ts`
+      // compares an exact tool name, so the `Write(...)` spelling closed
+      // neither layer for the tool a child would actually reach for. The
+      // `Write(...)` half is kept because the hook layer does still match a
+      // literal `Write`, so removing it would narrow the fence.
+      "worker.permissions.deny gains Edit(~/.claude/settings.json) beside the " +
+        "Write(...) form, which neither the CLI's permission layer nor the fence's " +
+        "own hook applied to an Edit",
+    ],
   },
   {
     path: "src/settings/role_configs_schema.json",
@@ -71,7 +93,11 @@ const CARRIED: readonly CarriedDocument[] = [
 
 describe("documents carried verbatim from interlock", () => {
   for (const document of CARRIED) {
-    test(`${document.path} is byte-identical to interlock at ${document.revision}`, () => {
+    const claim =
+      document.deviations === undefined
+        ? `is byte-identical to interlock at ${document.revision}`
+        : `is interlock at ${document.revision} plus ${document.deviations.length} recorded deviation(s)`;
+    test(`${document.path} ${claim}`, () => {
       // Read as bytes, never as text: a text read would normalise nothing on
       // POSIX and could still hide a BOM, and the claim is about bytes.
       const bytes = readFileSync(join(ROOT, document.path));
@@ -79,8 +105,13 @@ describe("documents carried verbatim from interlock", () => {
       expect(
         createHash("sha256").update(bytes).digest("hex"),
         `${document.path} is no longer the document carried from interlock ` +
-          `${document.revision}:${document.sourcePath}. If this change is deliberate, update the ` +
-          "digest, the byte count and the revision together and say why in the commit message.",
+          `${document.revision}:${document.sourcePath}` +
+          (document.deviations === undefined
+            ? ""
+            : ` plus its recorded deviations (${document.deviations.join("; ")})`) +
+          ". If this change is deliberate, update the digest, the byte count and the revision " +
+          "together -- and add a `deviations` entry if the document is no longer interlock's -- " +
+          "and say why in the commit message.",
       ).toBe(document.sha256);
     });
 

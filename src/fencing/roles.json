@@ -46,6 +46,7 @@
           "Read(**/*.pem)",
           "Read(**/credentials*)",
           "Write(~/.claude/settings.json)",
+          "Edit(~/.claude/settings.json)",
           "WebFetch"
         ]
       },

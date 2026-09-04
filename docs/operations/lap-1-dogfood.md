@@ -540,7 +540,10 @@ anyway, since it is the file that produced the original defect.
 Section 7's list is filed, and this lap changed nothing about the open half of it: F-3 is #121, F-4
 is #122, F-5 is #123, F-6 is #124, F-7 is #125, and section 3's note on an unchecked `--role` is
 #126. F-1 (#119) and F-2 (#120) are the two that shipped, and 9.4 is F-1's field check. F-8 and F-9
-below are new and have no issue yet.
+below were new here; they are #130 and #132, and both are now fixed by `D-0082` / `D-0083`. The
+accounts below are left as this lap wrote them, because what they cost is part of the record; each
+ends with what closing it actually turned out to require, and F-8's cause is not the one this lap
+concluded.
 
 #### F-8. The fence's `sandbox` block refuses the writes its own allow list permits, and lets denied reads through
 
@@ -572,6 +575,17 @@ below are new and have no issue yet.
   and add the worktree's real `.git` directory to the writable surface; or render it only for an
   interactive spawn, the way `D-0081` scoped the `acceptEdits` promotion. The first loses a layer,
   the second leaves the read-side hole, and the third is the narrowest and matches the precedent.
+- **Fixed by `D-0082` (#130) -- and the cause above is wrong.** The gate chose the second candidate,
+  and implementing it alone was measured to change nothing. What the `sandbox` key actually does here
+  is destroy itself: the block carries one deny entry in the structured form
+  `{"path": "~/.ssh"}`, which the CLI cannot read, so it builds *no sandbox at all* -- silently, with
+  no warning and a zero exit -- and a sandbox that was declared and could not be built makes every
+  write-capable `Bash` require approval whatever the allow list says. The writable surface was never
+  the problem: with that entry spelled as a string, the CLI already resolves the worktree's gitdir
+  itself. And the block has no `enabled` key, which is what the CLI builds a sandbox *for* -- so the
+  layer this account assumed was too tight had never once existed. The renderer now flattens the deny
+  entries, sets `enabled`, and adds the derived roots anyway so the fence does not depend on an
+  undocumented derivation. The read-side hole is untouched and is #131.
 
 #### F-9. One fence deny rule is spelled in a form the CLI does not apply
 
@@ -601,6 +615,12 @@ below are new and have no issue yet.
   stands alone**, so it is the only one with the gap. The other two still draw the warning when
   those roles are spawned, since the `Write(...)` half is ignored either way; whether to drop it as
   noise or keep it for the hook's exact-match layer is a smaller question than this one.
+- **Fixed by `D-0083` (#132), except the warning.** `worker` carries the `Edit(...)` form now, beside
+  the `Write(...)` one. Measured afterwards over three settings files differing only in that list:
+  the warning names the *`Write` spelling's presence*, not the missing `Edit`, so it stays for as
+  long as that spelling does -- for `curator` and `secretary` too. It is now noise about a redundant
+  rule rather than a signal about a dead one. The smaller question this account left open turned out
+  to be the deciding one, and `D-0083` records why the `Write(...)` half was kept.
 
 #### A methodological note that cost this lap a wrong conclusion
 

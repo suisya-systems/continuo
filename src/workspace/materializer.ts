@@ -34,6 +34,7 @@ import {
   addWorktree,
   branchExists,
   type GitOptions,
+  gitMetadataRoots,
   isWellFormedBranchName,
   repositoryRoot,
   resolveBranchCommit,
@@ -1192,6 +1193,13 @@ export function materializeWorkspace(
   const spawner = new FencedSpawner({
     ledger: new FenceLedger(fenceLedgerPath),
     settingsName: DEFAULT_SETTINGS_NAME,
+    // Asked of the worktree that was just created, not of the repository it was
+    // created from, and asked here rather than computed from the layout: the
+    // answer is where *this* checkout's git writes land, and only git knows it
+    // (D-0082). A worktree's `.git` is a file pointing outside itself, so
+    // without this the fence would claim a writable surface that stops at the
+    // checkout while `git add` writes past it.
+    sandboxWritableRoots: gitMetadataRoots({ ...git, cwd: workspace }),
     // The child this workspace is materialised for is a `claude -p` session --
     // `LapRunIntent` carries a prompt and the provider renders `--print`, and
     // there is no path through this step that produces an interactive one. So
