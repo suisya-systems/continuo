@@ -62,6 +62,7 @@ import {
   RefusalReason,
   renderFence,
 } from "../../src/fencing/renderer.js";
+import { parsePermissionRule } from "../../src/fencing/rules.js";
 import { FencedSpawner } from "../../src/fencing/spawn.js";
 import { gitMetadataRoots, runGitChecked } from "../../src/workspace/git.js";
 import { expectRefusal } from "../testkit/errors.js";
@@ -440,30 +441,74 @@ describe("the admission record says what the fence actually opened (D-0082)", ()
   });
 });
 
-describe("the worker's settings.json deny closes the tool a child would reach for (#132)", () => {
-  test("an Edit of ~/.claude/settings.json is refused by the fence's own hook layer", () => {
-    const fence = renderFence("worker", fenceContext(), {
+describe("the worker's settings.json deny closes the tool a child would reach for (#132, #135)", () => {
+  /**
+   * The rendered worker fence, whose only rule for this path is now the single
+   * `Edit(~/.claude/settings.json)` entry -- the `Write(...)` twin is gone.
+   */
+  function workerFence() {
+    return renderFence("worker", fenceContext(), {
       document: fenceDocument(),
       nonInteractive: true,
     });
+  }
 
-    // `matches` compares an exact tool name, so before the document carried the
-    // `Edit(...)` spelling this decision was `denied: false` -- and the CLI's
-    // permission layer ignored the `Write(...)` rule as well, which is what
-    // made the rule dead in both layers rather than in one.
-    const decision = fence.decide("Edit", { file_path: normalizePath("~/.claude/settings.json") });
-    expect(decision.denied).toBe(true);
-    // The reason names the rule that refused, which is how an operator tells
-    // this layer's refusal from the permission system's wordless one.
-    expect(decision.reason).toContain("Edit denied by permission-deny rule");
-    expect(decision.reason).toContain("~/.claude/settings.json");
+  /** The rule id every member of the family must be refused by. */
+  // The spec is the rule as authored -- permission rules keep the document's
+  // spelling, and `specMatches` normalises at comparison time instead.
+  const EDIT_RULE_ID = "permissions:permission-deny:Edit:~/.claude/settings.json";
 
-    // The `Write(...)` half is kept, so the literal `Write` tool stays closed at
-    // this layer too. It is also why the CLI still prints its warning about
-    // that spelling on every spawn; see D-0083.
+  // `NotebookEdit` carries its subject under `notebook_path`, not `file_path`;
+  // the table uses each tool's real payload key so a match cannot pass on a
+  // shape the CLI never sends.
+  const FAMILY = [
+    { tool: "Edit", input: { file_path: normalizePath("~/.claude/settings.json") } },
+    { tool: "Write", input: { file_path: normalizePath("~/.claude/settings.json") } },
+    { tool: "NotebookEdit", input: { notebook_path: normalizePath("~/.claude/settings.json") } },
+  ] as const;
+
+  for (const { tool, input } of FAMILY) {
+    test(`${tool} on ~/.claude/settings.json is refused by the one Edit rule`, () => {
+      // Before D-0089 `matches` compared an exact tool name, so this rule spoke
+      // only for the tool it was spelled with. It now speaks for the family the
+      // CLI applies it to -- which is what makes the `Write(...)` twin the
+      // document used to carry redundant rather than load-bearing.
+      const decision = workerFence().decide(tool, input);
+      expect(decision.denied).toBe(true);
+      // Asserting the rule id, not merely the refusal: it is the only thing
+      // that shows one authored `Edit(...)` rule reached three tools rather
+      // than three rules each reaching their own.
+      expect(decision.ruleId).toBe(EDIT_RULE_ID);
+      // The reason names the invoked tool and the rule that refused, which is
+      // how an operator tells this layer's refusal from the permission
+      // system's wordless one.
+      expect(decision.reason).toContain(`${tool} denied by permission-deny rule`);
+      expect(decision.reason).toContain("~/.claude/settings.json");
+    });
+  }
+
+  test("a file the rule does not name is not refused by it", () => {
+    // The widening is over tools only. A path outside the rule's spec stays
+    // outside it, and `denied: false` here means the fence has no opinion.
+    expect(workerFence().decide("Edit", { file_path: normalizePath("~/notes.md") }).denied).toBe(
+      false,
+    );
+  });
+
+  test("an authored Write(...) rule does not become a family alias", () => {
+    // The one-way half of D-0089. `Edit(...)` is the CLI's family spelling;
+    // `Write(...)` is not, and a fence that made it one would deny more than
+    // the document authorised.
+    const rule = parsePermissionRule("Write(~/.claude/settings.json)");
+    expect(rule.matches("Write", { file_path: normalizePath("~/.claude/settings.json") })).toBe(
+      true,
+    );
+    expect(rule.matches("Edit", { file_path: normalizePath("~/.claude/settings.json") })).toBe(
+      false,
+    );
     expect(
-      fence.decide("Write", { file_path: normalizePath("~/.claude/settings.json") }).denied,
-    ).toBe(true);
+      rule.matches("NotebookEdit", { notebook_path: normalizePath("~/.claude/settings.json") }),
+    ).toBe(false);
   });
 });
 

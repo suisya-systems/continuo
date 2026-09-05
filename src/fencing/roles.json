@@ -45,7 +45,6 @@
           "Read(.env)",
           "Read(**/*.pem)",
           "Read(**/credentials*)",
-          "Write(~/.claude/settings.json)",
           "Edit(~/.claude/settings.json)",
           "WebFetch"
         ]
@@ -90,7 +89,6 @@
           "Bash(git push)",
           "Bash(git push *)",
           "Bash(rm -rf *)",
-          "Write(**/.claude/skills/**)",
           "Edit(**/.claude/skills/**)",
           "Read(**/*.pem)"
         ]
@@ -162,7 +160,6 @@
           "Bash(git push *)",
           "Bash(git commit *)",
           "Bash(rm -rf *)",
-          "Write(**/src/**)",
           "Edit(**/src/**)",
           "Read(**/*.pem)"
         ]

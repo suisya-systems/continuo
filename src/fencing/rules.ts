@@ -358,8 +358,32 @@ export function parseSandboxEntry(raw: unknown, kind: string): FenceRule {
 // matching
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether an authored permission rule speaks for the tool that was invoked.
+ *
+ * The widening is deliberately **one-way**. The CLI applies a file-permission
+ * rule under `Edit(path)`, and that one spelling covers the whole file-editing
+ * family; `Write(...)` is not the family spelling -- it warns instead. So an
+ * authored `Edit(...)` rule is read as the family it names in the CLI, while an
+ * authored `Write(...)` or `NotebookEdit(...)` rule stays literal. Making the
+ * relation symmetric would give a standalone `Write(...)` in a persisted or
+ * caller-supplied fence a reach the measured CLI never gives it.
+ *
+ * The family membership is `WRITE_TOOLS`, shared with the sandbox layer so the
+ * two cannot drift apart. The *matching* is not shared: sandbox rules test
+ * containment and treat `Bash` specially, permission rules want `specMatches`.
+ *
+ * Authority: `DECISIONS.md` D-0089.
+ */
+function permissionToolMatches(ruleTool: string, toolName: string): boolean {
+  if (ruleTool === "Edit") {
+    return (WRITE_TOOLS as readonly string[]).includes(toolName);
+  }
+  return ruleTool === toolName;
+}
+
 function permissionMatches(rule: FenceRule, toolName: string, toolInput: ToolInput): boolean {
-  if (toolName !== rule.tool) {
+  if (!permissionToolMatches(rule.tool, toolName)) {
     return false;
   }
   const subject = permissionSubject(toolName, toolInput);
