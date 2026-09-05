@@ -60,13 +60,17 @@ The mount line itself, for one of them:
 0:6 /null <project root>/.bashrc ro,nosuid,nodev,relatime - devtmpfs none rw,...
 ```
 
-`/null` on `devtmpfs` is `/dev/null`; `ro` is why it is a mask rather than a redirect. On disk each
-is `crw-rw-rw- 1 nobody nogroup 1, 3` -- the `1, 3` and the `crw-` of #137's report.
+`/null` on `devtmpfs` is `/dev/null`; `ro` is why nothing can be written back through it. On disk
+each is `crw-rw-rw- 1 nobody nogroup 1, 3` -- the `1, 3` and the `crw-` of #137's report. The
+`nodev` matters too, and is easy to skim past: on a `nodev` mount the kernel will not open a device
+node, so a masked path is not an empty file but an unreadable one, and a read of it fails `EACCES`
+however permissive its mode bits look. See "What this does and does not mean for the fence" for the
+warning this produces in ordinary use.
 
 Read as a set these are the files a repository could ship to redirect a tool the agent runs: shell
 rc and profile (`bash`, `zsh`), `git` config and submodule config, editor config (`.idea`,
-`.vscode`), `ripgrep` config, and the MCP and Claude project config. Masking them with an empty
-read-only file is a coherent defence. **That reading is inference; the mount table is the
+`.vscode`), `ripgrep` config, and the MCP and Claude project config. Making each of them unreadable
+is a coherent defence. **That reading is inference; the mount table is the
 measurement.** What is measured, and matters here, is that the set is *built in*: none of these
 paths appears in the session's own `permissions.deny` or `sandbox.filesystem.deny*`, and the
 `Bash command sandbox` reminder the session receives does not list them either.
@@ -139,9 +143,19 @@ such a session prints, twice, to stderr and while otherwise succeeding:
 warning: unable to access '<project root>/.gitmodules': Permission denied
 ```
 
-A reader who does not know the cause will spend the warning on a permissions or ownership theory.
-Nothing is actually inaccessible: the mount is `ro` and owned by `nobody`, and git wanted to read a
-submodule config that does not exist.
+The path really is unreadable, and the reason is the `nodev` in the mount line above rather than the
+`ro` or the `nobody` ownership: on a `nodev` mount the kernel refuses to open a device node at all,
+so the mask is not an empty file but an unopenable one. Measured, on both a masked config path and a
+masked rc file:
+
+```sh
+cat .gitmodules              # cat: .gitmodules: Permission denied
+python3 -c "import os; os.open('.gitmodules', os.O_RDONLY)"   # OSError errno 13 EACCES
+```
+
+`EACCES` on a path that `ls` shows as `crw-rw-rw-` is the shape to recognise. A reader who does not
+know the cause will spend the warning on a file-permission or ownership theory, and the mode bits
+will appear to contradict them.
 
 The mitigation, if one is ever wanted, is one line of `.git/info/exclude` per name in the workspace
 continuo materialises for the child -- `.git/info/exclude` is not committed, so it does not touch
