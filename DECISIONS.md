@@ -13895,14 +13895,20 @@ poll.** Specifically:
 
    - **The fallback proper is executor-independent and is not a hint at all**: the recipient polls at
      each turn boundary (bounded by the turn), and underneath it rows stay due and visible in SQLite
-     (bounded by nothing, and the only load-bearing layer). Every one of the four cases above is
-     covered here and nowhere else. Decision item 9 is what makes the turn-boundary half happen.
+     (bounded by nothing). Decision item 9 is what makes the turn-boundary half happen, and how
+     strongly it happens depends on the executor: a `Stop` hook makes it a property of the process,
+     while a recipient with no such hook has the role prompt and the completion condition, which
+     bound *correctness* -- a run with an unacknowledged row does not reach done -- and never latency.
+     So on a non-Claude executor a worker that ignores its prompt does not silently lose the row; it
+     fails to finish, and the row stays due. **Rows staying due and visible to the operator is the
+     only layer that holds unconditionally, and it is the only load-bearing one.** Buying latency
+     back for such an executor is a separate change and is not decided here.
    - **The hint-write cadence is 30 seconds**, a separate, Claude-only, latency-only layer that
      covers only the dropped-or-coalesced-wake case: while a turn is in flight the composition layer
-     repeats the hint at most that often. It bounds *writing*, never discovery -- the latency it buys
-     is 30 seconds **plus** the time to the next tool-call boundary, and nothing here bounds the
-     second term. On a closed pipe or on Codex it buys nothing at all, which is exactly why it is not
-     the fallback.
+     writes the hint **at least once every 30 seconds** -- the number is a maximum interval between
+     writes, not a minimum. It bounds *writing*, never discovery -- the latency it buys is 30 seconds
+     **plus** the time to the next tool-call boundary, and nothing here bounds the second term. On a
+     closed pipe or on Codex it buys nothing at all, which is exactly why it is not the fallback.
 
    The 30 seconds is a new number: neither `--poll-interval-ms` (transcript reads, 1000 ms, a
    different process and a different resource) nor `D-0079`'s operator cadence (gate reconciliation,
