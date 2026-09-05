@@ -188,6 +188,7 @@ spaces distinct.
 | D-0090 | The CLI seam a host drives: `--version` carries the build's revision, and `--json` answers in one envelope | accepted |
 | D-0091 | A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement | accepted |
 | D-0092 | `gate close` joins the `--json` envelope: `D-0090`'s falsifier fired, and its verb reach is amended from three gate verbs to four | accepted |
+| D-0093 | One non-string entry in the sandbox deny list voids `permissions.deny` and the `PreToolUse` hook for the whole run | accepted |
 
 ---
 
