@@ -191,6 +191,7 @@ spaces distinct.
 | D-0093 | One non-string entry in the sandbox deny list voids `permissions.deny` and the `PreToolUse` hook for the whole run | accepted |
 | D-0094 | The settings generator refuses a non-string sandbox deny entry instead of writing it for a reader that does not reject it | accepted |
 | D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
+| D-0096 | continuo's database is not a public read surface; `run show` is | accepted |
 | D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present\|deliver\|ack` join the `--json` envelope | accepted |
 
 ---
@@ -14744,6 +14745,302 @@ range, following `D-0093`, which is also a fencing decision taken from the share
 against `origin/main` at `a293500` (re-checked at rebase; `ee2a399` at first draft), where `D-0093`
 is the last taken id; `D-0094` is claimed by the parallel lane on #163, so this entry takes
 `D-0095`.
+
+---
+
+## D-0096 -- continuo's database is not a public read surface; `run show` is
+
+**Context.** cadenza's `docs/design/operating-surface.md` measured what a console has to render and
+found seven rows. Six had a read path or an owner. One did not: *run and belt state,
+`awaiting_user`, the outbox* -- source of truth continuo, read path **none**. `run` had exactly
+`admit` and `close`, there was no `run list`, no `run show`, and no event or outbox verb. The
+document's own reading of that gap is the sharp part: *"the two rows with no read path are the two
+that would tempt somebody to open a database ... the wrong answer to it is a second reader of
+continuo's SQLite file."* It filed the question as row `S-10`, at **continuo's** gate, and
+recommended a read verb without being able to design one -- `S-10` is about a verb cadenza has no
+say in.
+
+The pressure is real rather than hypothetical. rondo `D-0015` rule 1 keeps continuo behind a CLI
+process boundary, and rondo's operating surface is the human-facing half of the host. A pane it
+cannot fill through a verb is a pane it fills some other way, and the only other way is
+`better-sqlite3` pointed at continuo's file from a second process -- which would make every column
+name in `migrations/0001_initial.sql` a contract with a consumer that has never been reviewed, and
+would put a second reader inside a database whose whole design is one writer per item.
+
+**Decision.**
+
+1. **The database is not a public read surface. A verb is.** No component outside this repository
+   reads continuo's SQLite file. What a host may read, it reads through a verb, in the `D-0090`
+   envelope, under a `schema` id that versions independently of the DDL. The DDL stays free to
+   change shape under a payload that does not.
+
+2. **`continuo run show --run-id R [--json]`**, schema `continuo.run.show/1`. It joins `admit` and
+   `close` under `run`, and it is the **fifteenth** verb to mount `--json`: fourteen now answer in
+   the envelope and `measure report` still emits its report unwrapped. `D-0090` point 3 and `D-0092`
+   point 1 are amended in the same way `D-0092` amended `D-0090` -- one number moves, nothing else
+   about either entry changes.
+
+3. **The payload is five keys, and they are the tables.** `run` (the row, including `writer_epoch`),
+   `lease` (the run lease at `run:<run_id>`, or `null`), `sessions`, `gates` (this run's OPEN gates,
+   in `gate list`'s summary shape), `events` (the run's spine, in `seq` order), `outbox` (every row
+   enqueued for the run, oldest first). The four lists are always present and empty when nothing
+   matched; an absent key is the one absence a JSON reader cannot tell from a key it forgot to read.
+
+4. **An unknown run is refused, in the envelope, not answered with an empty document.** Exit 2,
+   `UnknownRunRefused` on stderr -- the same class `run close` raises for the same situation. This
+   is the point the verb turns on: an empty document for a mistyped identifier is byte-identical to
+   the document a real, freshly admitted run produces, so a console would render "this run is idle"
+   for a run that does not exist.
+
+5. **It is a read and nothing else.** No write, no lease, no clock, no fence, and it is not a step
+   of `lap perform`. A console's read is not part of the lap, and putting it inside either would
+   make drawing a pane a thing that can fail the run it is drawing.
+
+**What "belt state" and "`awaiting_user`" turned out to be, since neither is a column.** Both names
+are inherited from interlock's vocabulary through cadenza#22, and the honest answer is that neither
+has a referent in this schema. Naming that is most of what point 3 decides:
+
+- A **belt** is interlock's *autonomous conveyor* -- the completion-driven triage->delegate->verify->PR
+  loop `docs/parity-audit.md` D15 describes. Continuo has no such entity and deliberately does not:
+  it holds a run and the things fenced against it. What is actually *executing* a run here is its
+  **session binding** (`session`, with `D-0024`'s staged `binding_phase`) and the **run lease**
+  (`lease` at `run:<run_id>`, `D-0046` rule 3). Those two are what the pane wanted, so those two are
+  what the payload carries -- under their own names, not under "belt".
+- **`awaiting_user`** is a *notify subkind* in the attention belt's v1 file world
+  (`src/attention/classifier.ts`, `secretary_awaiting_user`), not an event type on this spine.
+  `EVENT_TYPES` holds thirteen names and none of them is it. cadenza's document says what
+  corresponds today in as many words -- a gate at stage `presented` -- so the payload carries the
+  run's open gates **with their stage** and mints no `awaiting_user` key. A host reads `stage`,
+  which is the vocabulary it already decodes from `gate list --json`. Minting the name here would
+  have put a v1 file-world word into a host contract as a synonym for a gate stage, and the two
+  would drift the first time the stage vocabulary moved.
+
+**Why one verb and not four.** `run show`, `run events`, `run outbox` and a lease read would be four
+subprocesses per pane, reading four snapshots at four instants, which a console then has to
+reconcile: a run that shows `completed` beside an event stream that has not reached the close yet is
+not a rendering bug a host can fix, because the two reads really did see different databases. One
+verb reads them on one connection, so the sections are as close to simultaneous as this design gets.
+It also means the run's existence is established once, in one place, which is what makes point 4 a
+property of the verb rather than of whichever sub-verb was called first.
+
+**What that stops short of, stated rather than glossed: this is five reads, not a snapshot.**
+`txn.ts` is `BEGIN IMMEDIATE` -- a write lock -- and a read verb must not take the write lock out
+from under a running lap, so it is not used. A `BEGIN DEFERRED` snapshot would need a second
+transaction helper, and `txn.ts` states in as many words that the commit lives there once;
+`measurement/reader.ts` has one (`measurementSnapshot`), but it is built on a **read-only
+connection** it opens itself and proves query-only, which the handle this verb holds is not. So the
+document is five reads in autocommit. The run row is read FIRST, so an unknown run costs one
+statement and no later reader has to tolerate a run that is not there, and the residual skew is
+bounded by the run's own writers -- which are serialised by the run lease this same document
+carries, so a host that wants to know whether it read across a write has the epoch to check.
+Tightening this is a change with a reader behind it or not at all.
+
+**Why the whole row, including both payloads.** Every column this reader touches is carried through,
+`event.payload` and `outbox.payload` included, and those are the two large ones. The reasoning is
+the entry's own thesis turned around: **a column withheld from the read surface is a reason to open
+the database**, which is the behaviour this entry exists to remove. The one deliberate narrowing is
+the gate, carried as the six-field summary `gate list` prints rather than as `gate show`'s detail --
+because `gate show --json` exists and restating its payload here would be a second answer to "what
+is this gate", and two answers eventually disagree.
+
+Both payloads are the **verbatim TEXT of the column**, not a nested object. The DDL already
+guarantees `json_valid(payload)` for an event, so a host that wants the object calls `JSON.parse` on
+a string; re-encoding here would make these bytes depend on this build's JSON renderer rather than
+on the value that was stored, which is the argument `D-0090` already makes for not borrowing
+`pyJsonDumps`. Neither payload appears on the HUMAN rendering: that is one line per row, and a
+payload holding a newline would silently stop it being one.
+
+**And what excludes the payloads turns out to be a rule about the whole rendering, which the first
+draft of this verb got wrong twice.** Two rounds of review found the same defect widening: the
+payloads were kept off the human lines because they are unconstrained persisted text, and so is most
+of what stayed on them. Interpolated raw, a newline in any such field breaks the one-line-per-row
+claim by exactly the mechanism the payloads were excluded for, and a terminal escape lets persisted
+text forge a line an operator reads as the command's own. The rendering therefore applies **one
+rule** rather than a per-field judgement:
+
+- **Raw, because something narrows the value.** The closed vocabularies the DDL enforces with a
+  `CHECK ... IN` -- `run.status`, `session.binding_phase`, `session.observation`, `gate.gate_type`,
+  `gate.stage`, `event.subject_kind`, `outbox.status`. A run identifier and the lease resource
+  derived from one, because `D-0051` holds an admitted run id to printable ASCII and admission is
+  the only writer of the row -- and because `run admit` and `run close` print run ids raw, so
+  quoting here would print one value under two rules. `--db`, for that same reason, which
+  `run_cli.ts`'s header already records as a standing exception belonging to whichever entry settles
+  echoed external text for every verb at once.
+- **Quoted, because nothing does.** Everything else -- `lease.holder`, `session.session_id`,
+  `session.provider`, `session.provider_state`, `session.observation_reason`, `gate.gate_id`,
+  `event.event_id`, `event.event_type` (`events.ts` says the column is deliberately open text),
+  `event.subject_id`, `event.producer`, `outbox.message_id`, `outbox.recipient`. Each is at most
+  `length(...) > 0`, and each is written by a caller: `prepareBinding` takes a session id and a
+  provider name and validates neither's alphabet.
+
+**And the quoting is conditional, which is what keeps this verb's lines the same as every other
+verb's on real data.** A value that cannot break the framing prints exactly as it is; only one that
+could is quoted, through `JSON.stringify` -- one call, reversible, escaping exactly the characters
+the condition selects for. The condition is *anything outside printable ASCII, plus the double quote
+itself*: the first is every character that can end a line or move a terminal cursor, and the second
+is there so a reader never has to wonder whether a quoted-looking value was quoted by the renderer
+or stored that way. An ordinary session uuid, provider name, gate id or recipient therefore renders
+byte for byte as it would have without the rule, so `run show` and `gate show` print one value the
+same way, and a hostile one renders as an escaped, quoted, still-reversible string on one line. The
+unconditional version was written first and rejected on exactly this: it made `run show` the only
+verb in the CLI that quotes identifiers, which is the one-value-under-two-rules problem this same
+paragraph invokes to keep run ids raw.
+
+**The other human renderings in this CLI still carry the exposure, and this entry does not close it
+for them.** `gate list` and `gate show` interpolate gate ids, relay message ids, actor ids and
+answer bodies raw. That is the cross-verb work `docs/cli-output-policy.md` is waiting for, and
+`run_cli.ts`'s header already names it for `--db`; what this entry claims is only that the new verb
+adds no new instance of it. Saying so is the honest half of the paragraph above -- the rule is
+applied where this diff is responsible, not everywhere it belongs.
+
+The DOCUMENT needs none of this: `asciiJsonLine` already escapes every one of these values, which is
+why the payload columns are safe there and absent here.
+
+**One hazard is measured and declined rather than closed: `seq` and the millisecond columns are read
+as `number`.** `docs/sqlite-value-contract.md` section 3 requires `safeIntegers(true)` for a column
+that can hold an INTEGER past `Number.MAX_SAFE_INTEGER`, which this driver rounds silently. `seq` is
+an `INTEGER PRIMARY KEY AUTOINCREMENT` from 1, so the value is nine quadrillion appended events
+away, and epoch milliseconds are five orders of magnitude short. Against that, the same document
+notes that safe integers return `bigint` and that `JSON.stringify` throws on one -- so enabling them
+for this reader would make this verb's numbers a different type from every other verb's and would
+need a replacer to serialise at all, while `openGates`, `gateDetail`, `readRun` and `readLease` all
+read the same columns as numbers today. One statement diverging from that is worse than the hazard
+it would close. Raised by a review of this diff, recorded rather than left to be rediscovered.
+
+**Why it reads no clock, and why that is a design choice rather than an omission.** Whether a lease
+is live, whether a gate's deadline has passed, whether an outbox row is overdue are all questions
+against the *caller's* clock. The rows carry `expires_at_ms`, `deadline_at_ms` and
+`enqueued_at_ms`, and the host evaluates them. A boolean computed here would be continuo's clock
+answering at an instant the host cannot see -- and a console that drew "lease live: false" beside an
+`expires_at_ms` in its own future would have no way to reconcile the two. There is therefore no
+`--now-ms` on this verb: a clock argument on a read invites exactly the belief that the answer was
+evaluated at it.
+
+**Why `openProductionControlPlane`, the same writable handle every other verb takes.** A read-only
+open (`openForMeasurement`'s shape) is the tempting alternative and would make the read-only claim
+structural rather than tested. It is rejected because it skips the ledger and head verification: a
+database behind this build would be read anyway, and `run.writer_epoch` -- added by migration 0004
+-- would surface as a raw SQLite error about a missing column instead of a refusal naming the
+version. The read-only property is asserted instead, over the database's own bytes and over the
+absence of a `-journal` sibling, which is a stronger check than an open flag because it also covers
+a lease taken or an epoch bumped.
+
+**Not exported from `src/index.ts`.** `runView` is reachable from `run_cli.ts` and nowhere else. A
+library export would be a third read surface -- a caller with an open `Database` handle, which is
+the thing rondo `D-0015` rule 1 keeps out -- and this entry would then be saying the database is not
+a read surface while shipping a function whose first argument is a connection to it.
+
+**Alternatives.**
+
+- *Let a console open the SQLite file* (rejected: it is the answer `S-10` names as wrong, it makes
+  every column of `0001_initial.sql` an unreviewed contract, and it puts a second reader inside a
+  database designed around one writer per item).
+- *Four verbs -- `run show`, `run events`, `run outbox`, a lease read* (rejected above: four
+  snapshots at four instants, and four places for point 4 to be got wrong).
+- *A `run list` as well* (rejected: no reader. cadenza's row is a run PANE, which is about one run;
+  a list is `gate list`'s job for the gates a human owes an answer to, and a verb added ahead of a
+  reader is a shape nobody has checked, which is the principle `D-0090` and `D-0092` both applied).
+- *An `awaiting_user` key derived from the gate stage* (rejected above: a v1 file-world word as a
+  synonym for a stage the host already decodes, and a second thing to keep in step).
+- *Paginating or truncating `events` and `outbox`* (rejected: `gate show` returns every transition
+  and every relay unbounded and nothing has needed otherwise; a `--limit` invents a pagination
+  contract with no reader, which is the same principle as the row above. Its falsifier is below).
+- *A read-only connection* (rejected above: it trades a refusal naming the schema version for a raw
+  SQLite error).
+- *Emitting `payload` as a nested object* (rejected: it makes the bytes a property of this build's
+  renderer rather than of the stored value).
+- *Exporting `runView` from `src/index.ts`* (rejected above).
+- *Putting the read inside `lap perform` or behind the fence* (rejected: drawing a pane is not a
+  step of the lap, and a read that can fail the run it is reporting on is worse than no read).
+
+**Consequences.** `src/cli/json_output.ts`, `run_cli.ts` and `measurement/cli.ts` count the verbs
+that mount the flag, which becomes fifteen, of which fourteen answer in the envelope. `src/cli.ts`'s
+`run` description gains the third verb. `src/control_plane/run_view.ts` is new and is the only
+module that knows which tables a run's state lives in. Nothing existing changes behaviour: `admit`
+and `close` are untouched, and no DDL, migration or writer is edited by this entry. rondo's seam
+gains one more contract to decode, and rondo is a separate repository and is **not edited from
+here** -- naming the addition is this entry's whole obligation to it. cadenza's document records its
+own expiry for this: section 9 says sections 2 and 3 and row `S-10` expire *"the moment continuo
+grows read verbs for runs, events and the outbox"*, which this is.
+
+**What this entry does not decide.** Whether `gate reconcile` should carry `--json` (`D-0092` left
+that open; `D-0097` has since settled `gate present`, `deliver` and `ack`, and this entry touches
+neither). Whether the caller-defect exits should become refusals (`D-0090` point 2, still recorded
+rather than endorsed). Whether a run's `task` DDL is written (`docs/production-schema.md` section
+12's known hole, and cadenza's `S-7` puts the delegation record in rondo's store). `S-9` -- who acks
+the `presented` relay once a console exists -- is settled by `D-0097` and not by this entry; this
+verb makes the pane drawable and answers nothing about who acts on it.
+
+**What records it.** `src/control_plane/run_view.ts` holds the reader, its five queries and the
+argument for each ordering. `src/control_plane/run_cli.ts` holds `SHOW_SCHEMA`, `showPayload`, the
+human rendering and the mount. `test/control_plane/run-show.test.ts` holds the cases, per `D-0090`'s
+anti-vacuity standard, each observed RED under a deliberate mutation that was then reverted:
+
+- The exact document over an admitted run -- absent lease, three empty lists, `writer_epoch: null`,
+  and the two admission events read off the rows rather than written down -- red under a
+  `run_id` literal in `showPayload`.
+- The exact `lease`, `sessions`, `gates` and `outbox` sections over a run carrying one of each --
+  red under a dropped `readLease` and under an emptied `sessions` list, either of which leaves the
+  admitted-run case green forever.
+- A run's own rows and nobody else's, with two runs in one database -- red under a `SELECT` that
+  lost its `WHERE run_id = :run_id`, which every single-run fixture would have passed.
+- A closed gate stays out of the open list -- red under a dropped `closed_at_ms IS NULL`, which
+  would show a console questions that have already been answered.
+- The unknown-run refusal, its exit code taken from the non-`--json` run rather than from a literal,
+  and its message taken from the human line rather than restated -- red under a `runView` that
+  returned an empty view instead of refusing.
+- The verb writes nothing: the database's bytes before and after, plus the absence of a `-journal`
+  sibling -- red under an `UPDATE` inside the verb. Its limit is recorded in the case: a write of a
+  value identical to the one already there leaves the file identical, and a write nothing can
+  observe is not the hazard this stands in front of.
+- The verb reads no clock: `runCliSeams.nowMs` replaced with one that throws -- red under a single
+  added clock read.
+- An operator's prompt holding a newline, an em-dash and three Japanese characters travels into the
+  delegation event's payload and out through the document as one line of pure ASCII that parses
+  back byte for byte. This verb is the first place in this CLI where free-form external text reaches
+  a document, and `--prompt` is deliberately not held to ASCII.
+- Unconstrained persisted text cannot break the human rendering's framing: a hostile value in one
+  field of each SHAPE the rule covers -- a lease holder, a session id and a provider name, each
+  carrying a newline plus a forged line of this command's own format -- produces exactly the five
+  lines the run has and no sixth, with every value quoted and still reversibly readable. Red under
+  the raw interpolation this verb shipped, in both the first draft's form and the second's. The
+  condition itself is pinned from both sides: red when it never fires (this case), and red on the
+  human-rendering case when it always fires, which is what stops the rule quoting values it should
+  leave alone.
+- The four `--json` vacuity cases `D-0090` requires: the same invocation without the flag emits the
+  unchanged human rendering and no document (red under `jsonRequested(args) || true`); the refusal
+  path reads the flag too (red under a `refuse()` given a constant `false`); the mount carries the
+  flag (red under a deleted `addJsonArgument(show)`, which fails nine cases at once); and the
+  vacuity checks are not themselves vacuous -- the human refusal is still a line, so "not the
+  human line" cannot pass because nothing was written.
+
+**Status.** accepted
+
+**Falsifier.** A host that opens continuo's database anyway after this lands, which would mean the
+payload answers a question the console did not have -- most plausibly a field of `gate`, `session`
+or `event` that is on nobody's read path and that somebody reaches for the file to get. Sharper: a
+`run show` document large enough that a host cannot hold it, which would falsify the unbounded
+`events` and `outbox` lists and make the rejected `--limit` the right answer after all; the shape
+of that failure is a long-lived run, and it is a `/2` or a sibling key rather than a silent
+truncation. The `seq` hazard above shares that falsifier and no other: a run whose spine passes
+`2**53` falsifies the reading convention this entry declined to change, and would falsify it for
+`gate show` in the same breath. Also falsifying: the five-reads-not-a-snapshot residual becoming
+observable -- a console
+that renders a run's status and its spine from one document and can show a state pair the database
+never held. And, in the other direction, an `awaiting_user` key appearing in this payload, which
+would mean the correspondence this entry recorded (the name is a gate at stage `presented`) had been
+abandoned for the convenience of not making a host read a stage it already reads.
+
+**Source.** #166, and cadenza's `docs/design/operating-surface.md` row `S-10` (cadenza #56) for the
+measurement that raised it -- taken at continuo's gate on 2026-09-06, which is the gate that row
+names. `D-0090` for the envelope and its anti-vacuity standard, `D-0092` for the precedent of
+amending its verb reach by one number when a reader appears, rondo `D-0013` / `D-0015` / `D-0017`
+for the host whose seam decodes it. `D-0046` rule 3 for the run lease's granularity, `D-0024` for
+the session binding's phases, `D-0001` for state being reconstructed by query alone.
+
+Decision id allocated from the `D-0019`..`D-0099` shared band. Checked against `origin/main` at
+`ab24daa`, where `D-0095` is the last taken id; `D-0094` is claimed by the parallel lane on #163 and
+`D-0097` by the parallel lane on #165, so this entry takes `D-0096`. Re-checked at merge.
 
 ---
 
