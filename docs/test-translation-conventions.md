@@ -521,8 +521,7 @@ the first belt that touches it, and `inherited_limitations` records what is repr
 repair* -- not what is queued for someone upstream to fix.
 
 **What `where_a_fix_belongs` may say.** No field names "upstream" as its destination any more
-(#80 classified the last 25 entry by entry, against each entry's own `note`; one field still defers
-to interlock's open `Q-0005`, which is a question nobody there will answer either). A field takes
+(#80 classified the last 25 entry by entry, against each entry's own `note`). A field takes
 one of two shapes: either
 the fix is one continuo makes, in which case it names where -- `D-0023` governs and the belt that
 next touches the behaviour makes it -- or no fix is available in this repository, in which case the
