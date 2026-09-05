@@ -50,6 +50,19 @@
  * could reach any of that would be a flag that decides what happened rather
  * than how it is spelled.
  *
+ * **A refusal document names the session when the lap holds one** (`D-1102`).
+ * `session_id` is a top-level key of the refusal envelope, beside `db` and
+ * outside `error`: it is present, as a non-empty string, on the refusals raised
+ * once this lap held a confirmed identity, and the key is absent -- never
+ * `null` -- on every other refusal. {@link refusalMetadata} enumerates which
+ * states those are and why the ones left out are left out. The schema stays
+ * `/1` for the reason `report()` gives about `model`: a key a decoder has not
+ * been taught is one every JSON reader already handles, and an old producer
+ * that never writes it says "the identity is unknown", which is exactly what a
+ * decoder should conclude. It must not go looking in `error.message` instead
+ * (`D-0015` rule 7), even though the sentence there quotes the id: the message
+ * is written for a person and is free to be reworded.
+ *
  * **The whole report is one document, and this verb is the one where that is a
  * claim worth making.** `report()` writes a success line plus up to two
  * conditional `note:` lines, and it writes all of them after the lap is over --
@@ -65,7 +78,13 @@
 
 import { randomUUID } from "node:crypto";
 
-import { addJsonArgument, jsonRequested, refusalLine, successLine } from "../cli/json_output.js";
+import {
+  addJsonArgument,
+  jsonRequested,
+  type RefusalMetadata,
+  refusalLine,
+  successLine,
+} from "../cli/json_output.js";
 import {
   ArgparseExit,
   type ArgumentParser,
@@ -86,13 +105,17 @@ import { createDefaultSessionProvider } from "../index.js";
 // `src/session/provider.js` from what counts as knowing one, and this is the
 // refusal every provider raises before it starts anything.
 import { SpawnRefused } from "../session/provider.js";
-import { DEFAULT_READBACK_BUDGET_MS, OrchestrationRefused } from "../supervisor.js";
+import {
+  DEFAULT_READBACK_BUDGET_MS,
+  LoserTerminated,
+  OrchestrationRefused,
+} from "../supervisor.js";
 import { GitRefusal } from "../workspace/git.js";
 import {
   WorkspaceMaterializationRefused,
   WorkspaceMaterializationUsageError,
 } from "../workspace/materializer.js";
-import { type LapOutcome, LapUsageError, performLap, requireModel } from "./root.js";
+import { type LapOutcome, LapRefused, LapUsageError, performLap, requireModel } from "./root.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -329,9 +352,55 @@ function isOperatorRefusal(error: unknown): error is Error {
  */
 function refuse(error: Error, db: string, json: boolean): never {
   lapCliSeams.writeError(
-    json ? refusalLine(PERFORM_SCHEMA, db, error) : `error: ${error.message}\n`,
+    json
+      ? refusalLine(PERFORM_SCHEMA, db, error, refusalMetadata(error))
+      : `error: ${error.message}\n`,
   );
   throw new ArgparseExit(2, "refused lap");
+}
+
+/**
+ * The structured facts this verb's refusal document carries beside the class
+ * and the message -- today exactly one, the session (`D-1102`).
+ *
+ * **The rule is about the state the lap reached, not about the shape of a
+ * class.** A refusal names a session here only where the lap already held a
+ * CONFIRMED identity for it, so the list is enumerated rather than derived by
+ * asking whether an error happens to have a `sessionId` field:
+ *
+ * - {@link LapRefused} carries one only when `root.ts` set it, which is on the
+ *   refusals raised after the walk returned -- the turn's report could not be
+ *   read, was about another session, never came, or ran out of budget. The
+ *   identity has been read back and committed by then.
+ * - `LoserTerminated` carries the identity of the session it ordered stopped.
+ *   The binding for it exists; this claimant simply lost the lease afterwards,
+ *   and the id is the one thing an operator chasing a possibly-rogue child has
+ *   to have.
+ *
+ * And the two states deliberately left without a key:
+ *
+ * - `IdentityUnconfirmed` has no session to name. That is the whole content of
+ *   the refusal -- an identity was committed and never confirmed -- and putting
+ *   the unconfirmed id on the wire would report as spawned a session nothing
+ *   read back. The refusal's `message` and the binding, which stays honestly at
+ *   `spawned`, are where that id lives.
+ * - Every refusal raised before the walk: the run was not admitted, an argument
+ *   was malformed, git said no, the worker CLI is not installed. `performLap`
+ *   mints an identity before it binds one, so an id in hand at those depths may
+ *   belong to no binding at all.
+ *
+ * The absent key is not silence a host has to interpret twice over: `D-0015`
+ * rule 7 holds, so "no `session_id`" means "the identity is unknown" and never
+ * "read the message for it".
+ */
+function refusalMetadata(error: Error): RefusalMetadata {
+  if (error instanceof LoserTerminated) {
+    return { sessionId: error.sessionId };
+  }
+  if (error instanceof LapRefused) {
+    return { sessionId: error.sessionId };
+  }
+  return {};
 }
 
 /** An optional string flag, as the namespace leaves it. */
