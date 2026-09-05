@@ -5,6 +5,7 @@ import { acquire, LeaseHeld, StaleWriterRefused } from "../../src/control_plane/
 import * as sessionBinding from "../../src/control_plane/session_binding.js";
 import { Failure, FailureKind, Ok } from "../../src/session/provider.js";
 import {
+  DEFAULT_LEASE_SLACK_MS,
   DEFAULT_READBACK_BUDGET_MS,
   IdentityUnconfirmed,
   LoserTerminated,
@@ -941,6 +942,39 @@ describe("D-0098: the post-spawn read-back window is a caller's budget", () => {
         String(budget),
       ).toThrow(RangeError);
     }
+  });
+
+  test("the lease outlives the window the caller asked for", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // A window well past the shipped 30-second lease TTL, which is the value
+    // an operator on a slow machine would reach for and the one that made this
+    // coupling visible: nothing renews the session lease while `#awaitIdentity`
+    // polls, so a walk allowed to poll for 45 s under a 30 s lease reaches its
+    // own last fenced write as a stale writer -- and a child that named itself
+    // at 40 s would be stopped for it. Raising the window without raising the
+    // lease is a window that cannot be used.
+    const budget = 45_000;
+    const orchestrator = new SessionOrchestrator(cp, provider, {
+      runId: RUN_ID,
+      holder: "sup-a",
+      workspace,
+      role: "worker",
+      nowMs: clock.nowMs,
+      sessionUuidFactory: uuids,
+      readbackBudgetMs: budget,
+      wait: null,
+      providerName: "scripted",
+    });
+
+    // The scripted provider names the committed identity on the first ask, so
+    // this is the ordinary happy walk -- the lease is read afterwards for what
+    // it was TAKEN with, not for how the walk ended.
+    await orchestrator.start();
+
+    const lease = cp
+      .prepare("SELECT acquired_at_ms, expires_at_ms FROM lease WHERE resource = :resource")
+      .get({ resource: RESOURCE }) as { acquired_at_ms: number; expires_at_ms: number };
+    expect(lease.expires_at_ms - lease.acquired_at_ms).toBe(budget + DEFAULT_LEASE_SLACK_MS);
   });
 
   test("the budget buys time, not leniency", async () => {

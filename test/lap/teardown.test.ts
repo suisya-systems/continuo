@@ -536,10 +536,11 @@ describe("D-0066: the orchestrator is given a live clock", () => {
     // one. `materializeWorkspace` can only close over the instant it was given
     // -- its request carries a `number`, not a clock -- so a `performLap` that
     // passed those options straight through would hand the orchestrator a clock
-    // frozen at the START of materialisation. The lease TTL defaults to 30
-    // seconds, so a materialisation slower than that acquires a lease already
-    // expired, and a concurrent claimant on a live clock could take it over at
-    // once -- putting this lap on the loser path after it had spawned.
+    // frozen at the START of materialisation. The lease TTL is finite -- it
+    // defaults to the read-back budget plus thirty seconds (`D-0098`) -- so a
+    // materialisation slower than that acquires a lease already expired, and a
+    // concurrent claimant on a live clock could take it over at once --
+    // putting this lap on the loser path after it had spawned.
     const f = fixture(
       "clock-live",
       () => {

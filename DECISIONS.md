@@ -15001,6 +15001,18 @@ is deterministic, so no lap could complete on a real CLI at all.
    stderr line and exit 2 rather than a stack trace -- and must not spend the run identifier, which
    `D-0057` makes unrepeatable.
 
+6. **The session lease's default TTL follows the budget.** Nothing renews that lease while
+   `#awaitIdentity` polls -- the walk is one critical section from acquisition to the final fenced
+   gate -- so a TTL fixed at 30 s under a 30 s budget is a walk that can reach its own last write
+   after its lease has gone, and a child that named itself at 29 s would be refused as a stale
+   writer and stopped. `ttlMs` therefore defaults to `readbackBudgetMs + DEFAULT_LEASE_SLACK_MS`
+   (30 s, which was the whole of the old default and is what the walk outside the poll costs). A
+   caller that supplies `ttlMs` is stating both halves and is left alone. The cost is that a lap
+   which dies mid-walk holds `session-run:<runId>` for longer before another claimant may take it
+   over; that is the honest price of allowing the walk to take that long, and the alternative --
+   renewing the lease from inside the poll -- would make the orchestrator's own critical section
+   unbounded, which is the property the fence exists to deny.
+
 **What this does not change.** `defaultIdentityConfirmation` is untouched. The check is deliberately
 conservative -- a child reported as `exited-N` observed an exit, not an identity, and confirming on
 that word would put *the process died* into SQLite as *the identity read back* -- and the defect
@@ -15009,7 +15021,9 @@ still leaves the binding at `spawned`, still writes the fenced `readback-exhaust
 raises. A test asserts exactly this: a readout that names the committed identity and reports the
 child's exit is refused however large the budget is.
 
-**Falsifiers.** A worker whose first event lands beyond 30 s on a machine somebody actually uses --
+**Falsifiers.** A caller that needs the session lease to expire *sooner* than the walk it fences --
+which would mean takeover latency matters more than completing the walk, and would make point 6
+wrong. A worker whose first event lands beyond 30 s on a machine somebody actually uses --
 which makes the default too small again, and is the reason the number is a default and the flag
 exists. A provider whose `readState` is expensive enough that the polls a budget buys take
 materially longer than the budget names, which would make `ceil(budget / interval)` the wrong

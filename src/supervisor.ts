@@ -114,6 +114,18 @@ export const READBACK_POLL_INTERVAL_MS = 50;
  */
 export const DEFAULT_READBACK_BUDGET_MS = 30_000;
 
+/**
+ * What the default lease TTL allows for on top of the read-back budget:
+ * thirty seconds (`D-0098`).
+ *
+ * Everything in the walk that is not the poll -- the admission commit, the
+ * provider's `start`, the fenced gates on either side of the read-back. It was
+ * the whole of the default TTL before the budget became a caller's, which is
+ * the measurement behind the number: 30 s was enough for the walk when the
+ * poll inside it could only be 2.5 s long.
+ */
+export const DEFAULT_LEASE_SLACK_MS = 30_000;
+
 /** Sentinel distinguishing "not given" (paced default) from an explicit `null`. */
 const DEFAULT_WAIT = Symbol("default-wait");
 
@@ -285,6 +297,12 @@ export interface SessionOrchestratorOptions {
   readonly sessionUuidFactory: () => string;
   readonly settings?: Readonly<Record<string, unknown>> | undefined;
   readonly providerName?: string;
+  /**
+   * The session lease's TTL, in milliseconds. Defaults to
+   * {@link SessionOrchestratorOptions.readbackBudgetMs} plus
+   * {@link DEFAULT_LEASE_SLACK_MS}, so that the lease covers the whole walk
+   * including the read-back poll, which never renews it.
+   */
   readonly ttlMs?: number;
   readonly resource?: string | undefined;
   readonly identityConfirmed?: (readout: SessionReadout) => boolean;
@@ -308,6 +326,12 @@ export interface SessionOrchestratorOptions {
    * It does not loosen the check. `identityConfirmed` decides what counts as
    * a read-back and is untouched by this: exhausting the budget still leaves
    * the binding at `spawned` and raises.
+   *
+   * **It does move {@link SessionOrchestratorOptions.ttlMs}'s default**, which
+   * becomes this plus {@link DEFAULT_LEASE_SLACK_MS}: the lease is never
+   * renewed while the poll runs, so a budget that outlived the lease would
+   * refuse the very child it was raised to wait for. A caller that supplies
+   * `ttlMs` states both halves itself.
    */
   readonly readbackBudgetMs?: number;
   readonly wait?: Wait;
@@ -370,8 +394,8 @@ export class SessionOrchestrator {
     options: SessionOrchestratorOptions,
   ) {
     const readbackBudgetMs = options.readbackBudgetMs ?? DEFAULT_READBACK_BUDGET_MS;
-    if (!Number.isFinite(readbackBudgetMs) || readbackBudgetMs < 1) {
-      throw new RangeError("readbackBudgetMs must be at least 1");
+    if (!Number.isInteger(readbackBudgetMs) || readbackBudgetMs < 1) {
+      throw new RangeError("readbackBudgetMs must be a whole number of milliseconds, at least 1");
     }
     this.#connection = connection;
     this.#provider = provider;
@@ -383,7 +407,17 @@ export class SessionOrchestrator {
     this.#uuidFactory = options.sessionUuidFactory;
     this.#settings = options.settings ?? {};
     this.#providerName = options.providerName ?? "claude-cli";
-    this.#ttlMs = options.ttlMs ?? 30_000;
+    // **The lease has to outlive the walk it fences** (`D-0098`). Nothing
+    // renews this lease while `#awaitIdentity` polls -- the walk is one
+    // critical section from acquisition to the final gate -- so a TTL fixed at
+    // 30 s and a read-back budget of 30 s is a walk that can reach its own
+    // last fenced write *after* its lease has gone: a healthy child whose
+    // identity arrived at 29 s would be refused as a stale writer and stopped,
+    // and raising the budget to 60 s would guarantee it. The default TTL is
+    // therefore the budget plus {@link DEFAULT_LEASE_SLACK_MS}, which is the
+    // spawn and the fenced writes around the poll; a caller that supplies
+    // `ttlMs` is stating both halves itself and is left alone.
+    this.#ttlMs = options.ttlMs ?? readbackBudgetMs + DEFAULT_LEASE_SLACK_MS;
     this.#resource = options.resource ?? `session-run:${options.runId}`;
     this.#identityConfirmed = options.identityConfirmed ?? defaultIdentityConfirmation;
     this.#readbackBudgetMs = readbackBudgetMs;

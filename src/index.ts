@@ -1247,6 +1247,7 @@ export {
 export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";
 export {
+  DEFAULT_LEASE_SLACK_MS,
   DEFAULT_READBACK_BUDGET_MS,
   defaultIdentityConfirmation,
   IdentityUnconfirmed,

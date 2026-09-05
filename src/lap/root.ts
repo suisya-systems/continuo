@@ -940,6 +940,11 @@ export interface LapRequest {
    * It buys time, not leniency. What counts as a read-back is
    * `defaultIdentityConfirmation`'s decision and is unchanged by any value
    * here.
+   *
+   * Raising it lengthens the session lease with it: the orchestrator's TTL
+   * defaults to this plus its own slack, because nothing renews that lease
+   * while the read-back polls (`D-0098`). The `outbox-delivery` lease this lap
+   * holds is a different resource, and is renewed on its own timer.
    */
   readonly identityReadbackTimeoutMs?: number;
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -1029,11 +1034,11 @@ export async function performLap(
   // the intent is read, because nothing has been written yet.
   if (
     request.identityReadbackTimeoutMs !== undefined &&
-    (!Number.isFinite(request.identityReadbackTimeoutMs) || request.identityReadbackTimeoutMs < 1)
+    (!Number.isInteger(request.identityReadbackTimeoutMs) || request.identityReadbackTimeoutMs < 1)
   ) {
     throw new LapUsageError(
-      `identity_readback_timeout_ms must be at least 1, not ` +
-        `${String(request.identityReadbackTimeoutMs)}`,
+      "identity_readback_timeout_ms must be a whole number of milliseconds, at least 1, not " +
+        String(request.identityReadbackTimeoutMs),
     );
   }
   // 1. What this run was admitted to do. Read rather than retyped: the whole
