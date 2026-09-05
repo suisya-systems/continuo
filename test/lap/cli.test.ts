@@ -1352,6 +1352,12 @@ describe("D-0099: which model the worker runs on", () => {
     const refused = [
       // A flag wearing a model's clothes.
       "--dangerously-skip-permissions",
+      // A flag the PROVIDER renders itself, which is the value that found the
+      // ordering defect: `base_cli_args` carrying one raises at construction,
+      // and with the check downstream of that constructor an operator's typo
+      // arrived as a stack trace and exit 1 instead of this document.
+      "-p",
+      "--session-id",
       // Two arguments in one, for a reader that splits its own option values.
       "opus --dangerously-skip-permissions",
       // A path, which `D-0067` spent three attempts removing from this command

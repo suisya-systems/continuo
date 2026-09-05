@@ -92,7 +92,7 @@ import {
   WorkspaceMaterializationRefused,
   WorkspaceMaterializationUsageError,
 } from "../workspace/materializer.js";
-import { type LapOutcome, LapUsageError, performLap } from "./root.js";
+import { type LapOutcome, LapUsageError, performLap, requireModel } from "./root.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -496,29 +496,6 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
   const stateRoot = String(args["state_root"]);
   const claudeCommand = claudeCommandOf(args);
   const model = optionalText(args, "model");
-  const provider = createDefaultSessionProvider(stateRoot, {
-    ...(claudeCommand === undefined ? {} : { claudeCommand }),
-    // **This is where model selection lives** (`D-0099`), and the seam is the
-    // provider's own: `baseCliArgs` is documented there as the one for
-    // provider-wide choices "(a pinned `--model`, say)", appended to every
-    // spawn before the per-role `cli_args` and after the flags the provider
-    // renders itself. Nothing else in the stack had a place for the choice --
-    // `roles.json` carries no model key and is not going to (`D-0014`: a role
-    // is not an executor), the `cli_args` allowlist is a per-run operator
-    // vector checked by whole-vector equality (`D-0088`), and the admitted
-    // record fixes what a run may do rather than what it costs.
-    //
-    // Two tokens and never one: `--model=<id>` would be a single token whose
-    // interpretation belongs to the child's parser, and the value has been
-    // checked as an id on the assumption that it arrives as its own argument.
-    //
-    // Constructed here, before the preflight that validates it, and that
-    // ordering is safe rather than lucky: this constructor resolves a path and
-    // copies two lists, and every spawn is downstream of `performLap`'s
-    // preflight. `--model` is handed to that preflight below to be CHECKED,
-    // exactly as `--claude-command` and `--state-root` are (`D-0067`).
-    ...(model === undefined ? {} : { baseCliArgs: ["--model", model] }),
-  });
   const endpointModule = optionalText(args, "endpoint_module");
   const endpointDatabase = optionalText(args, "endpoint_db");
   const node = optionalText(args, "node");
@@ -532,6 +509,37 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
   const json = jsonRequested(args);
 
   try {
+    // **Before the provider is constructed, and that order is the whole of why
+    // this call exists** (`D-0099`). The provider takes the model as
+    // `base_cli_args` and raises `PyValueError` at construction on any flag it
+    // renders itself -- so `--model=-p` met that guard first, and a rule whose
+    // promise is one line and exit 2 produced a stack trace and exit 1, with no
+    // refusal document under `--json`. The rule itself is `root.ts`'s and is
+    // stated once there; `performLap`'s preflight asks it again for its own
+    // callers.
+    requireModel(model);
+    const provider = createDefaultSessionProvider(stateRoot, {
+      ...(claudeCommand === undefined ? {} : { claudeCommand }),
+      // **This is where model selection lives** (`D-0099`), and the seam is the
+      // provider's own: `baseCliArgs` is documented there as the one for
+      // provider-wide choices "(a pinned `--model`, say)", appended to every
+      // spawn before the per-role `cli_args` and after the flags the provider
+      // renders itself. Nothing else in the stack had a place for the choice --
+      // `roles.json` carries no model key and is not going to (`D-0014`: a role
+      // is not an executor), the `cli_args` allowlist is a per-run operator
+      // vector checked by whole-vector equality (`D-0088`), and the admitted
+      // record fixes what a run may do rather than what it costs.
+      //
+      // Two tokens and never one: `--model=<id>` would be a single token whose
+      // interpretation belongs to the child's parser, and the value has been
+      // checked as an id on the assumption that it arrives as its own argument.
+      //
+      // Constructed AFTER the check above and handed to `performLap` below to be
+      // CHECKED again, exactly as `--claude-command` and `--state-root` are
+      // (`D-0067`): this constructor has a guard of its own over `base_cli_args`,
+      // and reaching it first turned an operator's typo into a stack trace.
+      ...(model === undefined ? {} : { baseCliArgs: ["--model", model] }),
+    });
     const connection = openProductionControlPlane(path);
     try {
       const outcome = await performLap(connection, provider, provider, {

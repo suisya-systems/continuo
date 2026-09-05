@@ -823,8 +823,18 @@ const MODEL_ID_MAX = 128;
  * late, which is the same place an unknown one has always been refused. What is
  * settled here is the narrower and checkable half -- that the token continuo
  * appends is a model id and not a second argument.
+ *
+ * **Exported, and called from two places for `requireCompletion`'s reason.**
+ * The rule is stated once, here; the calls are in {@link preflight} and in
+ * `lap/cli.ts`, which has to ask it **before it constructs the provider**. That
+ * constructor takes the value as `base_cli_args` and raises `PyValueError` on
+ * anything it renders itself -- so a `--model=-p` reached the provider's guard
+ * before this one, and a rule whose whole promise is one line and exit 2
+ * delivered a stack trace and exit 1 instead. The verb's own call closes that,
+ * and the preflight's stays: `performLap` is reachable without the verb, and a
+ * check that lives only in a caller is a check its other callers do not have.
  */
-function requireModel(model: string | undefined): void {
+export function requireModel(model: string | undefined): void {
   if (model === undefined) {
     return;
   }

@@ -15019,6 +15019,18 @@ the operator's `claude` CLI happened to default to.
    `LapRequest` **to be checked and not to be used**, exactly as `providerStateRoot` and
    `workerCommand` are (`D-0067`): the caller has already built the provider over it.
 
+   **And the verb asks the same rule once more, before it constructs the provider at all.** This was
+   found by review rather than by design and is the one thing about this entry that was wrong on the
+   first pass. The provider's constructor has a guard of its own -- `base_cli_args` carrying any
+   flag it renders itself raises `PyValueError`, deliberately at construction, because for the
+   provider that is a programmer error and not an operator's typo. With the check living only in the
+   preflight, a `--model=-p` met that guard **first**: `PyValueError` is not an operator refusal, the
+   construction was outside the verb's `try`, and a rule whose whole promise is one line and exit 2
+   delivered a stack trace and exit 1, with no refusal document under `--json`. The rule is still
+   stated once, in `root.ts`; only the call is in two places, which is exactly what `requireCompletion`
+   already does and for the same reason -- `performLap` is reachable without the verb, so the
+   preflight's call cannot be dropped in favour of the verb's.
+
 5. **The model is reported, in both spellings.** The `--json` document gains a `model` key -- the id,
    or `null` when the choice was the worker CLI's -- under the same `continuo.lap.perform/1`, which
    is that schema's stated version story rather than an exception to it: an added key is one every
@@ -15062,10 +15074,11 @@ argument.
 - The flag reaches the child's argv exactly once and behind the provider's own flags -- read off
   `record.json`, the provider's durable record of the vector it spawned, not off the intent to build
   one. Red under a value threaded through both the provider and the request.
-- Five values that are not plain model ids -- a flag, two arguments in one, a path, an attached-value
-  form, and empty -- each exit 2 with the refusal document on stderr, stdout empty, and **no
-  worktree and no `workspace_materialized` event**. Red under a rule stated anywhere later than the
-  preflight.
+- Seven values that are not plain model ids -- a flag, two of the provider's own flags, two arguments
+  in one, a path, an attached-value form, and empty -- each exit 2 with a `LapUsageError` document on
+  stderr, stdout empty, and **no worktree and no `workspace_materialized` event**. Red under a rule
+  stated anywhere later than the preflight, and the two provider-owned flags are red under a rule
+  asked anywhere later than the provider's constructor.
 - Omitting the flag leaves the spawned argv equal, element by element, to the same lap's argv with
   the two tokens excised. Asserted as that comparison and not as "does not contain `--model`", which
   a `base_cli_args: []` or an empty appended value would both pass.
