@@ -189,6 +189,7 @@ spaces distinct.
 | D-0091 | A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement | accepted |
 | D-0092 | `gate close` joins the `--json` envelope: `D-0090`'s falsifier fired, and its verb reach is amended from three gate verbs to four | accepted |
 | D-0093 | One non-string entry in the sandbox deny list voids `permissions.deny` and the `PreToolUse` hook for the whole run | accepted |
+| D-0094 | The settings generator refuses a non-string sandbox deny entry instead of writing it for a reader that does not reject it | accepted |
 | D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
 
 ---
@@ -14432,6 +14433,126 @@ this unifies. `D-0082` for the repair this fences and the two claims corrected a
 open until that issue resolves, because the guarantee sentence above holds only while it does.
 Decision id allocated from the `D-0019`..`D-0099` shared band, checked against `origin/main` at
 `44f6233`, where `D-0092` is the last taken id, and re-checked at rebase.
+
+## D-0094 -- The settings generator refuses a non-string sandbox deny entry instead of writing it for a reader that does not reject it
+
+**Context.** `D-0093` closed one producer of a child's settings and named a second in its
+"Exposures this change does not close": `src/settings/generator.ts`, public API via `src/index.ts`,
+writes a role's `.claude/settings.local.json` and **deliberately passes a non-string
+`sandbox.filesystem.deny{Read,Write}` entry through verbatim**. It is not a fence and does not go
+through `renderFence`, so `checkRenderedSandboxDenyStrings` in `src/fencing/renderer.ts` never sees
+it -- but the file it writes carries that role's `permissions.deny`, its `sandbox` block and its
+hooks in one artifact, which is exactly the shape `D-0093` measured the CLI to discard whole.
+
+Three branches feed the pass-through, each written on a stated premise:
+
+- `normalizeSandboxEntry()` returned `null` -- an unknown anchor, a non-bool
+  `suppressOnSymlinkEscape` -- and the entry is carried on un-anchored;
+- `keptEntryString()` was handed `anchor: 'absolute'` with a RELATIVE path, has no concrete
+  absolute rendering to emit, and returns the entry rather than anchoring it against a base the
+  document did not name;
+- `canonicalizeSandboxDeny()` passes a non-string over, having no path to canonicalise.
+
+The first two doc comments say what the premise was, in as many words: `sandbox.filesystem.denyRead`
+/ `denyWrite` are a list of STRINGS, Claude Code's settings schema answers a structured object with
+`Expected string, but received object` and **rejects the whole file**, so the malformed entry is
+kept and the launcher surfaces the operator's error. **That premise is false**, and `D-0093`
+measured its second half directly on CLI `2.1.261`: the file is accepted, the run proceeds, and one
+non-string entry in either of those two arrays makes the CLI apply neither `permissions.deny` nor
+any `PreToolUse` hook for the whole run -- for `Read` and `Write` as much as for `Bash`, exit zero,
+nothing on stderr. The entry therefore surfaces the operator's error to nobody. It silently voids
+the rest of the same file, and that file is the one a fenced worker runs under.
+
+**The measurement is `D-0093`'s, and this entry adds one cell of its own.** Everything about the
+CLI's behaviour is `D-0093`'s 36-cell matrix; nothing is re-derived here. What is new is that the
+artifact was produced by the GENERATOR rather than by the renderer, and the pair below runs a real
+child against it: `renderRole` -> a settings file on disk -> `claude -p --settings <that file>
+--setting-sources ''`. `execFileSync` throws on a non-zero exit, so the reproduction half reaching
+its assertions at all is the direct falsification of the removed doc comment -- the CLI does not
+reject this file.
+
+**Decision.** `src/settings/generator.ts` gains an exported post-condition
+`checkRenderedSandboxDenyStrings(rendered, role)`, called at the end of `renderRoleWithMetadata`
+after the two canonicalising rebuilds -- the last steps that can change a deny entry -- and before
+the `$comment` that would otherwise describe a render which never becomes a file. It throws
+`PyValueError`, naming EVERY offending entry rather than the first, with its index, its Python type
+and its verbatim repr. `PyValueError` because that is the refusal this module already makes for a
+malformed `sandbox.filesystem` (`D-0215`) and the one the CLI turns into rc 2; the renderer's twin
+refuses with `FenceRefusal` / `sandbox-entry-not-string` because its callers catch that. The two
+checks stay separate implementations for that reason: sharing one would mean sharing an error type.
+
+The three branches above are UNCHANGED. Each still carries its entry through the pass exactly as the
+document authored it, which is what the refusal quotes. What moves is the decision about the
+DOCUMENT: refused, not written. That is why the check is one post-condition over the finished render
+rather than three throws spread over the branches -- the branches decide what an entry they cannot
+read renders as, this decides whether the result may reach a child.
+
+**Scoped to the two measured arrays.** A non-string in `additionalDirectories`, and an unknown key
+under `sandbox`, were measured HARMLESS on the same CLI and stay unguarded, for the reason `D-0093`
+gives: a guard whose scope exceeds its measurement refuses documents on a rule the CLI does not have,
+and it decays badly. `additionalDirectories` keeps its own inherited behaviour -- a non-string read
+root raises `PyTypeError` where `os.path.normpath` raises in interlock -- which is a different rule,
+reached earlier, and untouched.
+
+**Alternatives.**
+
+- *Normalise the entry into a string* (rejected, and it is the alternative `D-0093` rejected for the
+  renderer. Inventing a path for an entry this module could not resolve emits a deny the role
+  document never authorised -- wider or narrower than the author's, with nothing saying so -- which
+  restores exactly the silence the CLI already provides. Dropping the entry is the same fault
+  pointing the other way).
+- *Leave the pass-through and only correct the doc comments* (rejected: the comments were the whole
+  safety argument, and `D-0093` is the price of a safety argument that lives in a comment. Correcting
+  them without changing the behaviour would leave the module knowingly writing the shape it now
+  documents as fence-voiding).
+- *Refuse at the entry's own branch instead of at the end* (rejected: three throws would each have to
+  re-derive what the finished document looks like, and `canonicalizeSandboxDeny` runs AFTER the
+  suppression pass -- an entry can be suppressed away and never reach a child at all. The
+  post-condition asks the only question that matters, over the only document that matters).
+- *Wait for the upstream fix* (rejected on `D-0093`'s reasoning: the upstream issue
+  [anthropics/claude-code#92365](https://github.com/anthropics/claude-code/issues/92365) resolves on
+  the CLI's schedule, and until it does every settings file this module writes is one malformed role
+  entry away from disabling its own enforcement).
+
+**Consequences.** A role document that carries an unreadable deny entry now fails the render with
+rc 2 instead of producing a file. That is a behaviour change on every platform, recorded in
+`parity/settings.settings-generator.ledger.json` `intentional_divergences`; three translated cases
+move from `ported` to `adapted`, each keeping the half its source actually asserts -- the entry is
+left untouched by the pass -- and reading it back out of the refusal instead of out of the file.
+
+One knock-on inside the port: `D-0210` / `D-0211` make the thirteen number-spelling rebuild branches
+an obligation, and three of them were pinned by a float RIDING IN A DENY ARRAY into the rendered
+file, which this refusal makes impossible. They are pinned out of the refusal message instead --
+`pyTypeNameOf` consults the same spelling record on the same final container, so a dropped carry
+turns `float` into `int` in the message exactly as it turned `1.0` into `1` in the file -- and each
+of the three was re-confirmed red with its own carry removed.
+
+`D-0093`'s guarantee sentence is unchanged in shape and now covers both producers: no settings file
+this repository renders can carry the shape that voids `permissions.deny` and the `PreToolUse` hook.
+It still says nothing about whether the CLI honours a well-formed deny list.
+
+**Status.** accepted
+
+**Falsifier.** The same as `D-0093`'s, since the behaviour this guards is the CLI's: a release that
+rejects the settings file outright, or that accepts a structured entry and honours the deny list
+beside it, makes this a guard against a defect that no longer exists -- harmless, but the refusal
+would then be refusing a document the CLI would have run correctly, and it should be removed rather
+than left. The live tripwire is the reproduction half of the real-child pair: if the hand-corrupted
+generated file stops letting the read through, the CLI's behaviour has moved under this entry.
+Sharper and specific to this entry: any evidence that `settings.local.json` reaches the CLI by a
+route that does NOT merge it with the `permissions.deny` beside it -- a scope that loads the sandbox
+block alone -- would mean the artifact argument above is wrong for this producer even where it holds
+for the fence.
+
+**Source.** #163, handed on by `D-0093` (#131 / #164), which named this module as a live exposure it
+could not close because repairing it moves
+`parity/settings.settings-generator.ledger.json`. `D-0082` for the flattening repair whose premise
+this corrects at the second producer, and `D-0215` for the refusal shape this module already uses.
+Decision id allocated from the `D-0019`..`D-0099` shared band -- the same band `D-0093` took, because
+this straddles the settings belt and the cross-belt CLI fact rather than sitting inside `D-02xx` --
+checked against `origin/main` at `ee2a399`, where `D-0093` was the last taken id, and re-checked at
+`ab24daa`, where the parallel lane on #18 has since taken `D-0095` as this entry anticipated --
+so `D-0094` is unclaimed by anything but this.
 
 ## D-0095 -- A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way
 
