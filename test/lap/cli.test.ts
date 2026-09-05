@@ -1185,7 +1185,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
  * The envelope has carried the session on the SUCCESS document since `D-0090`;
  * a refusal put it in `error.message` and nowhere else, so a host that had just
  * been told its lap timed out could not stop, read or correlate the session
- * without parsing an English sentence -- which `D-0015` rule 7 forbids and
+ * without parsing an English sentence -- which rondo `D-0015` rule 7 forbids and
  * which reword itself out from under a decoder anyway. These cases pin the key
  * on both sides of the rule: present, as a top-level string, once the lap holds
  * a confirmed identity; absent -- not `null` -- when there is no session to

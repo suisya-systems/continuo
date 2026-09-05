@@ -174,8 +174,8 @@ export interface TerminalReportReader {
  * own, and reporting one would send a host after another run's worker.
  *
  * The message quotes the id as it always has; the field is what a host reads.
- * The two are not two sources of truth: the field is the source, and `D-0015`
- * rule 7 forbids parsing the sentence for it.
+ * The two are not two sources of truth: the field is the source, and rondo
+ * `D-0015` rule 7 forbids parsing the sentence for it.
  */
 export class LapRefused extends ControlPlaneRefusal {
   /** The confirmed session this refusal is about, or `undefined` when none. */

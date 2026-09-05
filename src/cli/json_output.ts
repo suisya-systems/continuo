@@ -224,7 +224,7 @@ export function successLine(
  *
  * Every field is optional, and an absent field means **unknown**, never
  * "empty": a caller that cannot establish the fact omits it, and the document
- * omits the key in turn rather than carrying `null`. `D-0015` rule 7 still
+ * omits the key in turn rather than carrying `null`. rondo `D-0015` rule 7 still
  * holds on the other side of the wire -- a decoder that finds no `session_id`
  * learns that the identity is unknown, and must not go looking for one in
  * `error.message`.

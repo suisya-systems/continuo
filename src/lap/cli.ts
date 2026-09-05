@@ -60,7 +60,7 @@
  * been taught is one every JSON reader already handles, and an old producer
  * that never writes it says "the identity is unknown", which is exactly what a
  * decoder should conclude. It must not go looking in `error.message` instead
- * (`D-0015` rule 7), even though the sentence there quotes the id: the message
+ * (rondo `D-0015` rule 7), even though the sentence there quotes the id: the message
  * is written for a person and is free to be reworded.
  *
  * **The whole report is one document, and this verb is the one where that is a
@@ -389,8 +389,8 @@ function refuse(error: Error, db: string, json: boolean): never {
  *   mints an identity before it binds one, so an id in hand at those depths may
  *   belong to no binding at all.
  *
- * The absent key is not silence a host has to interpret twice over: `D-0015`
- * rule 7 holds, so "no `session_id`" means "the identity is unknown" and never
+ * The absent key is not silence a host has to interpret twice over: rondo
+ * `D-0015` rule 7 holds, so "no `session_id`" means "the identity is unknown" and never
  * "read the message for it".
  */
 function refusalMetadata(error: Error): RefusalMetadata {
