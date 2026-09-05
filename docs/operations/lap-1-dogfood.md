@@ -1040,7 +1040,7 @@ Nothing on section 7's list moved, and none of it blocked this lap:
   that list. Section 3's own `--allowedTools` workaround went through this door, which is what the
   door is for and also why it is one.
 
-### 10.6 One observation this lap could not explain
+### 10.6 One observation this lap could not explain, and what it turned out to be
 
 Run 007's worker was asked for `git status --short` and the transcript records this as the tool
 result, in the same `Bash` call whose `git log --oneline -2` returned the workspace's own history:
@@ -1085,25 +1085,40 @@ untracked-inclusive stash fail part way through. So the eleven are environment l
 cause, not a view of anyone's home directory, and the question narrows to why they were listed for a
 worktree that does not contain them.
 
-That part is still unexplained, and the devices make one hypothesis much cheaper than the rest.
-**Nothing here needs a second tree.** The child's twelve entries are exactly what
-`git status --short` prints in `workspace-007` *if the ten devices were sitting in it at that
-moment*: `novel.md` is tracked and freshly committed, so it is not listed, and `.claude/` and
-`.mcp.json` are untracked there because `sandbox-clone`'s index carries `novel.md` and nothing
-else. Devices that appear and are gone again would explain both the listing and the fact that
-`ls -a workspace-007` finds nothing afterwards. This was not tested -- run 008's child was never
-asked for a status, so there is no second observation to hold it against.
+That part was left open here, filed as [#137](https://github.com/happy-ryo/continuo/issues/137),
+and has since been measured. It is not given an `F-` number because it obstructed nothing: the
+commit it sits next to was verified from outside the child, by an operator `git log` in the
+worktree, and does not rest on this output.
 
-The operator's own worktree is a poorer fit than it first looks, and for a reason worth writing
-down rather than the one first reached for. Its tracked paths -- `src`, `docs`, `README.md` -- are
-clean under its own index and so would not be listed either, which rules nothing out. What rules it
-out is the other direction: its status lists `CLAUDE.md`, which the child's does not, and omits
-`.claude/` and `.mcp.json`, which the child's has, because continuo tracks both.
+**The answer, in one line: the devices are mounts, not files, and they are anchored at the mounting
+session's own project root.** With the sandbox on, the CLI read-only bind-mounts `/dev/null` over a
+built-in set of project-local config paths -- shell rc and profile, `git` config, editor and
+`ripgrep` config, `.mcp.json`, and eleven paths under a `.claude/` it creates for the purpose. Those
+mounts live in that session's mount namespace and nowhere else. The child's project root was
+`workspace-007`, so for the child they were in `workspace-007`; the operator's checks ran in the
+operator's own session, whose mounts were anchored at the operator's own worktree, so from there
+`workspace-007` was clean. The full measurement, the mask list and the replay are in
+[`upstream/sandbox-masks-project-config-with-dev-null.md`](upstream/sandbox-masks-project-config-with-dev-null.md).
 
-It is recorded here rather than diagnosed, and it is not given an `F-` number because it obstructed
-nothing: the commit it sits next to was verified from outside the child, by an operator `git log` in
-the worktree, and does not rest on this output. It is filed as an open question about what leaves
-character devices in a fenced child's worktree and takes them away again.
+Two things written above are wrong, and are left standing because this file records what the lap
+saw rather than what later turned out to be true:
+
+- **"It does not reproduce"** was a consequence of *where* the check was made, not of anything
+  intermittent. Nothing appeared or disappeared: the mounts were there for the child's whole life,
+  and were never at that path in the namespace that went looking for them afterwards. The
+  hypothesis this section reached for -- devices created inside the child's worktree during the run
+  and removed again -- is the one thing the measurement rules out.
+- **The count of "eleven the worktree does not contain" is twelve.** `.mcp.json` is itself a mask,
+  and `.claude/` is a directory the CLI materialises only so it can mask paths inside it, so both
+  of the entries treated here as genuine are artefacts too. Not one of the twelve is something the
+  child wrote or `workspace-007` owned. The paragraph above that rules the operator's worktree out
+  by way of `.claude/` and `.mcp.json` being tracked by continuo argues from a premise that does not
+  hold -- continuo tracks neither -- and the conclusion it reached is right for a different reason:
+  the two trees are separate namespaces, so neither was ever a view of the other.
+
+Nothing in continuo changes. The mounts are the child CLI's own, made from a built-in list before
+any settings this repository writes are in play, and the parent cannot see or prevent them, so no
+fence rule moves and there is no `D-` entry.
 
 ### 10.7 Where the lap now stops
 
