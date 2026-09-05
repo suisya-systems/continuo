@@ -39,10 +39,13 @@ The rules are stated in that file's own "How to use this file" section:
 - **Every entry states what would falsify it** (`**Falsifier.**` / `**Falsified by.**`, on most
   entries). A decision taken on facts that can change records the fact and the version it was
   measured at.
-- **Number ranges are allocated per belt** (`D-0019`..`D-0099` control plane and cross-belt,
+- **Number ranges are allocated per belt** (`D-0019`..`D-0099` control plane, closed and exhausted;
   `D-01xx` measurement, `D-02xx` fencing/settings, `D-03xx` session, `D-04xx` canary, `D-05xx`
-  messagebus, `D-07xx` secretary, `D-09xx` attention, `D-10xx` gate_item11). Take the next free ID in
-  your belt's range and add a row to the index table at the top of the file.
+  messagebus, `D-06xx` fault-injection, `D-07xx` secretary, `D-08xx` gate_item2, `D-09xx` attention,
+  `D-10xx` gate_item11). **`D-11xx` is the cross-belt band** for decisions taken at the window,
+  continuing where `D-0019`..`D-0099` left off (see `D-1101`). Take the next free ID in your belt's
+  range (or `D-11xx` for a cross-belt decision) and add a row to the index table at the top of the
+  file.
 - An entry citing `interlock D-00NN` means *interlock's* decision of that number; the two numbering
   spaces are separate.
 

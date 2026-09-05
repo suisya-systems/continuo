@@ -23,11 +23,20 @@ spaces distinct.
   in the index table above and never over an ID. `D-0019`..`D-0099` is the control-plane belt and
   the shared band for cross-belt decisions taken at the window, `D-01xx` the measurement belt,
   `D-02xx` the fencing and settings belt, `D-03xx` the session belt, `D-04xx` the canary belt,
-  `D-05xx` the messagebus belt (the last three allocated by D-0032), `D-07xx` the
-  secretary belt (allocated by D-0701), `D-09xx` the attention belt -- shared across its three
+  `D-05xx` the messagebus belt (the last three allocated by D-0032), `D-06xx` the
+  fault-injection belt (allocated by D-0601), `D-07xx` the
+  secretary belt (allocated by D-0701), `D-08xx` the gate_item2 belt (allocated by D-0801), `D-09xx` the attention belt -- shared across its three
   sub-belts A1 (facts), A2 (dedup and config) and A3 (notify and pipeline) -- and `D-10xx` the
   gate_item11 belt (both allocated by D-0034). The ranges are an allocation,
   not a meaning: nothing about an entry follows from which range it is in.
+- **The shared cross-belt band is closed at `D-0099` and continues at `D-11xx`.** `D-0019`..`D-0099`
+  is exhausted (`D-0098` and `D-0099` are its last two ids, both taken; see D-0099's own closing
+  note). `D-11xx` is the next unallocated range -- every `D-0Nxx` and `D-10xx` slot above is already
+  a belt's -- and is reserved here as the shared band's continuation for cross-belt decisions taken
+  at the window, opened by D-1101 (Issue #179). Ids already taken in the old band (`D-0019`..`D-0099`)
+  keep their meaning and are never renumbered or reused; the new band is additive, not a
+  replacement. A citation of the form `D-00NN` or `D-0NNN` in this file or elsewhere still resolves
+  to a specific, permanent id under either band, since both spell a plain `D-` followed by digits.
 
 ## Index
 
@@ -194,6 +203,7 @@ spaces distinct.
 | D-0096 | continuo's database is not a public read surface; `run show` is | accepted |
 | D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present\|deliver\|ack` join the `--json` envelope | accepted |
 | D-0099 | Model selection is a `lap perform --model` flag over the provider's `base_cli_args`, not a `roles.json` key and not an admitted argument | accepted |
+| D-1101 | The shared cross-belt band is widened: `D-0019`..`D-0099` is closed, and `D-11xx` is its continuation | accepted |
 
 ---
 
@@ -15403,3 +15413,64 @@ must first widen the band -- an edit to "How to use this file" at the top of thi
 the new range -- rather than reaching into a belt's range, which the same note says means nothing
 about an entry but would still make the allocation unreadable. Flagged here because the exhaustion
 is discoverable only by counting, and the entry that discovers it is the one that cannot proceed.
+
+---
+
+## D-1101 -- The shared cross-belt band is widened: `D-0019`..`D-0099` is closed, and `D-11xx` is its continuation
+
+**Context.** D-0099's own closing note found the shared cross-belt band exhausted: `D-0098` and
+`D-0099` are its last two ids, both taken, and the note said the next cross-belt decision taken at
+the window "has no id to allocate and must first widen the band". This entry is that widening, and
+is itself the decision that needed the widened band to exist.
+
+**Why not simply extend to `D-0199`.** The obvious extension -- read `D-0019`..`D-0099` as `D-0019`..
+`D-0199` -- collides with an allocation already in force: "How to use this file" reserves `D-01xx`
+for the measurement belt, and that belt has already taken `D-0100`..`D-0119` (20 ids, accepted).
+Widening into `D-01xx` would not create fresh ids; it would make ids that already mean something
+else ambiguous, which is the one thing the belts' disjoint-range rule exists to prevent. The two
+belts this note had also left off the list -- `D-06xx` (fault-injection, opened by D-0601) and
+`D-08xx` (gate_item2, opened by D-0801) -- are folded into the enumeration here for the same reason:
+an accurate list of what is already spoken for is a precondition for finding what is free.
+
+**Decision.**
+
+1. **`D-0019`..`D-0099` is closed.** No further ids are taken from it. Every id already in it keeps
+   its meaning; none is renumbered, reused, or reinterpreted. This is the same permanence "IDs are
+   permanent" already promises for every id in the file -- closing the band changes where the next
+   id comes from, not what any existing id means.
+2. **`D-11xx` is the shared band's continuation**, reserved for the same purpose the old band served:
+   cross-belt decisions taken at the window. It is chosen because it is the lowest range not already
+   claimed by a belt -- `D-01xx` through `D-10xx` are each named in "How to use this file" (now
+   including `D-06xx` and `D-08xx`), leaving `D-11xx` as the first free three-digit-after-`D-0`
+   range once the two-digit `D-0Nxx` space is accounted for.
+3. **This entry opens the new band at `D-1101`**, matching the convention every other belt already
+   uses for its own first entry (`D-0601`, `D-0701`, `D-0801`, `D-0901`, `D-1001`: the belt's first
+   id ends `01`, not `00`), rather than repeating the old band's `D-0019` starting point, which was
+   an artefact of when the control-plane belt's own numbering happened to leave off.
+4. **Existing `D-00NN`-shaped citations are unaffected.** Nothing in this repository's scripts,
+   tests, or generators parses a decision id by a fixed digit count; every citation found in
+   `docs/` and `DECISIONS.md` itself is prose (`D-00NN`, `interlock D-00NN`) rather than a pattern a
+   tool matches against. A `D-11NN` id is the same shape -- `D-` followed by digits -- as every id
+   already in this file, so no ledger, parity script, or citation convention needs a change for the
+   new band to be read the same way the old one is.
+
+**Falsification.** A future script or test that greps for `D-0\d{3}` (or otherwise assumes a decision
+id is always `D-0` plus three digits) and rejects `D-11xx` ids would falsify point 4; none exists
+today (checked by grepping `scripts/`, `test/`, and `docs/` for a decision-id pattern narrower than
+"`D-` followed by digits", per this entry's Source). If a later belt needs the `D-11xx` range for its
+own decisions, this entry is wrong about it being free and needs a follow-up correction, not a
+silent reuse.
+
+**Status.** accepted
+
+**Falsifier.** A parser that rejects `D-11xx` ids -- because it requires the leading zero every id
+up to `D-0999` happens to share, or some other belt-specific shape narrower than "`D-` followed by
+digits" -- would make point 4 wrong (four-digit width alone does not distinguish `D-1101` from
+`D-0099`, so only a narrower rule falsifies this). A belt
+later claiming `D-11xx` for itself before this band is exhausted would make point 2's "next free
+range" claim wrong and require moving the shared band's continuation elsewhere.
+
+**Source.** Issue #179 (the shared band's exhaustion at `D-0099`). D-0099's closing note for the
+exhaustion finding. D-0601 and D-0801 for the two belts this entry adds to "How to use this file"'s
+enumeration. Checked against `origin/main` at `5211090`, where `D-0099` is the last id taken in the
+shared band and the band's `D-0019`..`D-0099` closing is uncontested.
