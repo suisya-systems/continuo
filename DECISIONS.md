@@ -13898,15 +13898,23 @@ poll.** Specifically:
      (bounded by nothing). Decision item 9 is what makes the turn-boundary half happen, and how
      strongly it happens depends on the executor: a `Stop` hook makes it a property of the process,
      while a recipient with no such hook has the role prompt and the completion condition, which
-     bound *correctness* -- a run with an unacknowledged row does not reach done -- and never latency.
-     So on a non-Claude executor a worker that ignores its prompt does not silently lose the row; it
-     fails to finish, and the row stays due. **Rows staying due and visible to the operator is the
+     bound *correctness* -- work with an unacknowledged row does not reach done on its own -- and
+     never latency. So on a non-Claude executor a worker that ignores its prompt does not silently
+     lose the row; it fails to finish, and the row stays due. **The completion condition is the
+     composition layer's, over the work it drives; it is not `run close`.** `D-0084` deliberately
+     admits `created -> completed` and deliberately reads no gate, so an operator may close a run
+     while a row addressed to its worker is still unacknowledged. That is the operator's call and
+     `D-0084` is unaffected by this entry -- but it means the condition is not an invariant over
+     every path a run row can reach a terminal status by, and it is written here as the narrower
+     thing it is. **Rows staying due and visible to the operator is the
      only layer that holds unconditionally, and it is the only load-bearing one.** Buying latency
      back for such an executor is a separate change and is not decided here.
    - **The hint-write cadence is 30 seconds**, a separate, Claude-only, latency-only layer that
      covers only the dropped-or-coalesced-wake case: while a turn is in flight the composition layer
-     writes the hint **at least once every 30 seconds** -- the number is a maximum interval between
-     writes, not a minimum. It bounds *writing*, never discovery -- the latency it buys is 30 seconds
+     writes the hint **at least once every 30 seconds** -- the number is a target maximum interval
+     between writes, not a minimum. It is best-effort in the sense `D-0073` already treats a timer:
+     a suspended process or a blocked event loop misses it, and nothing is load-bearing on its being
+     met, because this layer buys latency only. It bounds *writing*, never discovery -- the latency it buys is 30 seconds
      **plus** the time to the next tool-call boundary, and nothing here bounds the second term. On a
      closed pipe or on Codex it buys nothing at all, which is exactly why it is not the fallback.
 
