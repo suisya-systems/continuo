@@ -46,6 +46,27 @@
  * operator typed. They become one stderr line and exit 2, the same code
  * `run admit` and `db verify` use.
  *
+ * **`--json` on the three verbs a host reads, and on no others.** `gate list`,
+ * `gate show` and `gate answer` are the ones a program drives -- it enumerates
+ * the open questions, reads one, and records the answer it obtained -- so they
+ * carry the shared envelope from `src/cli/json_output.ts` (`D-0090`). `present`,
+ * `deliver`, `ack`, `close` and `reconcile` are the operator's own hands and
+ * stay human-only until something actually needs to parse them; a flag added
+ * ahead of a reader is a shape nobody has checked against a real consumer.
+ *
+ * The flag changes **bytes and nothing else**: the same entry point is called,
+ * the same refusals are caught, the handle is closed in the same `finally`, and
+ * the exit code is the same one. Without it every line below is byte-identical
+ * to what it was before the flag existed.
+ *
+ * Because the refusal path is shared by all eight verbs, {@link refuse} is
+ * taught the flag once rather than at each call site. Branching per verb would
+ * have left the refusals of a verb whose author forgot silently human under
+ * `--json` while its success case stayed green -- a host would then get a
+ * parse error exactly when something went wrong, which is the worst moment for
+ * one. The five verbs with no flag pass no report and reach the same line they
+ * always did.
+ *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every
  * string here reaches `--help` on a cp932 console, where a character the
  * console cannot encode is a crash rather than a smudge. The same open problem
@@ -53,6 +74,13 @@
  * and an answer body are printed as given.
  */
 
+import {
+  addJsonArgument,
+  type JsonValue,
+  jsonRequested,
+  refusalLine,
+  successLine,
+} from "../cli/json_output.js";
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
 import { DestinationRefusal } from "../control_plane/destination.js";
@@ -62,6 +90,7 @@ import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { HandlerRejected, OutboxUsageError } from "../control_plane/outbox.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { DELIVERY_LEASE_TTL_MS } from "../lap/endpoint_lease.js";
+import type { AnswerRecorded, GateDetail, OpenGateSummary } from "./operator.js";
 import {
   ackRelay,
   answerGate,
@@ -177,15 +206,47 @@ export const gateCliSeams = {
   },
 };
 
+/** The pinned document shapes, one per verb a host drives (`D-0090`). */
+const LIST_SCHEMA = "continuo.gate.list/1";
+const SHOW_SCHEMA = "continuo.gate.show/1";
+const ANSWER_SCHEMA = "continuo.gate.answer/1";
+
+/**
+ * What a verb needs in order to answer in JSON: which shape, and which database.
+ *
+ * `null` is the whole of "this invocation is human-readable", and it is the
+ * default everywhere, so a verb that never opts in cannot accidentally acquire
+ * the flag's behaviour. The database path is carried rather than looked up
+ * again because the envelope puts it on the refusal too, where the human line
+ * carries it only when the message happens to quote it -- a host driving
+ * several control planes cannot attribute a refusal without it.
+ */
+interface JsonReport {
+  readonly schema: string;
+  readonly db: string;
+}
+
+/** The report for this invocation, or `null` when `--json` was not given. */
+function jsonReportOf(args: Namespace, schema: string, db: string): JsonReport | null {
+  return jsonRequested(args) ? { schema, db } : null;
+}
+
 /**
  * Report a refusal on stderr and stop, rather than letting it escape.
  *
  * `ArgparseExit` rather than `process.exit`, because `src/cli.ts`'s `main`
  * already catches it and turns it into the process's status -- the one place
  * that is a process boundary.
+ *
+ * The `report` decides the bytes and nothing else. `--json` does not change
+ * which stream a refusal goes to, which refusals are caught, or the status: a
+ * host reads exit 2 and parses stderr, and an operator reads the same
+ * `error: ...` line they always read.
  */
-function refuse(error: Error): never {
-  gateCliSeams.writeError(`error: ${error.message}\n`);
+function refuse(error: Error, report: JsonReport | null): never {
+  gateCliSeams.writeError(
+    report === null ? `error: ${error.message}\n` : refusalLine(report.schema, report.db, error),
+  );
   throw new ArgparseExit(2, "refused gate verb");
 }
 
@@ -231,10 +292,15 @@ function nowMsOf(args: Namespace): number {
  * locked, so the operator's next command would fail for a reason that has
  * nothing to do with what it was asked to do. (`run_cli.ts` records the same
  * reason for the same shape.)
+ *
+ * `report` defaults to `null`, which is what makes the five verbs that carry no
+ * `--json` flag behave exactly as they did: they call this function with two
+ * arguments, and the refusal they provoke is the same line it has always been.
  */
 function withControlPlane<T>(
   path: string,
   body: (connection: ReturnType<typeof openProductionControlPlane>) => T,
+  report: JsonReport | null = null,
 ): T {
   try {
     const connection = openProductionControlPlane(path);
@@ -245,7 +311,7 @@ function withControlPlane<T>(
     }
   } catch (error) {
     if (isRefusal(error)) {
-      refuse(error);
+      refuse(error, report);
     }
     throw error;
   }
@@ -260,53 +326,160 @@ function stamp(value: number | null): string {
 // the verbs
 // --------------------------------------------------------------------------
 
+/**
+ * `gate list`'s payload: the open gates as an array under a key.
+ *
+ * Under a key rather than as a bare top-level array, so the document can grow a
+ * sibling -- a count, a truncation marker -- without becoming a different kind
+ * of JSON value, which is the one change no host absorbs.
+ *
+ * The empty case is `{"gates": []}` and not the human "no open gates" sentence.
+ * An empty list is a result: a host that had to recognise a sentence to learn
+ * "nothing is open" would be parsing prose for the most common answer this verb
+ * gives.
+ *
+ * `null` where the human line prints `-`, never the string `"-"`: the
+ * placeholder is a rendering decision, and a host that saw `"-"` could not tell
+ * a missing run from a run whose id is one character long.
+ */
+function listPayload(gates: readonly OpenGateSummary[]): { readonly [key: string]: JsonValue } {
+  return {
+    gates: gates.map((gate) => ({
+      gate_id: gate.gateId,
+      gate_type: gate.gateType,
+      run_id: gate.runId,
+      stage: gate.stage,
+      stage_entered_at_ms: gate.stageEnteredAtMs,
+      deadline_at_ms: gate.deadlineAtMs,
+    })),
+  };
+}
+
 export function cmdGateList(args: Namespace): number {
   const path = String(args["db"]);
-  return withControlPlane(path, (connection) => {
-    const gates = openGates(connection);
-    if (gates.length === 0) {
-      gateCliSeams.write(`no open gates in ${path}\n`);
-      return 0;
-    }
-    for (const gate of gates) {
-      gateCliSeams.write(
-        `${gate.gateId} ${gate.gateType} run=${gate.runId ?? "-"} stage=${gate.stage} ` +
-          `since=${gate.stageEnteredAtMs} deadline=${stamp(gate.deadlineAtMs)}\n`,
-      );
-    }
+  const report = jsonReportOf(args, LIST_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const gates = openGates(connection);
+      if (report !== null) {
+        gateCliSeams.write(successLine(report.schema, report.db, listPayload(gates)));
+        return 0;
+      }
+      return writeGateLines(gates, path);
+    },
+    report,
+  );
+}
+
+/** The human rendering of `gate list`, unchanged by the flag's arrival. */
+function writeGateLines(gates: readonly OpenGateSummary[], path: string): number {
+  if (gates.length === 0) {
+    gateCliSeams.write(`no open gates in ${path}\n`);
     return 0;
-  });
+  }
+  for (const gate of gates) {
+    gateCliSeams.write(
+      `${gate.gateId} ${gate.gateType} run=${gate.runId ?? "-"} stage=${gate.stage} ` +
+        `since=${gate.stageEnteredAtMs} deadline=${stamp(gate.deadlineAtMs)}\n`,
+    );
+  }
+  return 0;
+}
+
+/**
+ * `gate show`'s payload: the detail record, field by field.
+ *
+ * Built explicitly rather than by spreading the record, for two reasons that
+ * point the same way. The record's field names are `camelCase` and the document's
+ * are `snake_case`, so a spread would ship the wrong keys; and a spread would
+ * make every future field of `GateDetail` an unreviewed addition to a pinned
+ * host contract. Naming each key means the document changes only when somebody
+ * decides it should.
+ *
+ * `relays` and `transitions` are arrays under keys for the reason `gates` is,
+ * and each element is snake_cased the same way. `body` and the timestamps are
+ * `null` where the human line prints `-` or omits the clause entirely -- the
+ * human rendering drops `body=` when there is none, and a host reading a
+ * missing key would have to distinguish it from a key it forgot to read.
+ */
+function showPayload(gate: GateDetail): { readonly [key: string]: JsonValue } {
+  return {
+    gate_id: gate.gateId,
+    gate_type: gate.gateType,
+    run_id: gate.runId,
+    subject_kind: gate.subjectKind,
+    subject_id: gate.subjectId,
+    stage: gate.stage,
+    deadline_at_ms: gate.deadlineAtMs,
+    outcome: gate.outcome,
+    rationale: gate.rationale,
+    options: gate.options,
+    relays: gate.relays.map((relay) => ({
+      to_stage: relay.toStage,
+      message_id: relay.messageId,
+      recipient: relay.recipient,
+      status: relay.status,
+      retry_count: relay.retryCount,
+      delivered_at_ms: relay.deliveredAtMs,
+      acked_at_ms: relay.ackedAtMs,
+    })),
+    transitions: gate.transitions.map((transition) => ({
+      seq: transition.seq,
+      transition_kind: transition.transitionKind,
+      from_stage: transition.fromStage,
+      to_stage: transition.toStage,
+      actor_kind: transition.actorKind,
+      actor_id: transition.actorId,
+      recorded_at_ms: transition.recordedAtMs,
+      body: transition.body,
+    })),
+  };
 }
 
 export function cmdGateShow(args: Namespace): number {
   const path = String(args["db"]);
   const gateId = String(args["gate_id"]);
-  return withControlPlane(path, (connection) => {
-    const gate = gateDetail(connection, gateId);
+  const report = jsonReportOf(args, SHOW_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const gate = gateDetail(connection, gateId);
+      if (report !== null) {
+        gateCliSeams.write(successLine(report.schema, report.db, showPayload(gate)));
+        return 0;
+      }
+      return writeGateDetail(gate);
+    },
+    report,
+  );
+}
+
+/** The human rendering of `gate show`, unchanged by the flag's arrival. */
+function writeGateDetail(gate: GateDetail): number {
+  gateCliSeams.write(
+    `${gate.gateId} ${gate.gateType} run=${gate.runId ?? "-"} ` +
+      `subject=${gate.subjectKind}/${gate.subjectId} stage=${gate.stage} ` +
+      `deadline=${stamp(gate.deadlineAtMs)} outcome=${gate.outcome ?? "-"}\n` +
+      `rationale: ${gate.rationale}\n` +
+      `options: ${gate.options}\n`,
+  );
+  for (const relay of gate.relays) {
     gateCliSeams.write(
-      `${gate.gateId} ${gate.gateType} run=${gate.runId ?? "-"} ` +
-        `subject=${gate.subjectKind}/${gate.subjectId} stage=${gate.stage} ` +
-        `deadline=${stamp(gate.deadlineAtMs)} outcome=${gate.outcome ?? "-"}\n` +
-        `rationale: ${gate.rationale}\n` +
-        `options: ${gate.options}\n`,
+      `relay ${relay.toStage} ${relay.messageId} to=${relay.recipient} ` +
+        `status=${relay.status} retries=${relay.retryCount} ` +
+        `delivered=${stamp(relay.deliveredAtMs)} acked=${stamp(relay.ackedAtMs)}\n`,
     );
-    for (const relay of gate.relays) {
-      gateCliSeams.write(
-        `relay ${relay.toStage} ${relay.messageId} to=${relay.recipient} ` +
-          `status=${relay.status} retries=${relay.retryCount} ` +
-          `delivered=${stamp(relay.deliveredAtMs)} acked=${stamp(relay.ackedAtMs)}\n`,
-      );
-    }
-    for (const transition of gate.transitions) {
-      gateCliSeams.write(
-        `transition ${transition.seq} ${transition.transitionKind} ` +
-          `${transition.fromStage ?? "-"}->${transition.toStage} ` +
-          `by=${transition.actorKind}/${transition.actorId} at=${transition.recordedAtMs}` +
-          `${transition.body === null ? "" : ` body=${transition.body}`}\n`,
-      );
-    }
-    return 0;
-  });
+  }
+  for (const transition of gate.transitions) {
+    gateCliSeams.write(
+      `transition ${transition.seq} ${transition.transitionKind} ` +
+        `${transition.fromStage ?? "-"}->${transition.toStage} ` +
+        `by=${transition.actorKind}/${transition.actorId} at=${transition.recordedAtMs}` +
+        `${transition.body === null ? "" : ` body=${transition.body}`}\n`,
+    );
+  }
+  return 0;
 }
 
 export function cmdGatePresent(args: Namespace): number {
@@ -375,23 +548,52 @@ export function cmdGateAck(args: Namespace): number {
   });
 }
 
+/**
+ * `gate answer`'s payload: what the call did, as two booleans and two names.
+ *
+ * Both flags are JSON booleans, which is a deliberate difference from how the
+ * human line renders them. That line puts `advanced` through `String()` and
+ * spells `enqueued` as the words "enqueued" / "already enqueued" -- fine for an
+ * operator, and two different encodings of one idea for a host, one of which
+ * inverts under negation ("already enqueued" is the FALSE case). A host reads
+ * `false`, and re-running the verb after a kill is then a comparison rather
+ * than a phrasebook.
+ */
+function answerPayload(recorded: AnswerRecorded): { readonly [key: string]: JsonValue } {
+  return {
+    advanced: recorded.advanced,
+    enqueued: recorded.enqueued,
+    message_id: recorded.messageId,
+    to_stage: recorded.toStage,
+  };
+}
+
 export function cmdGateAnswer(args: Namespace): number {
   const path = String(args["db"]);
   const nowMs = nowMsOf(args);
-  return withControlPlane(path, (connection) => {
-    const recorded = answerGate(connection, {
-      gateId: String(args["gate_id"]),
-      body: String(args["body"]),
-      actorId: String(args["actor_id"]),
-      nowMs,
-    });
-    gateCliSeams.write(
-      `answered=${String(recorded.advanced)} ` +
-        `${recorded.enqueued ? "enqueued" : "already enqueued"} ${recorded.messageId} ` +
-        `for stage ${recorded.toStage}\n`,
-    );
-    return 0;
-  });
+  const report = jsonReportOf(args, ANSWER_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const recorded = answerGate(connection, {
+        gateId: String(args["gate_id"]),
+        body: String(args["body"]),
+        actorId: String(args["actor_id"]),
+        nowMs,
+      });
+      if (report !== null) {
+        gateCliSeams.write(successLine(report.schema, report.db, answerPayload(recorded)));
+        return 0;
+      }
+      gateCliSeams.write(
+        `answered=${String(recorded.advanced)} ` +
+          `${recorded.enqueued ? "enqueued" : "already enqueued"} ${recorded.messageId} ` +
+          `for stage ${recorded.toStage}\n`,
+      );
+      return 0;
+    },
+    report,
+  );
 }
 
 export function cmdGateClose(args: Namespace): number {
@@ -510,11 +712,13 @@ function addNowMsArgument(parser: ArgumentParser): void {
 export function addSubparsers(sub: Subparsers): void {
   const list = sub.addParser("list", LIST_DESCRIPTION);
   addDbArgument(list);
+  addJsonArgument(list);
   list.setDefaults({ func: cmdGateList });
 
   const show = sub.addParser("show", SHOW_DESCRIPTION);
   addDbArgument(show);
   addGateIdArgument(show);
+  addJsonArgument(show);
   show.setDefaults({ func: cmdGateShow });
 
   const present = sub.addParser("present", PRESENT_DESCRIPTION);
@@ -567,6 +771,7 @@ export function addSubparsers(sub: Subparsers): void {
   });
   addActorIdArgument(answer);
   addNowMsArgument(answer);
+  addJsonArgument(answer);
   answer.setDefaults({ func: cmdGateAnswer });
 
   const close = sub.addParser("close", CLOSE_DESCRIPTION);

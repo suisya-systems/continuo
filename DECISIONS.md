@@ -185,6 +185,7 @@ spaces distinct.
 | D-0087 | The host application is `rondo`, a third repository, and `minimal-operating-loop.md`'s premise 2 is settled against the working assumption | accepted |
 | D-0088 | An admitted run may pass only what a role document authorised: the cli_args check is an allowlist | accepted |
 | D-0089 | An authored `Edit(...)` deny rule is the file-editing family, in the fence's hook as it is in the CLI | accepted |
+| D-0090 | The CLI seam a host drives: `--version` carries the build's revision, and `--json` answers in one envelope | accepted |
 
 ---
 
@@ -13614,3 +13615,220 @@ shared here on the claim that they do. The check is a re-measurement against the
 
 **Source.** #135, on the option `D-0083` deferred. The `2.1.260` measurement is `D-0083`'s, and the
 dogfood finding behind both is `docs/operations/lap-1-dogfood.md` section 9.5, F-9.
+
+---
+
+## D-0090 -- The CLI seam a host drives: `--version` carries the build's revision, and `--json` answers in one envelope
+
+**Context.** `D-0087` settled that the host application is `rondo`, a third repository that drives
+this CLI as a subprocess. That makes two things properties of the seam rather than conveniences.
+First, a host that reports which build produced a result needs the build to be able to say -- and
+`--version` said `@suisya-systems/continuo 0.0.0`, which is the same string for every build ever
+made from this repository. Second, a host that must branch on what a verb did had only prose to
+read: `admitted r1 in /tmp/x.db: status created, run_created/r1 at seq 1, ...`, parsed by regular
+expression, silently re-parsed wrong the day a word changes.
+
+Both were surveyed before anything was written. The `--json` half was surveyed one subtree at a
+time, and the survey is the reason this entry pins an envelope rather than five: asked
+independently, the five subtrees proposed three different discriminator keys (`schema`, `verb`,
+`command`), two verb-name grammars (dotted and space-separated), and put the refusal document on
+stdout in two subtrees and on stderr in three. Every one of the five also wrote, unprompted, that
+whatever was chosen had to be the same for all of them. A host would have had to learn all five.
+
+**Decision.**
+
+1. **`--version` carries the git revision, derived at BUILD time.** The line becomes
+   `<name> <version> (rev <revision>)`, where a revision is 40 hex digits, optionally `-dirty`, or
+   the literal `unknown`. `src/build_revision.ts` is a committed placeholder holding `unknown`;
+   `scripts/generate-revision.mjs` runs after `tsc` and overwrites the EMITTED
+   `dist/build_revision.js` with the real value. Nothing under `src/` is ever rewritten by a build.
+
+2. **The `--json` envelope.** Success, on stdout, exit 0:
+   `{"schema":"continuo.<verb>/1","ok":true,"db":"...", ...payload}`. Refusal, on stderr, exit 2:
+   `{"schema":"continuo.<verb>/1","ok":false,"db":"...","error":{"class":...,"message":...}}`. One
+   document, one trailing newline, `snake_case` keys, every byte ASCII. Built and encoded in one
+   place, `src/cli/json_output.ts`.
+
+3. **The verbs that carry it**: `run admit`, `run close`, `db create|migrate|verify`,
+   `gate list|show|answer`, `lap perform`. `measure report` carries the flag under a different rule
+   (below). No verb's behaviour changes: `--json` changes bytes only.
+
+**What a copied `dist/` answers, which is the question this had to settle.** The published package
+ships `dist/` and nothing else (`package.json`'s `files`), so EVERY installed copy is a `dist/`
+with no repository around it. A design that shelled out to git at startup, or walked upward looking
+for a `.git`, answers wrong there twice: it reports `unknown` in exactly the installed build whose
+identity the field is about, and, if the package happens to sit inside some unrelated checkout, it
+reports THAT project's `HEAD` as continuo's revision -- confidently wrong rather than merely absent.
+So the revision is a literal in the JavaScript that ships. A `dist/` copied, renamed or moved
+anywhere answers with the revision of the checkout that built it, forever, because `--version` is a
+concatenation of three module constants and nothing is resolved at runtime. `src/about.ts` already
+made this argument for `TOOL_VERSION`; this is the same argument, sharper.
+
+A build that could derive nothing reports `unknown` -- a value, not an absence, so a host never
+faces an optional field. A source-tree run (the suite, `node --experimental-strip-types src/cli.ts`)
+also reports `unknown`, correctly: a run out of `src/` is not a build.
+
+**How the revision is derived, and the guard that matters.** Three git calls from the package root.
+`rev-parse --path-format=absolute --show-toplevel` is checked FIRST and its answer compared with the
+root: a toplevel that is not this package's own means git answered about a different repository, and
+the derivation returns `unknown` even though `rev-parse HEAD` would have succeeded. That is the one
+failure in the set that is believable rather than absent, which is why it is checked before the
+commit. `rev-parse HEAD` gives the full 40 hex -- not `--short`, whose length varies with repository
+size and `core.abbrev`, and not `describe`, which fails outright in the depth-1 shallow clone CI
+uses. `status --porcelain` marks `-dirty`, counting untracked files, and FAILS TOWARD `-dirty` if it
+cannot run: a false `-dirty` is noise, a missing one is a build lying about which commit it is.
+`.git` is never inspected directly, because in a git worktree it is a FILE, and this project is
+developed in worktrees.
+
+**Why the refusal document is on stderr.** stdout was the tempting answer -- a host reads one
+stream and is done. It also undoes a distinction this codebase had already argued for in writing:
+the seam records in `control_plane/cli.ts` and `run_cli.ts` carry a separate `write` and
+`writeError` "because a refused verb writes to stderr and a successful one to stdout, and a test
+that read only one of them could not tell 'refused with a reason' from 'printed nothing'". A
+refusal document on stdout reinstates exactly that ambiguity for the invocations this flag adds,
+and makes which stream carries the diagnosis depend on a flag. So the host contract is one line:
+**exit 0 -- parse stdout; exit 2 -- parse stderr; any other status -- the CLI was called wrong or
+the process failed, and stderr is text.**
+
+**`error.class` is a hint, not a taxonomy, and this is stated rather than left to be discovered.**
+The field carries `error.name` verbatim rather than a hand-written code table, because a table built
+from `instanceof` collapses subclasses silently -- `MigrationChecksumRefused` and
+`DatabaseAheadOfCodeRefused` both extend `CorruptStateRefused`, and their operator moves differ
+(restore versus upgrade the build). But `name` is not a taxonomy either: `refuseUnlessAtHead` throws
+a bare `ControlPlaneRefusal`, and so do three sites in `measurement/cli.ts`, so one class covers
+several unrelated conditions. `gate show` and `gate answer` refuse the same condition -- an unknown
+gate -- with two different classes and two different messages, from two call paths. The message is
+the authority; a host branches on the exit code and the verb, and on `class` only where the class is
+a leaf.
+
+**Three things `--json` does NOT reach, each a bounded exception recorded rather than glossed.**
+
+1. **Parser-level refusals.** A missing required flag, an unknown `--outcome`, a non-integer
+   `--now-ms`: argparse refuses before the handler runs and writes `usage` plus
+   `<prog>: error: <message>` through the TOP-LEVEL seam, exit 2. `--json` on the line changes
+   nothing. So exit 2 does not guarantee a parseable document, only that stderr holds the reason.
+   This is also a testing rule: a case pinning one of these must patch the top-level seam, or it
+   asserts on an empty capture.
+
+2. **Caller defects, which include operator-typed values.** `LapRunIntentUsageError` (raised by
+   `intentOf` BEFORE the try block), `RunAdmissionUsageError` and `RunCloseUsageError` stay uncaught
+   and escape as exit 1 with a stack trace. Keeping them uncaught is deliberate -- folding a defect
+   into the same document shape as an operator's answer destroys the distinction `run_cli.ts` was
+   written to preserve. What the survey corrected is the CLASSIFICATION: these are reachable from
+   the command line, not only from a library caller. A malformed `--run-id`, `--workspace`,
+   `--base-branch`, `--topic-branch` or `--lease-claimant-id` on `admit`, or `--actor-id` on
+   `close`, reaches a host as exit 1 and a stack. That is why the host contract above is
+   three-valued rather than two.
+
+3. **`measure report` is the exception to the envelope itself.** That verb already emitted JSON,
+   via `--format json`, so `--json` there is a SPELLING and not a new capability -- it exists so a
+   host asks all nine verbs with one flag. It emits the report document UNWRAPPED, with no
+   envelope: the suite pins that the markdown and json renderings of one invocation carry identical
+   facts, and an envelope would put three facts in one rendering the other cannot carry. The
+   report's own `report_kind` field does the envelope's identifying job and its header already
+   carries the database path. A host must special-case this verb: exit 0 plus stdout is a REPORT,
+   not an envelope. Its DOMAIN refusals are also untouched -- `measure` has no `refuse()` and no
+   catch, so `ControlPlaneRefusal` and `WindowRefusal` still escape as exit 1 with a stack, pinned
+   that way today. Catching them only under `--json` would make the flag change control flow, which
+   this entry forbids; catching them on both paths would move an exit code, which is changing what
+   the verb does. Making them representable is a separate change.
+
+**One new refusal is introduced, and only one.** `measure report --json --format markdown` asks for
+both renderings at once and is refused (usage, `argument --json: ...`, exit 2, stdout empty, no
+database opened) rather than resolved by last-one-wins -- the same reasoning that put
+`refuseRepeat: true` on every flag in that subtree. `--json --format json` agrees and is accepted.
+To make the two distinguishable, `--format` no longer declares `defaultValue: markdown`; the default
+is applied at the single point that reads it, which is where `run` applied it before. No help byte
+and no rendering changes -- the parser does not print defaults.
+
+**Alternatives.**
+
+- *A per-subtree JSON shape* (rejected: measured. Five independent proposals produced five
+  spellings, and each argued for uniformity it could not itself provide).
+- *Refusal documents on stdout* (rejected: reinstates the "refused with a reason" versus "printed
+  nothing" ambiguity the two-stream seams exist to remove).
+- *A hand-written `code` taxonomy in the error object* (rejected: an `instanceof` cascade collapses
+  subclasses whose operator moves differ; `error.name` is free and cannot drift from the class).
+- *`JSON.stringify` alone as the encoder* (rejected: it escapes control characters but passes
+  non-ASCII through, and `--db` is echoed verbatim and deliberately unconstrained, so a path holding
+  a non-ASCII byte would break `docs/cli-output-policy.md` on the one surface it exists to protect).
+- *`pyJsonDumps` as the encoder* (rejected: it is a byte-for-byte CPython port whose output is a
+  parity surface for persisted columns, so borrowing it would make CLI bytes a parity obligation;
+  and it throws `PyTypeError` for a value it cannot serialise, which on a write verb would be a
+  crash AFTER the write committed).
+- *Reading the revision from `.git` at startup* (rejected: answers `unknown` in every installed
+  build and can report an unrelated repository's `HEAD`).
+- *`git describe`, or `--short`* (rejected: `describe --tags` fails in CI's shallow clone,
+  `describe --always` and `--short` produce a value whose length depends on where it was built).
+- *Generating the revision into `src/`* (rejected: every build would dirty the tree it was produced
+  from, so the next build would report `-dirty` for no reason).
+- *An envelope around `measure report`* (rejected: breaks the pinned equality of the two
+  renderings).
+- *Adding a `prepare` verb, or changing any verb's behaviour* (out of scope by `D-0045`).
+
+**Consequences.** `--version` grows from 30 to 77 columns, 83 with `-dirty`; the 79-column budget
+asserted in the suite is over `--help` lines, not this one, which is said here so a later reader
+does not assume it was ignored. The revision is deliberately CLI-only: `provenance.ts` still stamps
+only `toolVersion` into the section 6 header, because adding a field there would change a compared
+artifact. `npm run build` gains a step; `npm run clean` already removes `dist/` and needs no edit. A
+build with no derivable revision succeeds with a stderr note, because a contributor on a machine
+without git must still be able to build -- but `CONTINUO_REQUIRE_REVISION=1` turns the same
+condition into a failure, so a release cannot ship `unknown` by accident. `gate present`, `deliver`,
+`ack`, `close` and `reconcile` stay human-only; a case pins that an out-of-scope verb's refusal is
+byte-identical, because the shared `withControlPlane` had to learn the flag.
+
+**What records it.** `src/cli/json_output.ts` holds the envelope, the flag's single declaration and
+the ASCII encoder. `test/contract/build-revision.test.ts` pins the version line's shape, the
+revision alphabet (including that a shell fragment and a non-ASCII string are refused before being
+written into a module) and the derivation's behaviour on each way git can fail -- as a table over a
+pure function, so no case names a commit a rebase would invalidate.
+`test/measurement/cli.test.ts` holds the other half: the BUILT `dist/cli.js` must print the value
+baked into `dist/build_revision.js`, and, where the suite is running inside its own checkout, that
+value must be that checkout's commit and not the placeholder. The in-process case asserts `unknown`.
+The pair is the executable statement of the design, and neither half passes if the other's mechanism
+is broken. Per verb, the `--json` shape and its refusal are pinned in that subtree's own CLI suite:
+`test/control_plane/run-admission.test.ts`, `run-close.test.ts`, `db-cli.test.ts`,
+`test/gate/cli.test.ts`, `test/lap/cli.test.ts`, `test/measurement/cli.test.ts`.
+
+**Anti-vacuity, which is where most of the work is.** Every verb carries three cases whose absence
+would leave a green suite over a broken flag, and each was OBSERVED RED under a deliberate mutation
+that was then reverted:
+
+- *The flag is actually read.* The same invocation WITHOUT `--json` must still emit the unchanged
+  human line and no document. Every other case passes the flag, so an implementation that ignored it
+  and always emitted JSON would satisfy all of them and break every operator. Observed red under
+  `jsonRequested(args) || true`.
+- *The document is built from the record, not from literals.* Two invocations differing in one
+  input must differ in the corresponding key. Observed red under a hardcoded `created_at_ms` in
+  `run admit`, a hardcoded `to` in `run close`, and a hardcoded `deadline_at_ms` in `gate list`.
+- *The refusal path reads the flag too.* Each subtree funnels every refusal through ONE writer, so a
+  writer that ignored the flag would leave all success cases green while hosts got `error: ...`
+  text. Observed red in every subtree under a `refuse()` that ignored its report. `run close` and
+  `lap perform` additionally pin a SECOND refusal family through the same writer, because covering
+  one family proves nothing about the funnel.
+- *The vacuity checks are themselves not vacuous.* Each subtree pins that the human line is still
+  emitted, so the "no document" assertions cannot pass because the verb printed nothing at all;
+  `lap` runs its document-detecting predicate over both spellings of one real refusal; `measure`
+  pins that the markdown and json renderings actually DIFFER, so "identical bytes to `--format
+  json`" is a claim and not a tautology.
+- The revision half was observed red the same way: with `dist/build_revision.js` reset to the
+  placeholder, the built-CLI case fails naming the generator.
+
+**What this entry does not decide.** Whether the caller-defect exits (point 2 above) should become
+refusals -- they reach a host as exit 1 today and that is recorded, not endorsed. Whether
+`measure report`'s domain refusals should be representable. Whether the five out-of-scope `gate`
+verbs should carry the flag. Whether the revision belongs in the provenance header. Each is a
+change to what a verb does, and this entry deliberately changed nothing about that.
+
+**Status.** accepted
+
+**Falsifier.** A host that has to special-case a verb's envelope beyond the two exceptions named
+here -- or, more likely, the `/1` in `schema` never moving while the payloads change anyway. The
+version suffix exists so a host can tell a shape it understands from one it does not; if a field is
+removed or retyped without becoming `/2`, the discriminator is decoration and this entry failed. The
+revision half fails if `--version` is ever seen reporting a commit that is not the one the build was
+made from -- most plausibly by someone "fixing" the toplevel guard because it returned `unknown` in
+a vendored checkout, which is the guard working.
+
+**Source.** #155. The five-subtree survey and its four adversarial critiques are what settled the
+single envelope and the stderr rule; `D-0087` is why a host exists to settle them for.

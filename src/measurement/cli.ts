@@ -58,7 +58,9 @@
  */
 
 import { readFileSync } from "node:fs";
+import { addJsonArgument, jsonRequested } from "../cli/json_output.js";
 import {
+  ArgparseExit,
   type ArgparseStreams,
   ArgumentParser,
   dispatch,
@@ -75,6 +77,7 @@ import {
 import { ControlPlaneRefusal, openForMeasurement } from "./reader.js";
 import {
   buildMeasurementReport,
+  JSON_RENDERING,
   MARKDOWN,
   type MeasurementReport,
   RENDERINGS,
@@ -268,6 +271,7 @@ export interface ReportArgs extends Namespace {
   readonly fixtureCorpus?: string | null;
   readonly fixtureCommit?: string | null;
   readonly format?: string | null;
+  readonly json?: boolean;
 }
 
 function fixtureSuite(args: ReportArgs): FixtureSuiteRef {
@@ -338,19 +342,103 @@ export function buildReportFromArgs(
 }
 
 /**
+ * Refuse a command line the way the parser refuses one: usage, then the reason.
+ *
+ * This is a check the parser cannot make for itself -- it is about two flags
+ * agreeing, and the parser validates one flag at a time -- but it is still a
+ * refusal of the COMMAND LINE rather than of the control plane, so an operator
+ * who gets it should read the same three lines they get for `--format json
+ * --format markdown`: the usage block, `<prog>: error: <reason>`, and status 2.
+ * Reproducing those bytes here rather than routing them through a domain
+ * refusal is what keeps the two kinds of mistake looking alike on the console.
+ *
+ * Written to `process.stderr` directly for the reason {@link defaultStreams}
+ * gives for not putting stderr on the seam: a refusal is the parser's output,
+ * the parser's stream is handed in at dispatch time and is no longer in reach
+ * by the time a handler runs, and both entry points -- this module's `main` and
+ * the top-level CLI's -- end their stderr at `process.stderr.write`, so the
+ * bytes an operator sees are the same either way.
+ *
+ * `ArgparseExit` rather than `process.exit`, for `control_plane/cli.ts`'s
+ * reason: the process boundary is `main`, and both of this command's `main`s
+ * turn the exit into a status.
+ */
+function refuseCommandLine(parser: ArgumentParser, message: string): never {
+  process.stderr.write(parser.usage());
+  process.stderr.write(`${parser.prog}: error: ${message}\n`);
+  throw new ArgparseExit(2, message);
+}
+
+/**
+ * Which rendering to write, given `--format` and `--json`.
+ *
+ * **`--json` is a spelling of `--format json` and nothing more.** It exists
+ * because a host driving this CLI as a subprocess asks every verb for machine
+ * output with one flag, and having to remember that one verb of the nine spells
+ * it differently is the whole of the cost this flag removes. What it
+ * deliberately does NOT do is wrap the report in the `{"schema","ok","db"}`
+ * envelope the other verbs answer in: the suite pins that the markdown and the
+ * json rendering of one invocation carry identical facts, and an envelope would
+ * put three facts in one rendering that the other cannot carry. The report's own
+ * `report_kind` field already does the envelope's identifying job, and the
+ * report's header already carries the database path.
+ *
+ * **A contradiction is refused rather than resolved.** `--json --format
+ * markdown` asks for both renderings at once, and there is no reading of it
+ * that is more likely than the other. Last-one-wins is exactly what
+ * `addArguments` refuses for a repeated flag, and for the same reason: the
+ * report that came out would carry no sign of which half of the command line
+ * won. `--json --format json` is not a contradiction -- the two agree -- and is
+ * accepted, because a host that always passes `--json` should not have to strip
+ * it from a command line an operator already wrote.
+ *
+ * The `--format` flag deliberately declares no `defaultValue`, and this
+ * function is why: with one, an absent `--format` and an explicit `--format
+ * markdown` arrive in the namespace as the same string, so the contradiction
+ * above would be undetectable and `--json` would have to silently override an
+ * explicit choice. Absent, `--format` is `null` here and the default is applied
+ * at this one point -- which is where {@link run} applied it before this flag
+ * existed, so no rendering changes.
+ */
+function resolveRendering(parser: ArgumentParser, args: ReportArgs): string {
+  const requested = args.format ?? null;
+  if (!jsonRequested(args)) {
+    return requested ?? MARKDOWN;
+  }
+  if (requested !== null && requested !== JSON_RENDERING) {
+    refuseCommandLine(
+      parser,
+      `argument --json: another spelling of --format ${JSON_RENDERING}, so it ` +
+        `contradicts --format ${requested}; give one of the two`,
+    );
+  }
+  return JSON_RENDERING;
+}
+
+/**
  * The clock boundary: read it once here, inject it, render, write.
  *
  * Returns 0 when a report was produced. That is a statement about this process
  * and not about the numbers in the report -- `Q-0005` is open, and an exit code
  * that meant "acceptable" would answer it (module docstring).
+ *
+ * `parser` is taken so that a command line this handler refuses -- the one
+ * disagreement between `--json` and `--format` that no single flag's validation
+ * can see -- refuses with the parser's own usage block and prog. It is the
+ * parser this handler was mounted on, bound in {@link addArguments}, so a
+ * command run through the top-level CLI names `continuo measure report` and one
+ * run through this module's own `main` names it too.
  */
-export function run(args: ReportArgs): number {
+export function run(args: ReportArgs, parser: ArgumentParser): number {
+  // Before the clock is read and before the database is opened: a command line
+  // that contradicts itself should cost nothing and hold no lock.
+  const rendering = resolveRendering(parser, args);
   // The only clock read in the harness. Everything below takes it as an
   // argument, so a report cannot be stamped at one instant and selected at
   // another.
   const nowMs = args.nowMs ?? cliSeams.nowMs();
   const report = buildReportFromArgs(args, { nowMs });
-  cliSeams.write(render(report, args.format ?? MARKDOWN));
+  cliSeams.write(render(report, rendering));
   return 0;
 }
 
@@ -440,11 +528,28 @@ export function addArguments(parser: ArgumentParser): void {
     optionStrings: ["--format"],
     dest: "format",
     choices: RENDERINGS,
-    defaultValue: MARKDOWN,
+    // No `defaultValue`, deliberately: `markdown` is applied by
+    // `resolveRendering` instead, so that an absent `--format` arrives here as
+    // `null` and can be told apart from an explicit `--format markdown`. A
+    // default declared here would make the two indistinguishable and would turn
+    // the `--json --format markdown` contradiction into a silent override --
+    // the failure `refuseRepeat` exists to prevent, arriving through a
+    // different door. The rendering an operator gets for a command line that
+    // names neither flag is unchanged.
     refuseRepeat: true,
     help: FORMAT_HELP,
   });
-  parser.setDefaults({ func: run as (values: Namespace) => number });
+  // Mounted last so that the host-facing spelling reads after the flag it is a
+  // spelling of, on the one help screen an operator learns both from.
+  addJsonArgument(parser);
+  parser.setDefaults({
+    // Bound to THIS parser rather than passed as a bare reference, because the
+    // handler refuses a self-contradicting command line with the parser's usage
+    // and prog. @see run.
+    func: ((values: Namespace): number => run(values as ReportArgs, parser)) as (
+      values: Namespace,
+    ) => number,
+  });
 }
 
 /** Mount `report` under the caller's `measure` subcommand table. */
@@ -488,7 +593,27 @@ function defaultStreams(): ArgparseStreams {
   };
 }
 
-/** Parse `argv` and run the named command. */
+/**
+ * Parse `argv` and run the named command.
+ *
+ * `dispatch` turns an exit raised by the PARSER into a status; this catch does
+ * the same for one raised by the COMMAND, which is what
+ * {@link refuseCommandLine} raises for a command line whose `--json` and
+ * `--format` disagree. The top-level CLI's `main` already carries the identical
+ * catch, for the identical reason -- Node has no top level that turns a
+ * `SystemExit` into a status -- and without this one the same refusal would
+ * reach an operator driving this module directly as an unhandled error with a
+ * stack trace over the message it had just written. No refusal that exists
+ * today reaches it: nothing under `run` raised `ArgparseExit` before this
+ * change.
+ */
 export function main(argv: readonly string[]): number {
-  return dispatch(buildParser(), argv, defaultStreams());
+  try {
+    return dispatch(buildParser(), argv, defaultStreams());
+  } catch (error) {
+    if (error instanceof ArgparseExit) {
+      return error.code;
+    }
+    throw error;
+  }
 }

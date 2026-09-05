@@ -333,6 +333,298 @@ describe("db verify", () => {
 });
 
 // --------------------------------------------------------------------------
+// --json
+// --------------------------------------------------------------------------
+
+/**
+ * Parse the one document a --json invocation wrote, failing loudly if it is not
+ * exactly one line of JSON.
+ *
+ * The line count is asserted here rather than in each case because "one
+ * document per invocation" is the part of the contract a host depends on when
+ * it reads a stream: a second line -- a stray human line left behind next to
+ * the document, or a document emitted twice -- would still `JSON.parse` if the
+ * caller only looked at the first line, and the case would stay green.
+ */
+function soleDocument(text: string): unknown {
+  expect(text.endsWith("\n"), "the document must be one line terminated by a newline").toBe(true);
+  const lines = text.split("\n").slice(0, -1);
+  expect(lines.length, "exactly one document per invocation reaches the stream").toBe(1);
+  return JSON.parse(lines[0] as string);
+}
+
+describe("db --json", () => {
+  test("db create answers one continuo.db.create/1 document on stdout", () => {
+    // The whole document, not a field of it: `toStrictEqual` is what makes an
+    // extra key, a renamed key or a stringified integer a failure. A host pins
+    // this shape, so a change to it that nobody noticed is the defect this
+    // assertion exists to catch.
+    const path = databasePath(caseRoot("db-create-json"));
+    const streams = captureStreams();
+
+    const code = main(["db", "create", "--db", path, "--now-ms", String(T0), "--json"]);
+
+    expect(code, "a JSON success is still exit 0").toBe(0);
+    expect(streams.err(), "a success writes nothing to stderr").toBe("");
+    expect(
+      soleDocument(streams.out()),
+      "the pinned success shape for db create; change it only by minting /2",
+    ).toStrictEqual({
+      schema: "continuo.db.create/1",
+      ok: true,
+      db: path,
+      schema_version: HEAD,
+      head_version: HEAD,
+    });
+  });
+
+  test("db migrate answers one continuo.db.migrate/1 document on stdout", () => {
+    // The verb differs from create only in its schema id, and that is the point
+    // of having three ids: the payload cannot say which verb ran, so the id
+    // must. A collapsed single id would leave this case indistinguishable from
+    // the one above.
+    const root = caseRoot("db-migrate-json");
+    const path = databaseBehindHead(root, HEAD - 1);
+    const streams = captureStreams();
+
+    const code = main(["db", "migrate", "--db", path, "--now-ms", String(T1), "--json"]);
+
+    expect(code).toBe(0);
+    expect(streams.err()).toBe("");
+    expect(
+      soleDocument(streams.out()),
+      "the pinned success shape for db migrate; the id must not be shared with create",
+    ).toStrictEqual({
+      schema: "continuo.db.migrate/1",
+      ok: true,
+      db: path,
+      schema_version: HEAD,
+      head_version: HEAD,
+    });
+  });
+
+  test("db verify answers one continuo.db.verify/1 document on stdout", () => {
+    const root = caseRoot("db-verify-json");
+    const path = databasePath(root);
+    createProductionControlPlane(path, { nowMs: T0 }).close();
+    const before = bytesOf(path);
+    const streams = captureStreams();
+
+    const code = main(["db", "verify", "--db", path, "--json"]);
+
+    expect(code).toBe(0);
+    expect(streams.err()).toBe("");
+    expect(soleDocument(streams.out()), "the pinned success shape for db verify").toStrictEqual({
+      schema: "continuo.db.verify/1",
+      ok: true,
+      db: path,
+      schema_version: HEAD,
+      head_version: HEAD,
+    });
+    // The flag changes bytes, not behaviour: verify still writes nothing.
+    expect(bytesOf(path), "--json must not have made verify touch the file").toEqual(before);
+    expect(sidecars(path)).toEqual([]);
+  });
+
+  test("a refused verb writes the document to stderr, leaves stdout empty, and still exits 2", () => {
+    // The stream split is the host contract (`exit 0 -- parse stdout; exit 2 --
+    // parse stderr`). A refusal document on stdout would read as a success to a
+    // host that only checked whether stdout parsed, and would undo the
+    // distinction this module's two seams exist to keep.
+    const path = databasePath(caseRoot("db-verify-json"));
+    const streams = captureStreams();
+
+    const code = main(["db", "verify", "--db", path, "--json"]);
+
+    expect(code, "the exit code is the flag's business in no way at all").toBe(2);
+    expect(streams.out(), "a refusal must put nothing on stdout").toBe("");
+    const document = soleDocument(streams.err()) as {
+      readonly schema: string;
+      readonly ok: boolean;
+      readonly db: string;
+      readonly error: { readonly class: string; readonly message: string };
+    };
+    expect(document.schema).toBe("continuo.db.verify/1");
+    expect(document.ok, "a refusal is ok:false, and false is a boolean not a string").toBe(false);
+    expect(document.db, "the refusal carries --db so a host can attribute it").toBe(path);
+    expect(document.error.class).toBe("MissingStateRefused");
+    expect(document.error.message, "the operator's message survives verbatim").toContain(
+      "does not exist",
+    );
+    expect(Object.keys(document).sort(), "the refusal envelope has exactly four keys").toEqual([
+      "db",
+      "error",
+      "ok",
+      "schema",
+    ]);
+  });
+
+  test("two different refusal subclasses answer with two different classes", () => {
+    // The case that catches an `instanceof` cascade or a hand-made code table:
+    // both of these are caught as `ControlPlaneRefusal`, and a writer that
+    // reported the caught family -- or that mapped every refusal to one code --
+    // would be green on the case above while telling an operator to restore a
+    // file whose real problem is that this build is too old, and vice versa.
+    const missingPath = databasePath(caseRoot("db-verify-json-missing"));
+    const missing = captureStreams();
+    expect(main(["db", "verify", "--db", missingPath, "--json"])).toBe(2);
+    const missingClass = (soleDocument(missing.err()) as { readonly error: { class: string } })
+      .error.class;
+
+    const behindRoot = caseRoot("db-verify-json-behind");
+    const behindPath = databaseBehindHead(behindRoot, HEAD - 1);
+    const behind = captureStreams();
+    expect(main(["db", "verify", "--db", behindPath, "--json"])).toBe(2);
+    const behindClass = (soleDocument(behind.err()) as { readonly error: { class: string } }).error
+      .class;
+
+    expect(missingClass, "an absent file is MissingStateRefused, not the caught family").toBe(
+      "MissingStateRefused",
+    );
+    expect(
+      behindClass,
+      "a database behind this build is refused by refuseUnlessAtHead, which throws the bare family",
+    ).toBe("ControlPlaneRefusal");
+    expect(
+      missingClass === behindClass,
+      "two refusals with different operator moves must not share one class",
+    ).toBe(false);
+  });
+});
+
+/**
+ * Anti-vacuity: the --json cases above, observed able to fail.
+ *
+ * `AGENTS.md`: a check never seen red is not a check. Each case here names the
+ * hole it stands in front of -- a hole that every assertion in the block above
+ * would survive.
+ */
+describe("db --json checks, observed red", () => {
+  test("without --json the human line is unchanged and no JSON is emitted", () => {
+    // The hole: `--json` never being read at all, because the document is what
+    // the verb now always prints. Every success case above would be green, and
+    // every operator would have lost the line they read today. This is also the
+    // byte-for-byte guard on the human rendering: it is asserted against the
+    // literal, not against a regex that a document would also satisfy.
+    const path = databasePath(caseRoot("db-create-nojson"));
+    const streams = captureStreams();
+
+    const code = main(["db", "create", "--db", path, "--now-ms", String(T0)]);
+
+    expect(code).toBe(0);
+    expect(streams.out(), "the human line must not have moved a byte").toBe(
+      `created ${path}: schema version ${HEAD} of ${HEAD}\n`,
+    );
+    expect(
+      () => JSON.parse(streams.out().trimEnd()),
+      "the human line must not be parseable as the document",
+    ).toThrow();
+  });
+
+  test("payload values change when the underlying facts change", () => {
+    // The hole: a document assembled from literals. Every success case above
+    // observes a database at head, so `{schema_version: 4, head_version: 4, db:
+    // "..."}` written out by hand would satisfy all three of them -- and would
+    // then answer with another operator's path, or with a stale head, forever.
+    // Two invocations differing in exactly one input, and the corresponding key
+    // must differ with it.
+    //
+    // `schema_version` is deliberately cross-checked against the file rather
+    // than varied: no `db` verb can report a version other than head (create
+    // and migrate end there, and verify refuses a database that has not), so
+    // the fact it must track is the ledger, and `versionOf` reads that ledger
+    // independently of the command that printed it.
+    const first = databasePath(caseRoot("db-json-fact-one"));
+    const second = databasePath(caseRoot("db-json-fact-two"));
+
+    const firstStreams = captureStreams();
+    expect(main(["db", "create", "--db", first, "--now-ms", String(T0), "--json"])).toBe(0);
+    const firstDocument = soleDocument(firstStreams.out()) as {
+      readonly db: string;
+      readonly schema: string;
+      readonly schema_version: number;
+      readonly head_version: number;
+    };
+
+    const secondStreams = captureStreams();
+    expect(main(["db", "verify", "--db", first, "--json"])).toBe(0);
+    expect(main(["db", "create", "--db", second, "--now-ms", String(T0), "--json"])).toBe(0);
+    const documents = secondStreams
+      .out()
+      .split("\n")
+      .slice(0, -1)
+      .map((line) => JSON.parse(line) as { readonly db: string; readonly schema: string });
+
+    expect(firstDocument.db, "db echoes --db, so it must follow the path given").toBe(first);
+    expect(documents[1]?.db, "a second path must produce a second db value").toBe(second);
+    expect(
+      firstDocument.db === documents[1]?.db,
+      "db is read from the invocation, not written down",
+    ).toBe(false);
+    expect(
+      documents[0]?.schema,
+      "a different verb over the SAME path must still change the schema id",
+    ).toBe("continuo.db.verify/1");
+    expect(
+      firstDocument.schema === documents[0]?.schema,
+      "the schema id is the verb's, not one shared literal",
+    ).toBe(false);
+    // The two integers are checked against the file the command wrote, not
+    // against the number the command believed it wrote.
+    expect(versionOf(first), "the ledger and user_version agree with the document").toEqual([
+      firstDocument.schema_version,
+      firstDocument.schema_version,
+    ]);
+    expect(firstDocument.head_version, "head_version is this build's head").toBe(headVersion());
+  });
+
+  test("the refusal path honours --json", () => {
+    // The hole rule 3 exists for: a `--json` branch written at the success call
+    // sites only. Every success case above stays green while a host driving a
+    // refused verb gets `error: ...` text it cannot parse -- and the exit code
+    // is 2 either way, so nothing else would notice. Asserted as a pair against
+    // the same invocation without the flag, so the human refusal is pinned too.
+    const humanPath = databasePath(caseRoot("db-migrate-refusal-human"));
+    const human = captureStreams();
+    const humanCode = main(["db", "migrate", "--db", humanPath, "--now-ms", String(T0)]);
+
+    const jsonPath = databasePath(caseRoot("db-migrate-refusal-json"));
+    const json = captureStreams();
+    const jsonCode = main(["db", "migrate", "--db", jsonPath, "--now-ms", String(T0), "--json"]);
+
+    expect(humanCode, "the flag does not move the exit code").toBe(2);
+    expect(jsonCode).toBe(humanCode);
+    expect(human.err(), "the human refusal is unchanged").toMatch(/^error: /);
+    expect(
+      () => JSON.parse(json.err().trimEnd()),
+      "under --json the refusal must be a document, not the error: line",
+    ).not.toThrow();
+    expect(json.err().startsWith("error: "), "the human line must not be emitted as well").toBe(
+      false,
+    );
+  });
+
+  test("the vacuity check on the vacuity checks: --json alone does not refuse", () => {
+    // A `--json` implementation that refused every invocation it was given
+    // would satisfy the refusal cases above, and the "no JSON without the flag"
+    // case, without ever having produced a success document. This says the flag
+    // is inert on the happy path: same exit code, same file, both with and
+    // without it.
+    const withoutFlag = databasePath(caseRoot("db-json-inert-plain"));
+    const withFlag = databasePath(caseRoot("db-json-inert-flag"));
+    captureStreams();
+
+    expect(main(["db", "create", "--db", withoutFlag, "--now-ms", String(T0)])).toBe(0);
+    expect(main(["db", "create", "--db", withFlag, "--now-ms", String(T0), "--json"])).toBe(0);
+
+    expect(versionOf(withFlag), "the flag must not change what was written").toEqual(
+      versionOf(withoutFlag),
+    );
+    expect(ledgerRows(withFlag)).toEqual(ledgerRows(withoutFlag));
+  });
+});
+
+// --------------------------------------------------------------------------
 // the mount itself
 // --------------------------------------------------------------------------
 

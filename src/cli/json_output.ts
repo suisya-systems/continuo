@@ -1,7 +1,7 @@
 import type { ArgumentParser, Namespace } from "./parser.js";
 
 /**
- * The one JSON envelope every host-driven verb answers in (`D-0089`).
+ * The one JSON envelope every host-driven verb answers in (`D-0090`).
  *
  * `docs/cli-output-policy.md` governs the bytes; this module governs their
  * shape. It exists because the alternative was measured and rejected: five
