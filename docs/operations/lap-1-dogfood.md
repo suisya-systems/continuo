@@ -166,6 +166,17 @@ node "$CLI" lap perform \
 #   gate gate/worker_escalation/cdbdc322-.../0 over event worker_escalation/cdbdc322-.../0 at seq 13
 ```
 
+> **Since `D-0099` the command above chooses no model, and that is now a visible omission rather
+> than an invisible one.** `lap perform` takes `--model <id>`, whose value is appended to every spawn
+> of the lap's session as `--model <id>`; the three laps here predate it and so ran on whatever the
+> operator's `claude` CLI defaulted to. rondo's own lap-1 dogfood measured what that costs -- one
+> one-word reply at `total_cost_usd: 0.0989`, over a 9,279-token cache-creation floor that is the
+> fence's own preamble and therefore applies to every lap. **With the flag omitted the cost of a lap
+> is still not a number this stack chooses**, and the `--json` document's `model` key says so
+> outright by carrying `null`. The flag is refused unless its value is a plain model id: it becomes
+> a token in the fenced child's command line, so a leading `-`, a path separator, whitespace or an
+> `=` is refused before the lap starts anything.
+
 Measured wall clock, each including one full worker turn: 52 s, 17 s, 32 s over the three laps.
 
 The command materialises the workspace, renders the fence, spawns the worker, waits for the turn's
