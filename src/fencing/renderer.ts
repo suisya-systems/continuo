@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { pyJsonLoads } from "./pyjson.js";
 import { normalizePath } from "./pypath.js";
 import { compilePythonRegex } from "./pyregex.js";
-import { pyRepr } from "./pyrepr.js";
+import { pyRepr, pyReprOf } from "./pyrepr.js";
 import {
   carryNumberSpellings,
   getOwn,
@@ -46,6 +46,7 @@ import {
   pySet,
   pyStr,
   pyStrip,
+  pyStrOf,
   pyTypeName,
   pyTypeNameOf,
   rememberKeyOrder,
@@ -608,8 +609,12 @@ export function checkRenderedSandboxDenyStrings(
         // `pyTypeNameOf(entries, index)` rather than `pyTypeName(entry)`, for
         // the reason the `permissions.deny` refusal gives: the container knows
         // the number spelling, so `1.0` reads `float` rather than `int`.
+        // `pyReprOf`, not `pyRepr(entry)`, for the same reason and off the same
+        // slot: `[1.0]` is `1.0` in interlock's sentence and was `1` here
+        // (D-0095). `entries` is the document's own array, not a `pyIterate`
+        // copy, so the spelling is still on it.
         `sandbox.filesystem.${key}[${index}] would reach the child as ` +
-          `${pyTypeNameOf(entries, index)}, not a string: ${pyRepr(entry)}`,
+          `${pyTypeNameOf(entries, index)}, not a string: ${pyReprOf(entries, index)}`,
       ]);
     }
   }
@@ -693,7 +698,14 @@ export function renderFence(
   // `body.get("permission_mode", "default")`: own key or the default. `in`
   // would find an inherited `permission_mode` that no author wrote.
   const authoredMode = Object.hasOwn(body, "permission_mode") ? body.permission_mode : "default";
-  reasons.push(...checkPermissionMode(authoredMode, globalCfg));
+  // Read once, off the role BODY -- the container the value came out of, and the
+  // only one that carries its spelling. `permission_mode` is a META key, so it
+  // is gone from `rendered` by the time the payload is built, which is why the
+  // spelling travels as a value rather than being looked up again downstream.
+  const authoredModeSpelling = Object.hasOwn(body, "permission_mode")
+    ? pyNumberSpelling(body, "permission_mode")
+    : undefined;
+  reasons.push(...checkPermissionMode(authoredMode, globalCfg, authoredModeSpelling));
   // D-0081. `default` means "ask a person"; a `claude -p` child has none, so
   // every Edit and Write it attempts is refused and the turn ends having
   // changed nothing (#120). The promotion is the whole of the fix, and it is
@@ -779,9 +791,12 @@ export function renderFence(
     ]);
     deny = [];
   }
-  for (const raw of deny as unknown[]) {
+  // `.entries()`, so the index is in hand: `deny` is the document's own array
+  // (not a `pyIterate` copy), so it still carries the number spellings its
+  // refusals name (D-0095).
+  for (const [index, raw] of (deny as unknown[]).entries()) {
     try {
-      rules.push(parsePermissionRule(raw));
+      rules.push(parsePermissionRule(raw, pyNumberSpelling(deny, index)));
     } catch (exc) {
       if (exc instanceof RuleSyntaxError) {
         reasons.push([RefusalReason.RULE_SYNTAX, exc.message]);
@@ -827,9 +842,10 @@ export function renderFence(
         ]);
         continue;
       }
-      for (const entry of entries) {
+      // @see the `permissions.deny` loop above for why the index is carried.
+      for (const [index, entry] of entries.entries()) {
         try {
-          rules.push(parseSandboxEntry(entry, kind));
+          rules.push(parseSandboxEntry(entry, kind, pyNumberSpelling(entries, index)));
         } catch (exc) {
           if (exc instanceof RuleSyntaxError) {
             reasons.push([RefusalReason.RULE_SYNTAX, exc.message]);
@@ -888,15 +904,30 @@ export function renderFence(
   // persists the raw value in `settings.permissionMode` and the `pyStr` of
   // it in `Fence.permissionMode`. Reproduced rather than tidied, because
   // `settings` is the dict a restart diffs.
-  const settings = settingsPayload(rendered, permissionMode);
+  // The spelling belongs to the AUTHORED value; a promotion substitutes a
+  // string literal for it, and a spelling left attached to that would be a
+  // stale record on a value from somewhere else.
+  const permissionModeSpelling = permissionMode === authoredMode ? authoredModeSpelling : undefined;
+  const settings = settingsPayload(rendered, permissionMode, permissionModeSpelling);
   return new Fence({
     role,
     // `str(body.get("role_kind", "worker"))`. `pyStr`, not `String`: an
     // explicit `"role_kind": null` is `"None"` in the source and `"null"`
     // under `String`, and `roleKind` is part of what a restart diff
     // compares -- a mismatch there reads as "the fence changed".
-    roleKind: Object.hasOwn(body, "role_kind") ? pyStr(body.role_kind) : "worker",
-    permissionMode: pyStr(permissionMode),
+    // `pyStrOf(body, ...)`, not `pyStr(body.role_kind)`: a number's `str()` is
+    // the DOCUMENT's, and the spelling for both fields lives on the role body
+    // (D-0095). `"role_kind": 1.0` persisted `"1"` here and `"1.0"` in
+    // interlock, and `"role_kind": 9007199254740993` persisted the rounded
+    // double -- in two fields the restart check compares, so either one was a
+    // fence that reports "changed" forever.
+    roleKind: Object.hasOwn(body, "role_kind") ? pyStrOf(body, "role_kind") : "worker",
+    // NOT `pyStrOf(body, "permission_mode")`: `permissionMode` is the PROMOTED
+    // value on the non-interactive path (D-0081), which is a different value
+    // from the authored one and must not be given the authored one's spelling.
+    // The promotion replaces a document number with a string literal, so the
+    // spelling is carried only while the value is still the authored one.
+    permissionMode: pyStr(permissionMode, permissionModeSpelling),
     rules: deduped,
     settings,
   });
@@ -920,6 +951,11 @@ export function renderFence(
 function checkPermissionMode(
   mode: unknown,
   globalCfg: Readonly<Record<string, unknown>>,
+  // The spelling of the slot `mode` was read out of, when it came from one --
+  // the refusal below names the value, and `1.0` is `1.0` in interlock's
+  // sentence (D-0095). Absent for the promoted mode, which is a literal in
+  // this file and has no document behind it.
+  modeSpelling?: PyNumberSpelling | undefined,
 ): Reason[] {
   // `global_cfg.get("permission_modes") or ["default", "plan", "acceptEdits"]`
   // (renderer.py:311). A truthy non-list is USED AS IS -- Python never checks
@@ -943,8 +979,23 @@ function checkPermissionMode(
     // already refusing, and sorting the stringified items keeps the message
     // stable for the all-strings case, which is the only one a real document
     // reaches.
+    // The spelling is read off `allowed`, the document's own list, by the index
+    // the copy preserves -- `pyIterate` returns `[...value]` and drops the
+    // index-keyed record on purpose (D-0212), so the copy cannot answer for
+    // itself. Without it a `permission_modes: [1.0]` is listed as `1`.
+    //
+    // WHAT THIS DOES NOT REACH, and it is the one place in the renderer where a
+    // document number still reads differently from interlock: the stringify
+    // above is the ADAPTATION described in the paragraph before it, and CPython
+    // sorts the VALUES. So an all-numeric `permission_modes` reprs `[1.0]` there
+    // and `['1.0']` here -- the number itself is now spelled right and the
+    // QUOTES are what differ, because the list being reprd is a list of strings.
+    // Making it agree means reproducing `sorted()`'s TypeError on mixed types,
+    // which this file deliberately does not, so it is disclosed in
+    // `parity/fencing.renderer.ledger.json` rather than changed under a decision
+    // that is not about refusal semantics (D-0095).
     const sorted = pyIterate(allowed)
-      .map((v) => pyStr(v))
+      .map((v, index) => pyStr(v, pyNumberSpelling(allowed, index)))
       .sort();
     return [
       [
@@ -954,7 +1005,7 @@ function checkPermissionMode(
         // joiner and the per-item quoting all come from `pyRepr`, not from
         // hand-written punctuation that gets the escaping wrong for a mode
         // containing an apostrophe or a backslash.
-        `permission_mode ${pyRepr(mode)} is not one of ${pyRepr(sorted)}`,
+        `permission_mode ${pyRepr(mode, modeSpelling)} is not one of ${pyRepr(sorted)}`,
       ],
     ];
   }
@@ -992,7 +1043,12 @@ function checkForbiddenAllow(
   // appear in the global config sends the operator looking for a line that is
   // not there.
   const patterns: { readonly regex: RegExp; readonly source: string }[] = [];
-  for (const raw of pyIterate(pyOr(globalCfg.forbidden_allow_regex, []))) {
+  // The ORIGINAL container is held alongside the copy `pyIterate` returns,
+  // because the copy drops the index-keyed number record on purpose (D-0212)
+  // and both refusals below name the entry (D-0095).
+  const forbiddenRegex = pyOr(globalCfg.forbidden_allow_regex, []);
+  for (const [index, raw] of pyIterate(forbiddenRegex).entries()) {
+    const rawSpelling = pyNumberSpelling(forbiddenRegex, index);
     // `re.compile` takes only a string (or an already-compiled pattern) and
     // raises TypeError on anything else -- which the source catches alongside
     // `re.error` and turns into a GLOBAL_CONFIG_INVALID reason.
@@ -1008,7 +1064,7 @@ function checkForbiddenAllow(
       // against CPython 3.12.3; both texts land in a ledger-persisted reason.
       found.push([
         RefusalReason.GLOBAL_CONFIG_INVALID,
-        `forbidden_allow_regex entry ${pyRepr(raw)} is not a valid regex: ` +
+        `forbidden_allow_regex entry ${pyRepr(raw, rawSpelling)} is not a valid regex: ` +
           (pyHashable(raw)
             ? "first argument must be string or compiled pattern"
             : `unhashable type: '${pyTypeName(raw)}'`),
@@ -1037,13 +1093,19 @@ function checkForbiddenAllow(
     } catch (exc) {
       found.push([
         RefusalReason.GLOBAL_CONFIG_INVALID,
-        `forbidden_allow_regex entry ${pyRepr(raw)} is not a valid regex: ${describe(exc)}`,
+        `forbidden_allow_regex entry ${pyRepr(raw, rawSpelling)} is not a valid regex: ${describe(exc)}`,
       ]);
     }
   }
-  for (const entry of allow) {
+  // `.entries()`: `allow` is the document's own array, so the slot still carries
+  // the spelling the refusal below names -- `[1.0]` is `1.0` in interlock's
+  // sentence and was `1` here (D-0095).
+  for (const [index, entry] of allow.entries()) {
     if (typeof entry !== "string") {
-      found.push([RefusalReason.RULE_SYNTAX, `allow entry not a string: ${pyRepr(entry)}`]);
+      found.push([
+        RefusalReason.RULE_SYNTAX,
+        `allow entry not a string: ${pyReprOf(allow, index)}`,
+      ]);
       continue;
     }
     if (exact.has(entry)) {
@@ -1119,9 +1181,21 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
   const problems: Reason[] = [];
   let commands = 0;
   const interlockMatchers: unknown[] = [];
-  for (const group of entries) {
+  // A LIST BUILT IN CODE out of document values, so it is a rebuild site like
+  // any other and the standing obligation applies (D-0212): the refusal below
+  // reprs it, and a `"matcher": 1.0` collected here would be named `1`. The
+  // record is keyed by this list's own index, filled as the pushes happen and
+  // attached once, because `rememberNumberSpellings` REPLACES the record rather
+  // than merging into it (D-0095).
+  const matcherSpellings = new Map<string, PyNumberSpelling>();
+  for (const [groupIndex, group] of entries.entries()) {
     if (!isPlainObject(group)) {
-      problems.push([RefusalReason.RULE_SYNTAX, `hook group not an object: ${pyRepr(group)}`]);
+      problems.push([
+        RefusalReason.RULE_SYNTAX,
+        // `entries` is `hooks.PreToolUse` straight out of the document, so the
+        // slot carries the spelling this sentence names (D-0095).
+        `hook group not an object: ${pyReprOf(entries, groupIndex)}`,
+      ]);
       continue;
     }
     // `for hook in group.get("hooks", []) or []` (renderer.py:394). A STRING
@@ -1132,10 +1206,18 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
     // hook group and one broken one CLEANLY, and the broken group's hooks
     // simply never run: the fence the operator reads is not the fence the child
     // gets.
-    const groupHooks = pyIterate(pyOr(getOwn(group, "hooks"), []));
-    for (const hook of groupHooks) {
+    // @see the `forbidden_allow_regex` loop: the original is kept beside the
+    // copy so a number's spelling survives into the refusal (D-0095). A STRING
+    // here iterates per character, and a character has no spelling to find --
+    // `pyNumberSpelling` simply answers `undefined`, which is the right answer.
+    const authoredHooks = pyOr(getOwn(group, "hooks"), []);
+    const groupHooks = pyIterate(authoredHooks);
+    for (const [hookIndex, hook] of groupHooks.entries()) {
       if (!isPlainObject(hook) || typeof (hook as Record<string, unknown>).command !== "string") {
-        problems.push([RefusalReason.RULE_SYNTAX, `hook not a command: ${pyRepr(hook)}`]);
+        problems.push([
+          RefusalReason.RULE_SYNTAX,
+          `hook not a command: ${pyRepr(hook, pyNumberSpelling(authoredHooks, hookIndex))}`,
+        ]);
         continue;
       }
       const hookObj = hook as Record<string, unknown>;
@@ -1146,13 +1228,20 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
       if (hookObj.type !== "command") {
         problems.push([
           RefusalReason.HOOK_NOT_A_COMMAND,
-          `PreToolUse hook has type ${pyRepr(hookObj.type)}, not 'command': ${pyRepr(command)}`,
+          // `pyReprOf(hookObj, "type")`: the type is read off the hook object,
+          // which is the container its spelling hangs on. `command` is a string
+          // by the guard above, so it needs none.
+          `PreToolUse hook has type ${pyReprOf(hookObj, "type")}, not 'command': ${pyRepr(command)}`,
         ]);
         continue;
       }
       commands += 1;
       problems.push(...checkCommandResolves(command));
       if (commandRunsHook(command, ctx)) {
+        const matcherSpelling = pyNumberSpelling(group, "matcher");
+        if (matcherSpelling !== undefined) {
+          matcherSpellings.set(String(interlockMatchers.length), matcherSpelling);
+        }
         interlockMatchers.push((group as Record<string, unknown>).matcher);
         problems.push(...checkInvocation(command, ctx, role));
       }
@@ -1173,7 +1262,9 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
     // consults the hook for the tools the matcher leaves out.
     problems.push([
       RefusalReason.HOOK_MATCHER_TOO_NARROW,
-      `Interlock's deny hook is scoped to matcher ${pyRepr(interlockMatchers)}; it ` +
+      `Interlock's deny hook is scoped to matcher ${pyRepr(
+        rememberNumberSpellings(interlockMatchers, matcherSpellings),
+      )}; it ` +
         "must match all tools ('*'), because the fence spans Bash, Read, Write, " +
         "Edit and WebFetch rules and a narrow matcher silently exempts the rest",
     ]);
@@ -1494,6 +1585,13 @@ function settingsPayload(
   // coerces, and the payload is persisted verbatim. Narrowing it here would
   // quietly insert a `str()` the source does not perform.
   permissionMode: unknown,
+  // ...which is exactly why the spelling has to arrive with it. The value is
+  // persisted AS A NUMBER when the document authored one, and this payload is
+  // `settings.local.json`, the fence digest input and half of the restart
+  // comparison. `permission_mode` is a META key, stripped by `stripMeta`, so
+  // there is no slot on `rendered` to look the spelling up from and the caller
+  // is the last holder of it (D-0095).
+  permissionModeSpelling?: PyNumberSpelling | undefined,
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = { permissionMode };
   // Carried key by key rather than with `carryNumberSpellings`, and that is the
@@ -1503,6 +1601,13 @@ function settingsPayload(
   // to author -- a stale spelling on a value from somewhere else, which is the
   // trap `carryNumberSpellings` itself warns about.
   const spellings = new Map<string, PyNumberSpelling>();
+  if (permissionModeSpelling !== undefined) {
+    // Measured before this carry existed: a role document spelling
+    // `"permission_mode": 1.0` (with `global.permission_modes` admitting it)
+    // rendered `"permissionMode": 1` where CPython writes `1.0`, and
+    // `9007199254740993` rendered as the rounded double.
+    spellings.set("permissionMode", permissionModeSpelling);
+  }
   for (const key of ["permissions", "sandbox", "hooks", "env"]) {
     // `key in rendered` on a document-derived object: `Object.hasOwn` keeps
     // an inherited member from being copied into the child's settings, which

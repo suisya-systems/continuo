@@ -29,7 +29,7 @@
 import { fnmatchcase } from "./fnmatch.js";
 import { expanduser, normalizePath } from "./pypath.js";
 import { pyRepr } from "./pyrepr.js";
-import { pyStrip } from "./pysemantics.js";
+import { type PyNumberSpelling, pyStrip } from "./pysemantics.js";
 
 /**
  * Rule layers.
@@ -275,11 +275,21 @@ export function decide(fence: Fence, toolName: string, toolInput: ToolInput): De
  *
  * A bare tool name (`"WebFetch"`) denies the whole tool.
  */
-export function parsePermissionRule(raw: unknown): FenceRule {
+export function parsePermissionRule(
+  raw: unknown,
+  // The spelling of the slot `raw` came out of, for the refusals below, which
+  // name the value the author wrote and are persisted in the ledger. Only a
+  // number needs it, and only a caller still holding the container can supply
+  // it (D-0095) -- every one of these refusals fires on a value that is NOT a
+  // string, which is precisely where a document number lands.
+  spelling?: PyNumberSpelling | undefined,
+): FenceRule {
   // Python: `not isinstance(raw, str) or not raw.strip()`. The second half is a
   // whitespace-only check, not merely an empty-string one.
   if (typeof raw !== "string" || pyStrip(raw) === "") {
-    throw new RuleSyntaxError(`permission rule must be a non-empty string: ${pyRepr(raw)}`);
+    throw new RuleSyntaxError(
+      `permission rule must be a non-empty string: ${pyRepr(raw, spelling)}`,
+    );
   }
   const text = pyStrip(raw);
   if (!text.endsWith(")")) {
@@ -308,18 +318,28 @@ export function parsePermissionRule(raw: unknown): FenceRule {
  * module already substituted, because a rule whose meaning still depends on a
  * later resolution step cannot be probed.
  */
-export function parseSandboxEntry(raw: unknown, kind: string): FenceRule {
+export function parseSandboxEntry(
+  raw: unknown,
+  kind: string,
+  // @see parsePermissionRule -- the same argument, for the same two refusals.
+  spelling?: PyNumberSpelling | undefined,
+): FenceRule {
   let path: string;
   if (typeof raw === "string") {
     path = raw;
   } else if (isMapping(raw) && typeof raw["path"] === "string") {
     path = raw["path"];
   } else {
-    throw new RuleSyntaxError(`unparseable sandbox entry: ${pyRepr(raw)}`);
+    throw new RuleSyntaxError(`unparseable sandbox entry: ${pyRepr(raw, spelling)}`);
   }
   path = pyStrip(path);
   if (path === "") {
-    throw new RuleSyntaxError(`empty sandbox path: ${pyRepr(raw)}`);
+    // `raw`, not `path`: the message quotes what the author wrote. A number
+    // never reaches here (it has already been refused above), so no spelling is
+    // needed -- but it is passed anyway, because the day this branch stops
+    // being unreachable for a number is not a day anyone will remember to
+    // revisit it.
+    throw new RuleSyntaxError(`empty sandbox path: ${pyRepr(raw, spelling)}`);
   }
   if (path.includes("{") || path.includes("}")) {
     throw new RuleSyntaxError(`unsubstituted placeholder in sandbox path: ${pyRepr(path)}`);

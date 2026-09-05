@@ -7,7 +7,7 @@ import { fnmatchcase } from "../../src/fencing/fnmatch.js";
 import { type PyJsonDumpsOptions, pyJsonDumps, pyJsonLoads } from "../../src/fencing/pyjson.js";
 import { expanduser, normalizePath, normpath } from "../../src/fencing/pypath.js";
 import { compilePythonRegex, PythonRegexError } from "../../src/fencing/pyregex.js";
-import { pyRepr } from "../../src/fencing/pyrepr.js";
+import { pyRepr, pyReprOf } from "../../src/fencing/pyrepr.js";
 import {
   PyTypeError,
   pyEntries,
@@ -17,6 +17,7 @@ import {
   pySet,
   pyStr,
   pyStrip,
+  pyStrOf,
   pyTypeNameOf,
 } from "../../src/fencing/pysemantics.js";
 import { quote, ShlexError, split } from "../../src/fencing/shlex.js";
@@ -77,6 +78,8 @@ interface NumberDocumentExpectation {
   readonly roundtrip: string;
   /** `[path, "int" | "float"]` for every number, in document order. */
   readonly types: [string, string][];
+  /** `[path, str(x), repr(x)]` for the same numbers, in the same order. */
+  readonly texts: [string, string, string][];
 }
 
 interface MappingExpectation {
@@ -839,37 +842,62 @@ describe("the JSON serialiser agrees with CPython byte for byte", () => {
   });
 
   /**
-   * Every number in one document, with the path that reaches it and the type
-   * name the DOCUMENT gives it -- the same walk the Python half does, and
-   * through `pyTypeNameOf` rather than `pyTypeName`, because the container and
-   * the key are what carry the spelling a JavaScript number cannot.
+   * Every number in one document, with the path that reaches it and whatever
+   * `row` asks of the slot it sits in -- the same walk the Python half does,
+   * and always through a CONTAINER-and-KEY form (`pyTypeNameOf`, `pyStrOf`,
+   * `pyReprOf`) rather than a value-only one, because the container and the key
+   * are what carry the spelling a JavaScript number cannot.
+   *
+   * `row` is a parameter rather than the walk being written twice: the type
+   * name and the two TEXTS are three answers to the same question about the
+   * same slot, and a second copy of the recursion is a second place for the two
+   * halves of the vector to drift apart at exactly the paths that matter.
    *
    * `typeof child === "number"` rather than a `bool` check: JavaScript's
    * booleans are not numbers, which is the one place this walk is SIMPLER than
    * the Python one (where `bool` subclasses `int`).
    */
-  function recordNumberTypes(
+  function recordNumbers(
     container: unknown,
     key: string | number,
     path: string,
-    out: [string, string][],
+    out: string[][],
+    row: (container: unknown, key: string | number) => string[],
   ): void {
     const value = (container as Record<string, unknown>)[String(key)];
     if (typeof value === "number") {
-      out.push([path, pyTypeNameOf(container, key)]);
+      out.push([path, ...row(container, key)]);
       return;
     }
     if (Array.isArray(value)) {
       value.forEach((_child, index) => {
-        recordNumberTypes(value, index, `${path}[${index}]`, out);
+        recordNumbers(value, index, `${path}[${index}]`, out, row);
       });
       return;
     }
     if (typeof value === "object" && value !== null) {
       for (const [childKey] of pyEntries(value as Record<string, unknown>)) {
-        recordNumberTypes(value, childKey, `${path}.${childKey}`, out);
+        recordNumbers(value, childKey, `${path}.${childKey}`, out, row);
       }
     }
+  }
+
+  /** `[type(x).__name__]`, the row the vector's `types` records. */
+  function typeRow(container: unknown, key: string | number): string[] {
+    return [pyTypeNameOf(container, key)];
+  }
+
+  /**
+   * `[str(x), repr(x)]`, the row the vector's `texts` records.
+   *
+   * Both, because they are the same text for a Python number and DIFFERENT from
+   * what `json.dumps` writes for the non-finite three -- `str(float("inf"))` is
+   * `inf`, `json.dumps` writes `Infinity` -- so a transcription that reused one
+   * for the other passes the round-trip check above and still writes `Infinity`
+   * into a `role_kind` interlock spells `inf` (D-0095).
+   */
+  function textRow(container: unknown, key: string | number): string[] {
+    return [pyStrOf(container, key), pyReprOf(container, key)];
   }
 
   /**
@@ -895,23 +923,39 @@ describe("the JSON serialiser agrees with CPython byte for byte", () => {
             `continuo ${JSON.stringify(roundtrip)}`,
         );
       }
-      const types: [string, string][] = [];
       // The root is a container in every entry of this corpus (a scalar root
       // has no slot to carry a spelling, which the module header states as the
       // boundary), so the walk starts inside it.
-      if (Array.isArray(parsed)) {
-        parsed.forEach((_child, childIndex) => {
-          recordNumberTypes(parsed, childIndex, `$[${childIndex}]`, types);
-        });
-      } else {
-        for (const [key] of pyEntries(parsed as Record<string, unknown>)) {
-          recordNumberTypes(parsed, key, `$.${key}`, types);
+      function walk(row: (container: unknown, key: string | number) => string[]): string[][] {
+        const out: string[][] = [];
+        if (Array.isArray(parsed)) {
+          parsed.forEach((_child, childIndex) => {
+            recordNumbers(parsed, childIndex, `$[${childIndex}]`, out, row);
+          });
+        } else {
+          for (const [key] of pyEntries(parsed as Record<string, unknown>)) {
+            recordNumbers(parsed, key, `$.${key}`, out, row);
+          }
         }
+        return out;
       }
+      const types = walk(typeRow);
       if (JSON.stringify(types) !== JSON.stringify(expected.types)) {
         mismatches.push(
           `text ${text}: CPython types ${JSON.stringify(expected.types)}, ` +
             `continuo ${JSON.stringify(types)}`,
+        );
+      }
+      // `str()` and `repr()` of the same slots. The round trip above is
+      // `json.dumps`, which is a DIFFERENT primitive for the non-finite three
+      // and shares one for everything else -- so neither check subsumes the
+      // other, and `role_kind` / `permission_mode` leave the document through
+      // this one (D-0095).
+      const texts = walk(textRow);
+      if (JSON.stringify(texts) !== JSON.stringify(expected.texts)) {
+        mismatches.push(
+          `text ${text}: CPython texts ${JSON.stringify(expected.texts)}, ` +
+            `continuo ${JSON.stringify(texts)}`,
         );
       }
     }
@@ -973,7 +1017,7 @@ describe("the Python value semantics agree with CPython", () => {
       const expected = vector.pysemantics.iterate.expected[index] as IterateExpectation;
       let actual: IterateExpectation;
       try {
-        actual = { items: pyIterate(SEMANTICS_VALUES[name]).map(pyRepr) };
+        actual = { items: pyIterate(SEMANTICS_VALUES[name]).map((item) => pyRepr(item)) };
       } catch (error) {
         if (!(error instanceof PyTypeError)) {
           mismatches.push(`value ${name}: threw a non-PyTypeError: ${String(error)}`);
@@ -1039,7 +1083,9 @@ describe("the Python value semantics agree with CPython", () => {
         // ASCII, so JavaScript's UTF-16 sort and Python's code-point sort
         // agree on it.
         actual = {
-          items: [...pySet(names.map((name) => SEMANTICS_VALUES[name]))].map(pyRepr).sort(),
+          items: [...pySet(names.map((name) => SEMANTICS_VALUES[name]))]
+            .map((item) => pyRepr(item))
+            .sort(),
         };
       } catch (error) {
         if (!(error instanceof PyTypeError)) {
