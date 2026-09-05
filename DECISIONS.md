@@ -205,6 +205,7 @@ spaces distinct.
 | D-0098 | The post-spawn identity read-back window is a caller's budget, defaulting to thirty seconds | accepted |
 | D-0099 | Model selection is a `lap perform --model` flag over the provider's `base_cli_args`, not a `roles.json` key and not an admitted argument | accepted |
 | D-1101 | The shared cross-belt band is widened: `D-0019`..`D-0099` is closed, and `D-11xx` is its continuation | accepted |
+| D-1103 | The Windows `double-green` cells get a 65-minute cap, not 40, for headroom over the measured slowest lap | accepted |
 
 ---
 
@@ -15575,3 +15576,71 @@ range" claim wrong and require moving the shared band's continuation elsewhere.
 exhaustion finding. D-0601 and D-0801 for the two belts this entry adds to "How to use this file"'s
 enumeration. Checked against `origin/main` at `5211090`, where `D-0099` is the last id taken in the
 shared band and the band's `D-0019`..`D-0099` closing is uncontested.
+
+---
+
+## D-1103 -- The Windows `double-green` cells get a 65-minute cap, not 40, for headroom over the measured slowest lap
+
+**Context.** Issue #115's trigger is run `33781360734` (continuo#114, 2026-09-03): `double-green
+(windows-latest, node 24)` finished both laps in 23m12s against the job's `timeout-minutes: 40` --
+1.6x headroom -- while `double-green (windows-latest, node 22)` was still mid-second-lap when the
+40-minute cap cut it off, which surfaces as `ci-gate` failing on a `cancelled` result rather than
+anything a log explains. This is the same failure shape the comment above `timeout-minutes` already
+describes from the last time this cap moved (20 to 40): a suite that keeps growing by design outruns
+a cap sized to what it cost when the cap was last set. `D-0052` separately measured this platform's
+`double-green` job wall time (both laps together, the same unit this entry's cap gates) at a p90 of
+930s and a max of 1864s (31m04s) -- already 78% of the 40-minute cap at its own max, with no new test
+added since -- which is corroborating evidence that 1.6x was thin rather than an outlier.
+
+The issue offers three remedies: split the two laps into two jobs, change the seed derivation, or
+raise the cap. The secretary chose the third: it is the cheapest change, and it keeps both the
+two-laps-in-one-job shape and `D-0005`'s per-cell seed derivation exactly as they are.
+
+**Decision.**
+
+1. **`double-green`'s Windows cells get `timeout-minutes: 65`; the Linux cells keep `40`.** The job
+   carries a single `timeout-minutes` key shared by every matrix leg (`D-0005`'s aggregate-job shape
+   is otherwise untouched), so this entry keeps that one key and turns its value into
+   `${{ matrix.os == 'windows-latest' && 65 || 40 }}` rather than splitting the job into two or adding
+   a `matrix.include` block -- the minimal edit that changes the cap only for the platform the issue
+   is about.
+2. **65 minutes clears 2x over both the fresh and the older measurement, not just the closer one.**
+   The slowest completed measurement at the time of this change is the triggering run's 23m12s; a
+   same-day re-measurement on `origin/main` at `add4738` (`gh run view 33996119610`) shows the same
+   order of magnitude on a fresh commit: `windows-latest, node 24` in 17m51s, `windows-latest, node
+   22` in 20m06s. 65 minutes over the worst of these (23m12s) is 2.80x headroom. The issue's suggested
+   60 minutes would have cleared that figure too (2.59x), but `D-0052`'s older job-level max of 1864s
+   (31m04s, cited in Context) only gets 1.93x from 60 minutes -- short of this entry's own 2x floor.
+   65 minutes clears 2.09x even against that older, worse figure, so the cap does not depend on which
+   of the two measurements is read as "the" main-branch duration.
+3. **The Linux cells are untouched.** Every ubuntu `double-green` cell measured above completes in
+   under 4 minutes, so a 40-minute cap already gives it 10x+ headroom; nothing about its cap needed
+   to move, and the conditional expression above never evaluates to anything but `40` for it.
+4. **`ci-gate` is unchanged.** Its allow-list check (`needs.double-green.result == 'success'`, plus
+   the `always()` and `contains(needs.*.result, 'failure'|'cancelled'|'skipped')` guards `D-0005`
+   already put in place) does not read `timeout-minutes`, so "every required cell green twice" gates
+   the merge exactly as strictly before and after this entry.
+
+**Falsification.** If a `double-green (windows-latest, *)` cell that is not otherwise hung needs more
+than 65 minutes for two laps, this entry's headroom claim was thin rather than settled, and the next
+move is the issue's other two alternatives (two jobs, or a seed-derivation change), not a second bump
+of the same number. If a Linux `double-green` cell is ever observed approaching its unchanged
+40-minute cap, point 3's "nothing needed to move" claim is wrong and the Linux side needs its own
+measurement.
+
+**Status.** accepted
+
+**Falsifier.** A `double-green (windows-latest, *)` cell cancelled by the 65-minute cap under a run
+with no hung test (`retry: 0` and `D-0005`'s shuffled double-green are what would legitimately still
+catch a real hang) would falsify the headroom measured here. A `double-green (ubuntu-latest, *)` cell
+running past a small fraction of its unchanged 40-minute cap would falsify the claim that the Linux
+side needed no change.
+
+**Source.** Issue #115. Run `33781360734` (continuo#114, 2026-09-03), read via `gh run view
+33781360734 --repo suisya-systems/continuo --json jobs`. Re-measured against `origin/main` at
+`add4738` via `gh run view 33996119610 --repo suisya-systems/continuo --json jobs`. `D-0005` (the
+double-green rule and `ci-gate`'s fail-closed shape, which this entry leaves unchanged). `D-0052`
+(the runner's per-test timeout scale and its measured p90/max on the slow platform, cited as
+corroborating evidence for the headroom this entry adds). Decision id `D-1103`, drawn from the
+`D-11xx` shared cross-belt band opened by `D-1101` (Issue #179); `D-1102` was reserved for a
+concurrent task at the time this entry was drafted, so this entry takes the next free id after it.
