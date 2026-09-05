@@ -529,6 +529,26 @@ field says *why* rather than naming a destination (it needs a v1 store, an inter
 decision this port has no standing to take), and the limitation stands as disclosed. A new entry is
 written in one of those two shapes; "upstream" is not a third.
 
+**When the repair lands, the entry must stop describing the pre-repair state as current.** Where
+the repair is recorded is ledger-specific. A ledger that carries a `divergences` block records the
+repair there (`D-0108` records its three that way, "under `divergences` rather than
+`inherited_limitations`", each with the interlock behaviour it departs from and the target-only case
+that pins the new one); a ledger without one records it on the `inherited_limitations` entry itself
+(the six `D-0024` repairs in the `control_plane` ledgers, `"status": "REPAIRED -- deliberate
+divergence from interlock (continuo D-0024)"`). Either way, an `inherited_limitations` entry whose
+defect has been repaired is either removed or retired in place with a `note` (or, in the
+`topic` / `status` / `detail` ledgers, a `status`) that opens `REPAIRED` and names what repaired it,
+so the disclosure trail stays readable. The two `D-0108` entries in
+`measurement.latency` and `measurement.shadow` are retired in place: past-tense `behaviour`,
+`matches_source` flipped to `false`, a `note` that names the pinning target-only case, and a
+`where_a_fix_belongs` that points at the landed repair. That is the recommended form for a new
+retirement; the earlier `REPAIRED` entries in `measurement.cli` and `measurement.known-holes` share
+the `REPAIRED` opening but vary in `matches_source` and `where_a_fix_belongs`.
+
+What an entry must not do is keep describing the pre-repair state as current while the same
+ledger's `divergences` records the repair -- the ledger then contradicts itself, and a reader has
+to guess which half is stale.
+
 An `adapted` case must still be *at least as strong* as its source in the property it pins. If it is
 weaker, it is a waiver, and that is a report to the reviewer -- see rule 0.
 
