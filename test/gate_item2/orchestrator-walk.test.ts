@@ -862,10 +862,14 @@ describe("D-0098: the post-spawn read-back window is a caller's budget", () => {
       IdentityUnconfirmed,
     );
 
-    // Seven intervals of budget, seven asks. Counted rather than timed: the
-    // pacing is this harness's (`wait: null`), so what the budget can be held
-    // to here is the number of questions it bought.
-    expect(provider.readStateCalls).toBe(7);
+    // Seven intervals of budget, eight asks: the one at zero, and one for each
+    // interval of budget after it. Counted rather than timed -- the pacing is
+    // this harness's (`wait: null`), so what the budget can be held to here is
+    // the number of questions it bought -- and the count is the arithmetic that
+    // matters: eight asks span seven waits, which is the window asked for,
+    // where seven asks would stop 50 ms short of it and could refuse an
+    // identity that arrived inside the operator's own deadline.
+    expect(provider.readStateCalls).toBe(8);
     // **The operator's own number, in the sentence they read.** The refusal
     // this replaces said "within 50 attempts", which names a constant no
     // command line could reach -- so an operator who had just raised the
@@ -874,7 +878,7 @@ describe("D-0098: the post-spawn read-back window is a caller's budget", () => {
     // the milliseconds are what they typed, the attempts and the interval are
     // what the class did with it.
     expect(refusal.message).toContain(`within the ${String(7 * READBACK_POLL_INTERVAL_MS)} ms`);
-    expect(refusal.message).toContain(`7 attempts at ${String(READBACK_POLL_INTERVAL_MS)} ms`);
+    expect(refusal.message).toContain(`8 attempts at ${String(READBACK_POLL_INTERVAL_MS)} ms`);
     // Unchanged by the budget: nothing is confirmed on trust when it runs out.
     const rows = activeRows(cp);
     expect(rows).toHaveLength(1);
@@ -922,7 +926,9 @@ describe("D-0098: the post-spawn read-back window is a caller's budget", () => {
     const refusal = await expectAsyncRefusal(() => orchestrator.start(), IdentityUnconfirmed);
 
     expect(DEFAULT_READBACK_BUDGET_MS).toBe(30_000);
-    expect(provider.readStateCalls).toBe(DEFAULT_READBACK_BUDGET_MS / READBACK_POLL_INTERVAL_MS);
+    expect(provider.readStateCalls).toBe(
+      DEFAULT_READBACK_BUDGET_MS / READBACK_POLL_INTERVAL_MS + 1,
+    );
     expect(refusal.message).toContain(`within the ${String(DEFAULT_READBACK_BUDGET_MS)} ms`);
     // The measurement this default has to clear: 11.3 s was the slowest warm
     // start rondo measured, and the old window was 2.5 s. A default that fits
@@ -997,7 +1003,7 @@ describe("D-0098: the post-spawn read-back window is a caller's budget", () => {
       IdentityUnconfirmed,
     );
 
-    expect(provider.readStateCalls).toBe(4);
+    expect(provider.readStateCalls).toBe(5);
     expect(refusal.message).toContain("rather than confirmed on trust");
     const rows = activeRows(cp);
     expect(rows).toHaveLength(1);

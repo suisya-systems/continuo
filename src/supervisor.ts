@@ -315,7 +315,9 @@ export interface SessionOrchestratorOptions {
    * twelve seconds to say its own name on this machine" -- and the poll
    * interval is IO pacing this class owns
    * ({@link READBACK_POLL_INTERVAL_MS}). The loop polls
-   * `ceil(readbackBudgetMs / READBACK_POLL_INTERVAL_MS)` times, at least once.
+   * `floor(readbackBudgetMs / READBACK_POLL_INTERVAL_MS) + 1` times: the ask
+   * at zero, plus one for each whole interval of budget, so the last ask lands
+   * ON the window rather than one interval inside it.
    *
    * The budget is the window under the default pacing. A caller that replaces
    * {@link SessionOrchestratorOptions.wait} has replaced the pacing too, and
@@ -421,10 +423,15 @@ export class SessionOrchestrator {
     this.#resource = options.resource ?? `session-run:${options.runId}`;
     this.#identityConfirmed = options.identityConfirmed ?? defaultIdentityConfirmation;
     this.#readbackBudgetMs = readbackBudgetMs;
-    // Rounded UP, and never below one: a budget shorter than one interval
-    // still buys the one poll the walk cannot skip, because a provider that
-    // has already answered would otherwise be refused without being asked.
-    this.#readbackAttempts = Math.max(1, Math.ceil(readbackBudgetMs / READBACK_POLL_INTERVAL_MS));
+    // **The ask at zero, plus one per whole interval of budget.** The first
+    // poll happens the instant the provider answers `start` and the waits fall
+    // BETWEEN polls, so N polls span only N-1 intervals: deriving N as
+    // `ceil(budget / interval)` would put the last ask one interval short of
+    // the window the caller asked for, and an identity arriving inside their
+    // own deadline could be refused. A budget shorter than one interval still
+    // buys the one poll the walk cannot skip, because a provider that has
+    // already answered would otherwise be refused without being asked.
+    this.#readbackAttempts = Math.floor(readbackBudgetMs / READBACK_POLL_INTERVAL_MS) + 1;
     const wait = Object.hasOwn(options, "wait") ? options.wait : DEFAULT_WAIT;
     if (wait === DEFAULT_WAIT) {
       // A real provider answers start() the instant spawn returns, long

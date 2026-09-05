@@ -14976,10 +14976,13 @@ is deterministic, so no lap could complete on a real CLI at all.
 2. **The poll interval stays internal.** `READBACK_POLL_INTERVAL_MS` is 50 ms and no flag reaches
    it. It is IO pacing against a live subprocess -- how often it is polite to ask -- and nothing an
    operator knows about their machine makes 50 ms the wrong question interval. The constructor turns
-   the budget into `max(1, ceil(budgetMs / READBACK_POLL_INTERVAL_MS))` polls: rounded up, because a
-   budget shorter than one interval must still buy the one poll a provider that has *already*
-   answered would satisfy, and refusing it would be a refusal about arithmetic rather than about the
-   child.
+   the budget into `floor(budgetMs / READBACK_POLL_INTERVAL_MS) + 1` polls -- the ask at zero, plus
+   one for each whole interval of budget after it. The `+ 1` is not rounding: the first poll happens
+   the instant the provider answers `start` and the waits fall *between* polls, so N polls span N-1
+   intervals, and `ceil` would put the last ask one interval short of the window the caller asked
+   for. It also makes a budget shorter than one interval buy the one poll a provider that has
+   *already* answered would satisfy, where refusing it would be a refusal about arithmetic rather
+   than about the child.
 
 3. **The default is 30 000 ms.** It is 2.65x the slowest measurement above and it is not itself a
    measured figure: the interval between 11.3 s and 30 s is head-room for a slower machine, a colder
