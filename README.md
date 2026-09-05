@@ -11,7 +11,10 @@ chords from figures, as this control plane realizes behavior from policy rows an
 > collected cases were the last, declined at continuo's own human gate on 2026-09-03
 > (`DECISIONS.md` D-0053). The per-subsystem record is
 > [`parity/source-inventory.belts.md`](./parity/source-inventory.belts.md) and is kept up to date
-> per belt. The package is `private` and is not published (`DECISIONS.md` D-0008).
+> per belt. Publication is decided (`DECISIONS.md` D-0045, which supersedes D-0008) and has not
+> been carried out: `package.json` still carries `"private": true` at version `0.0.0`, and the
+> package is not on the registry. D-0045 makes that a separate change -- drop `private`, set a real
+> version, and give the release path the build step it names -- and that change has not landed.
 
 ## Design lineage
 
@@ -55,6 +58,18 @@ from source, so no C++ toolchain is needed on any platform ([`DECISIONS.md`](./D
 Requires Node 22 or 24 LTS (`>=22.14.0 <23 || >=24.0.0 <25`). The floor is not cosmetic: better-sqlite3 v13's prebuilt binary is
 built at Node-API 10, which Node provides only from v22.14.0 onward
 ([`DECISIONS.md`](./DECISIONS.md) D-0003).
+
+### Depending on continuo
+
+Once `@suisya-systems/continuo` is published, a consumer inherits two constraints the moment it
+depends on it, neither visible from the dependency line ([`DECISIONS.md`](./DECISIONS.md) D-0045):
+
+- **A native runtime dependency.** `better-sqlite3` is a native addon that ships its prebuilt binary
+  in the npm tarball. Install with `--ignore-scripts` and run that binary, as D-0009 does here;
+  installing without it puts npm back into the `node-gyp` build that D-0009 exists to keep off every
+  platform.
+- **A Node floor, with odd majors excluded.** `engines.node` is `>=22.14.0 <23 || >=24.0.0 <25`
+  (D-0003), and the consumer inherits the whole range, not just the floor.
 
 ## Documentation
 
