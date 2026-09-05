@@ -55,7 +55,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
-import { normalizePath, osIsabs, osRealpath } from "../../src/fencing/pypath.js";
+import {
+  normalizePath,
+  osIsabs,
+  osNormcase,
+  osNormpath,
+  osRealpath,
+} from "../../src/fencing/pypath.js";
 import { PyValueError } from "../../src/fencing/pysemantics.js";
 import {
   checkRenderedSandboxDenyStrings,
@@ -1029,6 +1035,26 @@ describe("the settings generator is a second producer of the same artifact (#163
   /** Planted behind the generated `denyRead`; its arrival on stdout is the observation. */
   const GENERATOR_NONCE = "continuo-i163-nonce-2b91d4";
 
+  /**
+   * Does one rendered deny entry cover the planted path?
+   *
+   * `osNormpath` + `osNormcase` on BOTH sides, never a raw `startsWith`. A
+   * legacy string entry is emitted with the separators its author wrote, and
+   * the role below authors `{worker_dir}/vault/records` -- so on Windows the
+   * rendered entry is `C:\...\worker/vault/records`, a substituted native
+   * prefix followed by the authored forward slashes, while `join` builds the
+   * planted path with backslashes throughout. A raw prefix test finds nothing,
+   * and the case then fails claiming the deny list does not cover a path it
+   * covers perfectly well. Measured under a simulated ntpath in the case below.
+   *
+   * `osNormcase` as well as `osNormpath`, for the reason D-0216 gives at
+   * `_is_inside_root`: on Windows a drive-letter case difference is not a
+   * different path, and the runner's temp directory is not guaranteed to agree
+   * with the role's spelling about it.
+   */
+  const coversDenied = (entry: string, denied: string): boolean =>
+    osNormcase(osNormpath(denied)).startsWith(osNormcase(osNormpath(entry)));
+
   /** The role document the cases below render, with `denyRead` left to the caller. */
   function generatorRole(denyRead: readonly unknown[], witness: string): Record<string, unknown> {
     const script =
@@ -1194,7 +1220,61 @@ describe("the settings generator is a second producer of the same artifact (#163
       // relative. It is the same predicate the generator itself uses (D-0213).
       expect(osIsabs(entry as string)).toBe(true);
     }
-    expect(denyRead.filter((entry) => denied.startsWith(entry as string))).toHaveLength(1);
+    expect(denyRead.filter((entry) => coversDenied(entry as string, denied))).toHaveLength(1);
+  });
+
+  test("under a simulated ntpath the entry keeps its authored slashes, and still covers", () => {
+    // The Windows half of the case above, falsifiable on a POSIX cell -- the
+    // discipline `parity/settings.settings-generator.ledger.json` records for
+    // the three `os.path.isabs` pins of D-0213, and the reason this exists is
+    // that BOTH of this file's Windows CI failures were invisible on Linux.
+    //
+    // `pypath.ts` dispatches at CALL time, deliberately, so patching
+    // `process.platform` for the length of one test is enough to render under
+    // ntpath. `realpathFn` is the identity, because these paths name nothing
+    // on the host running this.
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const workerDir = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\wrk\\worker";
+      const role = generatorRole(
+        ["{worker_dir}/vault/records", "{worker_dir}/vault/other"],
+        "C:\\unused-witness",
+      );
+      const settings = renderRole(
+        { worker_roles: { demo: role } },
+        {
+          role: "demo",
+          workerDir,
+          claudeOrgPath: "C:\\co",
+          realpathFn: (path) => path,
+          wslDetector: () => false,
+        },
+      );
+      const filesystem = (settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+        string,
+        unknown
+      >;
+      const denyRead = filesystem["denyRead"] as string[];
+      // Both survive the suppression pass -- the failure this file saw first
+      // was an EMPTY list, so assert the count before anything about shape.
+      expect(denyRead).toHaveLength(2);
+      for (const entry of denyRead) {
+        expect(osIsabs(entry)).toBe(true);
+      }
+      // The shape a raw prefix test trips over, asserted rather than described:
+      // a native substituted prefix followed by the author's forward slashes.
+      expect(denyRead[0]).toBe(`${workerDir}/vault/records`);
+
+      const denied = `${workerDir}\\vault\\records\\reading.txt`;
+      expect(
+        denyRead.filter((entry) => denied.startsWith(entry)),
+        "a raw startsWith finds nothing here, which is the CI failure",
+      ).toHaveLength(0);
+      expect(denyRead.filter((entry) => coversDenied(entry, denied))).toHaveLength(1);
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
   });
 
   skipIf(!REAL_CHILD_ENABLED, REAL_CHILD_REASON)(
@@ -1232,7 +1312,7 @@ describe("the settings generator is a second producer of the same artifact (#163
         unknown
       >;
       const denyRead = filesystem["denyRead"] as string[];
-      const covers = (entry: string): boolean => denied.startsWith(entry);
+      const covers = (entry: string): boolean => coversDenied(entry, denied);
       expect(denyRead.filter(covers)).toHaveLength(1);
       filesystem["denyRead"] = denyRead.map((path) =>
         covers(path) ? path : { anchor: "absolute", path, suppressOnSymlinkEscape: true },
