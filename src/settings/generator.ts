@@ -21,6 +21,12 @@
  *   later command.
  * - **Symlink canonicalisation** REWRITES a deny path that crosses an absolute
  *   symlink to its realpath, so the deny survives and bwrap can bind it.
+ * - **The deny-list post-condition** REFUSES the whole document if any entry
+ *   would reach the child as something other than a string, because Claude Code
+ *   answers one such entry by applying neither `permissions.deny` nor any
+ *   `PreToolUse` hook for the run -- so a malformed entry does not narrow the
+ *   fence, it deletes it. @see {@link checkRenderedSandboxDenyStrings}, D-0093
+ *   for the measurement and D-0094 for this module's share of it.
  *
  * Both are decided from paths, and both compose `os.path` primitives whose
  * exact answers decide the outcome. That is why `src/fencing/pypath.ts`
@@ -54,6 +60,13 @@
  * reason -- with its carry removed; see the target-only block at the end of
  * `test/settings/settings-generator.test.ts`. **A new rebuild branch has to do
  * both.**
+ *
+ * Three of the pins -- 3, 7 and 11, the deny-array branches -- read the
+ * spelling out of the REFUSAL rather than out of the rendered file, because
+ * since D-0094 a number in `deny{Read,Write}` has no rendering. `pyTypeNameOf`
+ * consults the same record on the same final container, so a dropped carry
+ * still shows: the message says `int` where it should say `float`, exactly as
+ * the file said `1` where it should have said `1.0`.
  *
  * Three of the thirteen are not a plain wholesale `carryNumberSpellings`:
  *
@@ -108,6 +121,7 @@ import {
   pyStr,
   pyTruthy,
   pyTypeName,
+  pyTypeNameOf,
   rememberKeyOrder,
   rememberNumberSpellings,
   setOwn,
@@ -986,16 +1000,20 @@ export interface RenderResult {
  * form.
  *
  * `sandbox.filesystem.denyRead` / `denyWrite` are a list of STRINGS: the bwrap
- * launcher consumes the rendered `settings.local.json` directly, and Claude
- * Code's settings schema rejects a structured object in these arrays. Emitting
- * the internal dict shape there is the bug this fixes -- it made `/doctor`
- * report "Expected string, but received object" for every dict entry.
+ * launcher consumes the rendered `settings.local.json` directly. Emitting the
+ * internal dict shape there is the bug this fixes.
  *
  * Two pass-throughs: a raw-string entry is already contract-compliant, and a
  * malformed structured entry with no concrete absolute rendering (`anchor:
- * 'absolute'` paired with a RELATIVE path, i.e. an empty `anchorBase`) is kept
- * as the original dict so the launcher surfaces the operator error rather than
- * this code silently anchoring the path against the wrong base.
+ * 'absolute'` paired with a RELATIVE path, i.e. an empty `anchorBase`) is
+ * returned as the original dict rather than being silently anchored against
+ * the wrong base.
+ *
+ * This function does NOT decide whether that dict may be WRITTEN. It once did,
+ * on the premise that a downstream reader would answer it -- see D-0094 for
+ * what that premise turned out to be worth -- and
+ * {@link checkRenderedSandboxDenyStrings} now holds the emission decision for
+ * the whole module, in one place, over the finished document.
  */
 function keptEntryString(entry: unknown, anchorBase: string, substitutedPath: string): unknown {
   if (!isPlainObject(entry)) {
@@ -1004,10 +1022,15 @@ function keptEntryString(entry: unknown, anchorBase: string, substitutedPath: st
   // -- INHERITED DEFECT, REPAIRED IN PASS (D-0023, D-0213) --
   // The source tests `substituted_path.startswith("/")`. On Windows that is not
   // "is this absolute": `C:\secret` fails it, falls through to the empty-anchor
-  // branch below, and is emitted as the original DICT -- which is precisely the
-  // shape this function exists to stop emitting, because Claude Code's settings
-  // schema answers it with "Expected string, but received object" and rejects
-  // the whole file. `canonicalizeSandboxDeny` already spells the same test
+  // branch below, and is returned as the original DICT -- which is precisely the
+  // shape this function exists to stop emitting, because CLI `2.1.261` answers
+  // it by applying neither `permissions.deny` nor any `PreToolUse` hook for the
+  // whole run (D-0093), so a drive-letter deny would not merely be lost, it
+  // would take the rest of the file's enforcement with it. Under D-0094 that
+  // document is now refused before it is written rather than emitted, so what
+  // this repair changes is which of the two outcomes a Windows operator gets: a
+  // rendered deny, instead of a refusal naming an entry that was well-formed all
+  // along. `canonicalizeSandboxDeny` already spells the same test
   // `os.path.isabs` with a comment saying why ("a Windows entry begins with a
   // drive letter, which the prefix test would pass over"); the source author saw
   // it at one site and not at this one.
@@ -1147,8 +1170,11 @@ function evaluateSandboxSuppressions(
     for (const [index, entry] of entries.entries()) {
       const normalized = normalizeSandboxEntry(entry);
       if (normalized === null) {
-        // Unrecognised shape: kept as-is so the launcher sees the operator's
-        // original input.
+        // Unrecognised shape: carried through as the operator's original input,
+        // un-anchored and un-substituted, because this pass has no reading of it
+        // to apply. Whether it may be WRITTEN is not decided here -- see
+        // `checkRenderedSandboxDenyStrings`, which refuses the document if it
+        // survives to the end as a non-string.
         push(entry, index);
         continue;
       }
@@ -1184,8 +1210,9 @@ function evaluateSandboxSuppressions(
         targetLiteral = osJoin(realpathFn(anchorBase), literal);
       } else {
         // anchor=absolute with a relative path is malformed. Resolving it
-        // against CWD would produce surprising suppressions, so it is kept and
-        // the launcher surfaces the issue.
+        // against CWD would produce surprising suppressions, so the entry is
+        // carried through as authored and the document is refused at the end
+        // (`checkRenderedSandboxDenyStrings`) rather than written.
         push(keptEntryString(entry, anchorBase, substitutedPath), index);
         continue;
       }
@@ -1480,6 +1507,104 @@ function selectSandboxForPattern(options: {
   return selected;
 }
 
+/**
+ * The post-condition on the rendered document: every `sandbox.filesystem`
+ * `denyRead` / `denyWrite` entry that reaches the child is a string, or the
+ * render refuses (D-0094).
+ *
+ * ## Why a refusal, and why here rather than at the entry's own branch
+ *
+ * Three branches of this module deliberately carry an entry through unchanged
+ * because they have no reading of it to apply: `normalizeSandboxEntry` returned
+ * `null`, `keptEntryString` was handed an `anchor: 'absolute'` with a relative
+ * path, and `canonicalizeSandboxDeny` passes a non-string over. Each was
+ * written on a stated premise -- that a downstream reader would answer the
+ * malformed entry, and specifically that Claude Code's settings schema answers
+ * a structured object with `Expected string, but received object` and rejects
+ * the whole file. **That premise is false**, measured directly on CLI `2.1.261`
+ * (D-0093): the file is ACCEPTED, and one non-string entry in either of these
+ * two arrays makes the CLI apply neither `permissions.deny` nor any
+ * `PreToolUse` hook for the whole run -- for `Read` and `Write` as much as for
+ * `Bash`, with exit zero and nothing on stderr. So the entry does not surface
+ * the operator's error to anyone. It silently voids the rest of the file, and
+ * the file this module writes is the one a fenced worker runs under.
+ *
+ * The refusal is therefore about EMISSION, not about the entry's meaning, which
+ * is why it is one check over the finished document rather than three throws
+ * spread over the branches above. Those branches still decide what an entry
+ * they cannot read renders as; this decides whether the result may be written.
+ *
+ * It does NOT normalise the entry into something writable. Inventing a string
+ * for an entry whose path this module could not resolve would emit a deny the
+ * role document never authorised -- wider or narrower than the author's, with
+ * nothing saying so -- which is the alternative D-0093 rejected for the
+ * renderer and rejects here for the same reason.
+ *
+ * ## Scoped to the two measured arrays, deliberately
+ *
+ * A non-string in `additionalDirectories`, and an unknown key under `sandbox`,
+ * were measured on the same CLI and are HARMLESS: the hook fires and the deny
+ * is applied. They stay unguarded. `additionalDirectories` keeps its own
+ * inherited behaviour -- a non-string read root raises `PyTypeError` where
+ * `os.path.normpath` raises in the source -- and that is a different rule
+ * reached earlier, not this one.
+ *
+ * ## The relationship to the renderer's check of the same name
+ *
+ * `src/fencing/renderer.ts` holds `checkRenderedSandboxDenyStrings`, the same
+ * post-condition over the fence's settings payload. The two are separate
+ * because the producers are separate: that one guards a document built by
+ * `renderFence` and refuses with `FenceRefusal` / `sandbox-entry-not-string`;
+ * this one guards the `settings.local.json` this module writes and refuses
+ * with `PyValueError`, the refusal this module already uses for a malformed
+ * `sandbox.filesystem` (D-0215) and the one the CLI turns into rc 2. Sharing an
+ * implementation would mean sharing an error type, and each module's callers
+ * catch its own.
+ *
+ * Every offending entry is named, not the first, so an operator fixing a role
+ * document sees the whole list in one run.
+ */
+export function checkRenderedSandboxDenyStrings(rendered: Record<string, unknown>, role: string) {
+  const sandbox = getOwn(rendered, "sandbox");
+  if (!isPlainObject(sandbox)) {
+    return;
+  }
+  const filesystem = getOwn(sandbox, "filesystem");
+  if (!isPlainObject(filesystem)) {
+    // A truthy non-mapping was already refused by `evaluateSandboxSuppressions`
+    // (D-0215); a falsy one declares no entry at all.
+    return;
+  }
+  const offences: string[] = [];
+  for (const layerKey of ["denyRead", "denyWrite"] as const) {
+    const entries = getOwn(filesystem, layerKey);
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    for (const [index, entry] of entries.entries()) {
+      if (typeof entry === "string") {
+        continue;
+      }
+      offences.push(
+        `sandbox.filesystem.${layerKey}[${index}] would reach the child as ` +
+          // `pyTypeNameOf`, not `pyTypeName`: the container carries the number
+          // spelling, so a `1.0` this module preserved reads `float` rather
+          // than `int`. The renderer's twin gives the same reason.
+          `${pyTypeNameOf(entries, index)}, not a string: ${pyRepr(entry)}`,
+      );
+    }
+  }
+  if (offences.length === 0) {
+    return;
+  }
+  throw new PyValueError(
+    `role ${pyRepr(role)}: the rendered sandbox deny list is not a list of strings, ` +
+      "and Claude Code answers one non-string entry there by applying neither " +
+      "permissions.deny nor any PreToolUse hook for the whole run (D-0093), so the " +
+      `settings file is not written. ${offences.join("; ")}`,
+  );
+}
+
 /** The optional arguments `render_role_with_metadata` takes after the role. */
 export interface RenderOptions {
   readonly role: string;
@@ -1622,6 +1747,13 @@ export function renderRoleWithMetadata(
       metadata.rewrites.push(...denyRewrites);
     }
   }
+
+  // The post-condition on everything above, placed after the LAST step that can
+  // change a deny entry -- the two canonicalising rebuilds -- because what it
+  // checks is the document that will be written, not an intermediate one
+  // (D-0094). Before the `$comment`, which would otherwise describe a render
+  // that never becomes a file.
+  checkRenderedSandboxDenyStrings(rendered, role);
 
   // Emit the conditionally-required `$comment` whenever the runtime suppressed
   // at least one Layer 3 entry or rewrote a path. `$comment` is dropped from

@@ -25,16 +25,18 @@
   "target": {
     "test_file": "test/settings/settings-generator.test.ts",
     "target_only_tests": {
-      "count": 48,
+      "count": 50,
       "ids": [
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > production reads the symlink probe through the seam record (target-only)",
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > an integral float and a 2**53+ integer survive the whole CLI render (target-only)",
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > every rebuild on the render path carries the spelling (target-only)",
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > a kept deny entry keeps its spelling after an earlier entry is suppressed (target-only)",
+        "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > list() over a deny array carries the spelling into the refusal (target-only)",
+        "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > canonicalizeSandboxDeny's output list carries the spelling too (target-only)",
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > the canonicalising rebuilds carry the spelling too (target-only)",
         "test/settings/settings-generator.test.ts::the seam and the number-spelling carry (target-only, D-0213) > a placeholder written twice in one string is substituted twice (target-only)",
         "test/settings/settings-generator.test.ts::the two in-pass repairs (target-only, D-0213) > a kept absolute entry is emitted as a string on this platform (target-only)",
-        "test/settings/settings-generator.test.ts::the two in-pass repairs (target-only, D-0213) > anchor=absolute with a relative path is still kept as the dict (target-only)",
+        "test/settings/settings-generator.test.ts::the two in-pass repairs (target-only, D-0213) > anchor=absolute with a relative path is still refused as the dict (target-only)",
         "test/settings/settings-generator.test.ts::the two in-pass repairs (target-only, D-0213) > the -- separator: --role demo --claude-org-path /co --worker-dir -- (target-only)",
         "test/settings/settings-generator.test.ts::the two in-pass repairs (target-only, D-0213) > the -- separator: --role demo --claude-org-path /co --worker-dir -- /wd (target-only)",
         "test/settings/settings-generator.test.ts::the two in-pass repairs (target-only, D-0213) > the -- separator: --role demo --worker-dir -- --claude-org-path /co (target-only)",
@@ -76,7 +78,7 @@
         "test/settings/ospath-oracle.test.ts::posixpath agrees with CPython at every position > normcase",
         "test/settings/ospath-oracle.test.ts::ntpath agrees with CPython at every position > normcase"
       ],
-      "note": "Four groups, none counted as ported coverage. (1) Six in settings-generator.test.ts pin obligations no translated case can see: the seam liveness rule 5 requires, the thirteen number-spelling rebuild branches D-0211 makes an obligation, and Python's all-occurrences `str.replace` -- no source case writes one placeholder twice in a string, so the narrower JavaScript spelling would translate green and then ship a literal `{worker_dir}` into a rendered settings file. (2) The rest of that file pins the repairs the review gate found, each with the half it must not break beside it. Every value they assert was MEASURED against CPython 3.12.3 on this exact parser rather than reasoned about: the eight `--` separator shapes, the negative-number classification, and where unrecognized arguments are reported from. That discipline came from getting one of them wrong by reading argparse's source instead of running it. (3) Three of them patch `process.platform` for the length of one test, so the `os.path.isabs` repair is falsifiable on a POSIX cell -- see intentional_divergences. (4) Thirteen in ospath-oracle.test.ts are the CPython differential for `src/fencing/pypath.ts`'s `os.path` half, which interlock's suite cannot have a case for because there `os.path` is the standard library. -- UPDATED BY D-0216: the ospath-oracle group is now FIFTEEN, not thirteen. `normcase` joined the transcription and the vector when `_is_inside_root` was repaired to compare normcased paths, and it is asserted for both namespaces here for the same reason as the other six: interlock's suite cannot have a case for `os.path`, because there `os.path` is the standard library. Its two vacuity assertions were added to the existing case rather than as cases of their own, so they do not move this count."
+      "note": "Four groups, none counted as ported coverage. (1) Six in settings-generator.test.ts pin obligations no translated case can see: the seam liveness rule 5 requires, the thirteen number-spelling rebuild branches D-0211 makes an obligation, and Python's all-occurrences `str.replace` -- no source case writes one placeholder twice in a string, so the narrower JavaScript spelling would translate green and then ship a literal `{worker_dir}` into a rendered settings file. (2) The rest of that file pins the repairs the review gate found, each with the half it must not break beside it. Every value they assert was MEASURED against CPython 3.12.3 on this exact parser rather than reasoned about: the eight `--` separator shapes, the negative-number classification, and where unrecognized arguments are reported from. That discipline came from getting one of them wrong by reading argparse's source instead of running it. (3) Three of them patch `process.platform` for the length of one test, so the `os.path.isabs` repair is falsifiable on a POSIX cell -- see intentional_divergences. (4) Thirteen in ospath-oracle.test.ts are the CPython differential for `src/fencing/pypath.ts`'s `os.path` half, which interlock's suite cannot have a case for because there `os.path` is the standard library. -- UPDATED BY D-0216: the ospath-oracle group is now FIFTEEN, not thirteen. `normcase` joined the transcription and the vector when `_is_inside_root` was repaired to compare normcased paths, and it is asserted for both namespaces here for the same reason as the other six: interlock's suite cannot have a case for `os.path`, because there `os.path` is the standard library. Its two vacuity assertions were added to the existing case rather than as cases of their own, so they do not move this count. -- UPDATED BY D-0094: group (1) is now EIGHT, not six. Two number-spelling pins were split off when the deny arrays stopped being able to carry a float into the rendered file; see `intentional_divergences` for what each covers and for the confirmation that each is red with its carry removed."
     },
     "approved_non_running": [],
     "notes": [
@@ -89,8 +91,8 @@
   },
   "totals": {
     "source_cases": 106,
-    "ported": 103,
-    "adapted": 3,
+    "ported": 100,
+    "adapted": 6,
     "not_ported": 0,
     "waivers": 0
   },
@@ -115,6 +117,27 @@
       "port_behaviour": "(1) An enabled sandbox whose `filesystem` is a truthy non-mapping is REFUSED (`PyValueError`, rc 2) rather than coerced to `{}` and rendered as empty deny arrays -- D-0215. (2) `_is_inside_root` compares normcased paths, so a Windows drive-letter case difference no longer reads as an escape and no longer suppresses an in-root deny -- D-0216.",
       "why_here": "Both were raised by this file's review gate (round 4), escalated at the round limit rather than decided, and routed to PR 4 by the secretary because `sandbox_doctor` owns the readback half that observes the first. Recorded here rather than silently deleted: this ledger told a reader those two behaviours were inherited and disclosed, and a reader who returns to it has to be able to find out that they stopped being.",
       "platforms": "D-0215 diverges on every platform; D-0216 on Windows only."
+    },
+    {
+      "id": "D-0094",
+      "what": "A rendered `sandbox.filesystem.denyRead` / `denyWrite` entry that is not a string is REFUSED (`PyValueError`, rc 2 through the CLI) instead of being written. The check is `checkRenderedSandboxDenyStrings(rendered, role)` in src/settings/generator.ts, called at the end of `renderRoleWithMetadata` -- after the two canonicalising rebuilds, which are the last steps that can change a deny entry, and before the `$comment`. Three branches feed it: `normalizeSandboxEntry` returned `null` (an unknown anchor, a non-bool `suppressOnSymlinkEscape`), `keptEntryString` was handed `anchor: 'absolute'` with a relative path, and `canonicalizeSandboxDeny` passed a non-string over. Each still carries its entry through the pass untouched; what changes is that the DOCUMENT is refused rather than written.",
+      "source_behaviour": "interlock writes the entry into `settings.local.json` verbatim and says so in two doc comments: `sandbox.filesystem.denyRead` / `denyWrite` are a list of strings, Claude Code's settings schema answers a structured object with `Expected string, but received object` and rejects the whole file, so the malformed entry is kept and the launcher surfaces the operator's error. The premise is that a downstream reader answers it.",
+      "why_repaired_here": "D-0093 measured that premise directly against Claude Code CLI 2.1.261 and it does not hold for these two arrays. The file is ACCEPTED; one non-string entry there makes the CLI apply neither `permissions.deny` nor any `PreToolUse` hook for the whole run -- for `Read` and `Write` as much as for `Bash` -- with exit zero and nothing on stderr. So the entry does not surface the operator's error to anyone: it silently voids the rest of the same file, and the file this module writes is the one a fenced worker runs under. D-0023 applies as it does to D-0213 and D-0215: interlock is frozen, so `disclose now, repair after parity` has no second half. The repair is also the direction this module already takes for a malformed `sandbox.filesystem` (D-0215) and the one src/fencing/renderer.ts took for the same shape in #164, so the two producers of a child's settings now agree.",
+      "why_not_normalised": "Rejected explicitly, and it is the alternative D-0093 rejected for the renderer. Inventing a string for an entry whose path this module could not resolve emits a deny the role document never authorised -- wider or narrower than the author's, with nothing saying so -- which restores exactly the silence the CLI already provides. Dropping the entry is the same fault in the other direction.",
+      "scope": "The two arrays D-0093 measured, and nothing else. A non-string in `additionalDirectories` and an unknown key under `sandbox` were measured HARMLESS on the same CLI and stay unguarded; guarding them would be refusing role documents on a rule the CLI does not have. `additionalDirectories` keeps its own inherited behaviour -- a non-string read root raises `PyTypeError` where `os.path.normpath` raises in the source -- which is a different rule reached earlier, listed under `inherited_limitations` and untouched by this.",
+      "found_by": "continuo#163, handed on by D-0093 / #164, which named this module as a live exposure it could not close: repairing it moves this ledger, and the generator is not a fence.",
+      "pinned_by": [
+        "test/settings/settings-generator.test.ts::structured anchors, role_kind and Pattern B context > a structured entry with an invalid anchor is kept untouched, and refuses (D-0094)",
+        "test/settings/settings-generator.test.ts::strict bool, malformed absolute, additionalDirectories and CLI plumbing > a non-bool suppressOnSymlinkEscape passes the entry through as-is, and refuses (D-0094)",
+        "test/settings/settings-generator.test.ts::strict bool, malformed absolute, additionalDirectories and CLI plumbing > anchor=absolute with a relative path is malformed, kept as-is, and refuses (D-0094)",
+        "test/settings/settings-generator.test.ts::the two in-pass repairs (target-only, D-0213) > anchor=absolute with a relative path is still refused as the dict (target-only)",
+        "test/fencing/hermetic-child.test.ts::the settings generator is a second producer of the same artifact (#163, D-0094) > the generator refuses the shape it used to write, naming the entry",
+        "test/fencing/hermetic-child.test.ts::the settings generator is a second producer of the same artifact (#163, D-0094) > a well-formed role still renders, and every deny entry is an absolute string",
+        "test/fencing/hermetic-child.test.ts::the settings generator is a second producer of the same artifact (#163, D-0094) > a real child under the GENERATED settings file is refused, and the nonce never arrives (#163)",
+        "test/fencing/hermetic-child.test.ts::the settings generator is a second producer of the same artifact (#163, D-0094) > reproduces #163: the shape the generator used to write is ACCEPTED, and voids the file"
+      ],
+      "measured_against_a_real_child": "The last two of those are one PAIR, opt-in under CONTINUO_REAL_CLAUDE_CHILD=1, and both halves were RUN and pass on CLI 2.1.261 (node v22.17.0, Linux/WSL2, 2026-09-06). The positive half renders a role through `renderRole`, writes the file, and starts a real `claude -p` with `--settings <that file> --setting-sources ''`: the denied `cat` is refused, the nonce does not reach stdout, and the hook's witness file -- written BEFORE the hook decides -- is present. The reproduction half derives the pre-repair artifact BY SUBTRACTION from the file the generator did write, re-spelling the ONE entry that does not cover the nonce the way `keptEntryString` used to return it, and the same read then succeeds: the nonce arrives and the witness is absent, so the hook was never invoked rather than invoked and overruled. `execFileSync` throws on a non-zero exit, so reaching those assertions at all is the direct falsification of the removed doc comment: the CLI does not reject the file. Corrupting the non-covering entry is what makes the half evidence for `ONE non-string entry voids the file` rather than for `the covering rule went missing`. One further trap, recorded at the case: a first attempt planted the nonce at `.secrets/token.txt` and the reproduction half failed because the model declined the command on its own judgement -- green whether the deny fired or the file was void -- so the path and its contents are deliberately neutral.",
+      "how_the_number_spelling_pins_moved": "D-0210 / D-0211 make the thirteen rebuild branches an obligation, and three of them were pinned by a float RIDING IN A DENY ARRAY into the rendered file -- which this refusal makes impossible. They are pinned out of the refusal message instead: `pyTypeNameOf` consults the same spelling record on the same final container, so a dropped carry turns `float` into `int` in the message exactly as it turned `1.0` into `1` in the file. `list() over a deny array carries the spelling into the refusal` covers branches 3 and 7 on the unsuppressed path, `a kept deny entry keeps its spelling after an earlier entry is suppressed` covers 7's per-element re-key (the message names `denyRead[0]`, so the index shift is asserted too), and `canonicalizeSandboxDeny's output list carries the spelling too` covers 11 with the rewrite forced. Each of the three was re-confirmed RED with its own carry removed, which is what rule 11 asks of a repair."
     }
   ],
   "inherited_limitations": [
@@ -591,11 +614,11 @@
     },
     {
       "source_nodeid": "tests/test_settings_generator.py::test_unknown_anchor_in_structured_entry_passes_through",
-      "target_id": "test/settings/settings-generator.test.ts::structured anchors, role_kind and Pattern B context > a structured entry with an invalid anchor is kept untouched",
-      "disposition": "ported",
+      "target_id": "test/settings/settings-generator.test.ts::structured anchors, role_kind and Pattern B context > a structured entry with an invalid anchor is kept untouched, and refuses (D-0094)",
+      "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": null,
+      "reason": "D-0094. UNCHANGED: the pass still leaves the entry exactly as the role document authored it -- no anchoring, no substitution, no suppression -- and the case still asserts that, now by reading the entry back out of the refusal message, which quotes it verbatim. CHANGED: the source then asserts the entry is WRITTEN into the settings file, on the premise its own doc comment states -- that Claude Code answers a structured entry with `Expected string, but received object` and rejects the whole file, so the launcher surfaces the operator's error. D-0093 measured that premise against CLI 2.1.261 and it is false: the file is accepted and the run proceeds with `permissions.deny` and every `PreToolUse` hook discarded, silently. So the render refuses rather than writing a file that would disable its own enforcement. The property the source was protecting -- this code must not invent a path for an entry it cannot read -- is preserved and strengthened; only the outcome for the document as a whole moves, from written to refused.",
       "source_revision": "65f36c5"
     },
     {
@@ -645,11 +668,11 @@
     },
     {
       "source_nodeid": "tests/test_settings_generator.py::test_suppress_on_symlink_escape_non_bool_passes_through",
-      "target_id": "test/settings/settings-generator.test.ts::strict bool, malformed absolute, additionalDirectories and CLI plumbing > a non-bool suppressOnSymlinkEscape passes the entry through as-is",
-      "disposition": "ported",
+      "target_id": "test/settings/settings-generator.test.ts::strict bool, malformed absolute, additionalDirectories and CLI plumbing > a non-bool suppressOnSymlinkEscape passes the entry through as-is, and refuses (D-0094)",
+      "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": null,
+      "reason": "D-0094. UNCHANGED: the pass still leaves the entry exactly as the role document authored it -- no anchoring, no substitution, no suppression -- and the case still asserts that, now by reading the entry back out of the refusal message, which quotes it verbatim. CHANGED: the source then asserts the entry is WRITTEN into the settings file, on the premise its own doc comment states -- that Claude Code answers a structured entry with `Expected string, but received object` and rejects the whole file, so the launcher surfaces the operator's error. D-0093 measured that premise against CLI 2.1.261 and it is false: the file is accepted and the run proceeds with `permissions.deny` and every `PreToolUse` hook discarded, silently. So the render refuses rather than writing a file that would disable its own enforcement. The property the source was protecting -- this code must not invent a path for an entry it cannot read -- is preserved and strengthened; only the outcome for the document as a whole moves, from written to refused.",
       "source_revision": "65f36c5"
     },
     {
@@ -663,11 +686,11 @@
     },
     {
       "source_nodeid": "tests/test_settings_generator.py::test_absolute_anchor_with_relative_path_kept_as_is",
-      "target_id": "test/settings/settings-generator.test.ts::strict bool, malformed absolute, additionalDirectories and CLI plumbing > anchor=absolute with a relative path is malformed and kept as-is",
-      "disposition": "ported",
+      "target_id": "test/settings/settings-generator.test.ts::strict bool, malformed absolute, additionalDirectories and CLI plumbing > anchor=absolute with a relative path is malformed, kept as-is, and refuses (D-0094)",
+      "disposition": "adapted",
       "source_status": "passed",
       "target_status": "passed",
-      "reason": null,
+      "reason": "D-0094. UNCHANGED: the pass still leaves the entry exactly as the role document authored it -- no anchoring, no substitution, no suppression -- and the case still asserts that, now by reading the entry back out of the refusal message, which quotes it verbatim. CHANGED: the source then asserts the entry is WRITTEN into the settings file, on the premise its own doc comment states -- that Claude Code answers a structured entry with `Expected string, but received object` and rejects the whole file, so the launcher surfaces the operator's error. D-0093 measured that premise against CLI 2.1.261 and it is false: the file is accepted and the run proceeds with `permissions.deny` and every `PreToolUse` hook discarded, silently. So the render refuses rather than writing a file that would disable its own enforcement. The property the source was protecting -- this code must not invent a path for an entry it cannot read -- is preserved and strengthened; only the outcome for the document as a whole moves, from written to refused.",
       "source_revision": "65f36c5"
     },
     {
