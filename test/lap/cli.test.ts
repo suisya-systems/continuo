@@ -1048,6 +1048,11 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // not have to tell an absent key from a null one to learn that.
       endpoint_lease_failure: null,
       elapsed_deadline_at_ms: null,
+      // Present and null for the same reason, and saying a different thing from
+      // either of them (`D-0099`): this lap named no model, so what it ran on
+      // was the worker CLI's own default and this build does not know which one
+      // that was. A host accounting for what a lap cost reads the choice here.
+      model: null,
     });
   });
 
@@ -1130,6 +1135,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // The operator's own number, handed back so a host can tell "my deadline
       // was too tight" from "the worker ran long".
       elapsed_deadline_at_ms: deadline,
+      model: null,
     });
   });
 
@@ -1297,3 +1303,165 @@ function recordPath(stateRoot: string): string {
   expect(sessions, `expected one session under ${stateRoot}`).toHaveLength(1);
   return join(stateRoot, sessions[0] as string, "record.json");
 }
+
+/** The provider's durable record of the argv it spawned, and the identity in it. */
+function spawnedRecord(f: Lap): { readonly argv: string[]; readonly uuid: string } {
+  const record = JSON.parse(readFileSync(recordPath(f.stateRoot), "utf8")) as {
+    argv: string[];
+    claude_session_uuid: string;
+  };
+  return { argv: record.argv, uuid: record.claude_session_uuid };
+}
+
+/**
+ * One lap's spawned argv with everything that cannot repeat across laps folded
+ * out of it, so two laps' vectors can be compared element by element.
+ *
+ * Exactly two things vary between two laps of the same fixture shape, and both
+ * are here: the case's own root, which every path in the vector is built under
+ * (`caseRoot` hands out a fresh directory per call), and the session UUID the
+ * verb mints. Nothing else in the vector is per-lap, which is the property the
+ * comparison below is asserting -- so folding these two and finding a
+ * difference means a difference this change made.
+ *
+ * The root is folded case-insensitively because Windows paths are, and a
+ * substitution that missed on the cell would leave both vectors carrying their
+ * own roots and fail with a diff that named the wrong thing.
+ */
+function foldedArgv(f: Lap): string[] {
+  const { argv, uuid } = spawnedRecord(f);
+  const root = new RegExp(f.root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  return argv.map((token) => token.replace(root, "<root>").split(uuid).join("<uuid>"));
+}
+
+describe("D-0099: which model the worker runs on", () => {
+  test("--model reaches the child's argv exactly once, after the flags the provider owns", async () => {
+    // The whole of what the flag is for: a model named on the command line is a
+    // model the fenced child was actually started with. `record.json` is the
+    // provider's own record of the vector it spawned, so this reads the child's
+    // command line rather than a restatement of the intent to build one.
+    const f = lap("lap-model-argv", "run-model-argv");
+
+    expect(await f.perform({ "--model": "claude-haiku-4-5-20251001" }), f.err.join("")).toBe(0);
+
+    const { argv } = spawnedRecord(f);
+    const at = argv.indexOf("--model");
+    expect(at, JSON.stringify(argv)).toBeGreaterThanOrEqual(0);
+    // **Exactly once.** Two `--model` tokens is the failure mode a flag threaded
+    // through both the provider and the request could produce, and the child
+    // would silently honour the last one -- so a lap could run on a model the
+    // operator did not choose while every other assertion here passed.
+    expect(argv.filter((token) => token === "--model")).toHaveLength(1);
+    expect(argv[at + 1]).toBe("claude-haiku-4-5-20251001");
+    // After the flags the provider renders itself, which is the ordering that
+    // makes the committed identity un-overridable: `base_cli_args` is appended
+    // behind `--session-id` and the structured-readout flags, never in front of
+    // them.
+    expect(argv.indexOf("--session-id"), JSON.stringify(argv)).toBeLessThan(at);
+    expect(argv.indexOf("--output-format")).toBeLessThan(at);
+  });
+
+  test("the report says which model, in both spellings", async () => {
+    const f = lap("lap-model-report", "run-model-report");
+    f.out.length = 0;
+
+    expect(await mainAsync(jsonArgv(f, { "--model": "sonnet" })), f.err.join("")).toBe(0);
+    // The document's key, which is the one a host driving laps reads to account
+    // for what one cost. Not `toStrictEqual` over the whole object here: the
+    // shape is pinned once, above, and this case is about the one key.
+    expect(oneDocument(f.out)["model"]).toBe("sonnet");
+  });
+
+  test("a value that is not a plain model id is refused, in the envelope, with nothing built", async () => {
+    // The reason the rule exists. The value becomes a token in the fenced
+    // child's own command line, so anything that could be read there as a second
+    // argument -- a leading `-`, a path, whitespace, an `=` -- is refused before
+    // the lap starts rather than handed to the child's parser to interpret.
+    const refused = [
+      // A flag wearing a model's clothes.
+      "--dangerously-skip-permissions",
+      // A flag the PROVIDER renders itself, which is the value that found the
+      // ordering defect: `base_cli_args` carrying one raises at construction,
+      // and with the check downstream of that constructor an operator's typo
+      // arrived as a stack trace and exit 1 instead of this document.
+      "-p",
+      "--session-id",
+      // Two arguments in one, for a reader that splits its own option values.
+      "opus --dangerously-skip-permissions",
+      // A path, which `D-0067` spent three attempts removing from this command
+      // line and is not letting back in through a different flag.
+      "../../etc/passwd",
+      // An attached-value form of something else.
+      "opus=--print",
+      // Empty: naming no model is spelled by omitting the flag.
+      "",
+    ];
+    for (const [index, value] of refused.entries()) {
+      const f = lap(`lap-model-refused-${index}`, `run-model-refused-${index}`);
+      f.out.length = 0;
+      f.err.length = 0;
+
+      // `--model=<value>`, attached, and not as two tokens. Every value here is
+      // one the parser itself would stop first in the spaced form -- a leading
+      // `-` reads as the next flag and `""` as a missing argument -- and being
+      // stopped there is a usage error and not this rule. The attached form is
+      // how an operator passes such a value (the same note `run admit --cli-arg`
+      // carries), so it is the form the rule has to hold under.
+      const argv = jsonArgv(f);
+      argv.push(`--model=${value}`);
+
+      expect(await mainAsync(argv), `accepted ${value}`).toBe(2);
+      expect(f.out.join(""), "a refused --json run must leave stdout empty").toBe("");
+      const refusal = JSON.parse(f.err.join("")) as Record<string, unknown>;
+      expect(refusal["schema"]).toBe(PERFORM_SCHEMA);
+      expect(refusal["ok"]).toBe(false);
+      const error = refusal["error"] as { class: string; message: string };
+      expect(error.class).toBe("LapUsageError");
+      expect(error.message).toContain("model");
+
+      // And it is refused where the preflight promises: before the branch, the
+      // worktree and the fence exist, so a corrected retry is still free rather
+      // than costing the run identifier (`D-0057`).
+      expect(existsSync(f.workspace), "a refused model still cut a worktree").toBe(false);
+      expect(eventTypes(inspect(f.databasePath))).toEqual([
+        "run_created",
+        RUN_DELEGATION_RECORDED_EVENT_TYPE,
+      ]);
+    }
+  });
+
+  test("omitting the flag leaves the argv byte-identical to what it always was", async () => {
+    // The half that makes this change safe for every caller that does not pass
+    // it. Asserted as a comparison rather than as `not.toContain("--model")`,
+    // because the absent spelling has to be identical and not merely
+    // model-free: a `baseCliArgs: []` handed to the provider, or a `--model`
+    // with an empty value appended when the flag was omitted, would both pass
+    // the weaker check.
+    // The SAME run id for both, because the artifact directory is derived from
+    // it (`D-0061`) and so appears in the vector: two ids would be a difference
+    // this comparison would report as the flag's doing. The two laps are in
+    // separate control planes and separate roots, so one id is not a clash.
+    const without = lap("lap-model-absent");
+    expect(await without.perform(), without.err.join("")).toBe(0);
+
+    const with_ = lap("lap-model-present");
+    expect(await with_.perform({ "--model": "sonnet" }), with_.err.join("")).toBe(0);
+
+    const present = foldedArgv(with_);
+    const at = present.indexOf("--model");
+    expect(at).toBeGreaterThanOrEqual(0);
+    // The flag's whole footprint: two tokens, and every other element of the
+    // vector unchanged.
+    expect(foldedArgv(without)).toEqual([...present.slice(0, at), ...present.slice(at + 2)]);
+    expect(foldedArgv(without)).not.toContain("--model");
+
+    // And the human line an operator reads is the line it has always been: the
+    // model clause is present or absent, where the document's key is always
+    // there and null.
+    // Matched at the end of the line rather than by "does not contain 'model'":
+    // the case's own temporary directory has the word in its name, and every
+    // path on the line is under it.
+    expect(without.out.join("")).toMatch(/at seq \d+\n$/);
+    expect(with_.out.join("")).toMatch(/at seq \d+, model 'sonnet'\n$/);
+  });
+});

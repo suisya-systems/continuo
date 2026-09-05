@@ -1,5 +1,5 @@
 /**
- * `continuo run admit` and `continuo run close`.
+ * `continuo run admit`, `continuo run close` and `continuo run show`.
  *
  * Mounted into the unified CLI by `src/cli.ts`, which owns no flag of its own
  * here: the subtree's module declares its parser, exactly as
@@ -48,10 +48,25 @@
  * `admit`'s is not reachable from here at all, because the parser has already
  * established that `--run-id` is a string and `--now-ms` an int.
  *
- * **`--json` changes the bytes and nothing else.** Both verbs answer a host in
- * the one envelope `src/cli/json_output.ts` declares, under the pinned schema
- * ids {@link ADMIT_SCHEMA} and {@link CLOSE_SCHEMA}. Without the flag the two
- * report lines are byte-identical to what they have always been. With it, the
+ * **`show` is the read half, and it is the read surface (`D-0096`).** cadenza's
+ * operating-surface design measured what a console draws and found one pane
+ * with no read path at all -- run and belt state, `awaiting_user` and the
+ * outbox -- so the only way to draw it was to open continuo's SQLite file from
+ * a second process. `D-0096` settles that the database is **not** a public read
+ * surface and this verb is: it answers one run's row, its lease, its session
+ * bindings, its open gates, its events and its outbox rows in the one envelope,
+ * and it refuses an unknown run rather than answering an empty document. It is
+ * as thin as the other two -- every rule about what those rows mean lives in
+ * `run_view.ts` and the modules it reads through -- and it writes nothing, takes
+ * no lease and reads no clock. It is deliberately outside the fence and outside
+ * `lap perform`: a read a console makes is not a step of the lap.
+ *
+ * **`--json` changes the bytes and nothing else.** All three verbs answer a host
+ * in the one envelope `src/cli/json_output.ts` declares, under the pinned schema
+ * ids {@link ADMIT_SCHEMA}, {@link CLOSE_SCHEMA} and {@link SHOW_SCHEMA}. Without
+ * the flag the report lines are byte-identical to what they have always been --
+ * `show` is new, so what that means for it is that its human rendering is the
+ * one it shipped with and is not a fallback for a failed document. With it, the
  * exit codes, the refusal families {@link isOperatorRefusal} names, the order of
  * operations and the `finally` that closes the handle are all unchanged: the
  * flag is read once per verb and reaches exactly two places, the report and
@@ -87,7 +102,13 @@
  * printing the same value under two rules.
  */
 
-import { addJsonArgument, jsonRequested, refusalLine, successLine } from "../cli/json_output.js";
+import {
+  addJsonArgument,
+  type JsonValue,
+  jsonRequested,
+  refusalLine,
+  successLine,
+} from "../cli/json_output.js";
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
 import { LapRunIntent } from "./lap_run_intent.js";
@@ -101,6 +122,7 @@ import {
 } from "./run_admission.js";
 import { closeRun, RUN_CLOSE_OUTCOMES } from "./run_close.js";
 import { type RunStatus, RunTransitionRefused, UnknownRunRefused } from "./run_lifecycle.js";
+import { type RunView, runView } from "./run_view.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -162,6 +184,20 @@ const CLOSE_NOW_MS_HELP =
   "to take and give back the lease. Read once from the system clock when " +
   "omitted; nothing below this command reads a clock.";
 
+const SHOW_RUN_ID_HELP =
+  "the run to read. It must already be admitted: a run-id naming no run is " +
+  "refused with the reason, never answered with an empty document, because " +
+  "an empty answer cannot be told from a run that has done nothing yet.";
+
+const SHOW_DESCRIPTION =
+  "Show one run: its row, the run lease, its session bindings, its open " +
+  "gates, every event on its spine and every outbox row enqueued for it. A " +
+  "read and nothing else -- it writes no row, takes no lease and reads no " +
+  "clock, so 'is this lease live' and 'has this deadline passed' stay the " +
+  "caller's questions against the caller's clock. This is the read surface " +
+  "for a console (D-0096): the database is not one. Refuses a run that is " +
+  "absent, and exits 2 with the reason.";
+
 const CLOSE_DESCRIPTION =
   "Close a run: record the operator's close by advancing the run from its " +
   "current status to the terminal status given by --outcome, as the single " +
@@ -186,6 +222,7 @@ const CLOSE_DESCRIPTION =
  */
 const ADMIT_SCHEMA = "continuo.run.admit/1";
 const CLOSE_SCHEMA = "continuo.run.close/1";
+const SHOW_SCHEMA = "continuo.run.show/1";
 
 /**
  * The three effects this module has on the world, as a replaceable record.
@@ -453,6 +490,266 @@ export function cmdRunClose(args: Namespace): number {
   return 0;
 }
 
+/**
+ * An epoch-millisecond or epoch column, or `-` when the row carries none.
+ *
+ * The human rendering's placeholder only. The document never carries `"-"`:
+ * `null` is what an absent value is there, for the reason `gate/cli.ts` gives
+ * -- a host that saw `"-"` could not tell a missing value from a value one
+ * character long.
+ */
+function stamp(value: number | string | null): string {
+  return value === null ? "-" : String(value);
+}
+
+/**
+ * One field of unconstrained persisted text, quoted, or `-` when absent.
+ *
+ * **This is the rendering decision the "one line per row" claim depends on, and
+ * it is applied by one rule rather than field by field.** A value this build
+ * constrains is printed raw; a value it does not is printed through here.
+ * Interpolated raw, a newline in an unconstrained field silently stops the
+ * rendering being one line per row, and a terminal escape lets persisted text
+ * forge a line an operator reads as this command's own.
+ *
+ * **Raw, because something narrows them.** The closed vocabularies the DDL
+ * enforces with a `CHECK ... IN`: `run.status`, `session.binding_phase`,
+ * `session.observation`, `gate.gate_type`, `gate.stage`, `event.subject_kind`
+ * and `outbox.status`. A run identifier, and the lease resource derived from
+ * one, because `D-0051` holds an admitted run id to printable ASCII and
+ * admission is the only writer of the row -- and because `run admit` and
+ * `run close` print run ids raw, so quoting here would print one value under
+ * two rules. `--db` for that same reason, which this module's header already
+ * records as a standing exception belonging to whichever entry settles echoed
+ * external text for every verb at once.
+ *
+ * **Quoted, because nothing does.** Everything else: `lease.holder`,
+ * `session.session_id`, `session.provider`, `session.provider_state`,
+ * `session.observation_reason`, `gate.gate_id`, `event.event_id`,
+ * `event.event_type` (`events.ts` says the column is deliberately open text),
+ * `event.subject_id`, `event.producer`, `outbox.message_id` and
+ * `outbox.recipient`. Each is `NOT NULL` and at most `length(...) > 0`, and
+ * each is written by a caller -- `prepareBinding` takes a session id and a
+ * provider name and validates neither's alphabet.
+ *
+ * **Quoting is conditional, and that is what keeps this verb's lines the same
+ * as every other verb's on real data.** A value that cannot break the framing
+ * is printed exactly as it is; only one that could is quoted. The condition is
+ * {@link BREAKS_A_LINE}: anything outside printable ASCII -- which is every
+ * character that can end a line or move a terminal cursor -- plus the double
+ * quote itself, so that a reader never has to wonder whether a quoted-looking
+ * value was quoted by this function or stored that way. An ordinary session
+ * uuid, provider name, gate id or recipient renders byte for byte as it would
+ * have without this function, so `run show` and `gate show` print one value the
+ * same way; a hostile one renders as an escaped, quoted, still-reversible
+ * string on one line.
+ *
+ * `JSON.stringify` for the escaping rather than a scheme invented here: one
+ * call, reversible, and it escapes exactly the characters the condition
+ * selects for. Deliberately NOT held to ASCII on the raw path -- see `--db`
+ * above.
+ *
+ * **The other human renderings in this CLI do not do this yet**, and saying so
+ * is the honest half: `gate list` and `gate show` interpolate gate ids, relay
+ * message ids, actor ids and answer bodies raw, and carry the same exposure.
+ * Closing it there is the cross-verb entry `docs/cli-output-policy.md` is
+ * waiting for, not a change this verb makes on their behalf. What this verb
+ * does not do is add a new instance of it.
+ *
+ * The document needs none of this: {@link asciiJsonLine} escapes every one of
+ * these values already, which is why the two payload columns are safe there and
+ * absent here.
+ */
+const BREAKS_A_LINE = /[^\x20-\x7e]|"/;
+
+function quoted(value: string | null): string {
+  if (value === null) {
+    return "-";
+  }
+  return BREAKS_A_LINE.test(value) ? JSON.stringify(value) : value;
+}
+
+/**
+ * `run show`'s payload: the run, and the five things a console draws beside it.
+ *
+ * Built key by key rather than by spreading the record, for the two reasons
+ * `gate/cli.ts`'s `showPayload` gives and which apply here with more force:
+ * the record's fields are `camelCase` and the document's are `snake_case`, and
+ * a spread would make every future field of {@link RunView} an unreviewed
+ * addition to a pinned host contract.
+ *
+ * **The keys are the tables**, so a host reading this document and a person
+ * reading `docs/production-schema.md` are looking at the same five nouns.
+ * `lease` is `null` when the run has never been leased -- an absent lease is a
+ * fact about the run, and `{}` would be a lease with no holder. The four lists
+ * are always present and empty when nothing matched, because an absent key is
+ * the one absence a JSON reader cannot distinguish from one it forgot to read.
+ *
+ * `payload` is carried on an event and on an outbox row as the **verbatim TEXT
+ * of the column**, not as a nested object. The DDL already guarantees
+ * `json_valid(payload)` for an event, so a host that wants the object calls
+ * `JSON.parse` on a string; re-encoding it here would make these bytes depend
+ * on this build's JSON renderer rather than on the value that was stored, which
+ * is the same argument `D-0090` makes for not borrowing `pyJsonDumps`.
+ */
+function showPayload(view: RunView): { readonly [key: string]: JsonValue } {
+  return {
+    run: {
+      run_id: view.run.runId,
+      status: view.run.status,
+      writer_epoch: view.run.writerEpoch,
+      created_at_ms: view.run.createdAtMs,
+      updated_at_ms: view.run.updatedAtMs,
+    },
+    lease:
+      view.lease === null
+        ? null
+        : {
+            resource: view.lease.resource,
+            holder: view.lease.holder,
+            epoch: view.lease.epoch,
+            acquired_at_ms: view.lease.acquiredAtMs,
+            expires_at_ms: view.lease.expiresAtMs,
+          },
+    sessions: view.sessions.map((session) => ({
+      session_id: session.sessionId,
+      provider: session.provider,
+      binding_phase: session.bindingPhase,
+      observation: session.observation,
+      provider_state: session.providerState,
+      observation_reason: session.observationReason,
+      bound_at_ms: session.boundAtMs,
+      released_at_ms: session.releasedAtMs,
+    })),
+    gates: view.gates.map((gate) => ({
+      gate_id: gate.gateId,
+      gate_type: gate.gateType,
+      stage: gate.stage,
+      stage_entered_at_ms: gate.stageEnteredAtMs,
+      deadline_at_ms: gate.deadlineAtMs,
+    })),
+    events: view.events.map((event) => ({
+      seq: event.seq,
+      event_id: event.eventId,
+      event_type: event.eventType,
+      subject_kind: event.subjectKind,
+      subject_id: event.subjectId,
+      payload: event.payload,
+      producer: event.producer,
+      producer_epoch: event.producerEpoch,
+      dedup_key: event.dedupKey,
+      occurred_at_ms: event.occurredAtMs,
+      ingested_at_ms: event.ingestedAtMs,
+    })),
+    outbox: view.outbox.map((row) => ({
+      message_id: row.messageId,
+      recipient: row.recipient,
+      payload: row.payload,
+      dedup_key: row.dedupKey,
+      status: row.status,
+      retry_count: row.retryCount,
+      writer_epoch: row.writerEpoch,
+      enqueued_at_ms: row.enqueuedAtMs,
+      delivered_at_ms: row.deliveredAtMs,
+      acked_at_ms: row.ackedAtMs,
+    })),
+  };
+}
+
+/**
+ * The human rendering of `run show`: one line for the run, one per row after it.
+ *
+ * **Neither payload is on a human line, and that is not an oversight.** An
+ * event or outbox payload is free-form text that may hold a newline, and a
+ * line-per-row rendering that interpolated one would silently stop being one
+ * line per row. An operator reading a payload asks for the document; the
+ * rendering here is the shape of the run, which is what a person scanning a
+ * terminal is actually after.
+ */
+function writeRunView(view: RunView, path: string): number {
+  runCliSeams.write(
+    `run ${view.run.runId} in ${path}: status ${view.run.status} ` +
+      `created=${view.run.createdAtMs} updated=${view.run.updatedAtMs} ` +
+      `writer_epoch=${stamp(view.run.writerEpoch)}\n`,
+  );
+  runCliSeams.write(
+    view.lease === null
+      ? "lease -\n"
+      : `lease ${view.lease.resource} holder=${quoted(view.lease.holder)} ` +
+          `epoch=${view.lease.epoch} acquired=${view.lease.acquiredAtMs} ` +
+          `expires=${view.lease.expiresAtMs}\n`,
+  );
+  for (const session of view.sessions) {
+    runCliSeams.write(
+      `session ${quoted(session.sessionId)} provider=${quoted(session.provider)} ` +
+        `phase=${session.bindingPhase} observation=${session.observation} ` +
+        `state=${quoted(session.providerState)} reason=${quoted(session.observationReason)} ` +
+        `bound=${session.boundAtMs} released=${stamp(session.releasedAtMs)}\n`,
+    );
+  }
+  for (const gate of view.gates) {
+    runCliSeams.write(
+      `gate ${quoted(gate.gateId)} ${gate.gateType} stage=${gate.stage} ` +
+        `since=${gate.stageEnteredAtMs} deadline=${stamp(gate.deadlineAtMs)}\n`,
+    );
+  }
+  for (const event of view.events) {
+    runCliSeams.write(
+      `event ${event.seq} ${quoted(event.eventType)} ${quoted(event.eventId)} ` +
+        `subject=${event.subjectKind}/${quoted(event.subjectId)} producer=${quoted(event.producer)} ` +
+        `epoch=${stamp(event.producerEpoch)} occurred=${event.occurredAtMs} ` +
+        `ingested=${event.ingestedAtMs}\n`,
+    );
+  }
+  for (const row of view.outbox) {
+    runCliSeams.write(
+      `outbox ${quoted(row.messageId)} to=${quoted(row.recipient)} status=${row.status} ` +
+        `retries=${row.retryCount} epoch=${stamp(row.writerEpoch)} ` +
+        `enqueued=${row.enqueuedAtMs} delivered=${stamp(row.deliveredAtMs)} ` +
+        `acked=${stamp(row.ackedAtMs)}\n`,
+    );
+  }
+  return 0;
+}
+
+/**
+ * `continuo run show`.
+ *
+ * As thin as the other two, and thin about a read: `run_view.ts` decides what a
+ * run's state consists of and this decides how it is rendered. The handle is
+ * closed in a `finally` whatever the outcome, for the reason `cmdRunAdmit`
+ * gives.
+ *
+ * No `--now-ms`: this verb reads no clock. There is nothing to stamp, and a
+ * clock argument on a read would invite the belief that the answer is evaluated
+ * at it -- the millisecond columns are carried raw so the caller evaluates them
+ * against its own.
+ */
+export function cmdRunShow(args: Namespace): number {
+  const path = String(args["db"]);
+  const runId = String(args["run_id"]);
+  const json = jsonRequested(args);
+
+  try {
+    const connection = openProductionControlPlane(path);
+    try {
+      const view = runView(connection, runId);
+      if (json) {
+        runCliSeams.write(successLine(SHOW_SCHEMA, path, showPayload(view)));
+        return 0;
+      }
+      return writeRunView(view, path);
+    } finally {
+      connection.close();
+    }
+  } catch (error) {
+    if (isOperatorRefusal(error)) {
+      refuse(error, SHOW_SCHEMA, path, json);
+    }
+    throw error;
+  }
+}
+
 /** `--db`, spelled as the `db` subtree spells it. */
 function addDbArgument(parser: ArgumentParser): void {
   parser.addArgument({
@@ -464,7 +761,7 @@ function addDbArgument(parser: ArgumentParser): void {
   });
 }
 
-/** `add_subparsers`: mount `admit` under `run`. */
+/** `add_subparsers`: mount `admit`, `close` and `show` under `run`. */
 export function addSubparsers(sub: Subparsers): void {
   const admit = sub.addParser("admit", ADMIT_DESCRIPTION);
   addDbArgument(admit);
@@ -508,7 +805,7 @@ export function addSubparsers(sub: Subparsers): void {
     help: NOW_MS_HELP,
   });
   // Declared by `cli/json_output.ts` rather than here: this is the one flag in
-  // the CLI whose whole value is that fourteen verbs spell it identically, and that
+  // the CLI whose whole value is that fifteen verbs spell it identically, and that
   // module says why it is the deliberate exception to "a subtree declares its
   // own flags".
   addJsonArgument(admit);
@@ -548,4 +845,18 @@ export function addSubparsers(sub: Subparsers): void {
   });
   addJsonArgument(close);
   close.setDefaults({ func: cmdRunClose });
+
+  // `show` takes exactly two arguments and no clock: it is a read, so there is
+  // nothing to stamp and nothing to fence.
+  const show = sub.addParser("show", SHOW_DESCRIPTION);
+  addDbArgument(show);
+  show.addArgument({
+    optionStrings: ["--run-id"],
+    dest: "run_id",
+    required: true,
+    metavar: "RUN_ID",
+    help: SHOW_RUN_ID_HELP,
+  });
+  addJsonArgument(show);
+  show.setDefaults({ func: cmdRunShow });
 }

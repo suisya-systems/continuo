@@ -478,7 +478,10 @@ const DEFAULT_ELAPSED_MS = (): number => performance.now();
  * - the **operator arguments** were refused by name and only at admission
  *   (`D-0086`), so a vector the role document stopped authorising after the run
  *   was admitted still reached the child. `D-0088` moved that to whole-vector
- *   equality and asks it again here, first, ahead of every other entry.
+ *   equality and asks it again here, first, ahead of every other entry;
+ * - the **model** is the newest entry and the only one that was never late:
+ *   `D-0099` added `--model` and put its rule here in the same change, which is
+ *   what this list is for.
  *
  * They were each fixed as they were found, which is how five separate late
  * refusals came to exist: the discipline was stated and then applied one
@@ -518,6 +521,12 @@ function preflight(request: LapRequest, provider: SessionProvider, intent: LapRu
   }
   requireCompletion(request.completion);
   requireGateDeadline(request);
+  // The model, if one was chosen (`D-0099`). Beside the two above rather than
+  // further down because it is the same kind of check as they are -- a string
+  // an operator typed, read without touching the filesystem -- and the list
+  // this function is exists so that a flag added later has a place to go
+  // instead of a hole.
+  requireModel(request.model);
   // The artifact directory's name, which the encoding can push past a
   // filesystem's limit. Computed and discarded: what is wanted is the refusal.
   lapArtifactDir(request.artifactRoot, request.runId);
@@ -751,6 +760,109 @@ function requireAbsoluteWorkerCommand(command: readonly string[] | undefined): v
 }
 
 /**
+ * The shape a `--model` value has to have to be a model id and nothing else.
+ *
+ * An allowlist of characters rather than a denylist of dangerous ones, for the
+ * reason `D-0088` gives about `cli_args`: the option surface on the far side of
+ * this token belongs to a CLI this repository does not own, so a rule written
+ * as "not these spellings" is a list of the spellings somebody already thought
+ * of. What the child receives is decided here instead -- an ASCII identifier
+ * and nothing that could be read as a second argument.
+ *
+ * The class is what the model ids in circulation actually use: letters, digits,
+ * `.`, `_`, `:` and `-`, in vendor-qualified forms as well as bare ones
+ * (`claude-opus-5`, `sonnet`, `us.anthropic.claude-sonnet-4-5-20250929-v1:0`).
+ * The **first** character is deliberately narrower -- alphanumeric only -- and
+ * that is the half that carries the weight: it is what makes a leading `-`
+ * unspellable, so the value cannot arrive at the child's parser looking like a
+ * flag of its own.
+ *
+ * What it refuses, and why each is refused rather than passed through:
+ *
+ * - a leading `-`, per above;
+ * - `/` and `\`, so a model id can never be a path. `D-0067` removed execution
+ *   resolution from this lap by requiring every worker-command token to be
+ *   absolute; a value that could name a file would put a second, differently
+ *   resolved path back on the same command line;
+ * - whitespace, so one flag stays one argument. A CLI that splits its own
+ *   option values would otherwise turn `"opus --dangerously-skip-permissions"`
+ *   into two;
+ * - `=`, so `--model` cannot carry an attached-value form of some other flag;
+ * - every non-ASCII byte and every control character, the second of which
+ *   includes the NUL no operating system can carry in an argv.
+ */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+/**
+ * The longest model id this verb accepts.
+ *
+ * A bound rather than none, because the value is interpolated into a refusal
+ * this verb prints and into an argv the provider persists in `record.json`. The
+ * number is not a measured limit of anything downstream -- it is comfortably
+ * past every id in circulation, which is the property that matters: an operator
+ * who trips it typed something that is not a model id.
+ */
+const MODEL_ID_MAX = 128;
+
+/**
+ * `--model`, checked as a model id and nothing else (`D-0099`).
+ *
+ * **Why the rule is here and not in the parser or the provider.** The provider
+ * takes the value as `base_cli_args` and refuses only what it renders itself
+ * (`-p`, `--session-id`, `--output-format` ...), which it does by raising at
+ * construction, because for it a provider-wide argument overriding the
+ * committed identity is a programmer error rather than an operator's typo. Here
+ * it is an operator's typo: the value came off a command line. So it joins
+ * {@link preflight}'s list, is refused before anything irreversible, and
+ * arrives at an operator as one line and exit 2 like every other argument this
+ * verb will not proceed on.
+ *
+ * **What this rule does not claim.** It does not say the id names a model the
+ * worker CLI knows, and it cannot: the roster belongs to the CLI and changes
+ * without this build. An unknown-but-well-formed id is refused by the child,
+ * late, which is the same place an unknown one has always been refused. What is
+ * settled here is the narrower and checkable half -- that the token continuo
+ * appends is a model id and not a second argument.
+ *
+ * **Exported, and called from two places for `requireCompletion`'s reason.**
+ * The rule is stated once, here; the calls are in {@link preflight} and in
+ * `lap/cli.ts`, which has to ask it **before it constructs the provider**. That
+ * constructor takes the value as `base_cli_args` and raises `PyValueError` on
+ * anything it renders itself -- so a `--model=-p` reached the provider's guard
+ * before this one, and a rule whose whole promise is one line and exit 2
+ * delivered a stack trace and exit 1 instead. The verb's own call closes that,
+ * and the preflight's stays: `performLap` is reachable without the verb, and a
+ * check that lives only in a caller is a check its other callers do not have.
+ */
+export function requireModel(model: string | undefined): void {
+  if (model === undefined) {
+    return;
+  }
+  if (typeof model !== "string" || model === "") {
+    throw new LapUsageError(
+      "model must be a non-empty model id when it is given at all; a lap that names " +
+        "no model runs on the worker CLI's own default, and that is spelled by omitting " +
+        "the flag rather than by passing it empty",
+    );
+  }
+  if (model.length > MODEL_ID_MAX) {
+    throw new LapUsageError(
+      `model is ${String(model.length)} characters, and a model id may be at most ` +
+        `${String(MODEL_ID_MAX)}; a value this long is not an identifier`,
+    );
+  }
+  if (!MODEL_ID.test(model)) {
+    throw new LapUsageError(
+      `model ${pythonRepr(model)} is not a plain model id. It must start with a letter or ` +
+        "a digit and use only letters, digits, '.', '_', ':' and '-' after it: the value " +
+        "becomes a token in the fenced child's own command line, so a leading '-', a path " +
+        "separator, whitespace, an '=' or a control character would be continuo appending " +
+        "something other than a model to that line",
+    );
+  }
+}
+
+/**
  * The budget's rules, stated once and checked from both entry points.
  *
  * Separate from {@link awaitTerminalReport} because of *when* it has to run.
@@ -901,6 +1013,22 @@ export interface LapRequest {
   /** The worker's own command, if the caller pinned one, for the same check. */
   readonly workerCommand?: readonly string[];
   /**
+   * The model the worker CLI is to run on, if the caller chose one (`D-0099`).
+   *
+   * Carried so it can be **checked**, exactly as {@link workerCommand} and
+   * {@link providerStateRoot} are: the caller has already built the provider
+   * over it -- as the two tokens `--model <id>` appended to every spawn the
+   * provider makes -- and `performLap` never passes it to anything. It is here
+   * because {@link preflight} is where an argument an operator typed is refused
+   * before the branch, the worktree and the delivery lease exist, and a model
+   * id is the one argument this verb accepts that becomes a token in the
+   * fenced child's own command line.
+   *
+   * Absent means the caller chose nothing, and the child then runs on whatever
+   * the worker CLI defaults to -- which is what every lap before `D-0099` did.
+   */
+  readonly model?: string;
+  /**
    * The worker's endpoint binding, less the two fields this lap fixes itself.
    *
    * The holder is the admitted intent's claimant, and the **epoch is the one
@@ -999,6 +1127,19 @@ export interface LapOutcome {
    * through -- the gate over the report is open either way.
    */
   readonly endpointLeaseFailure: Error | null;
+  /**
+   * The model this lap was asked to run on, or `null` when none was chosen
+   * (`D-0099`).
+   *
+   * The caller's own value handed back, exactly as {@link elapsedDeadlineAtMs}
+   * is, and for the same reason: the caller is what tells the operator, and a
+   * host driving this verb has no other way to record what the lap it just paid
+   * for actually ran on. `null` is the honest answer rather than a name this
+   * build would have to guess -- with no `--model` the worker CLI picks, and
+   * which model that was is in the child's transcript and nowhere in this
+   * record.
+   */
+  readonly model: string | null;
 }
 
 /**
@@ -1316,6 +1457,10 @@ async function performLapHoldingTheEndpointLease(
       report,
       ingested,
       elapsedDeadlineAtMs,
+      // The caller's own value handed back, for {@link elapsedDeadlineAtMs}'s
+      // reason and one field along: what a lap ran on is a fact about the lap,
+      // and this record is where the verb reads its report off.
+      model: request.model ?? null,
       // **A field, and never a throw** (`D-0073`). The turn is over and its
       // report is in hand; a delivery lease lost while it ran costs the lease,
       // not the report -- the same trade `D-0065` made for an elapsed gate
