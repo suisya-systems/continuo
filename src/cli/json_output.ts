@@ -3,10 +3,10 @@ import type { ArgumentParser, Namespace } from "./parser.js";
 /**
  * The one JSON envelope every host-driven verb answers in (`D-0090`, `D-0092`).
  *
- * Ten verbs answer in it; an eleventh, `measure report`, mounts the same flag
- * and emits its report UNWRAPPED, for the reason `measurement/cli.ts` gives.
- * The counts below are of the eleven that mount the flag, because what this
- * module exists to prevent is eleven spellings of one flag.
+ * Thirteen verbs answer in it; a fourteenth, `measure report`, mounts the same
+ * flag and emits its report UNWRAPPED, for the reason `measurement/cli.ts`
+ * gives. The counts below are of the fourteen that mount the flag, because what
+ * this module exists to prevent is fourteen spellings of one flag.
  *
  * `docs/cli-output-policy.md` governs the bytes; this module governs their
  * shape. It exists because the alternative was measured and rejected: five
@@ -21,8 +21,8 @@ import type { ArgumentParser, Namespace } from "./parser.js";
  * **This is a deliberate exception to `src/cli.ts`'s rule that a subtree
  * declares its own flags.** That rule exists to stop a flag's spelling drifting
  * away from the module that implements it. Here the risk runs the other way:
- * eleven verbs must spell one flag identically, and eleven independent
- * `addArgument` calls are eleven chances to disagree about the help text, the
+ * fourteen verbs must spell one flag identically, and fourteen independent
+ * `addArgument` calls are fourteen chances to disagree about the help text, the
  * `dest`, or whether the flag exists at all. A shared declaration is the
  * stronger anti-drift answer for a flag whose whole value is uniformity, and it
  * is the only flag in this CLI that has that property.
@@ -85,7 +85,7 @@ import type { ArgumentParser, Namespace } from "./parser.js";
  * primitives and cannot fail that way.
  *
  * **ASCII only**, per `docs/cli-output-policy.md`: the help text here reaches
- * `--help` on a cp932 console from all eleven verbs at once.
+ * `--help` on a cp932 console from all fourteen verbs at once.
  */
 
 /** What a document may hold: primitives and the two containers, nothing else. */
@@ -97,7 +97,7 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-/** The flag's help text, declared once so eleven verbs cannot disagree about it. */
+/** The flag's help text, declared once so fourteen verbs cannot disagree about it. */
 export const JSON_HELP =
   "emit one machine-readable JSON document instead of the human-readable " +
   "text. The document goes to stdout on success and to stderr on a refusal; " +

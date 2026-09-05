@@ -90,7 +90,11 @@ function countedClock(instant: number): { reads: () => number } {
  */
 function aDatabaseWithAGate(
   label: string,
-  options: { readonly deadlineAtMs?: number | null; readonly runId?: string | null } = {},
+  options: {
+    readonly deadlineAtMs?: number | null;
+    readonly runId?: string | null;
+    readonly gateId?: string;
+  } = {},
 ): { readonly path: string; readonly destination: string } {
   const root = caseRoot(label);
   const path = join(root, "control-plane.sqlite3");
@@ -113,7 +117,7 @@ function aDatabaseWithAGate(
         .run(`evt/${RUN_ID}`, RUN_ID, RUN_ID, `dk/${RUN_ID}`, T0, T0).lastInsertRowid,
     );
     openGate(connection, {
-      gateId: GATE_ID,
+      gateId: options.gateId ?? GATE_ID,
       gateType: "worker_escalation",
       subjectKind: "run",
       subjectId: RUN_ID,
@@ -1034,6 +1038,404 @@ describe("continuo#159: every refusal gate close can reach is a document", () =>
   });
 });
 
+/**
+ * `gate present`, `gate deliver` and `gate ack` as a host drives them.
+ *
+ * One helper per verb rather than one for the sequence: the cases below assert
+ * on the document each verb writes, and a helper that ran all three would make
+ * every assertion depend on two invocations the case is not about.
+ */
+function presentArgv(path: string, extra: readonly string[] = []): readonly string[] {
+  return [
+    "gate",
+    "present",
+    "--db",
+    path,
+    "--gate-id",
+    GATE_ID,
+    "--now-ms",
+    String(T0 + MINUTE),
+    ...extra,
+  ];
+}
+
+function deliverArgv(
+  path: string,
+  destination: string,
+  nowMs: number,
+  extra: readonly string[] = [],
+): readonly string[] {
+  return [
+    "gate",
+    "deliver",
+    "--db",
+    path,
+    "--destination-dir",
+    destination,
+    "--holder",
+    ACTOR,
+    "--now-ms",
+    String(nowMs),
+    ...extra,
+  ];
+}
+
+function ackArgv(
+  path: string,
+  messageId: string,
+  nowMs: number,
+  extra: readonly string[] = [],
+): readonly string[] {
+  return [
+    "gate",
+    "ack",
+    "--db",
+    path,
+    "--message-id",
+    messageId,
+    "--actor-id",
+    ACTOR,
+    "--now-ms",
+    String(nowMs),
+    ...extra,
+  ];
+}
+
+/** Every document one capture holds, in the order they were written. */
+function documents(text: string): readonly Record<string, unknown>[] {
+  return text
+    .trimEnd()
+    .split("\n")
+    .map((line) => oneDocument(`${line}\n`)) as readonly Record<string, unknown>[];
+}
+
+describe("continuo#165: gate present, deliver and ack answer in the envelope", () => {
+  test("the three verbs carry one gate to presented, each in its own document", () => {
+    // `D-0097`'s whole point at the surface it is about: a console cannot answer
+    // a gate it cannot present, and until this landed the three verbs that reach
+    // `presented` printed prose. Without this case each payload could rename a
+    // key, drop `recipient`, or ship the domain record's camelCase names, and
+    // every human-output case above would stay green.
+    const { path, destination } = aDatabaseWithAGate("gate-json-walk");
+    const presented = relayMessageId(GATE_ID, "presented");
+    const streams = captureStreams();
+
+    expect(main([...presentArgv(path), "--json"])).toBe(0);
+    expect(main([...deliverArgv(path, destination, T0 + 2 * MINUTE), "--json"])).toBe(0);
+    expect(main([...ackArgv(path, presented, T0 + 3 * MINUTE), "--json"])).toBe(0);
+
+    const [present, deliver, ack] = documents(streams.out());
+    expect(present, "gate present's success document changed shape").toStrictEqual({
+      schema: "continuo.gate.present/1",
+      ok: true,
+      db: path,
+      gate_id: GATE_ID,
+      message_id: presented,
+      to_stage: "presented",
+      recipient: "external-notify",
+      enqueued: true,
+    });
+    expect(deliver, "gate deliver's success document changed shape").toStrictEqual({
+      schema: "continuo.gate.deliver/1",
+      ok: true,
+      db: path,
+      recipient: "external-notify",
+      epoch: 1,
+      // The dedup key and the message id are DIFFERENT strings for one relay
+      // (`gate/<id>/<stage>` against `relay/<id>/<stage>`), so a payload that
+      // carried one under both names could not satisfy this.
+      delivered: [{ message_id: presented, dedup_key: `gate/${GATE_ID}/presented` }],
+    });
+    expect(ack, "gate ack's success document changed shape").toStrictEqual({
+      schema: "continuo.gate.ack/1",
+      ok: true,
+      db: path,
+      message_id: presented,
+      gate_id: GATE_ID,
+      to_stage: "presented",
+      acked: true,
+      cancelled: false,
+      advanced: true,
+      closed: false,
+    });
+    expect(streams.err(), "three successes write nothing to stderr").toBe("");
+  });
+
+  test("a re-run of present is enqueued:false, and a second deliver carries an empty array", () => {
+    // The pair a host branches on after a kill, and the hole a hardcoded payload
+    // would sit in: `enqueued: true` and a one-element `delivered` would satisfy
+    // the case above. `present` is idempotent on `(gate_id, to_stage)` and
+    // returns the id already in force; a second delivery pass finds nothing due.
+    const { path, destination } = aDatabaseWithAGate("gate-json-walk-again");
+    const streams = captureStreams();
+
+    expect(main([...presentArgv(path), "--json"])).toBe(0);
+    expect(main([...presentArgv(path), "--json"]), "a repeat is a success").toBe(0);
+    expect(main([...deliverArgv(path, destination, T0 + 2 * MINUTE), "--json"])).toBe(0);
+    // The ack is captured and discarded: it is what makes the relay stop being
+    // due, and this case is about the two delivery passes either side of it.
+    // (Without it the second pass is a RESEND of an unacked message rather than
+    // an empty one, which is the outbox behaving correctly and a different
+    // fact from the one asserted here.)
+    captureStreams();
+    expect(main(ackArgv(path, relayMessageId(GATE_ID, "presented"), T0 + 3 * MINUTE))).toBe(0);
+    const afterAck = captureStreams();
+    expect(main([...deliverArgv(path, destination, T0 + 4 * MINUTE), "--json"])).toBe(0);
+
+    const [first, repeat, delivered] = documents(streams.out());
+    const [empty] = documents(afterAck.out());
+    expect(first?.["enqueued"], "the first call wrote the row").toBe(true);
+    expect(repeat?.["enqueued"], "the repeat wrote nothing, as a boolean").toBe(false);
+    expect(repeat?.["ok"], "and it is still a success").toBe(true);
+    expect(repeat?.["message_id"], "the id already in force is the one reported").toBe(
+      first?.["message_id"],
+    );
+    expect(delivered?.["delivered"], "the first pass carried the relay").toStrictEqual([
+      { message_id: first?.["message_id"], dedup_key: `gate/${GATE_ID}/presented` },
+    ]);
+    expect(
+      empty?.["delivered"],
+      "a pass with nothing due is an empty array, not a sentence",
+    ).toStrictEqual([]);
+    expect(empty?.["epoch"], "and it still reports the fence it ran under").toBe(2);
+  });
+
+  test("the gate and its relay id come from the gate the verb was pointed at", () => {
+    // The hole a `presentPayload` returning literals would sit in: every
+    // assertion above fixes the gate id as well as the document, so constants
+    // would satisfy them. Two control planes whose gates have DIFFERENT ids,
+    // and two documents differing in exactly the two keys derived from that id,
+    // is what a literal cannot fake.
+    const one = aDatabaseWithAGate("gate-json-present-id-one");
+    const other = aDatabaseWithAGate("gate-json-present-id-two", { gateId: "gate-2" });
+    const streams = captureStreams();
+
+    expect(main([...presentArgv(one.path), "--json"])).toBe(0);
+    expect(
+      main([
+        "gate",
+        "present",
+        "--db",
+        other.path,
+        "--gate-id",
+        "gate-2",
+        "--now-ms",
+        String(T0 + MINUTE),
+        "--json",
+      ]),
+    ).toBe(0);
+
+    const [first, second] = documents(streams.out());
+    expect(first?.["gate_id"], "the first document is about the gate it was given").toBe(GATE_ID);
+    expect(first?.["message_id"]).toBe(relayMessageId(GATE_ID, "presented"));
+    expect(second?.["gate_id"], "the second is about the other one").toBe("gate-2");
+    expect(second?.["message_id"], "and its relay id is derived from that gate").toBe(
+      relayMessageId("gate-2", "presented"),
+    );
+    // The vacuity check on this vacuity check: the two documents agree on the
+    // keys that are NOT derived from the gate, so the assertions above are
+    // about those two fields and not about two unrelated documents.
+    expect(first?.["schema"]).toBe(second?.["schema"]);
+    expect(first?.["to_stage"]).toBe(second?.["to_stage"]);
+    expect(first?.["recipient"]).toBe(second?.["recipient"]);
+    expect(first?.["enqueued"]).toBe(second?.["enqueued"]);
+  });
+
+  test("the forwarded ack differs from the presented ack in the booleans that changed", () => {
+    // The hole an `ackPayload` returning literals would sit in: the case above
+    // fixes the database as well as the document. The SAME gate, acked twice at
+    // two stages, differing in `to_stage` and in `closed` and agreeing
+    // everywhere else, is what a literal cannot fake -- and `closed` is the one
+    // a host reads to learn the gate is terminal.
+    const { path, destination } = aDatabaseWithAGate("gate-json-ack-forwarded");
+    const presented = relayMessageId(GATE_ID, "presented");
+    const forwarded = relayMessageId(GATE_ID, "forwarded");
+    carryToPresented(path, destination);
+    // Setup, captured and discarded for `carryToPresented`'s reason: the answer
+    // and the forward delivery are what make the forwarded ack possible, and
+    // their human lines are not what this case reads.
+    captureStreams();
+    expect(
+      main([
+        "gate",
+        "answer",
+        "--db",
+        path,
+        "--gate-id",
+        GATE_ID,
+        "--body",
+        "force-push, and record why",
+        "--actor-id",
+        ACTOR,
+        "--now-ms",
+        String(T0 + 4 * MINUTE),
+      ]),
+    ).toBe(0);
+    expect(main([...deliverArgv(path, destination, T0 + 5 * MINUTE)])).toBe(0);
+    const streams = captureStreams();
+
+    expect(main([...ackArgv(path, forwarded, T0 + 6 * MINUTE), "--json"])).toBe(0);
+    // The presented relay, re-acked after the gate closed: a settled replay, and
+    // a success rather than a refusal.
+    expect(main([...ackArgv(path, presented, T0 + 7 * MINUTE), "--json"])).toBe(0);
+
+    const [forward, replay] = documents(streams.out());
+    expect(forward?.["to_stage"], "the forward relay answers its own stage").toBe("forwarded");
+    expect(forward?.["closed"], "and its ack is what closes the gate").toBe(true);
+    expect(forward?.["advanced"]).toBe(true);
+    expect(replay?.["to_stage"], "the replay is of the presented relay").toBe("presented");
+    expect(replay?.["closed"], "which closes nothing").toBe(false);
+    expect(replay?.["acked"], "and records no second ack").toBe(false);
+    expect(replay?.["ok"], "a settled replay is a success").toBe(true);
+    // The vacuity check on this vacuity check: both documents are about the same
+    // gate under the same schema, so the assertions are about those keys.
+    expect(forward?.["gate_id"]).toBe(replay?.["gate_id"]);
+    expect(forward?.["schema"]).toBe(replay?.["schema"]);
+  });
+
+  test("the same three invocations without --json are the human lines, byte for byte", () => {
+    // The hole: a build that ignored the flag and emitted documents always.
+    // Every case above passes `--json`, so all of them would stay green while
+    // every operator's terminal filled with JSON on the one path every gate
+    // takes.
+    const { path, destination } = aDatabaseWithAGate("gate-json-walk-absent");
+    const presented = relayMessageId(GATE_ID, "presented");
+    const streams = captureStreams();
+
+    expect(main(presentArgv(path))).toBe(0);
+    expect(main(deliverArgv(path, destination, T0 + 2 * MINUTE))).toBe(0);
+    expect(main(ackArgv(path, presented, T0 + 3 * MINUTE))).toBe(0);
+
+    expect(streams.out(), "the human lines must be byte-identical to what they were").toBe(
+      `enqueued ${presented} to external-notify for stage presented\n` +
+        "delivered 1 message(s) to external-notify under epoch 1\n" +
+        `  ${presented} dedup=gate/${GATE_ID}/presented\n` +
+        `${presented}: acked=true cancelled=false advanced=true closed=false ` +
+        `gate=${GATE_ID} stage=presented\n`,
+    );
+    expect(streams.err(), "and nothing reaches stderr").toBe("");
+  });
+});
+
+describe("continuo#165: every refusal these three verbs can reach is a document", () => {
+  test("gate present --json refuses an unknown gate, and the human line is unchanged", () => {
+    const { path } = aDatabaseWithAGate("gate-json-present-refused");
+    const streams = captureStreams();
+    const argv = [
+      "gate",
+      "present",
+      "--db",
+      path,
+      "--gate-id",
+      "gate-nope",
+      "--now-ms",
+      String(T0 + MINUTE),
+    ];
+
+    const human = main(argv);
+    const machine = main([...argv, "--json"]);
+
+    expect(human, "a refused present is exit 2 without the flag").toBe(2);
+    expect(machine, "--json must not change the refusal's exit code").toBe(human);
+    expect(streams.out(), "a refusal writes nothing to stdout, with or without the flag").toBe("");
+    const lines = streams.err().trimEnd().split("\n");
+    expect(lines[0], "the human refusal line is unchanged").toBe(
+      "error: gate gate-nope does not exist",
+    );
+    expect(
+      oneDocument(`${lines[1] ?? ""}\n`),
+      "gate present's refusal document changed shape",
+    ).toStrictEqual({
+      schema: "continuo.gate.present/1",
+      ok: false,
+      db: path,
+      error: { class: "UnknownGateRefused", message: "gate gate-nope does not exist" },
+    });
+  });
+
+  test("gate deliver --json refuses while a lap holds the delivery lease", () => {
+    // `gate deliver` is the first enveloped verb whose refusal set reaches
+    // `LeaseRefusal`, so this is where the shared funnel is shown to carry a
+    // class none of the other six can raise (`D-0097`).
+    const { path, destination } = aDatabaseWithAGate("gate-json-deliver-refused");
+    const connection = openProductionControlPlane(path);
+    try {
+      acquire(connection, {
+        resource: DELIVERY_LEASE_RESOURCE,
+        holder: "a-running-lap",
+        nowMs: T0,
+        ttlMs: 300_000,
+      });
+    } finally {
+      connection.close();
+    }
+    const argv = deliverArgv(path, destination, T0 + MINUTE);
+    // The human run and the machine run are captured separately, so the line
+    // this case compares the document against is read before the flag was
+    // given rather than out of the same buffer.
+    const humanStreams = captureStreams();
+    const human = main(argv);
+    const humanMessage = humanStreams.err().trimEnd().slice("error: ".length);
+    const streams = captureStreams();
+    const machine = main([...argv, "--json"]);
+
+    expect(human).toBe(2);
+    expect(machine, "--json must not change the refusal's exit code").toBe(human);
+    expect(humanMessage, "the operator's line still names the holder").toContain("a-running-lap");
+    expect(streams.out(), "a refusal writes nothing to stdout").toBe("");
+    expect(
+      oneDocument(streams.err()),
+      "gate deliver's refusal document changed shape",
+    ).toStrictEqual({
+      schema: "continuo.gate.deliver/1",
+      ok: false,
+      db: path,
+      // The first enveloped verb whose refusal set reaches a lease class: this
+      // is the funnel carrying an error none of the other six can raise.
+      error: { class: "LeaseHeld", message: humanMessage },
+    });
+  });
+
+  test("gate ack --json refuses an ack of a relay nothing delivered", () => {
+    // The refusal `D-0097` rests its second point on: a console cannot present
+    // itself by acking a relay it never delivered, because `Outbox.recordAck`
+    // refuses the row. If this case ever goes green with an ack recorded, the
+    // decision's mechanism is gone and the entry must be re-taken.
+    const { path } = aDatabaseWithAGate("gate-json-ack-refused");
+    const presented = relayMessageId(GATE_ID, "presented");
+    captureStreams();
+    expect(main(presentArgv(path)), "enqueued, and deliberately never delivered").toBe(0);
+    const streams = captureStreams();
+    const argv = ackArgv(path, presented, T0 + 2 * MINUTE);
+
+    const human = main(argv);
+    const machine = main([...argv, "--json"]);
+
+    expect(human).toBe(2);
+    expect(machine, "--json must not change the refusal's exit code").toBe(human);
+    expect(streams.out(), "a refusal writes nothing to stdout").toBe("");
+    const lines = streams.err().trimEnd().split("\n");
+    expect(
+      oneDocument(`${lines[1] ?? ""}\n`),
+      "gate ack's refusal document changed shape",
+    ).toStrictEqual({
+      schema: "continuo.gate.ack/1",
+      ok: false,
+      db: path,
+      error: {
+        class: "OutboxUsageError",
+        message:
+          `'${presented}' has not been delivered; an ack for an undelivered message is ` +
+          "evidence of a lost delivery record, not of a delivery",
+      },
+    });
+    expect(lines[0], "the human refusal line is unchanged").toBe(
+      `error: '${presented}' has not been delivered; an ack for an undelivered message is ` +
+        "evidence of a lost delivery record, not of a delivery",
+    );
+  });
+});
+
 describe("continuo#155: a refusal is a document too", () => {
   test("gate show --json refuses an unknown gate on stderr, exit 2, stdout empty", () => {
     // The exit code and the stream are the host contract's load-bearing half:
@@ -1204,41 +1606,39 @@ describe("the --json documents, observed red", () => {
     ).not.toBe(machine);
   });
 
-  test("a gate verb with no --json flag refuses exactly as it did before", () => {
+  test("the gate verb with no --json flag refuses exactly as it did before", () => {
     // The hole: `refuse` is shared by all eight verbs, and teaching it the flag
-    // could have changed the five that never opted in -- the worst kind of
-    // regression, because it lands on the verbs this task was told not to
-    // touch. `gate present` is one of them: same line, same status.
-    const { path } = aDatabaseWithAGate("gate-json-out-of-scope");
+    // could have changed the ones that never opted in -- the worst kind of
+    // regression, because it lands on the verb each task was told not to touch.
+    // Since `D-0097` that verb is `gate reconcile`, alone: same line, same
+    // status, and its refusal is a control-plane one because it takes no gate.
+    const absent = join(caseRoot("gate-json-out-of-scope"), "absent.sqlite3");
     const streams = captureStreams();
 
-    expect(main(["gate", "present", "--db", path, "--gate-id", "gate-nope"])).toBe(2);
+    expect(main(["gate", "reconcile", "--db", absent, "--actor-id", ACTOR])).toBe(2);
 
-    expect(streams.err(), "an out-of-scope verb's refusal must be byte-identical").toBe(
-      "error: gate gate-nope does not exist\n",
+    expect(streams.err(), "an out-of-scope verb's refusal must be the operator's line").toMatch(
+      /^error: /,
     );
+    expect(() => JSON.parse(streams.err()), "and not a document").toThrow();
     expect(streams.out(), "and it writes nothing to stdout").toBe("");
   });
 
-  test("--json is mounted on the four verbs a host drives, and on no others", () => {
+  test("--json is mounted on the seven verbs a host drives, and on no others", () => {
     // The vacuity check on the vacuity checks: a flag mounted everywhere would
     // satisfy the cases above (nothing here asserts the parser REFUSES it
     // elsewhere), and a flag mounted nowhere would fail them all for one
-    // reason. This states the boundary itself -- four in, four out (`D-0092`
-    // moved `close` across it, and moved nothing else).
+    // reason. This states the boundary itself -- seven in, one out (`D-0092`
+    // moved `close` across it, `D-0097` moved `present`, `deliver` and `ack`,
+    // and `reconcile` is what is left, because no reader drives it).
     const usage: string[] = [];
     patchSeam(topLevelSeams, "err", (text: string) => {
       usage.push(text);
     });
-    const { path } = aDatabaseWithAGate("gate-json-mount");
+    const { path, destination } = aDatabaseWithAGate("gate-json-mount");
     captureStreams();
 
-    for (const argv of [
-      ["gate", "present", "--db", path, "--gate-id", GATE_ID],
-      ["gate", "deliver", "--db", path, "--destination-dir", path, "--holder", ACTOR],
-      ["gate", "ack", "--db", path, "--message-id", "m-1", "--actor-id", ACTOR],
-      ["gate", "reconcile", "--db", path, "--actor-id", ACTOR],
-    ]) {
+    for (const argv of [["gate", "reconcile", "--db", path, "--actor-id", ACTOR]]) {
       const before = usage.length;
       expect(
         main([...argv, "--json"]),
@@ -1250,12 +1650,15 @@ describe("the --json documents, observed red", () => {
       ).toContain("--json");
     }
 
-    // And the four that DO carry it reach their handler rather than the
+    // And the seven that DO carry it reach their handler rather than the
     // parser: without this half, deleting every `addJsonArgument` call in this
     // subtree would leave the loop above green.
     for (const argv of [
       ["gate", "list", "--db", path],
       ["gate", "show", "--db", path, "--gate-id", GATE_ID],
+      presentArgv(path),
+      deliverArgv(path, destination, T0 + 2 * MINUTE),
+      ackArgv(path, relayMessageId(GATE_ID, "presented"), T0 + 3 * MINUTE),
       ["gate", "answer", "--db", path, "--gate-id", GATE_ID, "--body", "b", "--actor-id", ACTOR],
       closeArgv(path, "withdrawn"),
     ]) {
