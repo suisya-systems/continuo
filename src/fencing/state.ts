@@ -38,9 +38,10 @@ import {
 import { basename, dirname, join } from "node:path";
 
 import { pyJsonDumps, pyJsonLoads } from "./pyjson.js";
-import { pyRepr } from "./pyrepr.js";
+import { pyRepr, pyReprOf } from "./pyrepr.js";
 import {
   isPlainObject,
+  type PyNumberSpelling,
   PyTypeError,
   PyValueError,
   pyDict,
@@ -157,12 +158,18 @@ function getOwn(mapping: unknown, key: string): unknown {
  * fence as sound -- so the vocabularies are closed and every field is
  * type-checked.
  */
-function ruleFromJson(entry: unknown): FenceRule {
+function ruleFromJson(
+  entry: unknown,
+  // The spelling of the slot `entry` came out of. The persisted fence is read
+  // with `pyJsonLoads`, so a hand-edited `"rules": [1.0]` has one, and the
+  // message below names the value (D-0095).
+  spelling?: PyNumberSpelling | undefined,
+): FenceRule {
   // `isinstance(entry, Mapping)`. A JSON array is not a Mapping and neither is
   // `null`, and `isPlainObject` excludes both -- `typeof null === "object"` and
   // an array is an object, so neither exclusion is automatic.
   if (!isPlainObject(entry)) {
-    throw new FenceStateError(`persisted rule is not an object: ${pyRepr(entry)}`);
+    throw new FenceStateError(`persisted rule is not an object: ${pyRepr(entry, spelling)}`);
   }
   const fields: Record<string, string> = {};
   for (const key of ["layer", "kind", "tool", "spec"]) {
@@ -173,7 +180,10 @@ function ruleFromJson(entry: unknown): FenceRule {
     // `=== ""` rather than `!value` so a future edit cannot widen it.
     if (typeof value !== "string" || value === "") {
       throw new FenceStateError(
-        `persisted rule field ${pyRepr(key)} must be a non-empty string, got ${pyRepr(value)}`,
+        // `pyReprOf(entry, key)`: the rule object is the container the value's
+        // spelling hangs on, so `{"spec": 1.0}` reads `1.0` rather than `1`.
+        `persisted rule field ${pyRepr(key)} must be a non-empty string, ` +
+          `got ${pyReprOf(entry, key)}`,
       );
     }
     fields[key] = value;
@@ -219,7 +229,9 @@ export function fenceFromJson(payload: Readonly<Record<string, unknown>>): Fence
   try {
     const format = getOwn(payload, "format");
     if (!equalsFormatVersion(format)) {
-      throw new FenceStateError(`unsupported fence format: ${pyRepr(format)}`);
+      // `pyReprOf(payload, "format")`: the payload came through `pyJsonLoads`,
+      // so a `"format": 1.0` is named as interlock names it (D-0095).
+      throw new FenceStateError(`unsupported fence format: ${pyReprOf(payload, "format")}`);
     }
     const rawRules = getItem(payload, "rules");
     if (rawRules === null) {
@@ -231,7 +243,12 @@ export function fenceFromJson(payload: Readonly<Record<string, unknown>>): Fence
       // compares the message, so the raise is reproduced rather than adapted.
       throw new PyTypeError("'NoneType' object is not iterable");
     }
-    const rules = pyIterate(rawRules).map((entry) => ruleFromJson(entry));
+    // The ORIGINAL is what carries the spellings -- `pyIterate` returns a copy and
+    // drops the index-keyed record by design (D-0212) -- so the index is used to
+    // read them back off `rawRules`.
+    const rules = pyIterate(rawRules).map((entry, index) =>
+      ruleFromJson(entry, pyNumberSpelling(rawRules, index)),
+    );
     if (rules.length === 0) {
       throw new FenceStateError("persisted fence carries no rules");
     }

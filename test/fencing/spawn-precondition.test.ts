@@ -992,6 +992,37 @@ describe("str() of a document number reaches the fence and the payload (target-o
     expect(denyRefusal.reasons.map(([, detail]) => detail).join("; ")).toContain(
       "permission rule must be a non-empty string: 9007199254740993",
     );
+
+    // And `permissions.allow`, whose loop is over the document's own array as
+    // well. Kept because the three lists are three separate loops and a repair
+    // applied to two of them is exactly the shape a review found here.
+    const allowDocument = documentWithNumbers(root, "roles-with-numeric-allow.json", {
+      permissions: { allow: ["<<1.0>>"], deny: ["Bash(git push)"] },
+    });
+    const allowRefusal = refuse(ledger, allowDocument, ctx).outcome;
+    expect(allowRefusal.reasons.map(([, detail]) => detail).join("; ")).toContain(
+      "allow entry not a string: 1.0",
+    );
+
+    // And the hooks, whose group list is the document's array while the hook
+    // list inside it is a `pyIterate` COPY -- so the two halves take their
+    // spelling from different containers, and only one of them can use
+    // `pyReprOf`.
+    const hookDocument = documentWithNumbers(root, "roles-with-numeric-hooks.json", {
+      hooks: { PreToolUse: ["<<1.0>>"] },
+    });
+    const hookRefusal = refuse(ledger, hookDocument, ctx).outcome;
+    expect(hookRefusal.reasons.map(([, detail]) => detail).join("; ")).toContain(
+      "hook group not an object: 1.0",
+    );
+
+    const hookEntryDocument = documentWithNumbers(root, "roles-with-numeric-hook.json", {
+      hooks: { PreToolUse: [{ matcher: "*", hooks: ["<<1.0>>"] }] },
+    });
+    const hookEntryRefusal = refuse(ledger, hookEntryDocument, ctx).outcome;
+    expect(hookEntryRefusal.reasons.map(([, detail]) => detail).join("; ")).toContain(
+      "hook not a command: 1.0",
+    );
   });
 
   test("a persisted fence carrying a number in a str() field round-trips its spelling", () => {
@@ -1029,6 +1060,46 @@ describe("str() of a document number reaches the fence and the payload (target-o
     const fence = readFence(path);
     expect(fence.roleKind).toBe("1.0");
     expect(fence.permissionMode).toBe("9007199254740993");
+  });
+
+  test("a malformed persisted fence names its numbers as the file spells them", () => {
+    // The refusal half of the same read path. `readFence` parses with
+    // `pyJsonLoads`, so every one of these messages CAN name the value the file
+    // holds, and each was naming JavaScript's rendering of it instead.
+    const { root } = fixtures();
+    function readBack(name: string, payload: Record<string, unknown>): string {
+      const path = join(root, name);
+      writeFileSync(
+        path,
+        pyJsonDumps(payload, { indent: 2 }).replaceAll(
+          /"<<([^"]+)>>"/g,
+          (_whole, literal: string) => literal,
+        ),
+        "utf8",
+      );
+      try {
+        readFence(path);
+      } catch (exc) {
+        return String((exc as Error).message);
+      }
+      throw new Error(`${name}: expected a refusal`);
+    }
+    // `2.0`, not `1.0`: `1.0 == 1` in Python and `1.0 === 1` in JavaScript, so
+    // a float spelling of the CURRENT version is ACCEPTED on both sides and
+    // never reaches this refusal at all.
+    expect(readBack("fence-bad-format.json", { format: "<<2.0>>" })).toContain(
+      "unsupported fence format: 2.0",
+    );
+    expect(
+      readBack("fence-bad-rule.json", { format: 1, rules: ["<<1.0>>"], settings: {} }),
+    ).toContain("persisted rule is not an object: 1.0");
+    expect(
+      readBack("fence-bad-rule-field.json", {
+        format: 1,
+        rules: [{ layer: "permissions", kind: "permission-deny", tool: "Bash", spec: "<<1.0>>" }],
+        settings: {},
+      }),
+    ).toContain("must be a non-empty string, got 1.0");
   });
 });
 

@@ -14506,6 +14506,30 @@ established:
    next write. `getItem` stays the lookup, because it is what raises the `KeyError` whose
    left-to-right argument order the source makes observable.
 
+**The call-site sweep, and what an independent review found.** The first draft of this repair
+carried the spelling at the sites the measurement above had reached and left `permissions.allow`'s
+loop alone -- a bare `pyRepr(entry)` over the document's own array, so `allow: [1.0]` still refused
+with `... : 1`. A Codex review of the diff caught it, and the useful part is WHY it was missed:
+`permissions.deny` and `permissions.allow` are two loops in two functions, and repairing the one the
+measurement had exercised looked complete. So every site in `src/fencing` that turns a value into
+text was then classified rather than sampled. Carrying: `role_kind`, `permission_mode`, the settings
+payload's `permissionMode`, all three rule-list entry refusals (`deny`, `allow`,
+`sandbox.filesystem.*`), both hook refusals, `checkPermissionMode`'s mode and its `sorted(allowed)`,
+the `forbidden_allow_regex` entry, the `interlockMatchers` list `checkHooks` builds -- a rebuild
+site, so it collects and attaches the record like every other -- and the four `state.ts` reads and
+refusals over a persisted fence. Not carrying, and stated rather than left: every other
+`pyRepr`/`pyStr` call in the subsystem sits after a guard that has already established the value is
+a STRING, so no number can reach it.
+
+**Two surfaces are out of reach at the PARSE, not at the refusal.** `src/fencing/readback.ts` and
+`src/fencing/cli_args_allow.ts` use `JSON.parse` rather than `pyJsonLoads`, each for a reason its
+own header gives: the readback parses a CLI's `--debug` stdout, and the cli_args allowlist is a
+continuo-only document with no interlock counterpart and no key-order or number property to
+preserve. No spelling is recorded for either, so a number in one of their messages is still
+JavaScript's rendering. Neither is compared by bytes and neither has an interlock counterpart to
+diverge from, so changing either parse would be a change to those modules' own decisions rather than
+part of this repair. Recorded in the renderer ledger beside the repair.
+
 **What is deliberately NOT carried.** A call site that iterates a `pyIterate` COPY does not get the
 spelling from the copy. `D-0212` proved that branch is safe precisely by NOT carrying -- an
 index-keyed record does not survive a caller reordering the copy, so arming it would arm a trap
@@ -14536,7 +14560,7 @@ the `types` row it already recorded, over the same 37 number documents in
 `parity/oracle/fnmatch-shlex-corpus.json`, which already include `1e400`, `-1e400` and 400-digit
 integers. Both entry points are asserted separately because they are separate functions here:
 control, with the spelling dropped from `pyRepr`'s number arm the vector reports 19 divergences from
-CPython while the `str` column stays green. Four target-only cases in
+CPython while the `str` column stays green. Five target-only cases in
 `test/fencing/spawn-precondition.test.ts` drive `FencedSpawner.spawn` over documents whose numeric
 literals are patched in as TEXT -- the JavaScript literal `1.0` IS `1`, so a body built in code
 carries no spelling and would pass against the unrepaired renderer -- and assert on the BYTES of the

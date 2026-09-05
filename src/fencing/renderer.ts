@@ -1032,7 +1032,12 @@ function checkForbiddenAllow(
   // appear in the global config sends the operator looking for a line that is
   // not there.
   const patterns: { readonly regex: RegExp; readonly source: string }[] = [];
-  for (const raw of pyIterate(pyOr(globalCfg.forbidden_allow_regex, []))) {
+  // The ORIGINAL container is held alongside the copy `pyIterate` returns,
+  // because the copy drops the index-keyed number record on purpose (D-0212)
+  // and both refusals below name the entry (D-0095).
+  const forbiddenRegex = pyOr(globalCfg.forbidden_allow_regex, []);
+  for (const [index, raw] of pyIterate(forbiddenRegex).entries()) {
+    const rawSpelling = pyNumberSpelling(forbiddenRegex, index);
     // `re.compile` takes only a string (or an already-compiled pattern) and
     // raises TypeError on anything else -- which the source catches alongside
     // `re.error` and turns into a GLOBAL_CONFIG_INVALID reason.
@@ -1048,7 +1053,7 @@ function checkForbiddenAllow(
       // against CPython 3.12.3; both texts land in a ledger-persisted reason.
       found.push([
         RefusalReason.GLOBAL_CONFIG_INVALID,
-        `forbidden_allow_regex entry ${pyRepr(raw)} is not a valid regex: ` +
+        `forbidden_allow_regex entry ${pyRepr(raw, rawSpelling)} is not a valid regex: ` +
           (pyHashable(raw)
             ? "first argument must be string or compiled pattern"
             : `unhashable type: '${pyTypeName(raw)}'`),
@@ -1077,13 +1082,19 @@ function checkForbiddenAllow(
     } catch (exc) {
       found.push([
         RefusalReason.GLOBAL_CONFIG_INVALID,
-        `forbidden_allow_regex entry ${pyRepr(raw)} is not a valid regex: ${describe(exc)}`,
+        `forbidden_allow_regex entry ${pyRepr(raw, rawSpelling)} is not a valid regex: ${describe(exc)}`,
       ]);
     }
   }
-  for (const entry of allow) {
+  // `.entries()`: `allow` is the document's own array, so the slot still carries
+  // the spelling the refusal below names -- `[1.0]` is `1.0` in interlock's
+  // sentence and was `1` here (D-0095).
+  for (const [index, entry] of allow.entries()) {
     if (typeof entry !== "string") {
-      found.push([RefusalReason.RULE_SYNTAX, `allow entry not a string: ${pyRepr(entry)}`]);
+      found.push([
+        RefusalReason.RULE_SYNTAX,
+        `allow entry not a string: ${pyReprOf(allow, index)}`,
+      ]);
       continue;
     }
     if (exact.has(entry)) {
@@ -1159,9 +1170,21 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
   const problems: Reason[] = [];
   let commands = 0;
   const interlockMatchers: unknown[] = [];
-  for (const group of entries) {
+  // A LIST BUILT IN CODE out of document values, so it is a rebuild site like
+  // any other and the standing obligation applies (D-0212): the refusal below
+  // reprs it, and a `"matcher": 1.0` collected here would be named `1`. The
+  // record is keyed by this list's own index, filled as the pushes happen and
+  // attached once, because `rememberNumberSpellings` REPLACES the record rather
+  // than merging into it (D-0095).
+  const matcherSpellings = new Map<string, PyNumberSpelling>();
+  for (const [groupIndex, group] of entries.entries()) {
     if (!isPlainObject(group)) {
-      problems.push([RefusalReason.RULE_SYNTAX, `hook group not an object: ${pyRepr(group)}`]);
+      problems.push([
+        RefusalReason.RULE_SYNTAX,
+        // `entries` is `hooks.PreToolUse` straight out of the document, so the
+        // slot carries the spelling this sentence names (D-0095).
+        `hook group not an object: ${pyReprOf(entries, groupIndex)}`,
+      ]);
       continue;
     }
     // `for hook in group.get("hooks", []) or []` (renderer.py:394). A STRING
@@ -1172,10 +1195,18 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
     // hook group and one broken one CLEANLY, and the broken group's hooks
     // simply never run: the fence the operator reads is not the fence the child
     // gets.
-    const groupHooks = pyIterate(pyOr(getOwn(group, "hooks"), []));
-    for (const hook of groupHooks) {
+    // @see the `forbidden_allow_regex` loop: the original is kept beside the
+    // copy so a number's spelling survives into the refusal (D-0095). A STRING
+    // here iterates per character, and a character has no spelling to find --
+    // `pyNumberSpelling` simply answers `undefined`, which is the right answer.
+    const authoredHooks = pyOr(getOwn(group, "hooks"), []);
+    const groupHooks = pyIterate(authoredHooks);
+    for (const [hookIndex, hook] of groupHooks.entries()) {
       if (!isPlainObject(hook) || typeof (hook as Record<string, unknown>).command !== "string") {
-        problems.push([RefusalReason.RULE_SYNTAX, `hook not a command: ${pyRepr(hook)}`]);
+        problems.push([
+          RefusalReason.RULE_SYNTAX,
+          `hook not a command: ${pyRepr(hook, pyNumberSpelling(authoredHooks, hookIndex))}`,
+        ]);
         continue;
       }
       const hookObj = hook as Record<string, unknown>;
@@ -1186,13 +1217,20 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
       if (hookObj.type !== "command") {
         problems.push([
           RefusalReason.HOOK_NOT_A_COMMAND,
-          `PreToolUse hook has type ${pyRepr(hookObj.type)}, not 'command': ${pyRepr(command)}`,
+          // `pyReprOf(hookObj, "type")`: the type is read off the hook object,
+          // which is the container its spelling hangs on. `command` is a string
+          // by the guard above, so it needs none.
+          `PreToolUse hook has type ${pyReprOf(hookObj, "type")}, not 'command': ${pyRepr(command)}`,
         ]);
         continue;
       }
       commands += 1;
       problems.push(...checkCommandResolves(command));
       if (commandRunsHook(command, ctx)) {
+        const matcherSpelling = pyNumberSpelling(group, "matcher");
+        if (matcherSpelling !== undefined) {
+          matcherSpellings.set(String(interlockMatchers.length), matcherSpelling);
+        }
         interlockMatchers.push((group as Record<string, unknown>).matcher);
         problems.push(...checkInvocation(command, ctx, role));
       }
@@ -1213,7 +1251,9 @@ function checkHooks(hooks: unknown, ctx: FenceContext, role: string): Reason[] {
     // consults the hook for the tools the matcher leaves out.
     problems.push([
       RefusalReason.HOOK_MATCHER_TOO_NARROW,
-      `Interlock's deny hook is scoped to matcher ${pyRepr(interlockMatchers)}; it ` +
+      `Interlock's deny hook is scoped to matcher ${pyRepr(
+        rememberNumberSpellings(interlockMatchers, matcherSpellings),
+      )}; it ` +
         "must match all tools ('*'), because the fence spans Bash, Read, Write, " +
         "Edit and WebFetch rules and a narrow matcher silently exempts the rest",
     ]);
