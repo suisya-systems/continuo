@@ -55,7 +55,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
-import { normalizePath, osIsabs } from "../../src/fencing/pypath.js";
+import { normalizePath, osIsabs, osRealpath } from "../../src/fencing/pypath.js";
 import { PyValueError } from "../../src/fencing/pysemantics.js";
 import {
   checkRenderedSandboxDenyStrings,
@@ -1079,7 +1079,6 @@ describe("the settings generator is a second producer of the same artifact (#163
     readonly settingsPath: string;
   } {
     const root = fenceCaseRoot();
-    const workerDir = join(root, "worker");
     // A neutral path holding a neutral string, deliberately. A first attempt
     // planted the nonce at `.secrets/token.txt`, the shape the D-0093 pair
     // uses, and the reproduction half failed for a reason that has nothing to
@@ -1087,13 +1086,26 @@ describe("the settings generator is a second producer of the same artifact (#163
     // the command on its own judgement, which is green whether the deny fired
     // or the file was void. What is under test is the settings file, so the
     // path must give the child nothing else to decide.
-    const recordsDir = join(workerDir, "vault", "records");
+    const created = join(root, "worker");
+    const recordsDir = join(created, "vault", "records");
     mkdirSync(recordsDir, { recursive: true });
-    const denied = join(recordsDir, "reading.txt");
-    writeFileSync(denied, `${GENERATOR_NONCE}\n`, "utf8");
-    const otherDir = join(workerDir, "vault", "other");
+    const otherDir = join(created, "vault", "other");
     mkdirSync(otherDir, { recursive: true });
-    writeFileSync(join(otherDir, "unrelated.txt"), "unrelated\n", "utf8");
+    // `osRealpath`, AFTER the directories exist, and every path below derived
+    // from the result. The generator's suppression pass compares
+    // `realpath(worker_dir + entry)` against `normpath(worker_dir)` and
+    // deliberately does NOT realpath the root, so an unresolved `worker_dir`
+    // makes both entries look like escapes and both are dropped -- leaving a
+    // `denyRead` of `[]` and this case asserting a length of 2 against nothing.
+    // Measured: green on Linux, where a temp directory is already its own
+    // realpath, and red on both required Windows cells, where it is an 8.3
+    // short name. `parity/settings.settings-generator.ledger.json` records the
+    // same precondition for the translated cases, which restore it the same
+    // way; macOS (`/var` -> `/private/var`) would need it too.
+    const workerDir = osRealpath(created);
+    const denied = join(workerDir, "vault", "records", "reading.txt");
+    writeFileSync(denied, `${GENERATOR_NONCE}\n`, "utf8");
+    writeFileSync(join(workerDir, "vault", "other", "unrelated.txt"), "unrelated\n", "utf8");
 
     const witness = join(root, "generated-hook-ran");
     // `{worker_dir}` rather than the resolved path, so the substitution and the
