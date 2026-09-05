@@ -103,6 +103,7 @@ export const RefusalReason = {
   HOOK_INVOCATION_WRONG: "hook-invocation-wrong",
   GLOBAL_CONFIG_INVALID: "global-config-invalid",
   SANDBOX_PROFILE_ABSENT: "sandbox-profile-absent",
+  SANDBOX_ENTRY_NOT_STRING: "sandbox-entry-not-string",
   RULE_SYNTAX: "rule-syntax",
   EMPTY_FENCE: "empty-fence",
   PERMISSION_MODE_INVALID: "permission-mode-invalid",
@@ -522,6 +523,102 @@ function repairSandbox(rendered: Record<string, unknown>, writableRoots: readonl
 }
 
 /**
+ * Refuse a rendered `sandbox` block whose deny entries are not all strings
+ * (D-0093).
+ *
+ * ## What this is a post-condition *for*
+ *
+ * {@link repairSandbox} flattens `denyRead` / `denyWrite` to strings, and its
+ * fallback branch says the unflattened case "is unreachable from a rendered
+ * fence". That claim is true today -- {@link parseSandboxEntry} refuses every
+ * shape the flattener does not recognise, over the same object graph -- and it
+ * was, until this entry, held by nothing but the comment asserting it. This
+ * function is the same claim, enforced.
+ *
+ * ## Why a comment is not enough here, when it is enough elsewhere
+ *
+ * Because of what the CLI does with the byte shape the comment rules out.
+ * Measured on `2.1.261`, in a target carrying no settings of its own, a
+ * settings file whose `sandbox.filesystem.denyRead` or `denyWrite` holds ONE
+ * non-string entry:
+ *
+ * - **discards the whole permission and hook pipeline**, for every tool. The
+ *   `permissions.deny` rule is not applied, and the `PreToolUse` hook is never
+ *   invoked -- not "invoked and overruled", never run at all.
+ * - **says nothing.** No warning, no stderr, exit zero.
+ * - so a denied read *succeeds*: a `Read` of a path the fence denies returns
+ *   the file's contents, and a denied `Bash` runs. A write is refused, but by
+ *   the nobody-to-approve path rather than by the rule, which is why `#130`
+ *   and `#131` -- a write refused and a read let through, read for two years
+ *   as two defects -- are one mechanism seen from two sides.
+ *
+ * The three layers ride to the child in ONE artifact: {@link settingsPayload}
+ * copies `permissions`, `sandbox` and `hooks` out of a single document, and the
+ * spawn serialises that document verbatim. So they are not independent layers,
+ * and the failure is not graceful degradation to a smaller fence -- it is the
+ * whole fence, silently, on one malformed entry. A fence that can be voided by
+ * a byte it emits itself has to refuse to emit that byte, not comment about it.
+ *
+ * ## Scoped to the two axes measured to do this, and no further
+ *
+ * `additionalDirectories` entries that are not strings, and unknown keys under
+ * `sandbox`, were measured on the same CLI and are **harmless**: the hook
+ * fires and the deny is applied. They are left alone deliberately. Refusing a
+ * shape measured not to matter is validating against a settings schema this
+ * project does not have, which is the move `D-0082` declined; `D-0093` names
+ * them so the omission is a decision rather than an oversight.
+ *
+ * Placed after {@link repairSandbox}, because the repair is what is being
+ * checked -- and after the authored-input refusals, so a document that is
+ * refusable on its own terms still refuses in its author's spelling.
+ *
+ * Exported for the cases that drive it directly. A post-condition whose only
+ * caller is the one function it guards can be tested through that function
+ * only by first constructing the state it exists to make impossible, which
+ * would mean adding a seam to `renderFence` that lets a caller ask for a bad
+ * render -- the lenient mode this module refuses to have. Checking the pure
+ * predicate against synthetic post-repair blocks costs no such seam.
+ */
+export function checkRenderedSandboxDenyStrings(
+  rendered: Record<string, unknown>,
+  role: string,
+): void {
+  const sandbox = getOwn(rendered, "sandbox");
+  if (!isPlainObject(sandbox)) {
+    return;
+  }
+  const filesystem = getOwn(sandbox, "filesystem");
+  if (!isPlainObject(filesystem)) {
+    return;
+  }
+  const reasons: Reason[] = [];
+  for (const key of ["denyRead", "denyWrite"] as const) {
+    const entries = Object.hasOwn(filesystem, key) ? filesystem[key] : undefined;
+    if (!Array.isArray(entries)) {
+      // A non-list was refused upstream, and `null` / absent declare nothing.
+      // Neither reaches the child as an entry, which is what this checks.
+      continue;
+    }
+    for (const [index, entry] of entries.entries()) {
+      if (typeof entry === "string") {
+        continue;
+      }
+      reasons.push([
+        RefusalReason.SANDBOX_ENTRY_NOT_STRING,
+        // `pyTypeNameOf(entries, index)` rather than `pyTypeName(entry)`, for
+        // the reason the `permissions.deny` refusal gives: the container knows
+        // the number spelling, so `1.0` reads `float` rather than `int`.
+        `sandbox.filesystem.${key}[${index}] would reach the child as ` +
+          `${pyTypeNameOf(entries, index)}, not a string: ${pyRepr(entry)}`,
+      ]);
+    }
+  }
+  if (reasons.length > 0) {
+    throw new FenceRefusal(role, reasons);
+  }
+}
+
+/**
  * Render one role's fence, or refuse.
  *
  * There is no `strict=false`. A renderer with a lenient mode grows a caller
@@ -777,6 +874,11 @@ export function renderFence(
   // its author spelled it, and a repair applied first would put this function's
   // spelling into a refusal detail the ledger stores verbatim (D-0082).
   repairSandbox(rendered, options?.sandboxWritableRoots ?? []);
+
+  // And the post-condition on that repair, before any settings object exists
+  // to be written (D-0093). @see `checkRenderedSandboxDenyStrings` for what the
+  // CLI does with the shape this refuses.
+  checkRenderedSandboxDenyStrings(rendered, role);
 
   // The source passes `permission_mode` to `_settings_payload` WITHOUT a
   // `str()` -- the annotation says `str`, but the value handed over is

@@ -596,9 +596,12 @@ concluded.
   | the same fence with only the `sandbox` key removed | `add 'novel.md'` | `worker: Bash denied by permission-deny rule 'git worktree *'` |
   | a minimal file carrying only `permissions` | `add 'novel.md'` | denied |
 
-  Removing one key fixes both directions, so both are that key's. The read that slips through is a
-  command the sandbox can satisfy on its own, and it appears not to reach the permission decision or
-  the hook at all. The write that is refused is refused because a worktree's `.git` is a *file*
+  Removing one key fixes both directions, so both are that key's. This lap read the difference
+  between the two directions as read-only-ness -- the read that slips through is a command the
+  sandbox can satisfy on its own, and it appears not to reach the permission decision or the hook
+  at all. That reading was never tested against a read the sandbox *cannot* satisfy on its own,
+  and it is wrong: the variable is the block's spelling, not the command's direction. `D-0093`'s
+  bullet below settles it. The write that is refused is refused because a worktree's `.git` is a *file*
   pointing into `<target>/.git/worktrees/<name>` -- outside the workspace -- so `git add`, which
   writes the index, writes outside the sandbox's writable surface. With no person to approve the
   escalation, `claude -p` turns that into a refusal.
@@ -621,7 +624,35 @@ concluded.
   itself. And the block has no `enabled` key, which is what the CLI builds a sandbox *for* -- so the
   layer this account assumed was too tight had never once existed. The renderer now flattens the deny
   entries, sets `enabled`, and adds the derived roots anyway so the fence does not depend on an
-  undocumented derivation. The read-side hole is untouched and is #131.
+  undocumented derivation. The read-side hole was taken to be untouched by that change, and was
+  filed as #131.
+- **Settled by `D-0093` (#131) -- one mechanism, not two, and the flattening had already closed
+  it.** #131 was measured directly on CLI `2.1.261` against a target carrying no settings of its
+  own, with a `PreToolUse` hook that writes a witness file *before* it decides, so that "the hook
+  was never invoked" is separable from "the hook was invoked and overruled". Eight spellings of
+  the `sandbox` key crossed with three denied commands, plus the decisive pair repeated four times
+  each, give one rule: **a non-string entry in `sandbox.filesystem.denyRead` or `denyWrite` makes
+  the CLI apply neither `permissions.deny` nor any `PreToolUse` hook for the run** -- and not only
+  for `Bash`. Zero exit, no warning, nothing on stderr. With the entries flat strings -- and
+  equally with the `sandbox` key absent, with no `enabled` key, or with an unknown key added --
+  the hook fires and the denied command is refused. The witness file is absent in every voided
+  cell, so the hook is not overruled; it is never reached.
+
+  So F-8's two halves are one defect. The `{"path": "~/.ssh"}` entry voided the pipeline; the
+  denied *read* then ran and its bytes came back (that is #131), while the *write* was refused
+  down the missing-approval path (#130). Read-only-ness was never the variable, and the void is
+  not `Bash`-only: with the dict spelling, a denied `Read` of a secret file returned its contents,
+  and a `Write` denied by an `Edit(...)` rule was refused with `Claude requested permissions to
+  write to ..., but you haven't granted it yet` -- the nobody-to-approve message, not the rule.
+  The entry `D-0082` flattened is the entry that voids the pipeline on `2.1.261`, so on that
+  version the flattening is what a fence owes its refusal to; `2.1.260` was never re-measured, so
+  10.4's disjunction is settled by cause rather than by a repeat run. What `D-0093` adds is not a
+  fix for a live hole in the renderer but a post-condition that keeps the hole shut:
+  `checkRenderedSandboxDenyStrings` runs after `repairSandbox` and refuses to render a fence whose
+  `denyRead` / `denyWrite` carries a non-string, so the "unreachable" comment `D-0082`'s safety
+  rested on is now enforced rather than asserted. It is scoped to those two arrays only: entries
+  of `additionalDirectories` -- string, dict, number, `null` alike -- and unrecognised `sandbox`
+  keys were measured harmless and are deliberately not checked.
 
 #### F-9. One fence deny rule is spelled in a form the CLI does not apply
 
@@ -692,7 +723,8 @@ nobody at the child's prompt to approve anything?
 under the fence exactly as `lap perform` rendered it; the gate then closed
 `answered_and_forwarded`. F-8's write half and F-9 are both closed in the field. What is left of
 section 7's list is unchanged, and #131 -- F-8's read half, the read that slipped past the fence --
-did not reproduce, which is not the same as being fixed (10.4).
+did not reproduce, which is not the same as being fixed (10.4 -- a caution `D-0093` later
+settled: it was fixed, by `D-0082`).
 
 | Run id | What it was for | `--cli-arg` | Result |
 |---|---|---|---|
@@ -892,6 +924,18 @@ before execution. So the two directions of the fence's `sandbox` block are enfor
 mechanisms -- reads by continuo's hook, writes by the CLI's own sandbox -- and this lap saw both
 fire. The child noticed the split on its own and wrote it up in `probe-report.txt`.
 
+**The split is conditional, not structural** -- something `D-0093` later established and this
+section had no way to see, because every cell it ran had a block the CLI accepts. The hook half of
+the split exists only while the `sandbox` block is readable: a single non-string entry in
+`denyRead` or `denyWrite` leaves `permissions.deny` and every `PreToolUse` hook unapplied for the
+run, so probes A and B would not have been refused by a hook at all. What would have happened to
+probe C is **not** something either measurement can say: `D-0093`'s cells never checked whether a
+sandbox is still built when the block carries a non-string entry, and 9.5's account of that same
+entry says no sandbox is built at all -- which would take probe C's `EROFS` down with A and B
+rather than leaving it standing. So the safe reading of this section is narrower than it looks:
+the *reads* demonstrably rest on the same file parsing the whole permission pipeline rests on, and
+whether the write side is enforced independently of it is untested.
+
 ### 10.3 Step 10, twice
 
 Identical to section 5 for both runs, against
@@ -932,9 +976,21 @@ is what made every write-capable `Bash` need an approval nobody was there to giv
 **F-8's read half -- #131 -- is a separate question, and this lap only observed it not happening.**
 `git worktree list`, which ran in section 9 despite two deny rules, was refused here, by the hook,
 naming the rule. That is one denial in one run on one CLI version. `D-0082` left #131 explicitly
-open, and nothing here establishes a cause, so **#131 stays open and is recorded as
-non-reproducing, not as fixed.** Whether building the sandbox closed it, or it is merely quiet under
-`2.1.260`, is not something this lap can say.
+open, and nothing here established a cause, so this lap recorded **#131 as non-reproducing, not as
+fixed**, and could not say whether building the sandbox closed it or it was merely quiet under
+`2.1.260`.
+
+**Read later: the cause is known, and the caution was still the right call.** `D-0093` reproduced
+#131 in isolation on CLI `2.1.261` and named it -- a non-string entry in
+`sandbox.filesystem.denyRead` / `denyWrite` leaves `permissions.deny` and every `PreToolUse` hook
+unapplied for the run, silently (9.5's F-8 bullet carries the matrix). The `{"path": "~/.ssh"}`
+entry `D-0082` flattened is that entry, so on `2.1.261` a flattened fence owes its refusal to the
+flattening. `2.1.260` itself was never re-measured, so what settles this section's disjunction is
+the cause rather than a repeat run -- but it settles it: the reading this section declined to
+adopt, "building the sandbox closed it", is the wrong one. On `2.1.261` a fence with flat entries
+and **no `enabled` key at all** still has its hook fire, so the hook half never depended on the
+sandbox being built. What restored the pipeline was the deny entries becoming readable, which is a
+different fact about a different key.
 
 **F-9 (#132) is closed, and its residue is gone too.** The worker role's deny list now carries both
 spellings:
