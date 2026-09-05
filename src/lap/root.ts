@@ -162,11 +162,32 @@ export interface TerminalReportReader {
  * operator typed -- the run was not admitted, the turn said nothing, the child
  * outlived its budget -- rather than a defect, and each becomes one stderr line
  * and exit 2 instead of a stack trace with the message buried above it.
+ *
+ * **{@link sessionId} is set exactly where the refusal is *about* a session
+ * this lap already holds a confirmed identity for** (`D-1102`), which in this
+ * module is every refusal {@link awaitTerminalReport} raises: the walk returned
+ * an {@link OrchestrationOutcome} before the poll begins, so the identity has
+ * been read back and committed by then. It is left unset everywhere else --
+ * step 1's argument refusals, which precede any session, and the internal
+ * spawn-invariant refusal, which fires before the walk starts -- because an
+ * identity a lap minted but never bound names a session this process does not
+ * own, and reporting one would send a host after another run's worker.
+ *
+ * The message quotes the id as it always has; the field is what a host reads.
+ * The two are not two sources of truth: the field is the source, and rondo
+ * `D-0015` rule 7 forbids parsing the sentence for it.
  */
 export class LapRefused extends ControlPlaneRefusal {
-  constructor(message: string, options?: { readonly cause?: unknown }) {
+  /** The confirmed session this refusal is about, or `undefined` when none. */
+  readonly sessionId: string | undefined;
+
+  constructor(
+    message: string,
+    options?: { readonly cause?: unknown; readonly sessionId?: string },
+  ) {
     super(message, options);
     this.name = "LapRefused";
+    this.sessionId = options?.sessionId;
     // The family's convention, and it is load-bearing rather than decorative:
     // extending a built-in under a downlevel emit target loses the prototype
     // chain and `instanceof` then silently reports false. See `refusals.ts`.
@@ -921,6 +942,7 @@ export async function awaitTerminalReport(
       throw new LapRefused(
         `the terminal report for session ${sessionId} could not be read: ` +
           `${result.kind.value}: ${result.detail}`,
+        { sessionId },
       );
     }
     const readout = (result as Ok<LapTerminalReadout>).value;
@@ -936,6 +958,11 @@ export async function awaitTerminalReport(
         throw new LapRefused(
           `the terminal report offered for session ${sessionId} is about ` +
             `${readout.sessionId}; a report is only evidence about the session it names`,
+          // The session this lap owns, never the one the reader named: the
+          // field says which session the refusal is about, and a host that
+          // acted on the other id would act on a session this lap never
+          // started.
+          { sessionId },
         );
       }
       return readout;
@@ -946,6 +973,7 @@ export async function awaitTerminalReport(
       // is not made by reading a diagnostic message.
       throw new LapRefused(
         `session ${sessionId} finished its turn without a report to escalate: ${readout.reason}`,
+        { sessionId },
       );
     }
     const outOfBudget = (): LapRefused =>
@@ -955,6 +983,7 @@ export async function awaitTerminalReport(
           "as they are -- the refusal is about the turn, and deleting a checkout the " +
           "worker may have written into is not a rollback -- and the session is stopped " +
           "on the way out",
+        { sessionId },
       );
     if (elapsedMs() >= deadline) {
       throw outOfBudget();

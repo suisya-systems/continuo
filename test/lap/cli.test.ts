@@ -1180,6 +1180,121 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
 });
 
 /**
+ * `D-1102`: the identity a refusal document names, and the states it does not.
+ *
+ * The envelope has carried the session on the SUCCESS document since `D-0090`;
+ * a refusal put it in `error.message` and nowhere else, so a host that had just
+ * been told its lap timed out could not stop, read or correlate the session
+ * without parsing an English sentence -- which rondo `D-0015` rule 7 forbids and
+ * which reword itself out from under a decoder anyway. These cases pin the key
+ * on both sides of the rule: present, as a top-level string, once the lap holds
+ * a confirmed identity; absent -- not `null` -- when there is no session to
+ * name.
+ */
+describe("D-1102: a refusal document names the session when the lap holds one", () => {
+  test("a turn that outlived its budget answers with the session it was about", async () => {
+    // The refusal a host is likeliest to have to act on: the child is still
+    // there, the lap has given up, and what happens next is keyed on the id.
+    // `events-then-hang` gets the identity read back and committed -- the walk
+    // returns -- and then never finishes the turn, which is exactly the state
+    // `D-1102` calls "the lap holds a confirmed identity".
+    const f = lap("lap-json-refusal-session");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+    expect(f.out.join(""), "a refused --json run must leave stdout empty").toBe("");
+
+    const refusal = oneDocument(f.err);
+    expect(refusal["ok"]).toBe(false);
+    expect(refusal["schema"]).toBe(PERFORM_SCHEMA);
+    // The spine's own answer, not the document's: a builder that echoed a
+    // constant, or the run id, or the empty string would pass an assertion that
+    // only asked for a string.
+    const session = inspect(f.databasePath).prepare("SELECT session_id FROM session").get() as {
+      session_id: string;
+    };
+    expect(refusal["session_id"]).toBe(session.session_id);
+    expect(String(refusal["session_id"]).length).toBeGreaterThan(0);
+    // Top-level and not inside the diagnosis: `error` stays a class hint and a
+    // sentence for a person, and the id is a fact a host acts on.
+    const error = refusal["error"] as Record<string, unknown>;
+    expect(error["class"]).toBe("LapRefused");
+    expect(Object.keys(error).sort()).toEqual(["class", "message"]);
+  });
+
+  test("a refusal raised before any session omits the key rather than nulling it", async () => {
+    // The other half of the rule, and the one a decoder is written against: an
+    // unadmitted run never reached a session, so there is nothing to name. A
+    // `null` here would be a third state for a host to interpret, and a
+    // placeholder would be an identity that names no process.
+    const f = lap("lap-json-refusal-no-session");
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f, { "--run-id": "no-such-run" }))).toBe(2);
+
+    const refusal = oneDocument(f.err);
+    expect(
+      "session_id" in refusal,
+      "a refusal about no session carried the key: absent is how the envelope spells unknown",
+    ).toBe(false);
+    expect(refusal["session_id"]).toBeUndefined();
+  });
+
+  test("the key is added to the envelope and moves nothing else in it", async () => {
+    // The additive claim, which is why the schema stays `/1`. A decoder written
+    // against the refusal envelope as it was reads `schema`, `ok`, `db` and
+    // `error`; if any of them changed shape or spelling to make room for the
+    // new key, `/1` would be a lie and every existing host would break on a
+    // build that only meant to add a field.
+    const f = lap("lap-json-refusal-additive");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+
+    const refusal = oneDocument(f.err);
+    expect(Object.keys(refusal).sort()).toEqual(["db", "error", "ok", "schema", "session_id"]);
+    expect(refusal["schema"]).toBe(PERFORM_SCHEMA);
+    expect(refusal["ok"]).toBe(false);
+    expect(refusal["db"]).toBe(f.databasePath);
+    expect(String((refusal["error"] as Record<string, unknown>)["message"])).toContain(
+      "did not finish its turn",
+    );
+  });
+
+  test("the human spelling of the same refusal is the line it has always been", async () => {
+    // `--json` changes the bytes and nothing else, and this change is no
+    // exception: the field is a JSON-path fact, and an operator's line keeps
+    // quoting the id in its sentence exactly as before. Without this, the
+    // obvious implementation -- append the id to the message so both spellings
+    // get it -- would pass every case above while moving the operator's bytes.
+    const f = lap("lap-json-refusal-human-line");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    f.err.length = 0;
+
+    expect(await f.perform({ "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })).toBe(2);
+
+    const written = f.err.join("");
+    expect(looksLikeDocument(written)).toBe(false);
+    expect(written).toMatch(/^error: session /);
+    expect(written).toContain("did not finish its turn");
+  });
+});
+
+/**
  * Anti-vacuity: the `--json` cases above, observed over runs built to break them.
  *
  * `AGENTS.md`'s rule is that a check never seen red is not a check. Every case

@@ -205,6 +205,7 @@ spaces distinct.
 | D-0098 | The post-spawn identity read-back window is a caller's budget, defaulting to thirty seconds | accepted |
 | D-0099 | Model selection is a `lap perform --model` flag over the provider's `base_cli_args`, not a `roles.json` key and not an admitted argument | accepted |
 | D-1101 | The shared cross-belt band is widened: `D-0019`..`D-0099` is closed, and `D-11xx` is its continuation | accepted |
+| D-1102 | A `lap perform --json` refusal names its session in a top-level `session_id`, present when the lap holds a confirmed identity and absent when it does not | accepted |
 
 ---
 
@@ -15575,3 +15576,123 @@ range" claim wrong and require moving the shared band's continuation elsewhere.
 exhaustion finding. D-0601 and D-0801 for the two belts this entry adds to "How to use this file"'s
 enumeration. Checked against `origin/main` at `5211090`, where `D-0099` is the last id taken in the
 shared band and the band's `D-0019`..`D-0099` closing is uncontested.
+
+---
+
+## D-1102 -- A `lap perform --json` refusal names its session in a top-level `session_id`, present when the lap holds a confirmed identity and absent when it does not
+
+**Context.** `D-0090` gave every host-driven verb one envelope, and a refusal in it carries
+`schema`, `ok`, `db` and an `error` object of `class` and `message`. For `continuo.lap.perform/1`
+that is enough to tell a host WHY the lap stopped and not WHAT it stopped over: the lap is the one
+verb that starts a child, and on the refusals that matter most -- the turn outlived
+`--turn-timeout-ms`, the transcript could not be read, the worker said nothing to escalate -- a
+worker process is still out there and everything a host does next is keyed on the session id.
+
+The id was on the wire already, inside `error.message`, because the sentences quote it for the
+person reading them. A host could therefore have it by regular expression, and rondo `D-0015`
+rule 7 is the standing rule against exactly that: the host contract has no prose-parsing fallback,
+because a message is written for a person and is free to be reworded by any later commit without
+that being a breaking change. So the fact was present and unusable, which is the gap this entry
+closes.
+
+**Decision.**
+
+1. **`session_id` is a top-level key of the refusal envelope**, beside `db` and outside `error`.
+   `error` is the diagnosis -- a class hint (`D-0090`: a hint, not a taxonomy) and a sentence for a
+   person -- while the identity is a fact about the refusal's subject that a host acts on: the next
+   stop, the next transcript read, the next log correlation. Nesting a machine-read field inside the
+   human-facing object would make the one depend on the other's shape.
+
+2. **Present exactly when the refusal was raised after the lap held a CONFIRMED session identity**,
+   and the condition is about the state the lap reached, not about which class was thrown. Two
+   states qualify today, both enumerated in `refusalMetadata` in `src/lap/cli.ts`:
+
+   - the refusals `awaitTerminalReport` raises -- the report could not be read, was about another
+     session, never came, or ran out of budget. All of them are downstream of a returned
+     `OrchestrationOutcome`, so the identity has been read back and committed by then. `LapRefused`
+     carries the id in a field for them and in no other case.
+   - `LoserTerminated`, which already carried the id of the session it ordered stopped. The binding
+     for it exists; this claimant merely lost the lease afterwards, and the id is the one thing an
+     operator chasing a possibly-rogue child has to have.
+
+3. **`IdentityUnconfirmed` is deliberately not one of them.** Its whole content is that an identity
+   was committed and never confirmed, and the binding stays honestly at `spawned` (`D-0047`).
+   Putting that id in `session_id` would report as this lap's session one that nothing read back,
+   and a host acting on it would act on a process this lap cannot prove it owns. The id stays where
+   it is honest: in the message and in the binding row.
+
+4. **So is every refusal raised before the walk** -- the run was not admitted, an argument was
+   malformed, git refused, the worker CLI is not installed. `performLap` mints an identity *before*
+   it binds one (the same asymmetry step 7's teardown is built around), so an id in hand at those
+   depths may belong to no binding at all.
+
+5. **Absent when unknown, never `null`, never an empty string.** This is the opposite of the success
+   document's `endpoint_lease_failure`, which is always present and `null` when there is nothing to
+   say, and the difference is deliberate: there a host must be able to read "the lap was clean"
+   positively, whereas here "no session" and "a session I cannot name" are one state, and a `null`
+   would be a second spelling of it. An empty string is not an identity, and shipping one would hand
+   a host a value it would try to stop.
+
+6. **The schema stays `continuo.lap.perform/1`**, additively, the way `D-0099` added `model` to the
+   success document on the same schema. `D-0090`'s version story is that a key a decoder has not
+   been taught is one every JSON reader already handles and `/2` is for a change a host cannot
+   absorb; a decoder that has not learned this key reads the envelope exactly as before.
+
+7. **The decoder contract, stated for the other side of the wire.** A decoder MUST treat a missing
+   `session_id` as "the identity is unknown" and MUST NOT fall back to parsing `error.message` for
+   one (rondo `D-0015` rule 7). An old producer that never writes the key is indistinguishable from
+   a new producer refusing over no session, and that is correct: in both cases the host has no
+   identity it may act on. When the key is present it is a non-empty string.
+
+8. **The serializer takes an enumerated `RefusalMetadata` record**, not an expansion of the
+   `Error`'s own fields. The shortcut -- copy a refusal's enumerable properties into the document --
+   would put values this envelope has promised nothing about on the wire: `IdentityUnconfirmed`
+   carries an `unknown`-typed `lastAnswer` that is the provider's raw answer, `LoserTerminated`
+   carries a nested refusal object and two timestamps. The first host to read one would have made it
+   a contract nobody wrote. Exactly one field is decided here; a later one is a later decision.
+
+9. **The human refusal line does not move.** `--json` changes the bytes and nothing else (`D-0090`),
+   and the operator's sentence keeps quoting the id as it always has.
+
+**What this does not claim.** Not every refusal a lap can produce is covered -- a refusal raised by
+the ingest step after the report is in hand (`ingestTerminalReport`'s own `ControlPlaneRefusal`
+family) knows the session and does not carry it, because its identity comes from the report rather
+than from this lap's own state and no reader has asked for it. Adding it later is additive under
+point 6 and needs no schema bump. The rule is "present when the lap holds a confirmed identity", and
+the enumeration in point 2 is what this build implements of it.
+
+**Residual.** rondo's decoder (`src/continuo/protocol.ts`) tolerates unknown keys, so it is not
+broken by this change -- it simply drops `session_id`. Teaching it the field is a rondo-side
+follow-up; nothing here depends on it.
+
+**Falsification.**
+
+- A lap whose turn outlives `--turn-timeout-ms` under `--json` writes a refusal document whose
+  `session_id` equals the session id the spine recorded for that run -- read from the `session`
+  table, not from the document -- and whose keys are exactly `schema`, `ok`, `db`, `session_id`,
+  `error`. Red under an implementation that left the id in the message, that nested it in `error`,
+  or that moved any other key to make room.
+- A refusal over an unadmitted run omits the key entirely: `"session_id" in document` is `false`.
+  Red under a `null`, a placeholder, or a field defaulted at the class.
+- The mismatched-report refusal carries THIS lap's session and not the id the reader offered. Red
+  under a field taken from the readout, which would send a host after another run's worker.
+- The same refusal without `--json` is byte-for-byte the line it was. Red under the obvious
+  implementation that appends the id to the message so both spellings get it.
+
+**Status.** accepted
+
+**Falsifier.** A refusal class that reaches `refuse()` holding an identity the lap has confirmed and
+is not on point 2's list would make the enumeration incomplete rather than the rule wrong -- the fix
+is to extend the list. What would falsify the rule itself: a host that turns out to need the
+*unconfirmed* id (which point 3 refuses to give it), or a state where a confirmed binding's id is
+not the id the next operator action should be keyed on. A decoder found in the wild reading the
+identity out of `error.message` would make point 7's MUST NOT a description of a broken consumer
+rather than a contract, and would need the message treated as a compatibility surface -- which is
+the outcome this entry exists to avoid.
+
+**Source.** Issue #177. `D-0090` for the envelope, its `error` object and the `/1` version story;
+`D-0099` for the same additive move on the success document; `D-0047` for why `IdentityUnconfirmed`
+does not distinguish its two shapes and keeps the binding at `spawned`; `D-0068` for the loser path
+`LoserTerminated` reports; rondo `D-0015` rule 7 for the no-prose-parsing rule this entry is written
+against. Decision id allocated from the `D-11xx` shared band opened by `D-1101` (Issue #179), checked
+against `origin/main` at `add4738`, where `D-1101` is the only id taken in the new band.

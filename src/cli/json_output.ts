@@ -38,6 +38,13 @@ import type { ArgumentParser, Namespace } from "./parser.js";
  *     {"schema":"continuo.run.admit/1","ok":false,"db":"...",
  *      "error":{"class":"RunAlreadyAdmitted","message":"..."}}
  *
+ * A refusal raised over a session whose identity the verb holds carries that
+ * identity as a top-level key beside `db` (`D-1102`), and omits the key
+ * entirely when it does not:
+ *
+ *     {"schema":"continuo.lap.perform/1","ok":false,"db":"...",
+ *      "session_id":"0c2b...","error":{"class":"LapRefused","message":"..."}}
+ *
  * One document, one trailing newline, `snake_case` keys throughout.
  *
  * **Why the refusal goes to stderr, against the tempting alternative.** Putting
@@ -203,6 +210,40 @@ export function successLine(
 }
 
 /**
+ * The structured facts a refusal carries **beside** its class and its message
+ * (`D-1102`).
+ *
+ * **An enumerated record and never a generic expansion of the `Error`.** The
+ * tempting shortcut is to copy a refusal's own enumerable fields into the
+ * document and let each class decide what a host sees. That would put values
+ * this envelope has made no promise about on the wire -- `IdentityUnconfirmed`
+ * carries an `unknown`-typed `lastAnswer` that is the provider's raw answer,
+ * `LoserTerminated` carries a nested refusal object -- and the first host to
+ * read one would make it a contract nobody wrote down. Every key here is
+ * decided one at a time, and today exactly one is decided.
+ *
+ * Every field is optional, and an absent field means **unknown**, never
+ * "empty": a caller that cannot establish the fact omits it, and the document
+ * omits the key in turn rather than carrying `null`. rondo `D-0015` rule 7 still
+ * holds on the other side of the wire -- a decoder that finds no `session_id`
+ * learns that the identity is unknown, and must not go looking for one in
+ * `error.message`.
+ */
+export interface RefusalMetadata {
+  /**
+   * The session this refusal is about, when the verb holds a **confirmed**
+   * identity for it.
+   *
+   * Which refusals hold one is a property of the state the verb reached, not of
+   * the refusal's class alone; `src/lap/cli.ts` enumerates the classes that do
+   * for `continuo.lap.perform/1` and `D-1102` records why each is on the list.
+   * A minted-but-unbound identity is not one of them: reporting it would name a
+   * session this process never owned.
+   */
+  readonly sessionId?: string | undefined;
+}
+
+/**
  * Build and encode a verb's refusal document.
  *
  * `db` is required rather than optional, and is on every refusal for the same
@@ -214,12 +255,37 @@ export function successLine(
  * `error.name` rather than the constructor name, because every refusal class in
  * this codebase sets `this.name` explicitly, and reading the field cannot drift
  * from the class the way a hand-maintained table can.
+ *
+ * **`session_id` is a top-level key and not a member of `error`** (`D-1102`).
+ * `error` is the diagnosis -- a class hint and a sentence written for a person
+ * -- and the identity is a fact about the refusal's subject that a host acts on:
+ * it is what the next `session stop`, the next transcript read and the next log
+ * correlation are keyed on. Nesting it inside the diagnosis would make a
+ * machine-read field depend on a human-facing object, and the `message` is
+ * emphatically not the source of identity even when it quotes the id.
+ *
+ * **Absent rather than `null` when unknown.** This is the opposite of the
+ * success document's `endpoint_lease_failure`, and deliberately so: there,
+ * "always present, `null` when there is nothing to say" exists because a host
+ * must be able to read "the lap was clean" positively. Here the two states are
+ * "this refusal is about a session I can name" and "it is not about a session
+ * at all" -- a `null` would be a third spelling of the second, and a host that
+ * has to distinguish an absent key from a null one has learnt nothing. An empty
+ * string is omitted too: it is not an identity, and shipping `""` would hand a
+ * host a value it would then try to stop.
  */
-export function refusalLine(schema: string, db: string, error: Error): string {
+export function refusalLine(
+  schema: string,
+  db: string,
+  error: Error,
+  metadata: RefusalMetadata = {},
+): string {
+  const sessionId = metadata.sessionId;
   return asciiJsonLine({
     schema,
     ok: false,
     db,
+    ...(sessionId === undefined || sessionId === "" ? {} : { session_id: sessionId }),
     error: { class: error.name, message: error.message },
   });
 }
