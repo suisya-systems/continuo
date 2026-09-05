@@ -508,7 +508,7 @@ export function addSubparsers(sub: Subparsers): void {
     help: NOW_MS_HELP,
   });
   // Declared by `cli/json_output.ts` rather than here: this is the one flag in
-  // the CLI whose whole value is that eleven verbs spell it identically, and that
+  // the CLI whose whole value is that fourteen verbs spell it identically, and that
   // module says why it is the deliberate exception to "a subtree declares its
   // own flags".
   addJsonArgument(admit);

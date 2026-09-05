@@ -191,6 +191,7 @@ spaces distinct.
 | D-0093 | One non-string entry in the sandbox deny list voids `permissions.deny` and the `PreToolUse` hook for the whole run | accepted |
 | D-0094 | The settings generator refuses a non-string sandbox deny entry instead of writing it for a reader that does not reject it | accepted |
 | D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
+| D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present\|deliver\|ack` join the `--json` envelope | accepted |
 
 ---
 
@@ -14743,3 +14744,201 @@ range, following `D-0093`, which is also a fencing decision taken from the share
 against `origin/main` at `a293500` (re-checked at rebase; `ee2a399` at first draft), where `D-0093`
 is the last taken id; `D-0094` is claimed by the parallel lane on #163, so this entry takes
 `D-0095`.
+
+---
+
+## D-0097 -- A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present` / `deliver` / `ack` join the `--json` envelope
+
+**Context.** cadenza's `docs/design/operating-surface.md` row `S-9` is at this gate, and cadenza
+declines to recommend it: *"Once a console exists, who acks the `presented` relay, and does the
+dropbox stay a second presentation channel?"* It is stated there because the surface cannot answer a
+gate without it -- `answerGate` admits only stage `presented`, that stage is reached only on the
+`presented` relay's ack, and `gate present` / `deliver` / `ack` carry no `--json`. So a programmatic
+operating surface can *answer* a gate machine-readably and cannot *present* one. `D-0076` decided the
+recipient for lap 1 and assigned the operator the dropbox; it says nothing about a programmatic
+reader, because in lap 1 there was none.
+
+**Four measurements, and they decide most of this.**
+
+1. **The stage machine leaves no way around presentation.** `answerGate` refuses from any stage but
+   `presented` (`src/gate/operator.ts`), and `presented` is written only by `ackRelay` on the
+   `presented` relay -- or by `reconcile`, completing an advance a durable ack already justified.
+   There is no path to `answered` that does not pass through an ack of that relay. A console that
+   cannot ack cannot answer.
+
+2. **An ack of a relay nobody delivered is already refused, by code and not by convention.**
+   `Outbox.recordAck` raises `OutboxUsageError` on a row whose `delivered_at_ms` is null: *"an ack
+   for an undelivered message is evidence of a lost delivery record, not of a delivery"*. So
+   cadenza's worry -- "acking a relay nobody delivered would record a delivery that did not happen"
+   -- is not a rule this entry has to invent and could not have waived: `gate deliver` is a
+   precondition of `gate ack`, mechanically. That single fact answers the dropbox half of `S-9`.
+
+3. **None of the three verbs records an actor as a person.** `presentGate` writes no transition at
+   all and takes no actor; `deliverRelays` takes a lease `holder`, which is a claimant on the one
+   delivery resource and not an identity on a row; `ackRelay` records its advance under
+   `RELAY_ADVANCE_ACTOR_KIND = "secretary"` with the caller's `--actor-id`. That is exactly what
+   `answerGate` (`actorKind: "human"`) and `closeOpenGate` (`actorKind: "human"`) do not do, and
+   those two hardcodes are the whole of cadenza `C-4` / `C-13`'s objection -- *a conductor-issued
+   call records an agent's act as a person's*. A console driving `present`, `deliver` and `ack`
+   records a relay settlement by a relay-handling agent, which is what it is.
+
+4. **A reader appeared and was measured**, which is the standard `D-0090` set and `D-0092` applied.
+   `D-0090` left these verbs human-only on a stated principle -- *a flag added ahead of a reader is a
+   shape nobody has checked against a real consumer* -- and `D-0092` widened the reach only when
+   rondo `D-0015` rule 5 was found working around the absence. Here the reader is cadenza's
+   operating-surface document, which measured this CLI at a pinned sha and wrote the gap down as a
+   decision row it routed to this gate. It is the same evidence in the same form.
+
+**Decision.**
+
+1. **The console acks the `presented` relay, and acks only the relay it delivered.** It drives the
+   same three verbs in the same order the operator does -- `present`, `deliver`, `ack` -- because
+   measurement 2 leaves no shorter sequence. What the presented ack means is unchanged from
+   `D-0076`: *the question is in front of its reader*. Which reader is now allowed to vary; that the
+   relay was carried is not.
+
+2. **The dropbox stays the one delivery channel, and does not become a second presentation
+   channel.** A console is a second **reader of the record**, not a second channel: it renders a gate
+   from `gate show --json`, which is the durable row, while the relay's effect still lands in the
+   dropbox under `gate/<gateId>/presented`. `D-0076` is untouched -- one recipient, two keys, one
+   handler -- and no `--recipient` per relay and no third handler is introduced. The dropbox file is
+   what makes the ack true; deleting the delivery to spare a console a redundant write would delete
+   the evidence the ack is about, and `recordAck` would refuse the ack anyway.
+
+3. **`gate present`, `gate deliver` and `gate ack` carry `--json`**, under the shared envelope from
+   `src/cli/json_output.ts`, with schemas `continuo.gate.present/1`, `continuo.gate.deliver/1` and
+   `continuo.gate.ack/1`. The gate verbs a host drives become **seven**: `list`, `show`, `present`,
+   `deliver`, `ack`, `answer`, `close`. **`reconcile` alone stays human-only** -- rondo `D-0013`
+   records it as not the conductor's to invoke and no surface drives it, so the principle in
+   measurement 4 still forbids it a flag.
+
+4. **No verb's behaviour, arguments or recorded actor semantics change.** `present` gains no
+   `--actor-id` (it writes no transition and inventing one would put an identity on a row nothing
+   records), `deliver`'s `--holder` stays a lease claimant, and `ack`'s advance stays
+   `secretary`/`--actor-id`. `answer` and `close` keep their `human` actor kind and are the surface's
+   human-authorised verbs; nothing here lets a conductor answer or close a gate (`C-4`, `C-13`). The
+   flag changes bytes and nothing else, as in `D-0090` and `D-0092`.
+
+**The payloads, and why each is that shape.**
+
+- **`present`**: `gate_id`, `message_id`, `to_stage`, `recipient`, `enqueued`. `enqueued` is
+  `RelayEnqueued`'s own boolean; the human line spells it as the words "enqueued" / "already
+  enqueued", which is two encodings of one idea for a host and one of which inverts under negation.
+  `recipient` is emitted because the human line carries it and because it is the value the host's
+  next verb (`deliver`) polls under -- read from `GATE_RELAY_RECIPIENT`, so a host reads the constant
+  rather than being told to hardcode it.
+- **`deliver`**: `recipient`, `epoch`, and `delivered` as an array under a key -- one object per
+  message, `message_id` and `dedup_key`. An array rather than the human line's count, for the reason
+  `listPayload` gives: an empty delivery is a result, and a host reading a count would still have to
+  learn which messages moved. Each element's own `recipient` is **not** emitted: `deliverRelays`
+  polls one recipient and every envelope carries it, so a per-element copy would be the top-level
+  key repeated, and the human line does not carry it either.
+- **`ack`**: `message_id`, `gate_id`, `to_stage`, and the four booleans `AckRecorded` already
+  distinguishes -- `acked`, `cancelled`, `advanced`, `closed`. All four, because the verb's whole
+  point after a kill is telling the operator (now: the host) which of the three writes this run was
+  the one that landed. Booleans rather than the human line's `String()` renderings, for
+  `answerPayload`'s reason.
+
+**Why `ack` does not read the gate back, when `close` does.** `D-0092` had `gate close` re-read the
+durable row because rondo `D-0015` rule 5 was running a **second** `gate show --json` subprocess per
+close purely to learn `stage` and `outcome`; the read-back deleted a subprocess. Here it would not:
+a console's next act after acking the presented relay is to **render the gate** -- rationale,
+options, relays, history -- which is `gate show --json` whatever this document says. A read-back
+inside `gate ack` would add a query inside the CLI without removing one outside it, and `to_stage`
+plus `advanced` already say which stage the ack moved the gate to. The principle `D-0092` applied is
+"emit what saves the host a call", not "emit the row"; applied honestly here it stops short.
+
+**rondo `R-5` stays satisfiable, and is untouched.** `refrain-lap1.md` rule `R-5` has `resume` drive
+**one** `gate show --json` and read `outcome`. Nothing here changes `gate show`, its document or its
+schema, and nothing here puts a second observation inside `resume`: the three verbs this entry
+widens are the **surface's** presentation path, which `R-5` step 2 already places outside the
+conductor (*"rondo drives none of those four verbs"*). What changes is that the surface can now drive
+them without parsing prose. `R-5` step 2's parenthetical -- that `D-0015`'s verb table records these
+verbs as carrying no `--json` -- becomes stale prose in rondo's document; rondo is a separate
+repository and is **not edited from here**, and naming that is this entry's whole obligation to it,
+as `D-0092` did for rule 5.
+
+**Alternatives.**
+
+- *Leave the three human-only and record the reason* (rejected: the reason would have to be "no
+  reader", and a reader is what `S-9` is. The cost is not hypothetical -- a console would parse
+  `enqueued gate/g/presented to external-notify for stage presented` and
+  `m: acked=true cancelled=false advanced=true closed=false` with regular expressions, which is the
+  defect `D-0090` exists to remove, on the one path every gate must pass through).
+- *Let the console ack without delivering, treating itself as the presentation* (rejected, and it is
+  not available: `recordAck` refuses an undelivered row. Had it been available it would still be
+  wrong -- the ack would assert a delivery whose evidence nobody wrote, and `gate show`'s
+  `delivered_at_ms` would stay null on a relay reported as acked).
+- *A third handler and a `console` recipient, so the console is its own channel* (rejected for
+  `D-0076`'s own reason, unchanged by a console's arrival: it answers a question nobody asked, adds
+  a second recipient name the endpoint must be configured with -- one more way to start an endpoint
+  serving the wrong queue -- and delivers into the same class of place under a new name. A console
+  reads the control plane through `gate show`; it does not need a queue to be told about a gate it
+  is already rendering).
+- *Admit `answered` from `received`, so a console can answer without presenting* (rejected: it
+  destroys the distinction section 9.6 is built on -- "the question never arrived" versus "nobody has
+  answered" -- and it is a behaviour change, which `D-0045` puts out of scope for the flag).
+- *Give `reconcile` the flag too, for completeness* (rejected: no reader, which is the same test that
+  admitted the other three. `D-0092`'s falsifier names a verb acquiring the flag with no reader as
+  evidence the principle had been abandoned).
+- *Add `--actor-id` to `gate present` so the console's identity is on the record* (rejected:
+  `presentGate` writes no transition, so the argument would be recorded nowhere, and a required flag
+  that changes no row is a shape a host would have to supply and could never read back).
+- *Supersede `D-0090` or `D-0092`* (rejected: neither was falsified. `D-0092` explicitly left the
+  remaining four verbs' scope open on the "no reader" principle, and this entry applies that
+  principle rather than overturning it -- it amends the same one number, four gate verbs to seven).
+
+**Consequences.** `D-0092`'s point 1 is amended: four host-driven gate verbs become seven, one
+excluded verb remains. The count of verbs mounting the flag goes from eleven to fourteen, of which
+thirteen answer in the envelope (`measure report` is still the unwrapped exception), so the counts in
+`src/cli/json_output.ts` and its two mirrors in `control_plane/run_cli.ts` and `measurement/cli.ts`
+are updated. `gate deliver` is now the first enveloped verb whose refusal set includes
+`LeaseRefusal`, `HandlerRejected` and `DestinationRefusal`; all three already reach `refuse()`
+through the shared `withControlPlane`, so the funnel needed no widening -- only the report. The three
+human lines are byte-identical, each pinned by a case. Exit 2 still does not guarantee a parseable
+document: `--gate-id`, `--message-id`, `--destination-dir` and `--holder` are argparse-required, and
+a missing one stays usage prose on the top-level seam (`D-0090`'s parser-level exception, unchanged).
+
+**What records it.** `src/gate/cli.ts` holds the three schemas, `presentPayload`, `deliverPayload`,
+`ackPayload` and the three mounts. `test/gate/cli.test.ts` holds the cases, per `D-0090`'s
+anti-vacuity standard, each observed RED under a deliberate mutation that was then reverted:
+
+- The exact success document and empty stderr for each of the three verbs, on the walk that carries
+  one gate from `received` to `presented`.
+- Two control planes whose gates carry DIFFERENT ids, presented in turn, differing in exactly
+  `gate_id` and `message_id` and agreeing on every other key -- red under a `presentPayload`
+  returning literals, which the walk case alone could not catch because it fixes the gate id too.
+- The re-run of `gate present` yielding `enqueued:false` with the same `message_id` and `ok:true`,
+  and the delivery pass AFTER the ack yielding an empty `delivered` array while the pass before it
+  carried the relay -- red under `enqueued: true` hardcoded, and under a `delivered` built from
+  anything but the poll. (The ack is in the middle deliberately: a second pass before it is a
+  RESEND of an unacked message, which is the outbox behaving correctly and a different fact.)
+- The `forwarded` ack's `closed:true` against the settled replay of the `presented` ack
+  (`acked:false`, `closed:false`, `ok:true`), from the same database, so the four booleans are
+  shown varying with the row rather than with the verb -- red under a fixed boolean set.
+- Each of the three verbs WITHOUT `--json`, byte-identical to the human line it always printed -- red
+  under `jsonRequested` forced true.
+- A refusal per verb -- an unknown gate on `present`, a held delivery lease on `deliver`, an
+  undelivered message on `ack` -- each exit 2 with stdout empty, the operator's line unchanged and
+  the exact stderr document -- red under a `refuse()` that ignores its report.
+- The mount boundary, both halves: the seven that carry the flag reach their handler and `reconcile`
+  is refused by the parser with the flag named -- red under a deleted `addJsonArgument`.
+
+**Status.** accepted
+
+**Falsifier.** A console that acks a `presented` relay it did not deliver -- which this entry says is
+impossible and `recordAck` currently enforces; if that refusal is ever relaxed, point 1 loses its
+mechanism and becomes a convention, and the entry must be re-taken. Also falsifying: a second party
+who must receive the forward relay without seeing the question (which is `D-0076`'s own falsifier,
+and would make "one recipient, two keys" wrong under a console as well), a surface that still
+special-cases one of these three verbs after this lands, or `reconcile` acquiring the flag with no
+reader named.
+
+**Source.** #165, and cadenza `docs/design/operating-surface.md` row `S-9` and section 2 for the
+reader that made the case (cadenza #56). `D-0076` for the recipient and the dropbox, `D-0078` for
+the verb set and why the ack closes the gate, `D-0090` for the envelope and the "no reader, no flag"
+principle, `D-0092` for the amendment this one follows. cadenza `C-4` / `C-13` and rondo `D-0013` /
+`D-0015` / `R-5` for the boundaries this entry does not cross. Decision id allocated from the
+`D-0019`..`D-0099` shared band, checked against `origin/main` at `ab24daa`, where `D-0095` is the
+last taken id; `D-0096` is claimed by the parallel lane on #166, so this entry takes `D-0097`.
+Re-checked at merge.
