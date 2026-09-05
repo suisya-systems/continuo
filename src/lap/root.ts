@@ -1052,6 +1052,29 @@ export interface LapRequest {
   readonly completion: TurnCompletion;
   /** Per-git-command wall-clock bound, passed through to the materialiser. */
   readonly gitTimeoutMs?: number;
+  /**
+   * How long the spawned worker is given to read its committed identity back,
+   * in milliseconds. Defaults to the orchestrator's own
+   * `DEFAULT_READBACK_BUDGET_MS`, which is thirty seconds (`D-0098`).
+   *
+   * The third bound a host declares beside {@link LapRequest.completion}'s
+   * `timeoutMs` and {@link LapRequest.gitTimeoutMs}, and the reason it is a
+   * caller's at all is that the number depends on the machine and the worker
+   * binary rather than on anything this repository can know: a real `claude`
+   * needed 3.55 s cold and up to 11.3 s warm where the hard-coded window was
+   * 2.5 s, so every lap on a real CLI ended with the binding at `spawned`
+   * (issue #174).
+   *
+   * It buys time, not leniency. What counts as a read-back is
+   * `defaultIdentityConfirmation`'s decision and is unchanged by any value
+   * here.
+   *
+   * Raising it lengthens the session lease with it: the orchestrator's TTL
+   * defaults to this plus its own slack, because nothing renews that lease
+   * while the read-back polls (`D-0098`). The `outbox-delivery` lease this lap
+   * holds is a different resource, and is renewed on its own timer.
+   */
+  readonly identityReadbackTimeoutMs?: number;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** The actor recorded on the escalation event. Defaults to `lap_composition_root`. */
   readonly actorId?: string;
@@ -1143,6 +1166,21 @@ export async function performLap(
   }
   if (typeof request.nowMs !== "function" || typeof request.sessionUuidFactory !== "function") {
     throw new LapUsageError("now_ms and session_uuid_factory must be functions");
+  }
+  // Refused here rather than left to the orchestrator's `RangeError`, and for
+  // the reason `cli.ts` gives about `--turn-timeout-ms`: this is a number an
+  // operator typed, the parser types it as an integer and so admits `-1`, and
+  // an operator's mistake reaching this CLI as a stack trace is the one
+  // outcome every other flag in this verb is careful not to produce. Before
+  // the intent is read, because nothing has been written yet.
+  if (
+    request.identityReadbackTimeoutMs !== undefined &&
+    (!Number.isInteger(request.identityReadbackTimeoutMs) || request.identityReadbackTimeoutMs < 1)
+  ) {
+    throw new LapUsageError(
+      "identity_readback_timeout_ms must be a whole number of milliseconds, at least 1, not " +
+        String(request.identityReadbackTimeoutMs),
+    );
   }
   // 1. What this run was admitted to do. Read rather than retyped: the whole
   //    point of D-0055 is that the execution intent is fixed once, at admission,
@@ -1288,7 +1326,12 @@ async function performLapHoldingTheEndpointLease(
   // The factory is wrapped rather than replaced: the value handed out is
   // `materialized.options`' own, so the identity the orchestrator commits and
   // the one stopped here cannot differ. `D-0057`'s "nothing below adds a field
-  // to these options" is intact -- this observes one, and adds none.
+  // to these options" is about the fields materialisation FIXES -- the run,
+  // the holder, the workspace, the role, the settings and the identity factory
+  // -- and this step overrides none of them. `readbackBudgetMs` below is not
+  // one of them: it is the operator's bound on this machine's worker, arriving
+  // on the command line, and materialisation no more owns it than it owns
+  // `ttlMs`, which it likewise leaves to the orchestrator's default.
   let sessionId: string | null = null;
   /** The lease epoch this lap's walk held, or `null` if it never took one. */
   let heldEpoch: number | null = null;
@@ -1327,6 +1370,12 @@ async function performLapHoldingTheEndpointLease(
     //
     // `request.nowMs` is a function precisely so this step can supply one.
     nowMs: request.nowMs,
+    // **The operator's read-back window** (`D-0098`). Omitted rather than
+    // spelled with the orchestrator's own default when the caller declared
+    // none, so there is one place the number lives.
+    ...(request.identityReadbackTimeoutMs === undefined
+      ? {}
+      : { readbackBudgetMs: request.identityReadbackTimeoutMs }),
     sessionUuidFactory: () => {
       const minted = materialized.options.sessionUuidFactory();
       sessionId = minted;

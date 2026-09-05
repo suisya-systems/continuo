@@ -1247,12 +1247,15 @@ export {
 export { isConstraintError } from "./sqlite/errors.js";
 export { MEMORY, type OpenDatabaseOptions, openDatabase } from "./sqlite/open.js";
 export {
+  DEFAULT_LEASE_SLACK_MS,
+  DEFAULT_READBACK_BUDGET_MS,
   defaultIdentityConfirmation,
   IdentityUnconfirmed,
   LoserTerminated,
   OrchestrationOutcome,
   OrchestrationRefused,
   ProviderStartFailed,
+  READBACK_POLL_INTERVAL_MS,
   SEAM_AFTER_ADMISSION_BEFORE_SPAWN,
   SEAM_AFTER_READBACK_COMMIT,
   SEAM_AFTER_SPAWN_BEFORE_READBACK_COMMIT,

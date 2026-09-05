@@ -680,11 +680,39 @@ describe("what the verb refuses, and what it leaves behind", () => {
     // walk refuses after the spawn rather than before it.
     fakeEnv("FAKE_OMIT_IDENTITY", "1");
 
-    expect(await f.perform()).toBe(2);
+    // **The read-back window this case asks for, and the assertion that the
+    // flag reached the orchestrator** (`D-0098`). The default window is thirty
+    // seconds -- deliberately, because a real `claude` needs up to 11.3 s to
+    // its first event -- and this child is never going to name itself, so
+    // taking the default here would buy half a minute of polling for a
+    // conclusion known at the first ask. The refusal quoting the number is the
+    // evidence: `--identity-readback-timeout-ms` is the only thing on this
+    // command line that can put it in that sentence, so a build where the flag
+    // stopped short of the orchestrator fails here -- slowly, which is itself
+    // the symptom.
+    expect(await f.perform({ "--identity-readback-timeout-ms": "150" })).toBe(2);
     expect(f.err.join("")).toMatch(/^error: /);
+    expect(f.err.join("")).toContain("within the 150 ms identity read-back budget");
 
     const connection = inspect(f.databasePath);
     expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+  });
+
+  test("a read-back window below a millisecond is a refusal, and costs no worktree", async () => {
+    // The same family as `--turn-timeout-ms: -1` below: the parser types this
+    // flag as an integer, so `0` and `-1` are values an operator can type, and
+    // the orchestrator would meet them as a `RangeError` -- a stack trace and
+    // exit 1 where every other flag in this verb gives one line and exit 2.
+    // `performLap` refuses it before the intent is even read, which is what
+    // makes the second half of this case true.
+    const f = lap("lap-zero-readback");
+    expect(await f.perform({ "--identity-readback-timeout-ms": "0" })).toBe(2);
+    expect(f.err.join("")).toMatch(/^error: /);
+    expect(f.err.join("")).toContain("identity_readback_timeout_ms");
+    // Nothing was built: a mistyped window must not spend the run identifier,
+    // because `D-0057` refuses a second materialisation of one run.
+    expect(existsSync(f.workspace)).toBe(false);
+    expect(existsSync(f.artifactDir)).toBe(false);
   });
 
   test("an operator's own bad values are refusals, not stack traces", async () => {
