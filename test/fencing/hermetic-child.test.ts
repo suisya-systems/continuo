@@ -57,6 +57,7 @@ import { delimiter, join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { normalizePath } from "../../src/fencing/pypath.js";
 import {
+  checkRenderedSandboxDenyStrings,
   FenceRefusal,
   NON_INTERACTIVE_PERMISSION_MODE,
   RefusalReason,
@@ -258,6 +259,32 @@ describe("the sandbox the fence renders is one the CLI can actually build (D-008
     expect(filesystem["denyRead"]).toContain(normalizePath("~/.ssh"));
   });
 
+  test("no role renders a non-string deny entry, not only the one that authored a dict", () => {
+    // The case above proves it for `worker`, which is the only role whose
+    // document spells an entry structurally today. The defect is a property of
+    // the EMITTED file, not of that role, so the assertion belongs to every
+    // role the document carries -- otherwise a new role authored with the same
+    // dict spelling ships the fence-voiding file with the suite green.
+    const document = fenceDocument() as Record<string, unknown>;
+    const roles = Object.keys(document["roles"] as Record<string, unknown>);
+    expect(roles.length).toBeGreaterThan(1);
+
+    for (const role of roles) {
+      const fence = renderFence(role, fenceContext(), {
+        document: fenceDocument(),
+        nonInteractive: true,
+      });
+      const filesystem = (fence.settings["sandbox"] as Record<string, unknown>)[
+        "filesystem"
+      ] as Record<string, unknown>;
+      for (const key of ["denyRead", "denyWrite"]) {
+        for (const entry of (filesystem[key] as unknown[] | undefined) ?? []) {
+          expect(typeof entry).toBe("string");
+        }
+      }
+    }
+  });
+
   test("the settings and the fence's own rules now name one path, not two spellings", () => {
     const fence = renderFence("worker", fenceContext(), {
       document: fenceDocument(),
@@ -369,6 +396,105 @@ describe("the sandbox the fence renders is one the CLI can actually build (D-008
         >
       )["additionalDirectories"],
     ).toStrictEqual(["/base/.git/objects", "/base/.git/packed-refs"]);
+  });
+});
+
+describe("the fence refuses to emit the block that would void it (D-0093)", () => {
+  /** A minimal post-repair document, as `repairSandbox` would have left it. */
+  function block(denyRead: unknown[], denyWrite: unknown[] = []): Record<string, unknown> {
+    return { sandbox: { enabled: true, filesystem: { denyRead, denyWrite } } };
+  }
+
+  test("a rendered block whose entries are all strings passes", () => {
+    expect(() =>
+      checkRenderedSandboxDenyStrings(block(["/home/x/.ssh"], ["/home/x/.state"]), "worker"),
+    ).not.toThrow();
+  });
+
+  test.each([
+    ["the dict spelling the document still authors", { path: "~/.ssh" }],
+    ["a number", 42],
+    ["null", null],
+    ["a dict with no path at all", {}],
+    ["a dict whose path is not a string", { path: 42 }],
+    ["a nested list", ["~/.ssh"]],
+  ])("a %s entry refuses rather than reaching the child", (_label, entry) => {
+    const refusal = expectRefusal(
+      () => checkRenderedSandboxDenyStrings(block([entry]), "worker"),
+      FenceRefusal,
+    );
+
+    expect(refusal.codes).toContain(RefusalReason.SANDBOX_ENTRY_NOT_STRING);
+    // The detail names the axis and the index, because an operator reading a
+    // ledger row has only this string to find the entry by.
+    expect(refusal.reasons[0]?.[1]).toContain("sandbox.filesystem.denyRead[0]");
+  });
+
+  test("denyWrite is checked on the same terms as denyRead", () => {
+    const refusal = expectRefusal(
+      () => checkRenderedSandboxDenyStrings(block(["/ok"], [{ path: "~/.ssh" }]), "worker"),
+      FenceRefusal,
+    );
+
+    expect(refusal.codes).toContain(RefusalReason.SANDBOX_ENTRY_NOT_STRING);
+    expect(refusal.reasons[0]?.[1]).toContain("sandbox.filesystem.denyWrite[0]");
+  });
+
+  test("every bad entry is reported, not the first", () => {
+    const refusal = expectRefusal(
+      () => checkRenderedSandboxDenyStrings(block([{ path: "~/.ssh" }, "/ok", 42]), "worker"),
+      FenceRefusal,
+    );
+
+    expect(refusal.reasons).toHaveLength(2);
+    expect(refusal.reasons[0]?.[1]).toContain("denyRead[0]");
+    expect(refusal.reasons[1]?.[1]).toContain("denyRead[2]");
+  });
+
+  test("the axes measured HARMLESS on the CLI are deliberately not checked", () => {
+    // `additionalDirectories` entries that are not strings, and unknown keys
+    // under `sandbox`, were measured on `2.1.261` to leave the deny rule
+    // applied and the hook firing. Refusing them would be validating against a
+    // settings schema this project does not have -- the move `D-0082`
+    // declined. If a later CLI starts voiding the fence on these too, this case
+    // is the one to change, and `D-0093` names them so the omission is found.
+    const tolerated: Record<string, unknown> = {
+      sandbox: {
+        enabled: true,
+        surprise: { anything: true },
+        filesystem: {
+          denyRead: ["/home/x/.ssh"],
+          denyWrite: [],
+          additionalDirectories: [{ path: "/tmp/x" }, 42, null],
+        },
+      },
+    };
+
+    expect(() => checkRenderedSandboxDenyStrings(tolerated, "worker")).not.toThrow();
+  });
+
+  test("a document with no sandbox at all is not this check's business", () => {
+    // Absent, non-object, and a non-list axis are all refused upstream by
+    // validation. This check runs after that refusal, so it must not turn a
+    // shape someone else already named into a second, differently-worded one.
+    expect(() => checkRenderedSandboxDenyStrings({}, "worker")).not.toThrow();
+    expect(() => checkRenderedSandboxDenyStrings({ sandbox: 1 }, "worker")).not.toThrow();
+    expect(() =>
+      checkRenderedSandboxDenyStrings({ sandbox: { filesystem: { denyRead: "nope" } } }, "worker"),
+    ).not.toThrow();
+  });
+
+  test("the shipped roles all pass their own post-condition", () => {
+    // The reason this check is quiet in production, stated as a case: every
+    // role in the carried document renders past it. A change to `roles.json` or
+    // to `repairSandbox` that breaks that is a refusal at spawn time, and this
+    // is where it is seen first.
+    const document = fenceDocument() as Record<string, unknown>;
+    for (const role of Object.keys(document["roles"] as Record<string, unknown>)) {
+      expect(() =>
+        renderFence(role, fenceContext(), { document: fenceDocument(), nonInteractive: true }),
+      ).not.toThrow();
+    }
   });
 });
 
@@ -724,6 +850,149 @@ describe("a real child under the fence", () => {
       // structured answered SANDBOX NO here and could not stage at all.
       expect(stdout).toContain("SANDBOX YES");
       expect(stdout).not.toContain("SANDBOX NO");
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // #131 / D-0093: the denied READ, and the reproduction that keeps this pair
+  // from being green while the deny is bypassed
+  // -------------------------------------------------------------------------
+
+  /**
+   * The unique string planted behind the fence's `denyRead`. The observation is
+   * whether this reaches the child's stdout, which does not go through the
+   * child's account of what happened to it: a refusal it merely *describes*
+   * would read the same whether the rule fired, the hook fired, or the model
+   * decided on its own not to run the command.
+   */
+  const NONCE = "continuo-i131-nonce-7f3a1c";
+
+  /**
+   * A worker fence over a real worktree, with {@link NONCE} planted at a path
+   * the `worker` role's `denyRead` already covers (`{interlock_root}/.secrets`).
+   */
+  function denyReadTarget(): {
+    readonly workerDir: string;
+    readonly secret: string;
+    readonly args: string[];
+    readonly settingsPath: string;
+  } {
+    const root = fenceCaseRoot();
+    const { workerDir } = worktreeTarget(root);
+    // `interlock_root` INSIDE the worktree, which is what puts the denied path
+    // inside the session's working directory. Measured first with the fixture's
+    // default root, one level up: the CLI refuses to `cat` anything outside the
+    // cwd before either the fence's rule or its hook is consulted ("Claude Code
+    // may only concatenate files from the allowed working directories"), so
+    // both halves of this pair came back green-for-the-wrong-reason and the
+    // reproduction half could not reproduce anything. The layer under test has
+    // to be the only one in the way.
+    const interlockRoot = join(workerDir, "vault");
+    const ctx = replaceFenceContext(fenceContext(root, { hookScript: shippedHookScript() }), {
+      workerDir,
+      interlockRoot,
+      fencePath: join(interlockRoot, "state", "fence-worker.json"),
+    });
+    const secretsDir = join(interlockRoot, ".secrets");
+    mkdirSync(secretsDir, { recursive: true });
+    const secret = join(secretsDir, "token.txt");
+    writeFileSync(secret, `${NONCE}\n`, "utf8");
+
+    const outcome = new FencedSpawner({
+      ledger: fenceLedger(root, "deny-read.jsonl"),
+      document: fenceDocument(),
+      nonInteractive: true,
+      sandboxWritableRoots: gitMetadataRoots({ cwd: workerDir, timeoutMs: 60_000 }),
+    }).prepare("worker", ctx);
+    expect(outcome.admitted).toBe(true);
+
+    const args = [...(outcome.plan?.cliArgs() ?? [])];
+    const settingsPath = args[args.indexOf("--settings") + 1] ?? "";
+    expect(existsSync(settingsPath)).toBe(true);
+    return { workerDir, secret, args, settingsPath };
+  }
+
+  /** Ask a child to read one denied path, once, and hand back what it said. */
+  function readDeniedPath(workerDir: string, secret: string, args: readonly string[]): string {
+    return execFileSync(
+      "claude",
+      [
+        "-p",
+        `Run exactly this one command with the Bash tool and then stop, reporting its ` +
+          `outcome verbatim: cat ${secret} -- Do not retry it, do not use ` +
+          `dangerouslyDisableSandbox, and do not run any other command.`,
+        ...args,
+      ],
+      { cwd: workerDir, encoding: "utf8", timeout: 300_000, stdio: ["ignore", "pipe", "pipe"] },
+    );
+  }
+
+  skipIf(!REAL_CHILD_ENABLED, REAL_CHILD_REASON)(
+    "refuses a denied read-only command under the sandbox, and the bytes never arrive (#131)",
+    () => {
+      const { workerDir, secret, args } = denyReadTarget();
+
+      const stdout = readDeniedPath(workerDir, secret, args);
+
+      // The acceptance of #131, observed rather than described: the command was
+      // read-only, it stayed inside the sandbox, and its output did not reach
+      // the child.
+      expect(stdout).not.toContain(NONCE);
+      // And it was refused by the fence's own layer, naming its rule. Section
+      // 9.5's second rule: read the refusal, not just the refusal -- the
+      // permission system's own wording names nothing, and an ambient rule
+      // produces that one.
+      expect(stdout).toContain("sandbox-deny-read");
+    },
+  );
+
+  skipIf(!REAL_CHILD_ENABLED, REAL_CHILD_REASON)(
+    "reproduces #131: one dict deny entry in the same fence and the same read goes through",
+    () => {
+      // The vacuity check, and the reason this pair exists rather than the case
+      // above alone. A child that never runs the command, a model that declines
+      // it on its own, a `cat` that fails for any other reason -- all of those
+      // make the positive case green while the deny is doing nothing. This half
+      // fails unless the deny is the thing stopping the read.
+      //
+      // The only edit is the spelling of ONE entry, put back the way
+      // `roles.json` still authors it and the way every fence this repository
+      // rendered before `D-0082` shipped. `D-0093`'s post-condition is what
+      // stops the renderer producing this file; nothing stops a hand from
+      // writing it, which is the point.
+      //
+      // **And it is deliberately not the entry that covers the secret.** Wrap
+      // every entry and the read could go through for the boring reason -- the
+      // rule that names this path is gone -- which would make the case green
+      // whether the pipeline was voided or merely narrowed. Corrupting the
+      // OTHER entry leaves the covering rule intact and spelled exactly as the
+      // passing half spells it, so a read that still succeeds can only be the
+      // whole pipeline going with it. That is also the shape the fence actually
+      // shipped before `D-0082`: one dict beside one string, not a list of
+      // dicts.
+      const { workerDir, secret, args, settingsPath } = denyReadTarget();
+      const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+      const filesystem = (settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+        string,
+        unknown
+      >;
+      const denyRead = filesystem["denyRead"] as string[];
+      const covers = (entry: string): boolean => secret.startsWith(entry);
+      // Both must exist, or the edit below is not the one this case describes:
+      // one entry that still names the secret, and one to spoil.
+      expect(denyRead.filter(covers).length).toBe(1);
+      expect(denyRead.filter((entry) => !covers(entry)).length).toBeGreaterThan(0);
+      filesystem["denyRead"] = denyRead.map((path) => (covers(path) ? path : { path }));
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf8");
+
+      const stdout = readDeniedPath(workerDir, secret, args);
+
+      // Measured directly on CLI `2.1.261` before this pair was written, over
+      // 32 cells: one non-string entry in `denyRead` or `denyWrite` and the CLI
+      // discards the whole permission and hook pipeline -- silently, exit zero.
+      // The denied read then succeeds and the bytes arrive.
+      expect(stdout).toContain(NONCE);
+      expect(stdout).not.toContain("sandbox-deny-read");
     },
   );
 });

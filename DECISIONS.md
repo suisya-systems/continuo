@@ -188,6 +188,7 @@ spaces distinct.
 | D-0090 | The CLI seam a host drives: `--version` carries the build's revision, and `--json` answers in one envelope | accepted |
 | D-0091 | A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement | accepted |
 | D-0092 | `gate close` joins the `--json` envelope: `D-0090`'s falsifier fired, and its verb reach is amended from three gate verbs to four | accepted |
+| D-0093 | One non-string entry in the sandbox deny list voids `permissions.deny` and the `PreToolUse` hook for the whole run | accepted |
 
 ---
 
@@ -14184,3 +14185,249 @@ the payload's central claim.
 envelope this amends and the falsifier it named. Decision id allocated from the `D-0019`..`D-0099`
 shared band, checked against `origin/main` at `50f97eb`, where `D-0091` is the last taken id, and
 re-checked at rebase.
+
+---
+
+## D-0093 -- One non-string entry in the sandbox deny list voids `permissions.deny` and the `PreToolUse` hook for the whole run
+
+**Context.** `docs/operations/lap-1-dogfood.md` section 9.5 records F-8 as two halves, filed as two
+issues. The write half (#130) was that a fenced `claude -p` worker could not commit: `git add` came
+back `This command requires approval` with `Bash(git add:*)` in the fence's own `permissions.allow`.
+The read half (#131) was that read-only commands which stay inside the sandbox -- `git worktree list`,
+`ls` -- ran despite a matching `permissions.deny` entry and a `PreToolUse` hook that should have
+refused them. `D-0082` measured the write half on CLI `2.1.260`, found that `roles.json` spells one
+sandbox deny entry `{"path": "~/.ssh"}` and that the CLI, having no such form, emitted no warning and
+built no sandbox at all, and closed #130 by flattening the rendered entries to strings. It named the
+read half nowhere. #131 stayed open on its own premise -- that *read-only* is the variable, that a
+command which touches nothing the sandbox guards slips past the checks -- and that premise is what
+this entry falsifies.
+
+**The measurement.** Taken on 2026-09-06 against **Claude Code CLI `2.1.261`**, node `v22.17.0`, Linux
+(WSL2), outside continuo entirely: a bare git repository carrying no settings of its own, so that no
+ambient layer is in play. Every cell is one real child, argv verbatim:
+
+```
+claude -p "<one command; do not retry; do not use dangerouslyDisableSandbox>" \
+  --settings <F> --setting-sources '' --model claude-haiku-4-5-20251001 \
+  --output-format json
+```
+
+`<F>` differs between cells in **one key only**. Its fixed part is
+`{"permissions": {"deny": ["<the rule under test>"], "allow": []}, "hooks": {"PreToolUse":
+[{"matcher": "Bash", "hooks": [{"type": "command", "command": "node <hook>"}]}]}, "permissionMode":
+"acceptEdits", "sandbox": <the varied value>}`. The hook **writes a witness file before it decides**
+and only then returns `permissionDecision: deny`, so the witness is a direct observation of
+invocation: its absence means the hook was never called at all, not that it was called and overruled.
+The 24-cell matrix is eight `sandbox` spellings crossed with three commands -- `git worktree list`,
+`ls -la <dir>`, `touch <file>` -- each under its matching deny rule (`Bash(git worktree *)`,
+`Bash(ls:*)`, `Bash(touch:*)`). Every spelling behaved identically across all three commands:
+
+| `sandbox` value | hook fired | the denied command |
+|---|---|---|
+| the key absent entirely | yes | refused by the hook |
+| `{enabled:true, filesystem:{denyRead:["/abs/.ssh"]}}` | yes | refused by the hook |
+| `{filesystem:{denyRead:["/abs/.ssh"]}}` (no `enabled`) | yes | refused by the hook |
+| `{enabled:true, ..., surprise:{...}}` (an unknown key) | yes | refused by the hook |
+| `{enabled:true, filesystem:{denyRead:[{"path":"~/.ssh"}]}}` | **no** | **ran** |
+| `{filesystem:{denyRead:[{"path":"~/.ssh"}]}}` | **no** | **ran** |
+| `{enabled:true, filesystem:{denyWrite:[{"path":"~/.ssh"}]}}` | **no** | **ran** |
+| `{enabled:true, filesystem:{denyRead:[42]}}` | **no** | **ran** |
+
+Eight supplementary cells vary `additionalDirectories` entry types over two commands:
+`["<abs>"]`, `[{"path":"<abs>"}]`, `[42]` and `[null]` are **all harmless** -- the hook fires and the
+command is refused in every one. A non-string there voids nothing.
+
+Four further cells ask whether the void is `Bash`-only, with matcher `"*"` and
+`deny: ["Read(<secret>)", "Edit(<dir>/**)"]`:
+
+| `denyRead` spelling | `Read` of the secret | `Write` under the `Edit(...)` rule |
+|---|---|---|
+| flat strings | refused by the hook | refused by the hook |
+| `{"path": ...}` | **succeeded, and returned the file's contents** | refused, but by *"Claude requested permissions to write to ..., but you have not granted it yet"* -- the nobody-to-approve path, not the rule |
+
+The decisive pair was repeated four times each; 4/4 both ways. The remaining cells were run once.
+
+**One mechanism, not two defects, and #131's premise is wrong.** A **non-string entry in
+`sandbox.filesystem.denyRead` or `denyWrite`** makes CLI `2.1.261` apply neither `permissions.deny`
+nor any `PreToolUse` hook for the run -- and not only for `Bash`: the same void was measured for
+`Read` and for `Write`. Exit zero, no warning, nothing on stderr. The denied read then succeeds and
+the bytes arrive, which is #131; the denied write is refused by the missing-approval path rather than
+by the rule, which is #130's symptom. F-8's two halves have one cause, and it is not the one either
+issue names. "Read-only commands bypass the fence" was never the variable: an unparseable sandbox
+deny list is. Read-only commands merely make the void *visible* -- a write under a voided fence still
+stops, on a path that looks enough like enforcement to be mistaken for it, while a read under a
+voided fence returns the secret. #131 is closed on a corrected diagnosis, not on the one it was filed
+with. Note also what does **not** void anything: the key's absence, a missing `enabled`, an unknown
+sibling key, and non-strings in `additionalDirectories`. The blast radius is exactly two arrays.
+
+**What the measurement does not cover, stated because F-8's whole history is a version-local
+observation mistaken for a general one.** One CLI version (`2.1.261`); one platform (Linux under
+WSL2); one invocation mode (`claude -p`, never interactive); one model; one delivery route (a
+`--settings` file with `--setting-sources ''` against a target carrying none). Two non-string types
+were put in front of the CLI in these two arrays -- the `{"path": ...}` dict and a bare number;
+`null`, `{}`, `{"path": 42}` and nested lists appear only as cases against continuo's own
+post-condition. Every `<F>` carried `"allow": []`, so what was observed is deny rules going
+unapplied, not that an allow list is discarded too. And each cell was a single run carrying one
+command, so nothing here says whether enforcement could return later within one session.
+
+**What the deny list actually provides while this is open.** `permissions.deny` and the `PreToolUse`
+hook are enforced by the CLI **only while the `sandbox` block delivered beside them parses**. All
+three ride to the child in one artifact -- a single settings file -- so they are not three
+independent layers over one child; they are one artifact the CLI accepts or discards whole, and the
+deny list's enforcement is conditional on a neighbour it never mentions. What continuo can therefore
+guarantee is one step short of enforcement: **no fence this repository renders can carry the shape
+that voids them** -- a claim about continuo's own output, now held by a refusal at the point of
+emission rather than by a comment asserting the shape is unreachable. It does **not** guarantee that
+the CLI honours a well-formed deny list, and nothing in this repository can: the only observation
+that could is a real child, and the fence's own `decide()` is not one.
+
+**Decision.** `src/fencing/renderer.ts` gains a refusal code
+`SANDBOX_ENTRY_NOT_STRING = "sandbox-entry-not-string"` and an exported post-condition
+`checkRenderedSandboxDenyStrings(rendered, role)`, called immediately after `repairSandbox()` and
+before `settingsPayload()`. It refuses the fence if any rendered `denyRead` or `denyWrite` entry is
+not a string. The check runs on the **rendered** block -- what will actually be written for the child
+to read -- rather than on the authored document, because the authored document is not the artifact
+whose shape matters and because the repair is precisely the step this fences.
+
+**Its scope is the two measured axes and nothing else.** `additionalDirectories` entries and unknown
+`sandbox` keys are *measured harmless* and are deliberately left unguarded. Guarding them would be
+refusing role documents on a rule the CLI does not have, which is the fence deciding more than the
+evidence authorises -- the same direction `D-0089` refused when it declined to make the `Edit` /
+`Write` family relation symmetric. A guard whose scope exceeds its measurement also decays badly: it
+looks like enforcement, it is untestable against the CLI, and the day it fires it refuses a fence for
+a reason nobody can reproduce.
+
+**It is a regression fence, not a live-hole patch in the renderer, and that is stated rather than
+blurred.** A trace pass over `renderFence` establishes that `repairSandbox` runs on every fence it
+returns (the two earlier exits are throws), and that `parseSandboxEntry`
+(`src/fencing/rules.ts:311-319`) and the `repairSandbox` flattener test the same predicate over the
+same object graph. A non-string `denyRead` / `denyWrite` entry is therefore **not reachable from an
+authored role document today**. What the post-condition replaces is `D-0082`'s own safety argument,
+which rested on a comment saying "unreachable" with nothing enforcing it -- and the measurement above
+is the price of that being wrong. One residual asymmetry is closed as a side effect:
+`parseSandboxEntry` reads `raw["path"]`, consulting the prototype chain, while `repairSandbox` reads
+`getOwn(entry, "path")`, own properties only. That gap is unreachable today because `substitute()`
+rebuilds every entry from own keys and `JSON.parse` makes `__proto__` an own property; the
+post-condition closes it regardless of which of those two facts stops being true first.
+
+**Alternatives.**
+
+- *File upstream and change nothing here* (rejected: it leaves the guarantee sentence with nothing
+  behind it, and an upstream fix arrives on the CLI's schedule while every fence this repository
+  renders is one bad merge away from carrying the shape. The measurement is still worth reporting
+  upstream, and `docs/operations/upstream/cli-sandbox-deny-voids-permissions.md` is written to be
+  replayable by someone who does not have this repository).
+- *Validate the authored document instead of the rendered block* (rejected: the authored form
+  `{"path": ...}` is one interlock's renderer grew and `parseSandboxEntry` still accepts; refusing it
+  at parse time would reject role documents this repository carries verbatim, and it would still not
+  fence the artifact, which is what the CLI reads).
+- *Strip or coerce the offending entry rather than refuse* (rejected: a deny entry this repository
+  invented, or silently dropped, is a fence narrower or wider than the one its document authorised,
+  and it would restore exactly the silence the CLI already provides).
+- *Guard every sandbox field, non-strings in `additionalDirectories` included* (rejected above: it
+  refuses on a rule the CLI does not have).
+- *Rest on the breach battery, which is green* (rejected: it was green throughout the window in which
+  the fence was void -- see the exposures below).
+
+**What this corrects in `D-0082`, and what `D-0082` got right.** `D-0082` diagnosed the "declared but
+not built" half correctly and its remedy is the right one: flattening the entries to strings is
+exactly the shape the measurement above shows to be safe, and `enabled: true` is genuinely required
+for the CLI to build a sandbox. Nothing in its decision is reversed. Two of its **claims about the
+effect** are narrower than the truth and are corrected here:
+
+- *"a sandbox that was declared and could not be built makes every write-capable `Bash` require
+  approval, allow list or not."* **Correction:** the structured entry destroys more than the sandbox.
+  It discards `permissions.deny` and the `PreToolUse` hook as well, for `Read` and `Write` as much as
+  for `Bash`, so the effect is not confined to write-capable `Bash` and is not only a *tightening*.
+  Under the same entry a denied `Read` succeeds and returns the file's contents. `D-0082` read the
+  symptom in front of it -- refused writes -- as the mechanism, and so recorded a failure mode that is
+  exclusively fail-closed. It is also fail-open, and the fail-open half is #131.
+- *"Every fence this repository has ever rendered declared a sandbox the CLI then did not build, and
+  the `denyRead` / `denyWrite` entries beside it were inert."* **Correction:** it was not only the
+  sandbox entries that were inert. For every such fence the `permissions.deny` list and the
+  `PreToolUse` hook were inert too. The sentence bounds the damage at the sandbox layer, and the
+  damage was the whole artifact.
+
+`D-0082` is amended by these two corrections, not superseded: its decision stands, its status is
+unchanged, and its text is left as the record of the measurement it took.
+
+**Exposures this change does not close, named rather than left.**
+
+1. **A second producer of settings, and it is not a fence.** `src/settings/generator.ts` -- public
+   API via `src/index.ts` -- writes `settings.local.json` and **deliberately passes a non-string deny
+   entry through verbatim** in two branches: `keptEntryString()` when `anchorBase === ""`, and the
+   `normalizeSandboxEntry() === null` branch. The stated reason is that the launcher surfaces the
+   operator error, and its doc comment says the CLI answers this with `/doctor` reporting
+   `Expected string, but received object` and rejecting the whole file. **The measurement shows that
+   premise does not hold for these two arrays on `2.1.261`**: the file is accepted, the run proceeds,
+   and the fence is voided in silence. (`/doctor` itself was not run, so what is contradicted is the
+   "rejects the whole file" half, measured directly.) This is a genuine live exposure, not a
+   regression fence. It is out of scope here for two reasons, both stated so the omission is not
+   mistaken for a judgement that it is safe: changing it moves
+   `parity/settings.settings-generator.ledger.json`, which this task's brief forbids touching, and it
+   is not a fence, so it cannot produce the real-child observation #131's acceptance names. It needs
+   its own issue and its own gate.
+2. **The breach battery never observes a child.** Its evaluator is the fence object's own `decide()`,
+   so a green battery proves self-consistency inside this process and says nothing about CLI
+   enforcement. Nothing in this repository could have caught this class of defect before the
+   real-child pair below existed -- which is why that pair, and not the battery, is what records this
+   entry.
+3. **The prototype asymmetry** between `parseSandboxEntry` and `repairSandbox` described above is
+   closed *in effect* by the post-condition, but the two readers still disagree and neither is
+   annotated as depending on the other. That is a latent shape, not a live hole.
+
+**What records it.** `src/fencing/renderer.ts` holds the refusal code, the post-condition and its
+call site. `test/fencing/hermetic-child.test.ts` holds:
+
+- unit cases for the post-condition: a `{path}` dict, a number, `null`, `{}`, `{path: 42}` and a
+  nested list each refuse with `sandbox-entry-not-string`; the harmless axes -- `additionalDirectories`
+  entry types and an unknown `sandbox` key -- explicitly do **not** refuse, so the scope is a case
+  rather than a sentence; and every shipped role passes;
+- a widened assertion that every rendered `denyRead` / `denyWrite` entry is a string for **every**
+  role, not only the one whose document authors a dict;
+- **a real-child pair, opt-in under `CONTINUO_REAL_CLAUDE_CHILD=1`, which was run and passes.** The
+  positive half plants a nonce at `{interlock_root}/.secrets/token.txt` with `interlock_root` set
+  **inside** the worktree, starts a real `claude -p` under the rendered worker fence, asks it to
+  `cat` that file, and asserts the nonce does not reach stdout and that the refusal names
+  `sandbox-deny-read` -- continuo's hook, by name, rather than merely "it did not work". The
+  reproduction half is the vacuity check: the **same** fence, with **one** of the written settings
+  file's `denyRead` entries re-spelled `{"path": ...}` by hand, and the **same** read then succeeds
+  and the nonce arrives. A green positive with no reproduction half would have been the exact failure
+  this entry is about, so the pair is one case, not two.
+
+  The corrupted entry is deliberately **not** the one that covers the nonce, and that is what makes
+  the half evidence for the sentence above rather than for a weaker one. Spoil every entry and the
+  read could go through for the boring reason -- the rule naming that path is gone -- which is green
+  whether the pipeline was voided or merely narrowed. Leaving the covering rule intact, spelled
+  exactly as the passing half spells it, means a read that still succeeds can only be the whole
+  pipeline going with the one bad neighbour. It is also the shape the fence actually shipped before
+  `D-0082`: one dict beside one string. Run in that form on `2.1.261`, the read goes through -- so
+  "**one** non-string entry" is measured against a real child, not only inferred from the matrix.
+
+  A first attempt put the nonce **outside** the worktree and both halves were useless: the CLI's own
+  working-directory guard refused the `cat` before the fence was consulted, so the positive passed
+  for the wrong reason and the reproduction failed to reproduce. That is recorded in comments at the
+  case, because it is the trap anyone rewriting it walks into first.
+
+**Status.** accepted
+
+**Falsifier.** A CLI release that accepts a structured `denyRead` / `denyWrite` entry, or that
+rejects the settings file outright instead of discarding the pipeline, would make this a guard
+against a defect that no longer exists -- harmless, but the guarantee sentence would then understate
+what an operator gets and should be rewritten rather than left. Sharper and more likely: a release
+that extends the void to a **third** array, `additionalDirectories` included, would falsify this
+entry's scope directly, and nothing here would notice, because the deliberately-unguarded axes are
+asserted to *pass* rendering, not to be enforced. The check is a re-run of the matrix above; the argv
+is recorded for that purpose. The reproduction half of the real-child pair is the live tripwire: if
+it ever stops reproducing -- the hand-corrupted fence no longer letting the read through -- the CLI's
+behaviour has changed under this entry and the positive half has stopped proving anything. Equally
+falsifying: any evidence that `permissions.deny` goes unenforced while the sandbox block *does*
+parse, which would mean the conditional in the guarantee sentence is not the only condition.
+
+**Source.** #131, with #130 and `docs/operations/lap-1-dogfood.md` section 9.5 F-8 for the two halves
+this unifies. `D-0082` for the repair this fences and the two claims corrected above.
+`docs/operations/upstream/cli-sandbox-deny-voids-permissions.md` is the report, filed upstream as
+[anthropics/claude-code#92365](https://github.com/anthropics/claude-code/issues/92365); #131 stays
+open until that issue resolves, because the guarantee sentence above holds only while it does.
+Decision id allocated from the `D-0019`..`D-0099` shared band, checked against `origin/main` at
+`44f6233`, where `D-0092` is the last taken id, and re-checked at rebase.
