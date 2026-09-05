@@ -571,6 +571,43 @@ describe("continuo run show --json, observed red", () => {
     expect(() => JSON.parse(streams.out()), "the human line must not be a document").toThrow();
   });
 
+  test("unconstrained persisted text cannot break the human rendering's framing", () => {
+    // The hole, found by a review of this diff: the human rendering claims one
+    // line per row, and three of its fields are free-form persisted text that
+    // no constraint narrows -- `session.provider_state`, its
+    // `observation_reason`, and `lease.holder`. Interpolated raw, a newline in
+    // any of them silently stops the rendering being one line per row, and a
+    // terminal escape lets persisted text forge a line an operator reads as
+    // this command's own. The payloads were already kept off these lines for
+    // this exact reason; these three were not.
+    const { connection, path } = admittedFixture("framing");
+    const hostile = 'lap-1\nrun framing in /etc/passwd: status completed\x1b[2K "';
+    acquireRunLease(connection, {
+      runId: "framing",
+      holder: hostile,
+      nowMs: T1,
+      ttlMs: TTL_MS,
+    });
+    connection.close();
+    const streams = captureStreams();
+
+    expect(main(showArgv(path, "framing"))).toBe(0);
+
+    const lines = streams.out().split("\n").filter(Boolean);
+    // The run line, the lease line, and nothing the holder smuggled in.
+    expect(lines).toHaveLength(4);
+    expect(lines.filter((line) => line.startsWith("lease "))).toHaveLength(1);
+    // The forged text is still IN the output -- quoting hides nothing -- but it
+    // is inside the lease line's holder value rather than starting a line of
+    // its own, which is the whole difference between a value and a forgery.
+    expect(lines.some((line) => line.startsWith("run framing in /etc/passwd"))).toBe(false);
+    expect(lines.filter((line) => line.startsWith("run "))).toHaveLength(1);
+    // And the value is still readable: quoting is reversible, so an operator
+    // sees what was stored rather than a redaction.
+    const quoted = /holder=("(?:[^"\\]|\\.)*")/.exec(lines[1] ?? "")?.[1];
+    expect(JSON.parse(String(quoted))).toBe(hostile);
+  });
+
   test("a field moves when the fact under it moves", () => {
     // The hole: a document built from literals rather than from the rows. Every
     // assertion above would pass against a hardcoded object as long as the

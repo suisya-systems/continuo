@@ -14728,6 +14728,29 @@ on the value that was stored, which is the argument `D-0090` already makes for n
 `pyJsonDumps`. Neither payload appears on the HUMAN rendering: that is one line per row, and a
 payload holding a newline would silently stop it being one.
 
+**And the same rule reaches three more fields, which the first draft of this verb missed.** A review
+of the diff found that `session.provider_state`, `session.observation_reason` and `lease.holder` are
+also free-form persisted text -- the DDL asks only that they be non-empty, and `confirmIdentity`
+stores whatever the provider said -- so interpolating them raw broke the one-line-per-row claim by
+exactly the mechanism the payloads were excluded for, and additionally let persisted text forge a
+line an operator reads as the command's own. They are rendered through `JSON.stringify`: one call,
+reversible, quotes the value so its extent is visible, and escapes exactly the control characters
+that break the framing. Not held to ASCII -- the human rendering already echoes `--db` verbatim, and
+narrowing that alphabet is the open problem `docs/cli-output-policy.md` hands to whichever entry
+settles it for every verb at once. The DOCUMENT needs none of this: `asciiJsonLine` already escapes
+every one of these values, which is why the payload columns are safe there and absent here.
+
+**One hazard is measured and declined rather than closed: `seq` and the millisecond columns are read
+as `number`.** `docs/sqlite-value-contract.md` section 3 requires `safeIntegers(true)` for a column
+that can hold an INTEGER past `Number.MAX_SAFE_INTEGER`, which this driver rounds silently. `seq` is
+an `INTEGER PRIMARY KEY AUTOINCREMENT` from 1, so the value is nine quadrillion appended events
+away, and epoch milliseconds are five orders of magnitude short. Against that, the same document
+notes that safe integers return `bigint` and that `JSON.stringify` throws on one -- so enabling them
+for this reader would make this verb's numbers a different type from every other verb's and would
+need a replacer to serialise at all, while `openGates`, `gateDetail`, `readRun` and `readLease` all
+read the same columns as numbers today. One statement diverging from that is worse than the hazard
+it would close. Raised by a review of this diff, recorded rather than left to be rediscovered.
+
 **Why it reads no clock, and why that is a design choice rather than an omission.** Whether a lease
 is live, whether a gate's deadline has passed, whether an outbox row is overdue are all questions
 against the *caller's* clock. The rows carry `expires_at_ms`, `deadline_at_ms` and
@@ -14820,6 +14843,10 @@ anti-vacuity standard, each observed RED under a deliberate mutation that was th
   delegation event's payload and out through the document as one line of pure ASCII that parses
   back byte for byte. This verb is the first place in this CLI where free-form external text reaches
   a document, and `--prompt` is deliberately not held to ASCII.
+- Unconstrained persisted text cannot break the human rendering's framing: a lease holder carrying
+  a newline, a forged `run ... : status completed` line and a terminal escape produces exactly the
+  four lines it should, with the value quoted and still readable -- red under the raw interpolation
+  this verb shipped in its first draft.
 - The four `--json` vacuity cases `D-0090` requires: the same invocation without the flag emits the
   unchanged human rendering and no document (red under `jsonRequested(args) || true`); the refusal
   path reads the flag too (red under a `refuse()` given a constant `false`); the mount carries the
@@ -14835,7 +14862,10 @@ or `event` that is on nobody's read path and that somebody reaches for the file 
 `run show` document large enough that a host cannot hold it, which would falsify the unbounded
 `events` and `outbox` lists and make the rejected `--limit` the right answer after all; the shape
 of that failure is a long-lived run, and it is a `/2` or a sibling key rather than a silent
-truncation. Also falsifying: the five-reads-not-a-snapshot residual becoming observable -- a console
+truncation. The `seq` hazard above shares that falsifier and no other: a run whose spine passes
+`2**53` falsifies the reading convention this entry declined to change, and would falsify it for
+`gate show` in the same breath. Also falsifying: the five-reads-not-a-snapshot residual becoming
+observable -- a console
 that renders a run's status and its spine from one document and can show a state pair the database
 never held. And, in the other direction, an `awaiting_user` key appearing in this payload, which
 would mean the correspondence this entry recorded (the name is a gate at stage `presented`) had been

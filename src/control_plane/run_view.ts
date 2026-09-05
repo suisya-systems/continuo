@@ -194,6 +194,23 @@ const SELECT_GATES = `
  * indexes, so this is both the cheapest and the only honest ordering:
  * `occurred_at_ms` is the producer's clock and two producers may disagree
  * about it, while `seq` is the order this database accepted the facts in.
+ *
+ * **Read as a `number`, not under `safeIntegers(true)`, and the choice is
+ * deliberate.** `docs/sqlite-value-contract.md` section 3 records that an
+ * INTEGER past `Number.MAX_SAFE_INTEGER` is silently rounded by this driver,
+ * and requires safe integers for a column that can hold one. `seq` is an
+ * `INTEGER PRIMARY KEY AUTOINCREMENT` starting at 1, so reaching that value
+ * would take nine quadrillion appended events; the millisecond columns are
+ * epoch milliseconds and are five orders of magnitude short of it. Against
+ * that, the contract's own note is decisive: safe integers return `bigint`,
+ * `JSON.stringify` throws on one, and this reader feeds a `--json` payload --
+ * so enabling them would make this verb's numbers a different type from every
+ * other verb's and would need a replacer to serialise at all. Every other
+ * reader in this codebase (`openGates`, `gateDetail`, `readRun`, `readLease`)
+ * reads these same columns the same way, and a single statement diverging is
+ * worse than the hazard it would close. Raised by a review of this diff and
+ * recorded here rather than left to be rediscovered; `D-0096`'s falsifier names
+ * the run that would make it real.
  */
 const SELECT_EVENTS = `
     SELECT seq, event_id, event_type, subject_kind, subject_id, payload,

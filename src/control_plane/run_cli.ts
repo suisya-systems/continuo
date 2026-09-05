@@ -503,6 +503,35 @@ function stamp(value: number | string | null): string {
 }
 
 /**
+ * One field of unconstrained persisted text, quoted, or `-` when absent.
+ *
+ * **This is the one rendering decision the "one line per row" claim depends
+ * on.** Three fields on `run show`'s human lines are free-form text that no
+ * constraint narrows: `session.provider_state` and `session.observation_reason`
+ * (a provider's own state word and R4's could-not-observe reason -- the DDL asks
+ * only that they be non-empty, and `confirmIdentity` persists whatever the
+ * backend said) and `lease.holder` (a claimant identity, likewise only
+ * non-empty). Interpolated raw, a newline in any of them would silently stop
+ * the rendering being one line per row, and a terminal escape would let
+ * persisted text forge a line an operator reads as this command's own.
+ *
+ * `JSON.stringify` rather than an escaping scheme invented here: it is one
+ * call, it is reversible, it escapes exactly the control characters that break
+ * the framing, and it puts the value in quotes so an operator can see where it
+ * begins and ends. It is deliberately NOT held to ASCII -- the human rendering
+ * already echoes `--db` verbatim, and narrowing the alphabet is the open
+ * problem `docs/cli-output-policy.md` hands to whichever entry settles it for
+ * every verb at once, which this one is not.
+ *
+ * The document needs none of this: {@link asciiJsonLine} escapes every one of
+ * these values already, which is why the two payload columns are safe there and
+ * absent here.
+ */
+function quoted(value: string | null): string {
+  return value === null ? "-" : JSON.stringify(value);
+}
+
+/**
  * `run show`'s payload: the run, and the five things a console draws beside it.
  *
  * Built key by key rather than by spreading the record, for the two reasons
@@ -608,7 +637,7 @@ function writeRunView(view: RunView, path: string): number {
   runCliSeams.write(
     view.lease === null
       ? "lease -\n"
-      : `lease ${view.lease.resource} holder=${view.lease.holder} ` +
+      : `lease ${view.lease.resource} holder=${quoted(view.lease.holder)} ` +
           `epoch=${view.lease.epoch} acquired=${view.lease.acquiredAtMs} ` +
           `expires=${view.lease.expiresAtMs}\n`,
   );
@@ -616,7 +645,7 @@ function writeRunView(view: RunView, path: string): number {
     runCliSeams.write(
       `session ${session.sessionId} provider=${session.provider} ` +
         `phase=${session.bindingPhase} observation=${session.observation} ` +
-        `state=${stamp(session.providerState)} reason=${stamp(session.observationReason)} ` +
+        `state=${quoted(session.providerState)} reason=${quoted(session.observationReason)} ` +
         `bound=${session.boundAtMs} released=${stamp(session.releasedAtMs)}\n`,
     );
   }
