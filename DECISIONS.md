@@ -178,12 +178,13 @@ spaces distinct.
 | D-0080 | After the lap there is no endpoint, so a verb drives delivery: `gate deliver` | accepted |
 | D-0081 | The fence is the child's only configuration, and it renders a mode the child can work under | accepted |
 | D-0082 | The fence's sandbox is switched on, spelled in strings, and told where the worktree's git writes | accepted |
-| D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | accepted |
+| D-0083 | The worker's `~/.claude/settings.json` deny gains the `Edit(...)` spelling, and the CLI's warning stays | superseded by D-0089 |
 | D-0084 | `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do | accepted |
 | D-0085 | The endpoint destination directory is created if missing and reused if present, for both verbs that take one | accepted |
 | D-0086 | Flags the fence generates and flags that alter what it means are two concepts, and admission refuses both | superseded by D-0088 |
 | D-0087 | The host application is `rondo`, a third repository, and `minimal-operating-loop.md`'s premise 2 is settled against the working assumption | accepted |
 | D-0088 | An admitted run may pass only what a role document authorised: the cli_args check is an allowlist | accepted |
+| D-0089 | An authored `Edit(...)` deny rule is the file-editing family, in the fence's hook as it is in the CLI | accepted |
 
 ---
 
@@ -12868,6 +12869,8 @@ it is tracked separately rather than folded into a two-line document fix.
 **What records it.** `test/fencing/hermetic-child.test.ts` asserts that the rendered worker fence
 refuses both an `Edit` and a `Write` of that path at the hook layer, with the reason naming the rule.
 
+**Status.** superseded by `D-0089`
+
 ---
 
 ## D-0084 -- `run close` records the operator's close of a run: the transitions it may take, and the three things it does not do
@@ -13524,3 +13527,90 @@ across all roles means the bounded question ("what does a lap need?") was not bo
 
 **Source.** #149, on `D-0086`'s stated limit. The eight-run measurement is
 `docs/operations/lap-1-dogfood.md` §3, §8, §9.2 and §10.1.
+
+---
+
+## D-0089 -- An authored `Edit(...)` deny rule is the file-editing family, in the fence's hook as it is in the CLI
+
+**Context.** `D-0083` left one option on the table and named it the only one that closes both layers:
+widen the hook's own matching so an `Edit(...)` rule covers every file-editing tool, as the CLI's
+permission layer already does. It was not taken there because it is a semantic deviation in a ported
+function that reaches every role's rules at once, and `D-0083`'s two-line document fix did not need
+it. The cost of not taking it was carried instead: three roles had to spell the same deny twice, and
+the CLI printed a startup warning about the redundant half on every spawn.
+
+The measurement that fixes the meaning is `D-0083`'s, on CLI `2.1.260`, over three settings files
+differing only in that list: `Write(...)` alone warns, `Write(...)` and `Edit(...)` together warn,
+`Edit(...)` alone does not. The CLI states on stderr what it is doing -- a file-permission rule is
+applied under `Edit(path)`, and that one spelling covers `Write`, `Edit` and `NotebookEdit`. So
+`Edit(...)` is not merely *a* spelling of a file rule; it is the canonical one, and `Write(...)` is
+the spelling the CLI declines to treat as a family.
+
+**Decision.** Taken at the human gate on 2026-09-05, adopting the option `D-0083` deferred.
+`permissionMatches` in `src/fencing/rules.ts` no longer compares an exact tool name. An authored
+`Edit(...)` deny rule matches an invocation of any member of the file-editing family; every other
+authored tool name -- `Write`, `NotebookEdit`, `Bash`, `Read`, `WebFetch`, and any tool this
+repository does not know about -- keeps exact matching.
+
+**The widening is one-way, and that asymmetry is the decision.** `Edit(...)` means the family;
+`Write(...)` does not become an alias for it. A symmetric equivalence would be easier to write and
+would be wrong in the direction that matters: a standalone `Write(...)` rule, in a persisted fence or
+one a caller supplied, would silently start denying `Edit` and `NotebookEdit` calls the measured CLI
+never applies it to, which is the fence deciding more than its document authorised. The predicate is
+`rule.tool === "Edit" ? family.includes(toolName) : rule.tool === toolName`, and the negative half is
+pinned by a case asserting an authored `Write(path)` refuses `Write` and refuses to speak for `Edit`
+or `NotebookEdit`.
+
+**Scope: deny only.** The hook grants nothing and this does not change that. Renderer `allow` entries
+are validated and handed to the CLI, which applies its own family semantics to them; only
+`permissions.deny` entries become `FenceRule`s, and only those get the widened match. Teaching the
+hook to evaluate `allow` would make a bug in this file widen a child's reach instead of narrowing it,
+which is the property the deny-only boundary exists to hold.
+
+**The family is shared with the sandbox layer; the matching is not.** Membership is the existing
+`WRITE_TOOLS` -- `Write`, `Edit`, `NotebookEdit` -- so there is one list to keep true rather than two
+that can drift. Permission rules keep `permissionSubject` and `specMatches`: glob and equality over
+the tool's subject, with `notebook_path` already among the keys the subject reader accepts. They are
+deliberately not routed through `sandboxMatches`, which tests path containment and treats a `Bash`
+command as a substring search -- correct for a sandbox path, wrong for a permission spec.
+
+**Consequences.** The three `Write(...)` twins in `src/fencing/roles.json` are redundant and are
+removed: `worker`'s `~/.claude/settings.json`, `curator`'s `**/.claude/skills/**`, `secretary`'s
+`**/src/**`. Each leaves its `Edit(...)` entry, which now denies strictly more than the pair did, so
+no role's fence narrows. The CLI's startup warning goes with them -- it named the `Write` spelling's
+presence, and nothing shipped spells it any more. `test/contract/carried-documents.test.ts` records
+all three departures from interlock at the recorded revision, with the digest and byte count that pin
+them; `D-0083`'s deviation text, which said the `Write(...)` half was kept because the hook needed it,
+is no longer true and is replaced rather than left standing. The general breach battery still probes
+one tool per rule, so the one-rule-to-three-tools expansion is proven by a per-tool table in
+`test/fencing/hermetic-child.test.ts` that asserts, for each of `Edit`, `Write` and `NotebookEdit`, a
+refusal, the *same* `Edit` rule id, and a reason naming the invoked tool.
+
+**This supersedes `D-0083`.** That entry decided to keep the `Write(...)` spelling and to keep the
+warning, and gave the reason: exact hook matching made the literal spelling load-bearing. That reason
+has ceased to be true, so leaving both entries `accepted` would give two contradictory current
+answers about what a role document should spell. `D-0083` keeps its ID and gains
+`Status: superseded by D-0089`, its index row is updated, and its text is otherwise untouched -- it
+remains the record of the measurement this entry rests on.
+
+**Alternatives.** *Leave the matching exact and keep both spellings in every role* (rejected: it is
+the status quo `D-0083` recorded as a known limitation, it makes the document say twice what the CLI
+reads once, and it leaves a standing warning that trains an operator to ignore startup stderr).
+*Drop `Write(...)` without widening the hook* (rejected by `D-0083` already: it silences the warning
+by giving up the hook's match on a literal `Write`, leaving that path to the CLI's permission layer
+alone -- the single-layer dependency this repository's hook exists to avoid). *Make the family
+relation symmetric* (rejected: see the one-way section; it denies beyond the measured CLI behaviour
+and beyond what a document authorised).
+
+**Status.** accepted
+
+**Falsifier.** A CLI release that changes the canonical spelling of a file-permission rule, or that
+changes which tools such a rule covers -- the family is transcribed from a measurement, not derived,
+and it goes stale silently because a rule that stops covering a tool still parses and still passes
+every test that asserts the refusals it does make. Equally falsifying: evidence that the permission
+layer's file-tool family and the sandbox layer's `WRITE_TOOLS` no longer coincide, since one list is
+shared here on the claim that they do. The check is a re-measurement against the CLI, in the shape
+`D-0083` used -- settings files differing only in that list, and the warning as the tell.
+
+**Source.** #135, on the option `D-0083` deferred. The `2.1.260` measurement is `D-0083`'s, and the
+dogfood finding behind both is `docs/operations/lap-1-dogfood.md` section 9.5, F-9.

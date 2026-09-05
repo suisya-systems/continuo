@@ -67,19 +67,28 @@ const CARRIED: readonly CarriedDocument[] = [
     path: "src/fencing/roles.json",
     sourcePath: "src/claude_org_runtime/fencing/roles.json",
     revision: "65f36c5",
-    sha256: "8f80d3550dfe4bf2ccfdad03df5b88f0b925ceb408169a84511e9e711034128d",
-    bytes: 5678,
+    sha256: "e9c2d00d449410475fce79185680508b7e4ed955001a193763afd639378fb23b",
+    bytes: 5563,
     deviations: [
-      // D-0083 / #132. The CLI applies a file-permission rule only under
-      // `Edit(...)`, which covers every file-editing tool -- it says so on
-      // stderr on every spawn -- and `matches` in `src/fencing/rules.ts`
-      // compares an exact tool name, so the `Write(...)` spelling closed
-      // neither layer for the tool a child would actually reach for. The
-      // `Write(...)` half is kept because the hook layer does still match a
-      // literal `Write`, so removing it would narrow the fence.
-      "worker.permissions.deny gains Edit(~/.claude/settings.json) beside the " +
-        "Write(...) form, which neither the CLI's permission layer nor the fence's " +
-        "own hook applied to an Edit",
+      // D-0083 / #132, then D-0089 / #135. The CLI applies a file-permission
+      // rule only under `Edit(...)`, which covers every file-editing tool -- it
+      // says so on stderr on every spawn, and the `Write(...)` spelling is what
+      // it warns about. D-0083 added the `Edit(...)` form beside the
+      // `Write(...)` one because `matches` in `src/fencing/rules.ts` then
+      // compared an exact tool name, so only the literal spelling closed the
+      // hook layer for a literal `Write`. D-0089 widened that matching -- an
+      // authored `Edit(...)` rule now covers `Write`, `Edit` and `NotebookEdit`
+      // at the hook layer too -- which makes every `Write(...)` twin redundant
+      // rather than load-bearing, so the three are gone and the warning with
+      // them. The fence is not narrowed by their removal: the surviving
+      // `Edit(...)` rule denies strictly more than the pair did.
+      "worker.permissions.deny carries Edit(~/.claude/settings.json) in place of " +
+        "interlock's Write(...) form, which neither the CLI's permission layer nor " +
+        "the fence's own hook applied to an Edit",
+      "curator.permissions.deny drops Write(**/.claude/skills/**), leaving the " +
+        "Edit(...) twin interlock already carried beside it",
+      "secretary.permissions.deny drops Write(**/src/**), leaving the Edit(...) " +
+        "twin interlock already carried beside it",
     ],
   },
   {
