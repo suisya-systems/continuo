@@ -78,13 +78,13 @@
       "behaviour": "defaultGraceMs refuses (GraceNotDeclared) for any revision whose classes carry more than one reconcile_period_ms, so a revision that moves one class to a coarser pass makes every report over it require an explicit grace.",
       "matches_source": true,
       "note": "Section 3.5 wants one grace per report and section 3.3 permits a coarse class; choosing between the periods would be this module deciding policy. The refusal is not a dead end -- declaring grace explicitly still works, and the ported case asserts both halves.",
-      "where_a_fix_belongs": "upstream, and only alongside a section 3.5 change that says which period wins."
+      "where_a_fix_belongs": "Nowhere in code: choosing which reconcile_period_ms wins is a section 3.5 policy decision this port has no standing to take, and the refusal already leaves the explicit-grace path open."
     },
     {
       "behaviour": "WindowReport.idsFor's refusal of an unrecognised classification is never exercised by interlock's suite: every call there passes one of the three real bucket names, so the guard could be deleted upstream without turning anything red.",
       "matches_source": true,
       "note": "Found by a mutation sweep on the port, then confirmed against interlock 65f36c5 (four ids_for call sites in tests/measurement/test_windows.py, all with valid classifications). The port reproduces the guard exactly as upstream has it and does NOT change behaviour; it adds a target-only test so the property stops being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
-      "where_a_fix_belongs": "upstream, as the same case added to interlock's tests/measurement/test_windows.py."
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023), so the repair lives in the target-only case this entry already records."
     }
   ],
   "entries": [

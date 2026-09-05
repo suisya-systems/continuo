@@ -520,15 +520,14 @@ continuo's**: interlock is frozen (`D-0023`, `D-0036`), so an inherited defect i
 the first belt that touches it, and `inherited_limitations` records what is reproduced *pending that
 repair* -- not what is queued for someone upstream to fix.
 
-**How to read a `where_a_fix_belongs` that says "upstream".** Ledgers written before `D-0023` and
-`D-0036` use that word, and it never meant "someone there will do it" -- interlock is frozen, and
-nobody there will. Each such entry is one of two things, and which one it is has to be read off the
-entry's own `note`: either the fix is *structurally impossible in this repository* (it needs a v1
-store, an interlock module, or a decision this port has no standing to take), in which case
-"upstream" means **nowhere, for now**, and the limitation stands as disclosed; or it is a repair
-continuo could make, in which case `D-0023` governs and the belt that next touches the behaviour
-makes it. Neither reading is a reason to wait. Re-wording those fields entry by entry is a decision
-per entry, not a find-and-replace, and it belongs to whichever belt re-opens each ledger.
+**What `where_a_fix_belongs` may say.** No field names "upstream" as its destination any more
+(#80 classified the last 25 entry by entry, against each entry's own `note`). A field takes
+one of two shapes: either
+the fix is one continuo makes, in which case it names where -- `D-0023` governs and the belt that
+next touches the behaviour makes it -- or no fix is available in this repository, in which case the
+field says *why* rather than naming a destination (it needs a v1 store, an interlock module, or a
+decision this port has no standing to take), and the limitation stands as disclosed. A new entry is
+written in one of those two shapes; "upstream" is not a third.
 
 An `adapted` case must still be *at least as strong* as its source in the property it pins. If it is
 weaker, it is a waiver, and that is a report to the reviewer -- see rule 0.

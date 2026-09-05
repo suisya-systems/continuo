@@ -191,7 +191,7 @@
       "what": "`parse_init_event` reads `mcp_servers` entries with `str(entry.get('name', ''))`, so a server whose `name` is a number is reported under its stringified form and a server entry that is not a mapping is skipped silently. Neither is distinguishable in the result from a server that was genuinely absent.",
       "matches_source": true,
       "source": "fencing/readback.py `parse_init_event` -- transcribed verbatim, including the `isinstance(entry, Mapping)` skip.",
-      "where_a_fix_belongs": "Upstream, if anywhere. The field is reported by the CLI rather than authored by an operator, so a malformed entry is a CLI bug rather than a configuration error, and refusing the whole readback for one would lose the permission-mode comparison that is the module's reason to exist."
+      "where_a_fix_belongs": "Nowhere reachable from here. The field is reported by the CLI rather than authored by an operator, so a malformed entry is a CLI bug in a program neither implementation owns, and the only repair available on this side -- refusing the whole readback for one -- would lose the permission-mode comparison that is the module's reason to exist."
     }
   ]
 }

@@ -97,19 +97,19 @@
       "behaviour": "The v1 side is whatever the adapter hands over. Nothing here can tell an adapter that reported half of v1's episodes from one that reported all of them, so a partial read is reported as Interlock improvement.",
       "matches_source": true,
       "note": "Structural upstream and reproduced. The separable-adapter design is the point (this module must not open v1's files), and the one confusion it CAN prevent -- an empty read read as 'v1 saw nothing' -- it prevents by degrading to the no-shadow-reference state and making the empty claim reachable only through attestsEmpty.",
-      "where_a_fix_belongs": "upstream, in the adapter's own provenance."
+      "where_a_fix_belongs": "In the v1 adapter's own provenance, which is not part of this repository: the separable-adapter design requires this module not to open v1's files, so there is nothing here to strengthen. Not a repair continuo can make from inside this module."
     },
     {
       "behaviour": "The positional escalation key is sound only while both systems saw the same escalations in the same order, and a tie in created_at_ms is broken by gate_id, which is an arbitrary order rather than a real one.",
       "matches_source": true,
       "note": "Named by the source in three places and carried into the report verbatim (POSITIONAL_KEY_CAVEAT). The failure direction is safe -- unmatched episodes on both sides rather than a confident wrong pairing -- and section 7 reads a run of them as the signal that the key needs replacing.",
-      "where_a_fix_belongs": "upstream, and only with a v1 register id Interlock can see."
+      "where_a_fix_belongs": "Nowhere available: a sound key needs a v1 register id Interlock can see, and no such id exists on this side of the cutover. The failure direction is safe, and section 7 reads a run of unmatched episodes as the signal that the key needs replacing."
     },
     {
       "behaviour": "renderShadowReconciliation prints POSITIONAL_KEY_CAVEAT only when an episode in the unmatched_key bucket is positional. A worker_escalation episode that DID compute its key and found no counterpart is filed interlock_only or v1_only, so a report full of unpaired escalations -- the ordering divergence the caveat is about -- can print no caveat at all.",
       "matches_source": true,
       "note": "Reproduced verbatim: interlock's renderer guards on `any(episode.positional_key for episode in report.unmatched_key)` and nothing else. Raised by the codex review gate as a design observation (P2) and NOT fixed here, because widening the guard would make continuo's report say something interlock's does not for the same data, which is the divergence a parity port exists to prevent. The caveat is still reachable on the report object (positionalCaveat) and on every key the escalation reader produces (CorrelationKey.positional), so a consumer that wants it can render it; what is missing is only the renderer's own decision to print it.",
-      "where_a_fix_belongs": "upstream, in interlock's renderer, and then here in the same shape."
+      "where_a_fix_belongs": "Here, and already done: repaired under D-0108 and recorded in this ledger's `divergences` block, with the interlock behaviour it departs from and the target-only case that pins the widened guard. The parity argument for leaving the guard alone did not survive D-0023 -- interlock is frozen, so there is no other side to keep in step with -- and the caveat went missing precisely in the buckets where an ordering divergence shows up. This `inherited_limitations` entry and its note describe the pre-repair state; retiring it is a ledger-structure change outside the scope of this classification pass."
     }
   ],
   "entries": [

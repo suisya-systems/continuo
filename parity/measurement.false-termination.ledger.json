@@ -88,7 +88,7 @@
       "behaviour": "This is a detector. It raises no incident and applies no remedy, and there is no reconcile driver to act on its findings.",
       "matches_source": true,
       "note": "interlock#74 acceptance criterion 5 requires the limitations disclosed in interlock PR #72 (detector-only among them) to stay disclosed rather than be silently fixed.",
-      "where_a_fix_belongs": "upstream, and out of scope for the parity port by interlock#74 acceptance criterion 6 (no reconcile driver, no new features)."
+      "where_a_fix_belongs": "Nowhere yet: acting on the detector's findings needs a reconcile driver that exists in neither implementation, and interlock#74 acceptance criterion 6 puts building one outside this port. Detector-only stays disclosed under criterion 5 rather than repaired."
     }
   ],
   "entries": [

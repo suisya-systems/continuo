@@ -800,7 +800,7 @@
       "what": "`collect_deny_targets` reads `permissions.deny` and the two Layer 3 arrays but not `permissions.ask`, and not the `additionalDirectories` that widen the sandbox rather than narrowing it. A scope that contributes an unbindable path through a key this list does not name is not audited, and the report says `deny targets: N` without saying which keys N was drawn from.",
       "matches_source": true,
       "source": "settings/sandbox_doctor.py `collect_deny_targets` -- the two layers are transcribed verbatim, including the docstring's reason for collecting both.",
-      "where_a_fix_belongs": "Upstream, and only with evidence. The two layers are the ones Claude Code's sandboxing documentation names as merging into the bwrap deny set; adding a third on the strength of a reading would widen a security check by guess, which is rule 11's shape. The live canary is the compensating control: it binds what was collected and reports whether the sandbox actually comes up."
+      "where_a_fix_belongs": "Here if anywhere, and only with evidence. interlock is frozen (D-0023), so widening the collection is continuo's call to make -- but the two layers collected are the ones Claude Code's sandboxing documentation names as merging into the bwrap deny set, and adding a third on the strength of a reading would widen a security check by guess, which is rule 11's shape. The live canary is the compensating control: it binds what was collected and reports whether the sandbox actually comes up."
     },
     {
       "what": "The bwrap canary binds only paths that already exist (`os.path.lexists`), so a deny path naming a file that has not been created yet is skipped by the live half and judged by the static half alone. A path that would be unbindable for a reason other than a symlink goes unreported until the file exists.",
@@ -812,7 +812,7 @@
       "what": "`discover_merged_scopes` names `~/.claude/settings.json` and two managed-settings paths, and derives project scopes from each input's directory. Claude Code's enterprise and policy scopes on other platforms -- and any scope an operator adds by configuration -- are not discovered, so `--no-merge-scopes` and the default differ by a fixed list rather than by what the client will actually merge.",
       "matches_source": true,
       "source": "settings/sandbox_doctor.py `USER_SETTINGS_PATH`, `MANAGED_SETTINGS_PATHS`, `PROJECT_SCOPE_FILENAMES` and `discover_merged_scopes` -- transcribed verbatim, list included.",
-      "where_a_fix_belongs": "Upstream, tracked against the client's documented scope list. The port keeps the list rather than extending it: a scope added here and not there would make the two implementations disagree about what a clean preflight means, and the command's whole value is that its answer matches the launch."
+      "where_a_fix_belongs": "Here, tracked against the client's documented scope list. interlock is frozen (D-0023), so keeping the list current is continuo's (the parity argument for freezing it -- that a scope added here and not there would make the two implementations disagree about what a clean preflight means -- no longer has an other side to disagree with). The pass that wrote this entry kept the list as transcribed because extending it is a behaviour change whose warrant is the client's documentation, not the transcription."
     }
   ]
 }

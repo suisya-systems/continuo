@@ -97,13 +97,13 @@
       "behaviour": "The grader runs no detector. It reads a caller-supplied map of case id to produced incidents, so nothing here verifies that the incidents were produced by replaying the trace at all.",
       "matches_source": true,
       "note": "Structural upstream and reproduced: the module loads and grades and explicitly does not run detectors. The one property it CAN enforce about the detector's honesty -- that every instant came from the injected clock -- it does enforce, and refuses anything else (ClockNotSynthetic).",
-      "where_a_fix_belongs": "upstream, in whatever eventually drives the replay; out of scope for the parity port by interlock#74 acceptance criterion 6."
+      "where_a_fix_belongs": "Nowhere yet: verifying the incidents would need whatever eventually drives the replay, which exists in neither implementation, and interlock#74 acceptance criterion 6 puts building one outside this port. The one property the module CAN enforce it does enforce (ClockNotSynthetic)."
     },
     {
       "behaviour": "Five properties of the loader and grader are unguarded by interlock's own suite: the budget_ms minimum (shadowed by the T > L rule), the upfront-versus-interleaved clock check (the source's case for it cannot discriminate), the null-versus-zero empty-denominator rate, nearest-rank percentiles, and the rate formatter.",
       "matches_source": true,
       "note": "Found by a 36-mutation sweep on the port and verified against interlock 65f36c5 case by case. The port reproduces the production behaviour exactly and does not change it; it adds five target-only tests so the properties stop being unguarded on this side. The clock one is the notable entry: interlock HAS a case for it whose docstring states the hazard precisely, and the case cannot detect it because the corpus's sort order grades the stamped case first.",
-      "where_a_fix_belongs": "upstream, as the same five cases added to interlock's tests/measurement/test_fixtures.py."
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023), so the repair lives in the five target-only cases this entry already records."
     }
   ],
   "entries": [

@@ -76,19 +76,19 @@
       "behaviour": "The v1_owned bucket is whatever the caller passes and is never checked against anything except a collision with this database. A shadow input that omitted half of v1's runs would produce a smaller v1_owned bucket and no signal at all.",
       "matches_source": true,
       "note": "Structural upstream and reproduced: interlock D-0013 leaves no v1-owned run in this database to find, so there is nothing here to reconcile the input against. The one assertion the module CAN make -- that no run is claimed by both systems -- it makes, and refuses rather than excluding quietly.",
-      "where_a_fix_belongs": "upstream, and only alongside a v1 store the harness could read directly."
+      "where_a_fix_belongs": "Nowhere, for now: reconciling the bucket needs a v1 store the harness could read directly, and D-0013 leaves no v1-owned run in this database to reconcile it against. Not a repair continuo can make, so the limitation stands as disclosed."
     },
     {
       "behaviour": "The terminal instant is derived from updated_at_ms rather than read from a terminal-timestamp column, which rests on run.status being the only mutable column on the run table.",
       "matches_source": true,
       "note": "Interlock states the derivation and its assumption explicitly, and localises it in one function so that adding a dedicated terminated_at_ms column later is a one-place change. Reproduced exactly, including the localisation. A schema change adding a second mutable column to `run` would invalidate it silently on both sides.",
-      "where_a_fix_belongs": "upstream, as a terminated_at_ms column plus the one-line change this function's shape already anticipates."
+      "where_a_fix_belongs": "Nowhere available to this port: it needs a terminated_at_ms column in the production schema, which this port does not own and has no standing to change. The function's shape already localises the derivation so that adding the column later stays a one-place change."
     },
     {
       "behaviour": "Three properties are unguarded by interlock's own suite: the period-end bound in the published query text (behaviourally redundant with touchesPeriod), the shadow-input chunking (no test passes enough ids to reach the parameter ceiling), and the denominator excluding the in-flight bucket (asserted only where that bucket is empty).",
       "matches_source": true,
       "note": "Found by a mutation sweep on the port and verified against interlock 65f36c5. The port reproduces the production behaviour exactly; it adds three target-only tests so the properties stop being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and a test added to interlock is a change to the other side of the comparison.",
-      "where_a_fix_belongs": "upstream, as the same three cases added to interlock's tests/measurement/test_cohort.py."
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023), so the repair lives in the three target-only cases this entry already records."
     }
   ],
   "entries": [
