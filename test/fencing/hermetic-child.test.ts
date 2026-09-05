@@ -55,7 +55,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
-import { normalizePath } from "../../src/fencing/pypath.js";
+import {
+  normalizePath,
+  osIsabs,
+  osNormcase,
+  osNormpath,
+  osRealpath,
+} from "../../src/fencing/pypath.js";
+import { PyValueError } from "../../src/fencing/pysemantics.js";
 import {
   checkRenderedSandboxDenyStrings,
   FenceRefusal,
@@ -65,6 +72,7 @@ import {
 } from "../../src/fencing/renderer.js";
 import { parsePermissionRule } from "../../src/fencing/rules.js";
 import { FencedSpawner } from "../../src/fencing/spawn.js";
+import { renderRole } from "../../src/settings/generator.js";
 import { gitMetadataRoots, runGitChecked } from "../../src/workspace/git.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { skipIf } from "../testkit/marks.js";
@@ -740,6 +748,33 @@ function runFencedChild(
   return { workerDir, witness, written: join(workerDir, "written-by-the-child.txt") };
 }
 
+/**
+ * Does one rendered deny entry cover a planted path?
+ *
+ * `osNormpath` + `osNormcase` on BOTH sides, never a raw `startsWith`. A legacy
+ * string deny entry is emitted with the separators its AUTHOR wrote, and the
+ * roles these cases drive author `.../vault/records` with forward slashes -- so
+ * on Windows the rendered entry is a substituted native prefix followed by
+ * those authored slashes, `C:\...\worker/vault/records`, while `join` builds
+ * the planted path with backslashes throughout. A raw prefix test finds nothing
+ * in that, and the case then fails claiming the deny list does not cover a path
+ * it covers perfectly well. Measured under a simulated ntpath by the case at
+ * the end of this file, which is also what keeps this falsifiable on a POSIX
+ * cell.
+ *
+ * `osNormcase` as well as `osNormpath`, for the reason D-0216 gives at
+ * `_is_inside_root`: on Windows a drive-letter case difference is not a
+ * different path, and a runner's temp directory is not guaranteed to agree with
+ * the role's spelling about it.
+ *
+ * Shared by the two reproduction halves -- D-0093's, over a fence, and D-0094's,
+ * over the generator's settings file -- because both ask the same question of
+ * the same kind of entry and both got the same answer wrong.
+ */
+function coversDenied(entry: string, denied: string): boolean {
+  return osNormcase(osNormpath(denied)).startsWith(osNormcase(osNormpath(entry)));
+}
+
 const REAL_CHILD_REASON =
   `the real-child cases need a real, authenticated \`claude\` on PATH and bill an API turn, ` +
   `so they are opt-in: set ${REAL_CHILD_ENV}=1 with the CLI installed. Everything they prove ` +
@@ -977,7 +1012,12 @@ describe("a real child under the fence", () => {
         unknown
       >;
       const denyRead = filesystem["denyRead"] as string[];
-      const covers = (entry: string): boolean => secret.startsWith(entry);
+      // Normalised on both sides, not a raw prefix test: this entry carries the
+      // separators the role document wrote, which are not the ones `join` used
+      // to build `secret`. The always-running Windows cells never reach this
+      // case, so the mismatch would have waited for someone running the
+      // real-child suite on Windows. @see `coversDenied`.
+      const covers = (entry: string): boolean => coversDenied(entry, secret);
       // Both must exist, or the edit below is not the one this case describes:
       // one entry that still names the secret, and one to spoil.
       expect(denyRead.filter(covers).length).toBe(1);
@@ -993,6 +1033,313 @@ describe("a real child under the fence", () => {
       // The denied read then succeeds and the bytes arrive.
       expect(stdout).toContain(NONCE);
       expect(stdout).not.toContain("sandbox-deny-read");
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// the SECOND producer of a child's settings, and the same void (#163, D-0094)
+// ---------------------------------------------------------------------------
+
+/**
+ * `src/settings/generator.ts` is not a fence and does not go through
+ * `renderFence`, but it writes the other file a fenced worker runs under -- a
+ * role's `.claude/settings.local.json`, carrying that role's
+ * `permissions.deny`, its `sandbox` block and its hooks in one artifact,
+ * exactly as the fence's settings payload does.
+ *
+ * Until `D-0094` it deliberately wrote a NON-STRING deny entry through
+ * verbatim, on a premise stated in two of its own doc comments: that Claude
+ * Code answers the structured shape with `Expected string, but received object`
+ * and rejects the whole file, so the launcher would surface the operator's
+ * error. `D-0093` measured that premise directly and it does not hold -- the
+ * file is accepted, and the run proceeds with `permissions.deny` and every
+ * `PreToolUse` hook discarded.
+ *
+ * These cases live in this file rather than beside the generator's own suite
+ * because everything they need is already here: the `CONTINUO_REAL_CLAUDE_CHILD`
+ * gate probed once at collection, and the pair discipline `D-0093` records --
+ * a positive half is green whether the deny fired or the fence was void, so it
+ * only means something beside a reproduction half that removes the deny's
+ * effect and nothing else.
+ */
+describe("the settings generator is a second producer of the same artifact (#163, D-0094)", () => {
+  /** Planted behind the generated `denyRead`; its arrival on stdout is the observation. */
+  const GENERATOR_NONCE = "continuo-i163-nonce-2b91d4";
+
+  /** The role document the cases below render, with `denyRead` left to the caller. */
+  function generatorRole(denyRead: readonly unknown[], witness: string): Record<string, unknown> {
+    const script =
+      `require("node:fs").writeFileSync(${JSON.stringify(witness)}, "ran");` +
+      `process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",` +
+      `permissionDecision:"deny",permissionDecisionReason:"the generated settings file's hook"}}))`;
+    return {
+      permissionMode: "acceptEdits",
+      permissions: { deny: ["Bash(cat:*)"], allow: [] },
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [
+              {
+                type: "command",
+                command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+              },
+            ],
+          },
+        ],
+      },
+      sandbox: {
+        enabled: true,
+        filesystem: {
+          denyRead: [...denyRead],
+          denyWrite: [],
+          additionalDirectories: [],
+        },
+        failIfUnavailable: false,
+      },
+    };
+  }
+
+  /**
+   * Render one role through the generator and write it where a child can be
+   * pointed at it, with the nonce planted behind the covering entry.
+   *
+   * The deny list is TWO entries on purpose, for the reason the `D-0093` pair
+   * gives: the reproduction half spoils the one that does NOT cover the nonce,
+   * so a read that still succeeds cannot be explained by the covering rule
+   * having gone missing.
+   */
+  function generatedSettings(): {
+    readonly workerDir: string;
+    readonly denied: string;
+    readonly witness: string;
+    readonly settingsPath: string;
+  } {
+    const root = fenceCaseRoot();
+    // A neutral path holding a neutral string, deliberately. A first attempt
+    // planted the nonce at `.secrets/token.txt`, the shape the D-0093 pair
+    // uses, and the reproduction half failed for a reason that has nothing to
+    // do with the fence: the model read the path as a credential and declined
+    // the command on its own judgement, which is green whether the deny fired
+    // or the file was void. What is under test is the settings file, so the
+    // path must give the child nothing else to decide.
+    const created = join(root, "worker");
+    const recordsDir = join(created, "vault", "records");
+    mkdirSync(recordsDir, { recursive: true });
+    const otherDir = join(created, "vault", "other");
+    mkdirSync(otherDir, { recursive: true });
+    // `osRealpath`, AFTER the directories exist, and every path below derived
+    // from the result. The generator's suppression pass compares
+    // `realpath(worker_dir + entry)` against `normpath(worker_dir)` and
+    // deliberately does NOT realpath the root, so an unresolved `worker_dir`
+    // makes both entries look like escapes and both are dropped -- leaving a
+    // `denyRead` of `[]` and this case asserting a length of 2 against nothing.
+    // Measured: green on Linux, where a temp directory is already its own
+    // realpath, and red on both required Windows cells, where it is an 8.3
+    // short name. `parity/settings.settings-generator.ledger.json` records the
+    // same precondition for the translated cases, which restore it the same
+    // way; macOS (`/var` -> `/private/var`) would need it too.
+    const workerDir = osRealpath(created);
+    const denied = join(workerDir, "vault", "records", "reading.txt");
+    writeFileSync(denied, `${GENERATOR_NONCE}\n`, "utf8");
+    writeFileSync(join(workerDir, "vault", "other", "unrelated.txt"), "unrelated\n", "utf8");
+
+    const witness = join(root, "generated-hook-ran");
+    // `{worker_dir}` rather than the resolved path, so the substitution and the
+    // suppression pass are the things that produce the entries a child reads.
+    const role = generatorRole(["{worker_dir}/vault/records", "{worker_dir}/vault/other"], witness);
+    const settings = renderRole(
+      { worker_roles: { demo: role } },
+      {
+        role: "demo",
+        workerDir,
+        claudeOrgPath: join(root, "co"),
+      },
+    );
+    const settingsPath = join(root, "generated-settings.json");
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+    return { workerDir, denied, witness, settingsPath };
+  }
+
+  /** Ask a real child to read the denied path under the GENERATED settings file. */
+  function readUnderGeneratedSettings(
+    workerDir: string,
+    denied: string,
+    settingsPath: string,
+  ): string {
+    return execFileSync(
+      "claude",
+      [
+        "-p",
+        `Run exactly this one command with the Bash tool and then stop, reporting its ` +
+          `outcome verbatim: cat ${denied} -- Do not retry it, do not use ` +
+          `dangerouslyDisableSandbox, and do not run any other command.`,
+        "--settings",
+        settingsPath,
+        // The empty subset, so the generated file is the child's ONLY settings
+        // source and nothing ambient can be mistaken for it (D-0081).
+        "--setting-sources",
+        "",
+        "--model",
+        "claude-haiku-4-5-20251001",
+      ],
+      { cwd: workerDir, encoding: "utf8", timeout: 300_000, stdio: ["ignore", "pipe", "pipe"] },
+    );
+  }
+
+  test("the generator refuses the shape it used to write, naming the entry", () => {
+    // Hermetic, and the first end of "no longer reaches the CLI": the document
+    // below is the one whose rendered `denyRead` used to hold a dict, and it
+    // now has no rendering at all. `anchor: 'absolute'` with a relative path is
+    // the branch that produced it -- `keptEntryString` had no concrete absolute
+    // form to emit and returned the entry.
+    const role = generatorRole(
+      [{ anchor: "absolute", path: "etc/shadow", suppressOnSymlinkEscape: true }],
+      join(fenceCaseRoot(), "unused-witness"),
+    );
+    const render = (): unknown =>
+      renderRole(
+        { worker_roles: { demo: role } },
+        {
+          role: "demo",
+          workerDir: "/home/u/wd",
+          claudeOrgPath: "/home/u/co",
+        },
+      );
+    // The class as well as the text: `PyValueError` is what this module's CLI
+    // turns into rc 2, so a refusal of any other class would not stop a
+    // `settings generate` from reporting success.
+    expect(render).toThrowError(PyValueError);
+    expect(render).toThrowError(/sandbox\.filesystem\.denyRead\[0\] would reach the child as dict/);
+  });
+
+  test("a well-formed role still renders, and every deny entry is an absolute string", () => {
+    // The half the refusal must not break: the ordinary document still becomes
+    // a file, and the entries in it are the shape the CLI honours.
+    const { settingsPath, denied } = generatedSettings();
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const filesystem = (settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+      string,
+      unknown
+    >;
+    const denyRead = filesystem["denyRead"] as unknown[];
+    expect(denyRead).toHaveLength(2);
+    for (const entry of denyRead) {
+      expect(typeof entry).toBe("string");
+      // `osIsabs`, not `startsWith("/")`: on the required Windows cells these
+      // are drive-letter paths, and the POSIX test would call an absolute entry
+      // relative. It is the same predicate the generator itself uses (D-0213).
+      expect(osIsabs(entry as string)).toBe(true);
+    }
+    expect(denyRead.filter((entry) => coversDenied(entry as string, denied))).toHaveLength(1);
+  });
+
+  test("under a simulated ntpath the entry keeps its authored slashes, and still covers", () => {
+    // The Windows half of the case above, falsifiable on a POSIX cell -- the
+    // discipline `parity/settings.settings-generator.ledger.json` records for
+    // the three `os.path.isabs` pins of D-0213, and the reason this exists is
+    // that BOTH of this file's Windows CI failures were invisible on Linux.
+    //
+    // `pypath.ts` dispatches at CALL time, deliberately, so patching
+    // `process.platform` for the length of one test is enough to render under
+    // ntpath. `realpathFn` is the identity, because these paths name nothing
+    // on the host running this.
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const workerDir = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\wrk\\worker";
+      const role = generatorRole(
+        ["{worker_dir}/vault/records", "{worker_dir}/vault/other"],
+        "C:\\unused-witness",
+      );
+      const settings = renderRole(
+        { worker_roles: { demo: role } },
+        {
+          role: "demo",
+          workerDir,
+          claudeOrgPath: "C:\\co",
+          realpathFn: (path) => path,
+          wslDetector: () => false,
+        },
+      );
+      const filesystem = (settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+        string,
+        unknown
+      >;
+      const denyRead = filesystem["denyRead"] as string[];
+      // Both survive the suppression pass -- the failure this file saw first
+      // was an EMPTY list, so assert the count before anything about shape.
+      expect(denyRead).toHaveLength(2);
+      for (const entry of denyRead) {
+        expect(osIsabs(entry)).toBe(true);
+      }
+      // The shape a raw prefix test trips over, asserted rather than described:
+      // a native substituted prefix followed by the author's forward slashes.
+      expect(denyRead[0]).toBe(`${workerDir}/vault/records`);
+
+      const denied = `${workerDir}\\vault\\records\\reading.txt`;
+      expect(
+        denyRead.filter((entry) => denied.startsWith(entry)),
+        "a raw startsWith finds nothing here, which is the CI failure",
+      ).toHaveLength(0);
+      expect(denyRead.filter((entry) => coversDenied(entry, denied))).toHaveLength(1);
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  });
+
+  skipIf(!REAL_CHILD_ENABLED, REAL_CHILD_REASON)(
+    "a real child under the GENERATED settings file is refused, and the nonce never arrives (#163)",
+    () => {
+      const { workerDir, denied, witness, settingsPath } = generatedSettings();
+
+      const stdout = readUnderGeneratedSettings(workerDir, denied, settingsPath);
+
+      expect(stdout).not.toContain(GENERATOR_NONCE);
+      // The witness is written BEFORE the hook decides, so its presence is a
+      // direct observation that the generated file's hook was invoked -- not
+      // that some other layer happened to stop the command.
+      expect(existsSync(witness), "the generated file's PreToolUse hook ran").toBe(true);
+    },
+  );
+
+  skipIf(!REAL_CHILD_ENABLED, REAL_CHILD_REASON)(
+    "reproduces #163: the shape the generator used to write is ACCEPTED, and voids the file",
+    () => {
+      // The other end, and the one that falsifies the removed doc comment
+      // directly. The generator can no longer produce this file, so the case
+      // derives it BY SUBTRACTION from the file the generator did write --
+      // re-spelling one entry the way `keptEntryString` used to return it --
+      // rather than hand-writing a settings file that could drift away from
+      // what the generator emits.
+      //
+      // Not the entry that covers the nonce, for the reason D-0093's pair
+      // gives: spoil the covering rule and a successful read proves only that
+      // the rule is gone.
+      const { workerDir, denied, witness, settingsPath } = generatedSettings();
+      const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+      const filesystem = (settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
+        string,
+        unknown
+      >;
+      const denyRead = filesystem["denyRead"] as string[];
+      const covers = (entry: string): boolean => coversDenied(entry, denied);
+      expect(denyRead.filter(covers)).toHaveLength(1);
+      filesystem["denyRead"] = denyRead.map((path) =>
+        covers(path) ? path : { anchor: "absolute", path, suppressOnSymlinkEscape: true },
+      );
+      writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+
+      // `execFileSync` throws on a non-zero exit, so reaching the assertions at
+      // all is the observation the doc comment got wrong: the CLI does NOT
+      // reject this file. It accepts it, runs the turn, and says nothing.
+      const stdout = readUnderGeneratedSettings(workerDir, denied, settingsPath);
+
+      expect(stdout).toContain(GENERATOR_NONCE);
+      // And the hook was never invoked -- not invoked and overruled. One
+      // non-string entry took the whole file's enforcement with it (D-0093).
+      expect(existsSync(witness), "the hook was discarded, not consulted").toBe(false);
     },
   );
 });

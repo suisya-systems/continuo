@@ -374,7 +374,7 @@ function refuseCommandLine(parser: ArgumentParser, message: string): never {
  *
  * **`--json` is a spelling of `--format json` and nothing more.** It exists
  * because a host driving this CLI as a subprocess asks every verb for machine
- * output with one flag, and having to remember that one verb of the twelve spells
+ * output with one flag, and having to remember that one verb of the fifteen spells
  * it differently is the whole of the cost this flag removes. What it
  * deliberately does NOT do is wrap the report in the `{"schema","ok","db"}`
  * envelope the other verbs answer in: the suite pins that the markdown and the

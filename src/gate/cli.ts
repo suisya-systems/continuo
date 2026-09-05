@@ -46,22 +46,37 @@
  * operator typed. They become one stderr line and exit 2, the same code
  * `run admit` and `db verify` use.
  *
- * **`--json` on the four verbs a host reads, and on no others.** `gate list`,
- * `gate show`, `gate answer` and `gate close` are the ones a program drives --
- * it enumerates the open questions, reads one, records the answer it obtained,
- * and closes the question it withdrew -- so they carry the shared envelope from
- * `src/cli/json_output.ts` (`D-0090`, `D-0092`). `present`, `deliver`, `ack` and
- * `reconcile` are the operator's own hands and stay human-only until something
- * actually needs to parse them; a flag added ahead of a reader is a shape nobody
- * has checked against a real consumer.
+ * **`--json` on the seven verbs a host reads, and on no others.**
+ * `gate list`, `show`, `present`, `deliver`, `ack`, `answer` and `close` are the
+ * ones a program drives -- it enumerates the open questions, puts one in front
+ * of its reader and settles the relay that carried it, reads the gate, records
+ * the answer it obtained, and closes the question it withdrew -- so they carry
+ * the shared envelope from `src/cli/json_output.ts` (`D-0090`, `D-0092`,
+ * `D-0097`). `reconcile` is the operator's own hand and stays human-only until
+ * something actually needs to parse it; a flag added ahead of a reader is a
+ * shape nobody has checked against a real consumer.
  *
- * `close` is here because a reader appeared and was measured, not because the
- * set looked incomplete: the host's own operating surface drives it (rondo
- * `D-0013`), and, with no flag to read, rondo `D-0015` rule 5 had to treat the
- * exit code as opaque and re-read the gate through a second `gate show --json`
- * subprocess. That is the case `D-0090` named as its falsifier, and `D-0092`
- * answers it by widening the reach rather than by leaving a host to parse
- * `closed g as withdrawn` with a regular expression.
+ * Each widening happened because a reader appeared and was measured, not
+ * because the set looked incomplete. `close` came in under `D-0092`: the host's
+ * own operating surface drives it (rondo `D-0013`), and, with no flag to read,
+ * rondo `D-0015` rule 5 had to treat the exit code as opaque and re-read the
+ * gate through a second `gate show --json` subprocess -- the case `D-0090`
+ * named as its falsifier. `present`, `deliver` and `ack` came in under `D-0097`,
+ * for the reason cadenza's operating-surface row `S-9` measured: `answerGate`
+ * admits only stage `presented`, that stage is written only by the `presented`
+ * relay's ack, and `Outbox.recordAck` refuses an ack of a row nothing delivered.
+ * So a console that could answer machine-readably could not reach the stage it
+ * is allowed to answer from, and the three verbs that get it there are one
+ * sequence rather than three optional ones.
+ *
+ * **What `D-0097` did NOT change, which is the part to keep true.** No verb here
+ * gained an actor, lost one, or records one differently. `present` writes no
+ * transition and takes no `--actor-id`; `deliver`'s `--holder` is a claimant on
+ * the one delivery resource and not an identity on a row; `ack`'s advance is
+ * recorded under `secretary` with the caller's `--actor-id`, as it always was.
+ * That is exactly what makes these three safe for a console when `answer` and
+ * `close` -- which hardcode `actorKind: "human"` -- stay the surface's
+ * human-authorised verbs (cadenza `C-4` / `C-13`).
  *
  * The flag changes **bytes and nothing else**: the same entry point is called,
  * the same refusals are caught, the handle is closed in the same `finally`, and
@@ -73,7 +88,7 @@
  * have left the refusals of a verb whose author forgot silently human under
  * `--json` while its success case stayed green -- a host would then get a
  * parse error exactly when something went wrong, which is the worst moment for
- * one. The four verbs with no flag pass no report and reach the same line they
+ * one. The one verb with no flag passes no report and reaches the same line it
  * always did.
  *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every
@@ -99,7 +114,14 @@ import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { HandlerRejected, OutboxUsageError } from "../control_plane/outbox.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { DELIVERY_LEASE_TTL_MS } from "../lap/endpoint_lease.js";
-import type { AnswerRecorded, GateDetail, OpenGateSummary } from "./operator.js";
+import type {
+  AckRecorded,
+  AnswerRecorded,
+  DeliveryReport,
+  GateDetail,
+  OpenGateSummary,
+  RelayEnqueued,
+} from "./operator.js";
 import {
   ackRelay,
   answerGate,
@@ -215,9 +237,15 @@ export const gateCliSeams = {
   },
 };
 
-/** The pinned document shapes, one per verb a host drives (`D-0090`, `D-0092`). */
+/**
+ * The pinned document shapes, one per verb a host drives (`D-0090`, `D-0092`,
+ * `D-0097`).
+ */
 const LIST_SCHEMA = "continuo.gate.list/1";
 const SHOW_SCHEMA = "continuo.gate.show/1";
+const PRESENT_SCHEMA = "continuo.gate.present/1";
+const DELIVER_SCHEMA = "continuo.gate.deliver/1";
+const ACK_SCHEMA = "continuo.gate.ack/1";
 const ANSWER_SCHEMA = "continuo.gate.answer/1";
 const CLOSE_SCHEMA = "continuo.gate.close/1";
 
@@ -492,70 +520,186 @@ function writeGateDetail(gate: GateDetail): number {
   return 0;
 }
 
+/**
+ * `gate present`'s payload: which relay is now on the queue, and whether this
+ * call put it there.
+ *
+ * `enqueued` is `RelayEnqueued`'s own boolean. The human line spells the same
+ * fact as the words "enqueued" / "already enqueued", which is two encodings of
+ * one idea for a host and one of which inverts under negation ("already
+ * enqueued" is the FALSE case) -- `answerPayload` makes the same argument about
+ * the same pair.
+ *
+ * `recipient` is emitted although it is a constant today (`GATE_RELAY_RECIPIENT`,
+ * `D-0076`), because it is the value the host's next verb polls under: a
+ * document that omitted it would leave a host hardcoding the queue name that
+ * `D-0076`'s falsifier says may one day be per-relay. Read from the constant
+ * rather than spelled again, for the reason `operator.ts` re-exports it.
+ *
+ * `gate_id` is carried even though the caller supplied it, for the reason the
+ * envelope carries `db`: a host reading one document out of a log cannot
+ * attribute a `message_id` to a gate without it, and the id is the same string
+ * either way -- unlike `gate close`'s `outcome`, this one is not a fact about a
+ * row that could disagree with the request.
+ */
+function presentPayload(
+  gateId: string,
+  relay: RelayEnqueued,
+): { readonly [key: string]: JsonValue } {
+  return {
+    gate_id: gateId,
+    message_id: relay.messageId,
+    to_stage: relay.toStage,
+    recipient: GATE_RELAY_RECIPIENT,
+    enqueued: relay.enqueued,
+  };
+}
+
 export function cmdGatePresent(args: Namespace): number {
   const path = String(args["db"]);
+  const gateId = String(args["gate_id"]);
   const nowMs = nowMsOf(args);
-  return withControlPlane(path, (connection) => {
-    const relay = presentGate(connection, {
-      gateId: String(args["gate_id"]),
-      nowMs,
-    });
-    gateCliSeams.write(
-      `${relay.enqueued ? "enqueued" : "already enqueued"} ${relay.messageId} ` +
-        `to ${GATE_RELAY_RECIPIENT} for stage ${relay.toStage}\n`,
-    );
-    return 0;
-  });
+  const report = jsonReportOf(args, PRESENT_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const relay = presentGate(connection, { gateId, nowMs });
+      if (report !== null) {
+        gateCliSeams.write(successLine(report.schema, report.db, presentPayload(gateId, relay)));
+        return 0;
+      }
+      gateCliSeams.write(
+        `${relay.enqueued ? "enqueued" : "already enqueued"} ${relay.messageId} ` +
+          `to ${GATE_RELAY_RECIPIENT} for stage ${relay.toStage}\n`,
+      );
+      return 0;
+    },
+    report,
+  );
+}
+
+/**
+ * `gate deliver`'s payload: what this pass carried, one object per message.
+ *
+ * An array under a key rather than the human line's count, for the reason
+ * `listPayload` gives: an empty pass is a result rather than a special case, and
+ * a host told only "delivered 0 message(s)" would still have to ask which
+ * messages moved. `epoch` is the fence this pass wrote under and is carried
+ * because the human line carries it -- it is what an operator correlates a
+ * dropbox file with when two passes overlap.
+ *
+ * Each element carries `message_id` and `dedup_key` and NOT its own `recipient`:
+ * `deliverRelays` polls exactly one recipient, so every envelope in the array
+ * carries the top-level value and a per-element copy would be that key repeated
+ * once per message. The human line does not print it either.
+ */
+function deliverPayload(report: DeliveryReport): { readonly [key: string]: JsonValue } {
+  return {
+    recipient: report.recipient,
+    epoch: report.epoch,
+    delivered: report.delivered.map((message) => ({
+      message_id: message.messageId,
+      dedup_key: message.dedupKey,
+    })),
+  };
 }
 
 export function cmdGateDeliver(args: Namespace): number {
   const path = String(args["db"]);
   const nowMs = nowMsOf(args);
-  return withControlPlane(path, (connection) => {
-    const report = deliverRelays(connection, {
-      holder: String(args["holder"]),
-      destinationDir: String(args["destination_dir"]),
-      nowMs,
-      ttlMs: DELIVERY_LEASE_TTL_MS,
-      // The one verb that re-reads the clock, and the fence is why: an attempt
-      // must be validated at the instant it writes, not at the instant the pass
-      // began, or a pass outliving its 60-second lease keeps writing under a
-      // lease it no longer holds. An operator who froze the clock with
-      // --now-ms means the instant they gave, so that case keeps the single
-      // read.
-      ...(typeof args["now_ms"] === "number" ? {} : { clock: gateCliSeams.nowMs }),
-    });
-    gateCliSeams.write(
-      `delivered ${report.delivered.length} message(s) to ${report.recipient} ` +
-        `under epoch ${report.epoch}\n`,
-    );
-    for (const message of report.delivered) {
-      gateCliSeams.write(`  ${message.messageId} dedup=${message.dedupKey}\n`);
-    }
-    return 0;
-  });
+  const jsonReport = jsonReportOf(args, DELIVER_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const report = deliverRelays(connection, {
+        holder: String(args["holder"]),
+        destinationDir: String(args["destination_dir"]),
+        nowMs,
+        ttlMs: DELIVERY_LEASE_TTL_MS,
+        // The one verb that re-reads the clock, and the fence is why: an attempt
+        // must be validated at the instant it writes, not at the instant the pass
+        // began, or a pass outliving its 60-second lease keeps writing under a
+        // lease it no longer holds. An operator who froze the clock with
+        // --now-ms means the instant they gave, so that case keeps the single
+        // read.
+        ...(typeof args["now_ms"] === "number" ? {} : { clock: gateCliSeams.nowMs }),
+      });
+      if (jsonReport !== null) {
+        gateCliSeams.write(successLine(jsonReport.schema, jsonReport.db, deliverPayload(report)));
+        return 0;
+      }
+      gateCliSeams.write(
+        `delivered ${report.delivered.length} message(s) to ${report.recipient} ` +
+          `under epoch ${report.epoch}\n`,
+      );
+      for (const message of report.delivered) {
+        gateCliSeams.write(`  ${message.messageId} dedup=${message.dedupKey}\n`);
+      }
+      return 0;
+    },
+    jsonReport,
+  );
+}
+
+/**
+ * `gate ack`'s payload: which relay was settled, and which of the writes landed.
+ *
+ * All four booleans, because that is what this verb is for. Each of the ack, the
+ * advance and the close is its own transaction (`D-0078`), so a caller re-running
+ * the verb after a kill has to be able to see which one this run performed --
+ * and a host has exactly the same question an operator does. The human line
+ * renders the same four through `String()`; JSON booleans are what a host
+ * compares rather than reads.
+ *
+ * `to_stage` is the stage the relay answers, so with `advanced` it says where
+ * the gate now stands. The gate is deliberately NOT read back the way
+ * `gate close` reads its row back: `D-0092` did that because rondo was running a
+ * second `gate show --json` subprocess purely to learn the closure, and the
+ * read-back deleted that subprocess. Here it would delete nothing -- a console's
+ * next act after acking the `presented` relay is to RENDER the gate, which is a
+ * `gate show` whatever this document carries (`D-0097`).
+ */
+function ackPayload(outcome: AckRecorded): { readonly [key: string]: JsonValue } {
+  return {
+    message_id: outcome.messageId,
+    gate_id: outcome.gateId,
+    to_stage: outcome.toStage,
+    acked: outcome.acked,
+    cancelled: outcome.cancelled,
+    advanced: outcome.advanced,
+    closed: outcome.closed,
+  };
 }
 
 export function cmdGateAck(args: Namespace): number {
   const path = String(args["db"]);
   const nowMs = nowMsOf(args);
-  return withControlPlane(path, (connection) => {
-    const outcome = ackRelay(connection, {
-      messageId: String(args["message_id"]),
-      actorId: String(args["actor_id"]),
-      nowMs,
-    });
-    // Every step is reported, including the ones that changed nothing: an
-    // operator re-running an ack after a kill has to be able to see which of
-    // the three writes this run was the one that landed.
-    gateCliSeams.write(
-      `${outcome.messageId}: acked=${String(outcome.acked)} ` +
-        `cancelled=${String(outcome.cancelled)} ` +
-        `advanced=${String(outcome.advanced)} closed=${String(outcome.closed)} ` +
-        `gate=${outcome.gateId} stage=${outcome.toStage}\n`,
-    );
-    return 0;
-  });
+  const report = jsonReportOf(args, ACK_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const outcome = ackRelay(connection, {
+        messageId: String(args["message_id"]),
+        actorId: String(args["actor_id"]),
+        nowMs,
+      });
+      if (report !== null) {
+        gateCliSeams.write(successLine(report.schema, report.db, ackPayload(outcome)));
+        return 0;
+      }
+      // Every step is reported, including the ones that changed nothing: an
+      // operator re-running an ack after a kill has to be able to see which of
+      // the three writes this run was the one that landed.
+      gateCliSeams.write(
+        `${outcome.messageId}: acked=${String(outcome.acked)} ` +
+          `cancelled=${String(outcome.cancelled)} ` +
+          `advanced=${String(outcome.advanced)} closed=${String(outcome.closed)} ` +
+          `gate=${outcome.gateId} stage=${outcome.toStage}\n`,
+      );
+      return 0;
+    },
+    report,
+  );
 }
 
 /**
@@ -784,7 +928,7 @@ function addNowMsArgument(parser: ArgumentParser): void {
   });
 }
 
-/** `add_subparsers`: mount the eight verbs under `gate`. */
+/** `add_subparsers`: mount the eight verbs under `gate`, seven of them with `--json`. */
 export function addSubparsers(sub: Subparsers): void {
   const list = sub.addParser("list", LIST_DESCRIPTION);
   addDbArgument(list);
@@ -801,6 +945,7 @@ export function addSubparsers(sub: Subparsers): void {
   addDbArgument(present);
   addGateIdArgument(present);
   addNowMsArgument(present);
+  addJsonArgument(present);
   present.setDefaults({ func: cmdGatePresent });
 
   const deliver = sub.addParser("deliver", DELIVER_DESCRIPTION);
@@ -820,6 +965,7 @@ export function addSubparsers(sub: Subparsers): void {
     help: HOLDER_HELP,
   });
   addNowMsArgument(deliver);
+  addJsonArgument(deliver);
   deliver.setDefaults({ func: cmdGateDeliver });
 
   const ack = sub.addParser("ack", ACK_DESCRIPTION);
@@ -833,6 +979,7 @@ export function addSubparsers(sub: Subparsers): void {
   });
   addActorIdArgument(ack);
   addNowMsArgument(ack);
+  addJsonArgument(ack);
   ack.setDefaults({ func: cmdGateAck });
 
   const answer = sub.addParser("answer", ANSWER_DESCRIPTION);
