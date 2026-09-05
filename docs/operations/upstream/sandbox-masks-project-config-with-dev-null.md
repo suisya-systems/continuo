@@ -159,11 +159,27 @@ will appear to contradict them.
 
 ### The mitigation, and why this change is not it
 
-The mitigation is one line of `.git/info/exclude` per masked name in the workspace continuo
+The mitigation is one line of `.git/info/exclude` per masked name for the workspace continuo
 materialises for the child. `.git/info/exclude` is not committed, so it does not touch the target
 repository's tracked files, and this repository's own worker worktrees already carry exactly those
 lines by hand -- which is why a `git status` run here is clean while `lap1-dogfood-007`'s fresh
 clone's was not.
+
+**It is not per-workspace, though, and that is the first thing to get right.** For a linked worktree
+`info/exclude` lives in the *common* git directory and applies to every worktree sharing it:
+
+```sh
+git rev-parse --path-format=absolute --git-path info/exclude
+# /home/happy_ryo/work/org/workers/continuo/.git/info/exclude   -- the main checkout's,
+#                                                                  not this worktree's
+```
+
+`workspace-007` was a linked worktree of `sandbox-clone`, so writing the names there would have
+excluded them for `sandbox-clone` itself and for every sibling lap workspace at once -- and among
+the masked names are `.mcp.json` and `.claude/`, which some other tree may legitimately want to see
+as untracked. A per-workspace mechanism (a per-worktree `core.excludesFile`, say) would be needed
+before this could be applied to one child without reaching its siblings. That shape was not tested
+here.
 
 It would work, and on more than the cosmetics. `git add -A`, `git add .` and an untracked-inclusive
 stash all honour the exclude file, so excluding the names keeps git from reaching the devices at all
@@ -184,11 +200,14 @@ and the paragraphs above should be read as the case *for* eventually doing this:
 - **It is a fence behaviour change, and this was an investigation.** Writing into the child
   workspace's git metadata is the fence acquiring a new side effect, which is a `D-` decision rather
   than a docs task's to take unilaterally. It is recommended, not done.
-- **The list is a property of one CLI version on one platform.** That is an argument about how to
-  build it, not about whether -- a stale list degrades benignly, since a name that stops being
-  masked simply stops needing the exclude, and a newly masked name reintroduces the old noise rather
-  than producing a wrong answer. A mitigation that reads the live mount table instead of a
-  hard-coded list would not go stale at all, and is the better shape if this is taken up.
+- **A hard-coded list would not go stale harmlessly.** The set is a property of one CLI version on
+  one platform, and the failure is not symmetric. A newly masked name only reintroduces the old
+  noise. But a name the CLI *stops* masking keeps its exclude entry, and the next real file the
+  child writes at that path -- a genuine `.mcp.json`, a genuine `.gitconfig` -- is then silently
+  omitted from `git status`, from broad staging, and from an untracked-inclusive stash. Excluding a
+  path that no longer needs it hides work, which is the one outcome worse than the noise being
+  mitigated. Deriving the list from the live mount table instead, so that a path is excluded only
+  while it is actually a mount, avoids this and is the better shape if this is taken up.
 - **Nothing is obstructed today.** continuo's fenced children are not instructed to stage broadly,
   and this repository's worker rules already forbid the stash mutation that the devices break. The
   cost of waiting is that a reader is confused once and finds this document; the cost of guessing
