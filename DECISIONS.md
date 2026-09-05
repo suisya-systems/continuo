@@ -187,6 +187,7 @@ spaces distinct.
 | D-0089 | An authored `Edit(...)` deny rule is the file-editing family, in the fence's hook as it is in the CLI | accepted |
 | D-0090 | The CLI seam a host drives: `--version` carries the build's revision, and `--json` answers in one envelope | accepted |
 | D-0091 | A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement | accepted |
+| D-0092 | `gate close` joins the `--json` envelope: `D-0090`'s falsifier fired, and its verb reach is amended from three gate verbs to four | accepted |
 
 ---
 
@@ -14050,4 +14051,136 @@ those facts, and they are independent of them:
 decision table. Decision id allocated from the `D-0019`..`D-0099` shared band -- the shared one rather
 than messagebus's `D-05xx` because the decision binds four belts at once (messagebus, session, lap and
 the host) -- checked against `origin/main` at `c92ab1a`, where `D-0090` is the last taken id, and
+re-checked at rebase.
+
+---
+
+## D-0092 -- `gate close` joins the `--json` envelope: `D-0090`'s falsifier fired, and its verb reach is amended from three gate verbs to four
+
+**Context.** `D-0090` gave the CLI one machine-readable envelope and named the verbs that carry it:
+`run admit`, `run close`, `db create|migrate|verify`, `gate list|show|answer`, `lap perform`, plus
+`measure report` under its own unwrapped rule. It left `gate present`, `deliver`, `ack`, `close` and
+`reconcile` human-only, on a stated principle -- *a flag added ahead of a reader is a shape nobody has
+checked against a real consumer* -- and it recorded the open question in as many words: whether the
+five out-of-scope `gate` verbs should carry the flag was "what this entry does not decide".
+
+A reader then appeared, for exactly one of the five. Rondo `D-0013` puts `gate close --outcome
+withdrawn` on the host's own operating surface. Rondo `D-0015` surveyed the built seam at a pinned sha
+and found the flag rejected at the top level -- `continuo: error: unrecognized arguments: --json` --
+so a host that passed `--json` uniformly would break this one call outright. Its rule 5 is the
+workaround that fact forced: drive `gate close` as an **opaque exit code**, never parse its prose, and
+confirm the state change by running a **second** `gate show --json` subprocess to read `stage` and
+`outcome`.
+
+**That is `D-0090`'s falsifier, in its own words**: "a host that has to special-case a verb's envelope
+beyond the two exceptions named here". The two exceptions `D-0090` allowed are parser-level refusals
+and `measure report`. Rondo `D-0015` rule 5 is a third, and it was written by the host this CLI exists
+to serve.
+
+**Decision.**
+
+1. **`gate close` carries `--json`, under the same envelope, with schema `continuo.gate.close/1`.**
+   The gate verbs a host drives become **four**: `list`, `show`, `answer`, `close`. `present`,
+   `deliver`, `ack` and `reconcile` stay human-only, and nothing else about `D-0090` changes.
+
+2. **The success payload is `gate_id`, `closed`, `outcome`, `from_stage`, `to_stage`.** `closed` is
+   `closeOpenGate`'s own boolean -- whether THIS invocation performed the close. `false` is the
+   idempotent repeat of an identical close and is a **success**, exit 0, `ok:true`; a close under a
+   *different* outcome raises `GateClosedRefused` and never reaches the payload. `outcome`,
+   `from_stage` and `to_stage` are read back from the durable row after the write, through the
+   existing `gateDetail` reader, so they are the confirmed effect rather than a restatement of the
+   command line. `closeOpenGate`'s boolean return type is unchanged.
+
+3. **Refusals go through the funnel that already exists.** `UnknownGateRefused`, `GateClosedRefused`
+   (a different outcome, or a closure race), `InadmissibleTransitionRefused`, `DeadlineNotPassed`, and
+   the control-plane refusals raised while opening the database all reach `withControlPlane` and
+   `refuse()`: exit 2, one document on stderr, stdout empty. **A disallowed `--outcome` does not.**
+   argparse's `choices` refuses it before the handler runs, so it stays usage prose even with `--json`
+   -- `D-0090`'s parser-level exception, unchanged and not narrowed here. **Exit 2 on `gate close`
+   still does not guarantee a parseable document**, and this entry does not promise otherwise.
+
+4. **`D-0090` is amended, not superseded.** Its envelope, its stream split, its schema versioning, its
+   `error.class`-is-a-hint rule and its revision half are all untouched and all still accepted. What
+   this entry changes is one number in its point 3: three gate verbs become four. `D-0090`'s standing
+   text and its status are not edited.
+
+**Why `from_stage` and `to_stage` are both present when a close never moves the stage.** `gates.ts`
+leaves `stage` and `stage_seq` deliberately untouched on a close, because the stage a gate was closed
+*at* is part of what the outcome means -- an `expired` at `answered` is a different failure from one
+at `presented`. So the two keys are always equal today. They are still both emitted, under the names
+`gate show`'s transition records already use, so a host reads one vocabulary for every stage movement
+it is told about instead of learning which transitions happen to preserve the stage. The alternative,
+a single `stage` key, would make a host that later meets a stage-changing close read a different
+shape for the same event.
+
+**Why the durable row is read back rather than the argument echoed.** The two are equal on this path
+by construction, so echoing would have been cheaper and untestable-apart. Reading back is what makes
+the document the answer to rondo's actual question: rule 5's second subprocess went to `gate show
+--json` for `stage` and `outcome` specifically, and a payload that merely repeated the operator's
+`--outcome` would have left that subprocess necessary. The read is inside the `--json` branch, so
+without the flag the verb issues exactly the queries it always issued -- "the flag changes bytes and
+nothing else" stays true of the work as well as of the output.
+
+**Rondo `D-0015` rule 5 is obsolete once this lands.** `gate close` becomes an ordinary enveloped verb
+under that entry's own rules 2 and 3: exit 0, parse stdout, read `closed` / `outcome` / `to_stage`
+from one document; exit 2, parse stderr, which is either an envelope or argparse prose, exactly as
+rule 3 already requires the decoder to tolerate. The second `gate show --json` subprocess per close is
+no longer needed. Rondo is a separate repository and is **not edited from here**; naming the rule is
+this entry's whole obligation to it.
+
+**Alternatives.**
+
+- *Leave `gate close` human-only and let rondo keep rule 5* (rejected: it is the falsifier `D-0090`
+  named, and the cost is real -- a second subprocess per close, and a host special case that grows the
+  next time a verb is driven).
+- *Have rondo parse `closed g as withdrawn`* (rejected by rondo itself, and correctly: that is the
+  defect `--json` exists to remove, adopted in the same change that adopts the fix).
+- *Move `present`, `deliver`, `ack` and `reconcile` too* (rejected: no reader. `present`, `deliver`
+  and `ack` are the dropbox relay path an operator works by hand (`D-0076`), and rondo `D-0013`
+  records `reconcile` as not the conductor's to invoke. `ack` in particular stays human-only because
+  rondo `D-0010` keeps publishing -- and the ack that follows it -- with the operator, who holds the
+  credential; a future privileged publisher reopens that boundary, as `D-0078`'s falsifier says).
+- *Change `closeOpenGate` to return a record instead of a boolean* (rejected: an API-breaking domain
+  change to serve a CLI rendering, when `gateDetail` already answers the same question from the same
+  connection).
+- *A single `stage` key* (rejected above).
+- *Supersede `D-0090` and restate the envelope* (rejected: nothing in it was falsified except the
+  scope question it explicitly left open, and restating an accepted entry to change one number loses
+  the record of which part the evidence actually touched).
+
+**Consequences.** The gate subtree's header now says four host-driven verbs and four excluded ones;
+`src/cli/json_output.ts` and its two mirrors in `run_cli.ts` and `measurement/cli.ts` count the verbs
+that mount the flag, which becomes eleven, of which ten answer in the envelope. `gate close`'s human
+line is byte-identical, pinned by a case. The mount-boundary case moves from three verbs to four and
+now asserts both halves: the four that carry the flag reach their handler, and the four that do not
+are refused by the parser with the flag named.
+
+**What records it.** `src/gate/cli.ts` holds `CLOSE_SCHEMA`, `closePayload` and the mount.
+`test/gate/cli.test.ts` holds the cases, per `D-0090`'s anti-vacuity standard, each observed RED under
+a deliberate mutation that was then reverted:
+
+- The exact success document and empty stderr on a first close, and the identical-outcome replay
+  yielding `ok:true` with `closed:false` -- red under `closed: true` hardcoded.
+- The same close WITHOUT `--json`, byte-identical to the human line it always printed -- red under
+  `jsonRequested` forced true.
+- Two gates closed at different stages under different outcomes, differing in exactly those keys --
+  red under a `closePayload` returning literals.
+- All four domain refusal classes, each exit 2 with stdout empty, the operator's line unchanged and
+  the exact stderr document -- red under a `refuse()` that ignores its report.
+- The mount boundary, both halves -- red under a deleted `addJsonArgument(close)`.
+- A disallowed `--outcome` with `--json`, pinned as usage prose on the TOP-LEVEL seam with the verb's
+  own refusal writer never running, so point 3's exception is a case rather than a sentence.
+
+**Status.** accepted
+
+**Falsifier.** A host that still special-cases `gate close` after this lands -- which would mean the
+payload answers a question rondo did not have. More sharply: a second `gate show --json` per close
+surviving in rondo's adapter, or a fifth gate verb acquiring the flag with no reader named, which
+would mean the principle this entry claims to have applied ("a reader appeared and was measured") had
+in fact been abandoned for completeness. `closed:false` being read anywhere as a failure would falsify
+the payload's central claim.
+
+**Source.** #159, and rondo `D-0013` / `D-0015` for the reader that made the case. `D-0090` for the
+envelope this amends and the falsifier it named. Decision id allocated from the `D-0019`..`D-0099`
+shared band, checked against `origin/main` at `50f97eb`, where `D-0091` is the last taken id, and
 re-checked at rebase.

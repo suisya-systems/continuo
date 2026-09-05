@@ -782,6 +782,258 @@ describe("continuo#155: the JSON documents a host reads", () => {
   });
 });
 
+/**
+ * `continuo#159`: `gate close` joins the envelope, and what its document says.
+ *
+ * The verb the host's own operating surface drives (rondo `D-0013`) and the one
+ * `D-0090` left out. Until this landed, rondo `D-0015` rule 5 drove it as an
+ * opaque exit code and confirmed the write with a SECOND `gate show --json`
+ * subprocess, because the alternative was parsing `closed g as withdrawn`.
+ * These cases own the document that makes both unnecessary (`D-0092`).
+ */
+
+/** `gate close` on `GATE_ID`, with whatever the case adds after it. */
+function closeArgv(
+  path: string,
+  outcome: string,
+  extra: readonly string[] = [],
+): readonly string[] {
+  return [
+    "gate",
+    "close",
+    "--db",
+    path,
+    "--gate-id",
+    GATE_ID,
+    "--outcome",
+    outcome,
+    "--actor-id",
+    ACTOR,
+    "--now-ms",
+    String(T0 + 5 * MINUTE),
+    ...extra,
+  ];
+}
+
+describe("continuo#159: gate close answers in the envelope", () => {
+  test("gate close --json pins the closure it performed, read back from the row", () => {
+    // Without this, `gate close --json` could ship the outcome it was HANDED
+    // rather than the one the row now carries, and a host would learn nothing
+    // it did not already type. The three read-back fields are exactly what
+    // rondo's second subprocess went to fetch.
+    const { path } = aDatabaseWithAGate("gate-json-close");
+    const streams = captureStreams();
+
+    expect(main([...closeArgv(path, "withdrawn"), "--json"])).toBe(0);
+
+    expect(oneDocument(streams.out()), "gate close's success document changed shape").toStrictEqual(
+      {
+        schema: "continuo.gate.close/1",
+        ok: true,
+        db: path,
+        gate_id: GATE_ID,
+        closed: true,
+        outcome: "withdrawn",
+        // A close is stage-preserving: the stage a gate was closed AT is part
+        // of what the outcome means, so both ends of the transition are the
+        // stage the gate stands at and stays at.
+        from_stage: "received",
+        to_stage: "received",
+      },
+    );
+    expect(streams.err(), "a success writes nothing to stderr").toBe("");
+  });
+
+  test("an identical-outcome replay is ok:true with closed:false, not a refusal", () => {
+    // The case a host actually branches on after a kill. `closeOpenGate`
+    // returns false for the idempotent repeat of the SAME close, and that is a
+    // success -- a build that read `false` as "refused" would exit 2 on a
+    // retry that changed nothing, which is the one thing an idempotent verb
+    // exists to avoid.
+    const { path } = aDatabaseWithAGate("gate-json-close-again");
+    const streams = captureStreams();
+    const argv = [...closeArgv(path, "withdrawn"), "--json"];
+
+    expect(main(argv)).toBe(0);
+    expect(main(argv), "the replay is a success, with the same status").toBe(0);
+
+    const documents = streams
+      .out()
+      .trimEnd()
+      .split("\n")
+      .map((line) => oneDocument(`${line}\n`)) as readonly Record<string, unknown>[];
+    expect(documents[0]?.["closed"], "the first call performed the close").toBe(true);
+    expect(documents[1]?.["closed"], "the replay performed nothing, as a boolean").toBe(false);
+    expect(documents[1]?.["ok"], "and it is still a success").toBe(true);
+    expect(documents[1]?.["outcome"], "the confirmed effect is unchanged").toBe("withdrawn");
+    expect(documents[1]?.["to_stage"], "and so is the stage it was closed at").toBe("received");
+    expect(streams.err(), "neither call writes to stderr").toBe("");
+  });
+
+  test("the outcome and the stage come from the row, not from the command line", () => {
+    // The hole a hardcoded payload would sit in: every assertion above fixes
+    // the database as well as the document, so a `closePayload` that returned
+    // literals would satisfy them. Two gates closed at DIFFERENT stages under
+    // DIFFERENT outcomes, differing in exactly those keys, is what a literal
+    // cannot fake.
+    const received = aDatabaseWithAGate("gate-json-close-received");
+    const presented = aDatabaseWithAGate("gate-json-close-presented");
+    carryToPresented(presented.path, presented.destination);
+    const streams = captureStreams();
+
+    expect(main([...closeArgv(received.path, "withdrawn"), "--json"])).toBe(0);
+    // `unanswerable` is reachable from 'presented' and from nowhere else, so
+    // this pair varies the stage and the outcome together and neither could
+    // have been produced from the other database.
+    expect(main([...closeArgv(presented.path, "unanswerable"), "--json"])).toBe(0);
+
+    const [first, second] = streams
+      .out()
+      .trimEnd()
+      .split("\n")
+      .map((line) => oneDocument(`${line}\n`)) as readonly Record<string, unknown>[];
+    expect(first?.["outcome"], "the first outcome must come from its own row").toBe("withdrawn");
+    expect(second?.["outcome"], "the second must come from its own row").toBe("unanswerable");
+    expect(first?.["from_stage"], "the stage a gate was closed at is per-row too").toBe("received");
+    expect(second?.["from_stage"]).toBe("presented");
+    expect(second?.["to_stage"], "and a close leaves the gate where it stood").toBe("presented");
+    // The vacuity check on this vacuity check: the two documents describe the
+    // same gate id under the same schema, so the assertions above are about
+    // those keys and not about two unrelated documents.
+    expect(first?.["gate_id"]).toBe(second?.["gate_id"]);
+    expect(first?.["schema"]).toBe(second?.["schema"]);
+  });
+
+  test("the same close without --json is the human line, byte for byte", () => {
+    // The hole: a build that ignored the flag and emitted the document always.
+    // Every case above passes `--json`, so all of them would stay green while
+    // every operator's terminal filled with JSON.
+    const { path } = aDatabaseWithAGate("gate-json-close-absent");
+    const streams = captureStreams();
+
+    expect(main(closeArgv(path, "withdrawn"))).toBe(0);
+
+    expect(streams.out(), "the human line must be byte-identical to what it was").toBe(
+      `closed ${GATE_ID} as withdrawn\n`,
+    );
+    expect(() => JSON.parse(streams.out()), "no --json, no document").toThrow();
+    expect(streams.err(), "and nothing reaches stderr").toBe("");
+  });
+});
+
+describe("continuo#159: every refusal gate close can reach is a document", () => {
+  /**
+   * One refused close, both ways: the status, the streams and the document.
+   *
+   * Run without the flag first, so each case also states that the operator's
+   * line is unchanged -- the refusal funnel is shared by all eight verbs, and
+   * teaching it one more report must not move any of them.
+   */
+  function expectRefused(
+    label: string,
+    prepare: (path: string, destination: string) => void,
+    outcome: string,
+    expected: { readonly class: string; readonly message: string },
+  ): void {
+    const { path, destination } = aDatabaseWithAGate(label);
+    prepare(path, destination);
+    const streams = captureStreams();
+    const argv = closeArgv(path, outcome);
+
+    const human = main(argv);
+    const machine = main([...argv, "--json"]);
+
+    expect(human, "a refused close is exit 2 without the flag").toBe(2);
+    expect(machine, "--json must not change the refusal's exit code").toBe(human);
+    expect(streams.out(), "a refusal writes nothing to stdout, with or without the flag").toBe("");
+    const lines = streams.err().trimEnd().split("\n");
+    expect(lines[0], "the human refusal line is unchanged").toBe(`error: ${expected.message}`);
+    expect(
+      oneDocument(`${lines[1] ?? ""}\n`),
+      `gate close's ${expected.class} document changed shape`,
+    ).toStrictEqual({
+      schema: "continuo.gate.close/1",
+      ok: false,
+      db: path,
+      error: { class: expected.class, message: expected.message },
+    });
+  }
+
+  test("an unknown gate", () => {
+    // The gate id is the one value a host supplies from its own records, so
+    // this is the refusal it meets when those records and the control plane
+    // have drifted apart.
+    const { path } = aDatabaseWithAGate("gate-json-close-unknown");
+    const streams = captureStreams();
+    const argv = [
+      "gate",
+      "close",
+      "--db",
+      path,
+      "--gate-id",
+      "gate-nope",
+      "--outcome",
+      "withdrawn",
+      "--actor-id",
+      ACTOR,
+      "--now-ms",
+      String(T0 + 5 * MINUTE),
+      "--json",
+    ];
+
+    expect(main(argv)).toBe(2);
+
+    expect(streams.out(), "a refusal writes nothing to stdout").toBe("");
+    expect(oneDocument(streams.err())).toStrictEqual({
+      schema: "continuo.gate.close/1",
+      ok: false,
+      db: path,
+      error: { class: "UnknownGateRefused", message: "no gate 'gate-nope'" },
+    });
+  });
+
+  test("a close under a different outcome than the one on the row", () => {
+    // The refusal that is NOT the idempotent replay, and the reason `closed`
+    // being false is a success: which outcome a gate reached is a fact a
+    // reader relies on, so a second close under another outcome is refused
+    // rather than absorbed.
+    expectRefused(
+      "gate-json-close-conflict",
+      (path) => {
+        captureStreams();
+        expect(main(closeArgv(path, "withdrawn"))).toBe(0);
+      },
+      // `unanswerable` rather than `expired`: `expired` is checked against the
+      // deadline BEFORE the domain close runs, so it would refuse for a
+      // different reason and this case would pin the wrong funnel.
+      "unanswerable",
+      {
+        class: "GateClosedRefused",
+        message:
+          `gate ${GATE_ID} is already closed as 'withdrawn'; ` +
+          "it does not become 'unanswerable'",
+      },
+    );
+  });
+
+  test("an outcome that is not reachable from the stage the gate stands at", () => {
+    expectRefused("gate-json-close-inadmissible", () => {}, "unanswerable", {
+      class: "InadmissibleTransitionRefused",
+      message: "outcome 'unanswerable' is reached from ['presented'], not from 'received'",
+    });
+  });
+
+  test("'expired' on a gate whose deadline has not passed", () => {
+    // `D-0008`: the operator decides WHETHER a passed deadline expires a gate,
+    // never whether it passed. A gate with no deadline at all is the sharpest
+    // form of that, and it refuses before the domain close runs.
+    expectRefused("gate-json-close-no-deadline", () => {}, "expired", {
+      class: "DeadlineNotPassed",
+      message: `gate ${GATE_ID} has no deadline; it does not close as 'expired'`,
+    });
+  });
+});
+
 describe("continuo#155: a refusal is a document too", () => {
   test("gate show --json refuses an unknown gate on stderr, exit 2, stdout empty", () => {
     // The exit code and the stream are the host contract's load-bearing half:
@@ -968,11 +1220,12 @@ describe("the --json documents, observed red", () => {
     expect(streams.out(), "and it writes nothing to stdout").toBe("");
   });
 
-  test("--json is mounted on the three verbs a host drives, and on no others", () => {
+  test("--json is mounted on the four verbs a host drives, and on no others", () => {
     // The vacuity check on the vacuity checks: a flag mounted everywhere would
     // satisfy the cases above (nothing here asserts the parser REFUSES it
     // elsewhere), and a flag mounted nowhere would fail them all for one
-    // reason. This states the boundary itself.
+    // reason. This states the boundary itself -- four in, four out (`D-0092`
+    // moved `close` across it, and moved nothing else).
     const usage: string[] = [];
     patchSeam(topLevelSeams, "err", (text: string) => {
       usage.push(text);
@@ -980,10 +1233,60 @@ describe("the --json documents, observed red", () => {
     const { path } = aDatabaseWithAGate("gate-json-mount");
     captureStreams();
 
-    expect(
-      main(["gate", "present", "--db", path, "--gate-id", GATE_ID, "--json"]),
-      "gate present must not accept a flag it does not implement",
-    ).toBe(2);
-    expect(usage.join("")).toContain("--json");
+    for (const argv of [
+      ["gate", "present", "--db", path, "--gate-id", GATE_ID],
+      ["gate", "deliver", "--db", path, "--destination-dir", path, "--holder", ACTOR],
+      ["gate", "ack", "--db", path, "--message-id", "m-1", "--actor-id", ACTOR],
+      ["gate", "reconcile", "--db", path, "--actor-id", ACTOR],
+    ]) {
+      const before = usage.length;
+      expect(
+        main([...argv, "--json"]),
+        `${argv[1]} must not accept a flag it does not implement`,
+      ).toBe(2);
+      expect(
+        usage.slice(before).join(""),
+        `${argv[1]}'s rejection must be the parser's, naming the flag`,
+      ).toContain("--json");
+    }
+
+    // And the four that DO carry it reach their handler rather than the
+    // parser: without this half, deleting every `addJsonArgument` call in this
+    // subtree would leave the loop above green.
+    for (const argv of [
+      ["gate", "list", "--db", path],
+      ["gate", "show", "--db", path, "--gate-id", GATE_ID],
+      ["gate", "answer", "--db", path, "--gate-id", GATE_ID, "--body", "b", "--actor-id", ACTOR],
+      closeArgv(path, "withdrawn"),
+    ]) {
+      const before = usage.length;
+      main([...argv, "--json"]);
+      expect(
+        usage.slice(before).join(""),
+        `${argv[1]} must accept the flag the envelope promises`,
+      ).toBe("");
+    }
+  });
+
+  test("a disallowed --outcome stays usage prose, even with --json", () => {
+    // `D-0090`'s parser-level exception, at the one verb where an operator can
+    // trip it: argparse's `choices` refuses before the handler runs, so there
+    // is no report to write the refusal through and exit 2 does NOT guarantee
+    // a parseable document. A case that asserted a document here would be
+    // asserting a promise `D-0092` deliberately does not make.
+    const usage: string[] = [];
+    patchSeam(topLevelSeams, "err", (text: string) => {
+      usage.push(text);
+    });
+    const { path } = aDatabaseWithAGate("gate-json-close-bad-outcome");
+    const streams = captureStreams();
+
+    expect(main([...closeArgv(path, "answered_and_forwarded"), "--json"])).toBe(2);
+
+    expect(usage.join(""), "the parser's own words reach the top-level seam").toContain(
+      "--outcome",
+    );
+    expect(streams.out(), "nothing reaches stdout").toBe("");
+    expect(streams.err(), "and the verb's own refusal writer never ran").toBe("");
   });
 });
