@@ -360,9 +360,9 @@ to be lossy.
 ### 7.2 The number, and why it is a new one
 
 **Recommended: a maximum of 30 seconds between message polls while a turn is in flight**, as a named
-constant owned by the composition layer that owns the wake. Read "maximum" as the target the
-mechanisms aim at rather than a guarantee any of them delivers -- section 7.3 is where the two cases
-that miss it are named.
+constant owned by the composition layer that owns the wake. It is a **hint-write cadence**, not a
+delivery guarantee: section 7.3 works out the latency it actually buys, which carries a second term
+this design cannot bound.
 
 The reasoning is arithmetic, and both bounds are checkable:
 
@@ -404,12 +404,18 @@ restated at its sharpest. Three mechanisms could compel it, and they are not equ
 
 **The only actually periodic mechanism is layer 1**, and it is the composition layer's own timer --
 the process holds the pipe, so writing a hint every 30 seconds needs nobody's cooperation. What the
-timer bounds is **when a hint is written**, not when a poll happens: the hint still becomes visible
-at the next tool-call boundary. So the 30-second maximum is a real bound for a turn that reaches
-boundaries, and for the two unmeasured cases -- a tool call longer than 30 seconds, and a
-boundary-free turn -- **no mechanism here achieves it**, and the bound degrades to the turn. That
-degradation is survivable for exactly one reason: layer 3 keeps the rows due, and nothing above it
-is load-bearing for correctness.
+timer bounds is **when a hint is written**, and nothing more: the hint still becomes visible only at
+the next tool-call boundary. So 30 seconds is the **hint-write cadence**, and the discovery latency
+it actually buys is
+
+> at most 30 seconds **plus** the time to the next tool-call boundary,
+
+which collapses to 30 seconds only for a turn whose boundaries are closer together than that. A turn
+containing a tool call longer than 30 seconds reaches boundaries and still misses the number, by the
+length of that call; a boundary-free turn has no second term at all and degrades to the turn. **No
+mechanism in this design bounds the second term**, because it is a property of the work the worker
+chose to do. That is survivable for exactly one reason: layer 3 keeps the rows due, and nothing above
+it is load-bearing for correctness.
 
 **Recommendation: layer 1 by the composition layer's timer, layer 2 by the completion condition,
 and the `Stop` hook as the executor-specific way to make layer 2 a property of the process rather
@@ -650,7 +656,7 @@ Five items, each overturnable without disturbing the others.
 |---|---|---|---|
 | **D1** | Is the draft entry above the settlement of continuo#97? | accept as `D-0090` | the two comment corrections still stand; they are true under A as well as B |
 | **D2** | Structural capability on `ClaudeCliSessionProvider`, or a sixth S1 verb? | structural, per `D-0056`/`D-0059` | a sixth verb reopens interlock `D-0021` and needs `provider-contract.test.ts` changed, which is a separate decision |
-| **D3** | Is 30 seconds the message-poll maximum? | yes, with the arithmetic in 7.2 | any other number, provided it is *a* number and is neither `--poll-interval-ms` nor `D-0079`'s |
+| **D3** | Is 30 seconds the hint-write cadence? | yes, with the arithmetic in 7.2 and the latency it actually buys in 7.3 | any other number, provided it is *a* number and is neither `--poll-interval-ms` nor `D-0079`'s |
 | **D4** | Does the start prompt become a record field before the pipe is enabled? | yes -- 9.1 consequence 3 deletes the only durable copy otherwise | measure whether `--input-format stream-json` can coexist with an argv prompt first; if it can, D4 is moot |
 | **D5** | Which mechanism compels the fallback poll? | the composition layer's timer for layer 1, the completion condition for layer 2, a `Stop` hook to make layer 2 a process property | the role prompt alone is available and is weaker; the entry does not depend on the answer |
 
