@@ -187,6 +187,38 @@ def _record_number_types(value: Any, path: str, out: list[list]) -> None:
             _record_number_types(child, f"{path}[{index}]", out)
 
 
+def _record_number_texts(value: Any, path: str, out: list[list]) -> None:
+    """Every number in one document, with ``str(x)`` and ``repr(x)``.
+
+    The same walk as ``_record_number_types``, asking the other question about
+    the same slots. ``str`` and ``repr`` are one text for a Python number, and
+    both are recorded so the TypeScript side can assert its two entry points
+    (``pyStrOf`` and ``pyReprOf``) separately -- they are separate functions
+    there, and a repair applied to one and not the other is exactly the shape
+    this vector exists to catch.
+
+    Neither is ``json.dumps``: they agree with it everywhere except the
+    non-finite three, where ``repr(float("inf"))`` is ``inf`` and
+    ``json.dumps`` writes ``Infinity``. ``role_kind`` and ``permission_mode``
+    leave a role document through ``str()``, and the persisted fence carrying
+    ``Infinity`` where interlock writes ``inf`` is a restart comparison that
+    fails forever (continuo D-0095).
+
+    ``bool`` is skipped first for the reason ``_record_number_types`` gives.
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)):
+        out.append([path, str(value), repr(value)])
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _record_number_texts(child, f"{path}.{key}", out)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _record_number_texts(child, f"{path}[{index}]", out)
+
+
 def main() -> None:
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
 
@@ -327,8 +359,10 @@ def main() -> None:
         value = json.loads(text)
         types: list[list] = []
         _record_number_types(value, "$", types)
+        texts: list[list] = []
+        _record_number_texts(value, "$", texts)
         number_documents_expected.append(
-            {"roundtrip": json.dumps(value), "types": types}
+            {"roundtrip": json.dumps(value), "types": types, "texts": texts}
         )
 
     # The Python value semantics `renderer.py` is written in. Results go through

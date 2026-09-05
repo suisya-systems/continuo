@@ -105,7 +105,15 @@
  *   result of any of them reaches `pyJsonDumps` or `pyTypeNameOf`: five end in
  *   `pyRepr`, `pyStr` or set membership, and `pyDict`'s two read the spelling
  *   off `items[index]` -- the ORIGINAL element -- for precisely this reason,
- *   which is the one place the drop was already known about. Adding
+ *   which is the one place the drop was already known about. AMENDED BY D-0095:
+ *   `pyRepr` and `pyStr` are no longer spelling-blind, so "it only ends in
+ *   `pyRepr`" is no longer on its own a reason the drop is unobservable -- what
+ *   remains true, and is what the proof now rests on, is that the drop is
+ *   invisible in the ARTEFACTS (nothing reaches a serialiser) while being
+ *   visible in a refusal DETAIL. The one such site that names a document number,
+ *   `checkPermissionMode`'s `sorted(allowed)`, therefore reads each spelling off
+ *   `allowed` -- the original container -- by the index the copy preserves,
+ *   rather than the carry being added inside `pyIterate`. Adding
  *   the carry would ARM a trap rather than close one, because a caller may
  *   reorder the copy (`renderer.ts` sorts it) and an index-keyed record does
  *   not survive reordering. **The proof expires** if `pysemantics` is exported
@@ -164,9 +172,19 @@
  *   the seventh. Three drafts, three undercounts, each one caught by a wider
  *   sweep than the last: that is why D-0212 enumerated mechanically rather than
  *   by reading this paragraph. See D-0211, D-0212, D-0213 and D-0214.
- * - `pyStr` still renders an integral float as an int, which is visible only
- *   for a role document that spells `role_kind` or `permission_mode` as a
- *   number. Recorded there rather than fixed in passing.
+ * - a number that leaves a document through `str()` or `repr()` rather than
+ *   through `json.dumps` used to be JavaScript's answer, and is now CPython's
+ *   (D-0095). The two primitives are the same everywhere except the non-finite
+ *   three, where `repr()` writes `inf`/`-inf`/`nan` and `json.dumps` writes
+ *   `Infinity`/`-Infinity`/`NaN` -- so {@link pyNumberText} sits beside
+ *   {@link formatNumber} rather than callers reaching for the wrong one, and
+ *   {@link ../fencing/pysemantics.ts | pyStrOf} and
+ *   {@link ../fencing/pyrepr.ts | pyReprOf} are the container-and-key forms,
+ *   beside `pyTypeNameOf`. The doors this closed: `role_kind` and
+ *   `permission_mode` (wire fields of the persisted fence), the settings
+ *   payload's `permissionMode` (whose slot `stripMeta` has already removed by
+ *   the time the payload is built, so no rebuild carry could reach it), and the
+ *   value a refusal detail names.
  *
  * It lives beside `./pyrepr.js` rather than inside it because the two
  * primitives escape DIFFERENTLY and share nothing but a superficial
@@ -459,6 +477,44 @@ export function formatNumber(value: number, spelling?: PyNumberSpelling | undefi
     return `${sign}${digits}${"0".repeat(decpt - digits.length)}.0`;
   }
   return `${sign}${digits.slice(0, decpt)}.${digits.slice(decpt)}`;
+}
+
+/**
+ * `repr()` -- equivalently `str()` -- of a number, with the document's spelling
+ * applied.
+ *
+ * CPython builds `json.dumps`'s number text and `repr()`'s out of the SAME
+ * primitive, `float_repr_style`/`int.__repr__`, so {@link formatNumber} is
+ * almost the whole answer and re-deriving it here is what this module's header
+ * forbids. The three values that separate them are the non-finite ones, and the
+ * difference is not cosmetic: `json.dumps` writes the JavaScript-looking
+ * `NaN`/`Infinity`/`-Infinity` (which are not legal JSON, and CPython's own
+ * `allow_nan=True` default is why they are written at all), while `repr()` and
+ * `str()` write `nan`/`inf`/`-inf`. Both spellings are reachable from one role
+ * document: `"role_kind": 1e400` overflows to `inf` at parse time and lands in
+ * `Fence.roleKind` through `str()`, where interlock persists `inf` and this
+ * port persisted `Infinity` -- in a field the restart check compares.
+ *
+ * Post-processing {@link formatNumber}'s answer rather than testing the value
+ * FIRST is deliberate, and the case that forces the order is the one
+ * `formatNumber` documents: an `int` spelling past the double's range (a
+ * 400-digit integer) parses to `Infinity` while CPython holds the exact digits,
+ * and a leading non-finite test would print `inf` for a value CPython prints in
+ * full. A recorded `int` spelling is digits, so it can never collide with the
+ * three strings matched below.
+ */
+export function pyNumberText(value: number, spelling?: PyNumberSpelling | undefined): string {
+  const text = formatNumber(value, spelling);
+  switch (text) {
+    case "NaN":
+      return "nan";
+    case "Infinity":
+      return "inf";
+    case "-Infinity":
+      return "-inf";
+    default:
+      return text;
+  }
 }
 
 /**
