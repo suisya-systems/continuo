@@ -186,6 +186,7 @@ spaces distinct.
 | D-0088 | An admitted run may pass only what a role document authorised: the cli_args check is an allowlist | accepted |
 | D-0089 | An authored `Edit(...)` deny rule is the file-editing family, in the fence's hook as it is in the CLI | accepted |
 | D-0090 | The CLI seam a host drives: `--version` carries the build's revision, and `--json` answers in one envelope | accepted |
+| D-0091 | A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement | accepted |
 
 ---
 
@@ -13832,3 +13833,221 @@ a vendored checkout, which is the guard working.
 
 **Source.** #155. The five-subtree survey and its four adversarial critiques are what settled the
 single envelope and the stderr rule; `D-0087` is why a host exists to settle them for.
+
+---
+
+## D-0091 -- A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement
+
+**Context.** `src/messagebus/index.ts` and `src/messagebus/endpoint.ts` each derive worker-outbound
+delivery from interlock's F1: *there is no non-interactive way to push a message into a running
+worker session*. Three measurements taken at the human gate's request on 2026-09-05, all at
+`claude 2.1.261`, show that clause is false for the executor this stack targets, and settle two of
+the questions the design left open.
+
+1. **Mid-turn delivery exists.** Under
+   `-p --input-format stream-json --output-format stream-json --verbose --replay-user-messages`, a
+   second user message written to stdin 8 s into a turn was replayed on stdout immediately after the
+   running tool call's `tool_result` (t=26 s), acknowledged by the assistant at t=28 s, and the turn
+   ran on to its own end at t=74 s. Two runs, identical in shape, no error or rejection event. So a
+   message can be delivered into a running turn, at the granularity of a tool-call boundary. **For a
+   message written while a tool call is in flight** -- which is the only arrival time any of the three
+   measurements covers -- discovery is bounded by the remainder of that call rather than by the turn.
+2. **The pipe and an argv prompt do not coexist.** With `--input-format stream-json` on the line, a
+   positional `-p <prompt>` is silently discarded: no error, no echo, no `system init` until the
+   first stdin message arrives, the only `user` event in the stream is that stdin message, and
+   `num_turns` is 1 -- the instructions that lived only in argv never ran (2/2 runs; the control that
+   sent the same prompt as stdin message 1 behaved as measurement 1 did). So enabling the pipe
+   *moves* the start prompt onto stdin. There is no cheaper variant in which argv keeps it.
+3. **An information-free frame reaches the model.** A `stream-json` user message whose content is
+   `[{"type":"text","text":""}]`, written at t~8 s during a turn of three `sleep 15` calls, is
+   replayed on stdout as a `type: user` event and surfaces at the next tool-call boundary, and the
+   model reports it. 6/6 runs across empty string, a single space, and `.`. No rejection and no
+   silent drop, so the floor is **zero bytes of text**: a hint that carries nothing is still
+   observable.
+
+**Decision. Pull over SQLite remains the settlement and the only source of delivery decisions. A
+wake is added as an empty, best-effort, coalescible hint whose only effect is to advance the next
+poll.** Specifically:
+
+1. **What is due, what resends, what is settled** is read from SQLite alone. A wake is not an input to
+   any of those decisions, and `src/messagebus/bus.ts`'s SQLite-only statement is unweakened.
+2. **A wake carries nothing** -- no payload, message id, recipient, epoch, due count, or
+   acknowledgement -- and grants no authority. Two wakes are indistinguishable from one. Measurement 3
+   is what makes this buildable rather than merely stated: the executor surfaces a frame with no text
+   in it, so "empty of authority" can be spelled as "empty of bytes" without the hint being swallowed
+   by the transport. What it establishes is *delivery*, not *response*: the model observed the frame
+   and said so. Whether a worker under its role document answers a bare frame by issuing a message
+   poll is a property of the prompt and the recipient, not of the executor, and is untested -- see
+   what is unmeasured.
+3. **The mechanism is the Claude session provider's.** The stdin pipe, its framing and its write live
+   in `ClaudeCliSessionProvider` and are exposed to composition as a narrow structural capability, on
+   the precedent of `readTerminalReport` (`D-0056`, `D-0059`). **S1 keeps its five verbs**
+   (interlock `D-0009`): a wake is not a sixth, and a provider without the capability runs
+   cadence-only.
+4. **"Enqueue committed, then attempt wake" is the composition layer's**, which is rondo in the end
+   state (`D-0087`) and `src/lap/` by injection for lap 1. Enqueue and the worker's pipe must be
+   co-located: a separate CLI process calling `MessageBus.send` cannot write a pipe it does not hold.
+   Enqueue success is never rolled back or reclassified by wake failure, and no session readout
+   precedes an enqueue.
+5. **A fallback that does not depend on the wake remains mandatory**, because a dropped or coalesced
+   wake, a closed pipe, Codex and a boundary-free turn each leave a due row undiscovered otherwise.
+   Two distinct things carry it, and they must not be collapsed into one number:
+
+   - **The fallback proper is executor-independent and is not a hint at all**: the recipient polls at
+     each turn boundary (bounded by the turn), and underneath it rows stay due and visible in SQLite
+     (bounded by nothing). Decision item 9 is what makes the turn-boundary half happen, and how
+     strongly it happens depends on the executor: a `Stop` hook makes it a property of the process,
+     while a recipient with no such hook has the role prompt and the completion condition, which
+     bound *correctness* -- work with an unacknowledged row does not reach done on its own -- and
+     never latency. So on a non-Claude executor a worker that ignores its prompt does not silently
+     lose the row; it fails to finish, and the row stays due. **The completion condition is the
+     composition layer's, over the work it drives; it is not `run close`.** `D-0084` deliberately
+     admits `created -> completed` and deliberately reads no gate, so an operator may close a run
+     while a row addressed to its worker is still unacknowledged. That is the operator's call and
+     `D-0084` is unaffected by this entry -- but it means the condition is not an invariant over
+     every path a run row can reach a terminal status by, and it is written here as the narrower
+     thing it is. **Rows staying due and visible to the operator is the
+     only layer that holds unconditionally, and it is the only load-bearing one.** Buying latency
+     back for such an executor is a separate change and is not decided here.
+   - **The hint-write cadence is 30 seconds**, a separate, Claude-only, latency-only layer that
+     covers only the dropped-or-coalesced-wake case: while a turn is in flight the composition layer
+     writes the hint **at least once every 30 seconds** -- the number is a target maximum interval
+     between writes, not a minimum. It is best-effort in the sense `D-0073` already treats a timer:
+     a suspended process or a blocked event loop misses it, and nothing is load-bearing on its being
+     met, because this layer buys latency only. It bounds *writing*, never discovery -- the latency it buys is 30 seconds
+     **plus** the time to the next tool-call boundary, and nothing here bounds the second term. On a
+     closed pipe or on Codex it buys nothing at all, which is exactly why it is not the fallback.
+
+   The 30 seconds is a new number: neither `--poll-interval-ms` (transcript reads, 1000 ms, a
+   different process and a different resource) nor `D-0079`'s operator cadence (gate reconciliation,
+   at human scale).
+6. **Repeated polling is replay-safe, not idempotent.** Presentation is at-least-once and duplicate
+   envelopes are deduplicated by the sender's `dedupKey`; an extra poll creates no second destination
+   effect and no second settlement.
+7. **A wake never extends the turn (`D-0060`), never renews or re-acquires the endpoint lease
+   (`D-0073`), carries no epoch or recipient authority (`D-0074`), is not liveness evidence
+   (`D-0075`), and is not publisher functionality (`D-0077`).** It travels the worker's stdin, never
+   the endpoint's, which carries MCP JSON-RPC (`D-0072`).
+8. **The start prompt becomes a record field before the pipe is enabled.** Today argv holds the only
+   durable copy of a start prompt -- only `resume_prompt` is a record field -- and measurement 2 shows
+   that enabling `--input-format stream-json` moves the prompt onto stdin rather than leaving it in
+   argv. Persisting it first is therefore a precondition of the mechanism, not a follow-up to it, and
+   it is the largest piece of work this entry implies.
+9. **The fallback poll is compelled by the composition layer's own timer for layer 1** (the process
+   holds the pipe, so writing a hint needs nobody's cooperation), **by the completion condition for
+   layer 2** (a run does not reach done unless the ack exists, so a recipient that never polls never
+   finishes rather than silently missing work), **and by a Claude Code `Stop` hook exiting 2 while
+   rows are due**, which makes layer 2 a property of the process rather than a discipline. The hook
+   is executor-specific and belongs in the adapter beside the wake; it is a turn-boundary safeguard
+   and cannot enforce layer 1's cadence. The role prompt alone is available and is weaker.
+
+**What the gate decided.** Six rows were put to continuo's human gate (`D-0036`) on 2026-09-05 and
+all six were taken as recommended; they are recorded here because a row taken elsewhere and not
+written down is a decision nobody can cite.
+
+| row | question | outcome |
+|---|---|---|
+| **D1** | Is the drafted entry the settlement of continuo#97? | **accepted**, as this entry |
+| **D2** | Structural capability on `ClaudeCliSessionProvider`, or a sixth S1 verb? | **structural**, per `D-0056`/`D-0059` -- decision item 3 |
+| **D3** | Is 30 seconds the hint-write cadence? | **yes**, as a hint-write cadence and not a latency bound -- decision item 5 |
+| **D4** | Does the start prompt become a record field before the pipe is enabled? | **yes** -- decision item 8. The escape hatch the row named (measure whether the pipe coexists with an argv prompt; if it does, D4 is moot) was measured and closed: it does not |
+| **D5** | Which mechanism compels the fallback poll? | **timer for layer 1, completion condition for layer 2, `Stop` hook to make layer 2 a process property** -- decision item 9 |
+| **D6** | Is the wake frame named and measured before the mechanism is built? | **yes**, and it has been: measurement 3 closes it, so the mechanism is no longer blocked on an experiment |
+
+**Alternatives.**
+
+- **A: keep pull and drop the stale justification, specifying a cadence.** Rejected as insufficient
+  rather than wrong: it is a strict subset of this entry, and it leaves the measured sub-turn latency
+  unused for the messages that need it.
+- **C: re-derive from scratch and restate or relax the import ban.** Rejected because nothing in the
+  measurements argues for it. The capability is one executor's, the SQLite-only property is what makes
+  a wrong liveness reading unable to alter delivery, and relaxing the import assertion would trade a
+  structural guarantee for a latency improvement option B already buys.
+- **A sixth `SessionProvider` verb.** Rejected: it reopens a provisional contract (interlock `D-0021`)
+  for a Claude-only facility, misrepresents Codex as having it, and makes gate items 6 and 11
+  unmeasurable -- which is what `DELIVERY_ABSENCE_IS_DELIBERATE` already says.
+- **A wake carrying the message id or the due count.** Rejected: either makes a delivery decision
+  outside SQLite, which is the property this entry exists to keep.
+- **Enabling the pipe while leaving the prompt in argv.** Rejected because it was measured and does
+  not exist: the positional prompt is discarded without an error, which is the worst shape a wrong
+  assumption could have taken -- a worker that starts, blocks, and is asked nothing.
+
+**Consequences.**
+
+1. **The import ban is untouched and stays as strict.** `test/messagebus/import-graph.test.ts` needs
+   no change, which is the concrete difference between this option and option C.
+2. **Two module comments stop asserting a capability claim** and state the measured position instead.
+3. **The provider's spawn gains a stdin**, so `stdin: "ignore"` becomes a held pipe closed
+   deliberately at teardown rather than by the process ending, and `--input-format stream-json` joins
+   `PROVIDER_OWNED_FLAGS` beside `--output-format`, so an operator's `cli_args` cannot append it and
+   change how the child reads its input. The prompt moves from argv onto stdin, which is why decision
+   item 8 comes first.
+4. **The wake has no producer today.** The only enqueue site in `src/` is `enqueueRelay`, called from
+   the `continuo gate` verbs in their own process, addressing `external-notify` (`D-0076`); lap 1 does
+   not deliver through the endpoint (`D-0064`) and the privileged publisher is deferred (`D-0077`).
+   So this entry settles a shape, and the first code that needs it is lap 2's.
+5. **continuo chooses the cadence and can now compel the turn-boundary layer but not the periodic
+   one.** The poll is a tool call the worker issues; decision item 9 makes layer 2 a property of the
+   process, while layer 1 remains a hint the worker may not act on until its next boundary.
+6. **Nothing is built by this entry.** It is a record: no `src/` change, no test, no export, no schema,
+   and no import edge accompanies it.
+
+**What is unmeasured**, and must be read as part of the decision rather than as a caveat to it:
+
+- **Pure text generation with no tool-call boundary.** Every observation in all three measurements is
+  anchored to a `tool_result`; a turn that calls nothing has no measured boundary.
+- **A single very long tool call**, including whether the signal is visible only after its
+  `tool_result` and how long that may be.
+- **A message written between two tool calls**, during prose generation rather than during a call in
+  flight. All three measurements wrote into a running `sleep`; nothing establishes when a message
+  arriving in the gap is surfaced, and its delay would be a property of the generation, not of a tool
+  call.
+- **Content-block shapes other than `text`.** Measurement 3 covers an empty, whitespace-only and
+  single-character `text` block. An omitted `content` block and an empty `content` array are not
+  covered, so the frame this entry authorises is a `text` block whose text may be empty -- not any
+  representation of emptiness the protocol admits.
+- **The cost of frequent frames.** Thirty hints in a default-length turn is the arithmetic behind the
+  cadence, not an observation; what a hint costs the worker in context and boundaries was not
+  measured.
+- **Whether a worker answers a frame with a poll.** Measurement 3 observed the model *report* the
+  frame, which is what closes the transport question D6 asked. It did not observe a `poll` tool call,
+  because the harness had no bus in it. The remaining gap is a prompt-and-recipient property rather
+  than an executor one, and it is where decision item 9's compulsion mechanisms do their work -- but
+  the end-to-end "hint written, poll issued" has not been observed, and the first implementation
+  should observe it.
+- **Every other executor.** `codex exec 0.147.0` has no `--input-format` and no streaming-input
+  option; its stdin is the initial prompt only. F1 still holds there.
+
+**Falsifier (the measured facts).** Each of the three is dated and versioned (`claude 2.1.261`,
+2026-09-05) precisely so it can be re-checked rather than assumed, and a newer version is a
+re-measurement and not an inference. Any of these falsifies one:
+
+- A supported `claude` version at which a message written to a running
+  `-p --input-format stream-json` session's stdin is *not* surfaced at the next tool-call boundary --
+  deferred to the end of the turn, rejected, or dropped.
+- A version at which a positional prompt *is* honoured alongside `--input-format stream-json`, which
+  would make decision item 8 optional again rather than a precondition.
+- A version at which a zero-byte `text` block is rejected, ignored, or dropped, which would put the
+  frame's floor above zero and reopen D6.
+
+**Falsifier (the settlement).** Any of the following would falsify or supersede the decision built on
+those facts, and they are independent of them:
+
+- A wake is observed to change which SQLite rows are due, their ordering, their settlement, their ack,
+  or recipient authority.
+- Correct liveness turns out to require reliable or authoritative push rather than fallback polling --
+  that is, a case where a lost wake loses work rather than delaying it.
+- A required deployment puts enqueue and the worker's pipe in separate processes with no IPC bridge,
+  making the co-location requirement unsatisfiable rather than merely unmet.
+- The fallback cadence is shown to be unenforceable by the mechanisms decision item 9 names, which
+  would make wake availability a liveness dependency after all.
+
+**Status.** accepted
+
+**Source.** continuo#97: the human gate's choice of option B and its six-row ratification, both
+2026-09-05; the three measurements recorded as comments on that issue the same day;
+`docs/design/messagebus-wake-hint.md`, whose section 11 drafted this entry and whose section 12 is the
+decision table. Decision id allocated from the `D-0019`..`D-0099` shared band -- the shared one rather
+than messagebus's `D-05xx` because the decision binds four belts at once (messagebus, session, lap and
+the host) -- checked against `origin/main` at `c92ab1a`, where `D-0090` is the last taken id, and
+re-checked at rebase.

@@ -1,18 +1,24 @@
 # Re-deriving F1: pull stays the settlement, and a wake is only a hint
 
-**Status: propose-only.** No behaviour change accompanies this document. Nothing under `src/`
-changes except two comments that cite a premise measurement has overtaken (section 10), and nothing
-is written to [`DECISIONS.md`](../../DECISIONS.md): section 11 drafts an entry, and the entry is a
-proposal to continuo's human gate (`D-0036`), not a decision taken. The same shape
+**Status: taken.** This document was filed propose-only -- no behaviour change, nothing under `src/`
+changed except two comments citing a premise measurement had overtaken (section 10), and nothing
+written to [`DECISIONS.md`](../../DECISIONS.md). It has since been through continuo's human gate
+(`D-0036`) on 2026-09-05, which took all six rows of section 12 as recommended. The entry section 11
+drafted is now **`D-0091`** in [`DECISIONS.md`](../../DECISIONS.md), which is the record of what was
+decided; this document remains the argument behind it. The same shape
 [`cli-args-allowlist.md`](./cli-args-allowlist.md) was filed in, for the same reason -- the design is
 cheap to argue and expensive to unpick once implemented.
+
+Two of the four cases the document called unmeasured were measured after it merged, on 2026-09-05,
+and are folded in below: **D4** (sections 9.1) and **D6** (section 5.1). Both are recorded verbatim
+as comments on continuo#97 and are carried into `D-0091`.
 
 **What the human gate has already decided, and what is left.** continuo#97 offered three options and
 the gate chose **B** on 2026-09-05: *keep pull as the settlement path, add a push as a wake-up only*.
 So the question this document answers is not *which option* but *what B costs, exactly* -- which
 component owns which half, what a wake may and may not carry, what has to remain true when it is
-lost, and what in today's code stops being true if it is built. Section 12 is the decision table; the
-recommendations in it are the parts the gate can still overturn independently.
+lost, and what in today's code stops being true if it is built. Section 12 is the decision table; its
+six rows were each overturnable independently, and the gate took all six as recommended.
 
 **Companion documents.** [`minimal-operating-loop.md`](./minimal-operating-loop.md) is where the lap
 this would run inside is defined, and section 4.9 of it is where the endpoint's lease shape was
@@ -31,8 +37,8 @@ structural-capability move section 4 makes twice.
 | interlock | frozen at `65f36c5`; read for what the port inherited, never for a decision (`D-0036`) |
 
 Two of these matter more than the others. The Claude version is load-bearing because the measured
-fact is a fact about one build of one executor, and the draft entry's first falsifier is a change to
-it. The continuo revision matters because section 4's ownership answer rests on `D-0087`, which
+fact is a fact about one build of one executor, and `D-0091`'s first falsifier is a change to it. All
+three measurements this document rests on were taken at that one version. The continuo revision matters because section 4's ownership answer rests on `D-0087`, which
 landed two commits before this branch started.
 
 ---
@@ -81,8 +87,9 @@ worker-outbound transport, the worker as MCP client, delivery decisions from SQL
 worker leaving its rows due -- is unaffected, because none of it was ever derived from the absence of
 a push. That is the whole of section 2.
 
-**What the measurement does not establish**, and the draft entry has to say so in its own words
-(section 11):
+**What the measurement does not establish.** Two of the five gaps below were closed by the later
+measurements of 2026-09-05 (D4 in section 9.1, D6 in section 5.1); the rest are carried into `D-0091`
+as unmeasured, in its own words.
 
 - **Pure text generation with no tool-call boundary.** Every observation above is anchored to a
   `tool_result`. A turn that generates prose and calls nothing has no measured boundary, and this
@@ -95,9 +102,10 @@ a push. That is the whole of section 2.
   flight. Nothing here establishes when that one is surfaced, and its delay would be a property of
   the generation rather than of any tool call -- so "bounded by the longest tool call" is a claim
   about the measured arrival time, not a general latency bound.
-- **The wake frame.** The measured message carried a word the assistant acted on. Whether the fixed,
-  information-free frame section 5.1 calls a wake is surfaced at all is unmeasured, and it is the
-  one gap that could make a conforming implementation prompt no poll.
+- **The wake frame** -- *since measured, and closed*. This measurement's message carried a word the
+  assistant acted on, leaving open whether the fixed, information-free frame section 5.1 calls a wake
+  is surfaced at all. The D6 measurement answers yes, down to zero bytes of text (section 5.1). What
+  remains open is narrower: content-block shapes other than `text`, and what frequent frames cost.
 - **Any other executor.** `codex exec 0.147.0` has no `--input-format` and no streaming-input option:
   its stdin is the initial prompt only, and `--json` is output-side. F1 still holds there. The
   capability is a property of one executor, not of the transport -- which is itself an argument for
@@ -285,7 +293,7 @@ reader can never tell.
 The positive statement is one sentence: **a wake says "a poll may be useful now", and nothing else.**
 Everything the recipient then does, it does by reading SQLite.
 
-### 5.1 "Empty" is a statement about authority, not about bytes -- and the frame is unmeasured
+### 5.1 "Empty" is a statement about authority, not about bytes -- and the frame's floor is zero, measured
 
 Everything above is about what a wake may *mean*. At the wire it is still a `stream-json` user
 message, and that message has to contain something, so the two senses of "empty" must not be
@@ -293,19 +301,31 @@ conflated:
 
 - **Empty of authority** -- the table above. No message id, recipient, epoch, count or ack, and no
   content a delivery decision could be read out of. This is the design.
-- **Empty of bytes** -- not required, and possibly not even accepted. The measurement sent a
-  *non-empty* message ("The word is PELICAN ...") and observed the assistant act on it. Whether a
-  zero-length or whitespace-only `stream-json` user message is surfaced at all, rather than rejected
-  or silently dropped, **was not measured**.
+- **Empty of bytes** -- permitted, and **measured on 2026-09-05** at `claude 2.1.261`. The first
+  measurement had sent a *non-empty* message ("The word is PELICAN ...") and left this open. The D6
+  measurement closed it: a `stream-json` user message whose content is `[{"type":"text","text":""}]`,
+  written at t~8 s during a turn of three `sleep 15` calls, is replayed on stdout as a `type: user`
+  event, surfaces at the next tool-call boundary, and is reported by the model -- 6/6 runs across the
+  empty string, a single space, and `.`. No rejection and no silent drop. **The floor is zero bytes
+  of text**, so a hint that carries nothing is still observable.
 
-So the frame is a fixed constant this design owes and does not yet have: one literal string,
-identical for every wake, saying only that polling may be useful now. That is what makes wakes
-coalescible -- two identical frames are indistinguishable by construction -- and it keeps the
-authority table true, because a constant carries no per-message information. But **it must be
-chosen and then measured**: an implementation that writes an empty frame the executor ignores would
-conform to every rule in this section and never prompt a single poll. Naming the frame and
-observing a worker poll in response to it is the smallest experiment that would make D1's mechanism
-real rather than argued, and it is D6 in section 12.
+So the frame is a fixed constant: one literal string -- possibly the empty one -- identical for every
+wake, saying only that polling may be useful now. That is what makes wakes coalescible -- two
+identical frames are indistinguishable by construction -- and it keeps the authority table true,
+because a constant carries no per-message information. The risk this section named had two halves,
+and the measurement retires the first: an empty `text` frame is **not** swallowed by the transport --
+it is delivered, replayed, and observed by the model. The second half is untouched by it. The
+harness had no message bus in it, so what was observed is the model *reporting* the frame, not a
+worker *issuing a poll* in response. Whether a bare frame is answered with a poll is a property of
+the role document and the recipient rather than of the executor, and it is what decision item 9's
+compulsion mechanisms exist for. **D6 is no longer a gate on building** -- the gate took it as
+measured on 2026-09-05 -- but the end-to-end "hint written, poll issued" is still unobserved and the
+first implementation should observe it.
+
+What the measurement does *not* cover is otherwise the shape of the block rather than its length: an
+omitted `content` block and an empty `content` array were not tested, and neither was the cost of
+writing frames often. So the frame this design authorises is a `text` block whose text may be empty, not any
+representation of emptiness the protocol admits.
 
 **A wake is not publisher functionality.** `D-0077` defers the privileged publisher, and lap 1's
 operator is the publisher. A wake grants no ability to enqueue, publish, approve, or act on a
@@ -453,8 +473,9 @@ it is load-bearing for correctness.
 
 **Recommendation: layer 1 by the composition layer's timer, layer 2 by the completion condition,
 and the `Stop` hook as the executor-specific way to make layer 2 a property of the process rather
-than a discipline.** Recorded here rather than decided, because it reaches into the role documents
-and the fence, and D5 in section 12 is where the gate takes it.
+than a discipline.** Recorded as a recommendation when this document was filed, because it reaches
+into the role documents and the fence; **the gate took it as recommended on 2026-09-05**, and it is
+now `D-0091` decision item 9.
 
 ---
 
@@ -516,7 +537,9 @@ follow from changing that, and the third is the expensive one.
    beside `--output-format` for the same reason: an operator `cli_args` carrying it would be appended
    after the provider's own and could change how the child reads its input.
 3. **The prompt moves out of argv, and argv is where the only copy of it lives.** The measured
-   configuration passes no positional prompt: message 1 *is* the prompt, written to stdin. Today the
+   configuration passes no positional prompt: message 1 *is* the prompt, written to stdin. This is
+   not merely the configuration that happened to be measured -- see the D4 measurement below, which
+   shows it is the only one available. Today the
    start argv is `claude -p <prompt> --output-format stream-json --verbose --session-id <uuid> ...`,
    and the provider's own comment says what that costs to change: *"The **start** prompt is not
    persisted anywhere else: only `resume_prompt` is a record field, so the prompt survives solely
@@ -525,12 +548,22 @@ follow from changing that, and the third is the expensive one.
 
 Consequence 3 is a genuine cost of option B and is not a detail of the wake. The honest fix is to
 make the start prompt a record field the way `resume_prompt` already is, so the durable copy survives
-the move; that is D4 in section 12, and it is the one item here that is larger than the wake itself.
+the move; that is D4 in section 12, taken as recommended on 2026-09-05, and it is the one item here
+that is larger than the wake itself.
 
-**A cheaper variant worth the gate's attention:** if `--input-format stream-json` can be rendered
-*while still passing the prompt in argv*, consequence 3 disappears entirely and only 1 and 2 remain.
-The measurement does not answer that -- it did not try -- and this document does not assume it. It is
-the first thing an implementer should measure.
+**The cheaper variant does not exist, and this was measured on 2026-09-05** at `claude 2.1.261`,
+after this document merged. The hoped-for variant was: render `--input-format stream-json` *while
+still passing the prompt in argv*, so consequence 3 disappears and only 1 and 2 remain. It does not
+work, and it fails in the worst available shape -- silently. With `--input-format stream-json` on the
+line, a positional `-p <prompt>` is **discarded with no error and no echo**: there is no `system
+init` until the first stdin message arrives, the only `user` event in the stream is that stdin
+message, `num_turns` is 1, and the instructions that lived only in argv never run (2/2 runs). The
+control, sending the same prompt as stdin message 1, behaved as the earlier measurement did. A build
+that assumed the variant would therefore start a worker that blocks and is asked nothing.
+
+So consequence 3 stands in full: enabling the pipe moves the start prompt onto stdin, and **D4 is not
+moot**. Making the start prompt a record field is a precondition of the mechanism, not a follow-up to
+it, and the gate took it that way (`D-0091` decision item 8).
 
 ---
 
@@ -557,156 +590,81 @@ not need it relaxed.
 
 ---
 
-## 11. Draft entry
+## 11. The entry, taken as `D-0091`
 
-Proposed, not written to [`DECISIONS.md`](../../DECISIONS.md).
+**Taken, on 2026-09-05, as `D-0091`.** The draft this section carried went to continuo's human gate
+with the six rows of section 12 and was accepted as row D1. The entry now lives in
+[`DECISIONS.md`](../../DECISIONS.md) as **`D-0091` -- *A wake is an empty hint over the Claude
+worker's stdin; pull over SQLite stays the settlement*** (status: accepted), and that file is the
+record. The draft text is **not** reproduced here: two copies of an entry drift, and the one in
+`DECISIONS.md` is the one a reader is required to cite (`D-0036`).
 
-**On the number.** The shared control-plane band (`D-0019`..`D-0099`) is free from `D-0091` at
-`78d459e`, which is where it was last confirmed. The draft has now been renumbered twice while it
-sat unmerged: `D-0089` went to the fencing layer's `Edit(...)` family entry, and `D-0090` to the
-host-driven CLI seam. It is confirmed again at the moment the entry is actually written, because
-nothing stops another change taking it first -- and on this evidence something usually does. The
-band is the shared one rather than messagebus's `D-05xx` because the decision binds four belts at
-once: messagebus, session, lap and the host. Precedent for the number moving: this document's
-neighbour drafted `D-0087` and landed as `D-0088`.
+**What the taken entry says that the draft did not**, so a reader of this document knows whether it
+is worth opening:
 
----
+- The two measurements taken after this document merged are folded into its context, and the two
+  matching gaps move out of *what is unmeasured*: **D4** (an argv prompt is silently discarded when
+  `--input-format stream-json` is on the line -- section 9.1) and **D6** (an empty `text` block is
+  surfaced; the floor is zero bytes -- section 5.1).
+- Three items are added to the decision itself, because the gate took the rows that were left open
+  beside D1: the 30-second hint-write cadence is stated as the number (**D3**), the start prompt
+  becoming a record field is a **precondition** of enabling the pipe rather than a follow-up
+  (**D4**), and the compulsion mechanisms are named -- timer, completion condition, `Stop` hook
+  (**D5**).
+- Its falsifiers are split three ways rather than two: one per measured fact, and a separate set for
+  the settlement built on them, so a version bump that breaks one measurement does not read as
+  falsifying the design.
+- What stays unmeasured is narrower and is listed there: a boundary-free turn, a single very long
+  tool call, a message arriving between two tool calls, content-block shapes other than `text`, the
+  cost of frequent frames, and every other executor.
 
-### D-0091 (draft) -- A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement
-
-**Context.** `src/messagebus/index.ts` and `src/messagebus/endpoint.ts` each derive worker-outbound
-delivery from interlock's F1: *there is no non-interactive way to push a message into a running
-worker session*. A measurement taken at the human gate's request on 2026-09-05 shows that clause is
-false for the executor this stack targets. At `claude 2.1.261`, under
-`-p --input-format stream-json --output-format stream-json --verbose --replay-user-messages`, a
-second user message written to stdin 8 s into a turn was replayed on stdout immediately after the
-running tool call's `tool_result` (t=26 s), acknowledged by the assistant at t=28 s, and the turn ran
-on to its own end at t=74 s. Two runs, identical in shape, no error or rejection event. So a message
-can be delivered into a running turn, at the granularity of a tool-call boundary. **For a message
-written while a tool call is in flight** -- which is the only case measured -- discovery is therefore
-bounded by the remainder of that call rather than by the turn. Every other arrival time is
-unmeasured, including one that is easy to read into the table and is not there: a message written
-during a long prose interval *between* two tool calls, whose delay is a property of the generation
-rather than of any tool call. See what is unmeasured, below.
-
-**Decision. Pull over SQLite remains the settlement and the only source of delivery decisions. A
-wake is added as an empty, best-effort, coalescible hint whose only effect is to advance the next
-poll.** Specifically:
-
-1. **What is due, what resends, what is settled** is read from SQLite alone. A wake is not an input to
-   any of those decisions, and `src/messagebus/bus.ts`'s SQLite-only statement is unweakened.
-2. **A wake carries nothing** -- no payload, message id, recipient, epoch, due count, or
-   acknowledgement -- and grants no authority. Two wakes are indistinguishable from one.
-3. **The mechanism is the Claude session provider's.** The stdin pipe, its framing and its write live
-   in `ClaudeCliSessionProvider` and are exposed to composition as a narrow structural capability, on
-   the precedent of `readTerminalReport` (`D-0056`, `D-0059`). **S1 keeps its five verbs**
-   (interlock `D-0009`): a wake is not a sixth, and a provider without the capability runs
-   cadence-only.
-4. **"Enqueue committed, then attempt wake" is the composition layer's**, which is rondo in the end
-   state (`D-0087`) and `src/lap/` by injection for lap 1. Enqueue and the worker's pipe must be
-   co-located: a separate CLI process calling `MessageBus.send` cannot write a pipe it does not hold.
-   Enqueue success is never rolled back or reclassified by wake failure, and no session readout
-   precedes an enqueue.
-5. **A bounded fallback message-poll cadence remains mandatory**, because a dropped wake, a closed
-   pipe, Codex and a boundary-free turn each leave a due row undiscovered otherwise. The cadence is a
-   new number, not `--poll-interval-ms` (transcript reads) and not `D-0079`'s operator cadence (gate
-   reconciliation).
-6. **Repeated polling is replay-safe, not idempotent.** Presentation is at-least-once and duplicate
-   envelopes are deduplicated by the sender's `dedupKey`; an extra poll creates no second destination
-   effect and no second settlement.
-7. **A wake never extends the turn (`D-0060`), never renews or re-acquires the endpoint lease
-   (`D-0073`), carries no epoch or recipient authority (`D-0074`), is not liveness evidence
-   (`D-0075`), and is not publisher functionality (`D-0077`).** It travels the worker's stdin, never
-   the endpoint's, which carries MCP JSON-RPC (`D-0072`).
-
-**Alternatives.**
-
-- **A: keep pull and drop the stale justification, specifying a cadence** (continuo#97's option A).
-  Rejected as insufficient rather than wrong: it is a strict subset of this entry, and it leaves the
-  measured sub-turn latency unused for the messages that need it.
-- **C: re-derive from scratch and restate or relax the import ban** (option C). Rejected because
-  nothing in the measurement argues for it. The capability is one executor's, the SQLite-only property
-  is what makes a wrong liveness reading unable to alter delivery, and relaxing item 6's static
-  assertion would trade a structural guarantee for a latency improvement that option B already buys.
-- **A sixth `SessionProvider` verb.** Rejected: it reopens a provisional contract (interlock `D-0021`) for a
-  Claude-only facility, misrepresents Codex as having it, and makes gate items 6 and 11 unmeasurable
-  -- which is what `DELIVERY_ABSENCE_IS_DELIBERATE` already says.
-- **A wake carrying the message id or the due count.** Rejected: either makes a delivery decision
-  outside SQLite, which is the property this entry exists to keep.
-
-**Consequences.**
-
-1. **The import ban is untouched and stays as strict.** `test/messagebus/import-graph.test.ts` needs
-   no change, which is the concrete difference between this option and option C.
-2. **Two module comments stop asserting a capability claim** and state the measured position instead.
-3. **The provider's spawn gains a stdin**, so `stdin: "ignore"` becomes a held pipe,
-   `--input-format stream-json` joins `PROVIDER_OWNED_FLAGS`, and -- in the measured configuration --
-   the prompt moves from argv onto stdin, where today argv holds the *only* durable copy of a start
-   prompt. That last one is a record-shape change larger than the wake and is not yet designed.
-4. **The wake has no producer today.** The only enqueue site in `src/` is `enqueueRelay`, called from
-   the `continuo gate` verbs in their own process, addressing `external-notify` (`D-0076`); lap 1 does
-   not deliver through the endpoint (`D-0064`) and the privileged publisher is deferred (`D-0077`).
-   So this entry settles a shape, and the first code that needs it is lap 2's.
-5. **continuo chooses the cadence but cannot compel it**, because the poll is a tool call the worker
-   issues. Compulsion is available as a role-prompt discipline, an executor hook, or an ack-gated
-   completion condition, and choosing among those is not settled here.
-
-**Status.** proposed -- drafted in `docs/design/messagebus-wake-hint.md`, awaiting the human gate.
-
-**Source.** continuo#97; the human gate's choice of option B, 2026-09-05; the measurement recorded as
-a comment on that issue the same day; a pre-delegation Codex design review of option B (1 Blocker
-pair, 5 Major, 2 Minor).
-
-**What is unmeasured**, and must be read as part of the decision rather than as a caveat to it:
-
-- **Pure text generation with no tool-call boundary.** Every observation is anchored to a
-  `tool_result`; a turn that calls nothing has no measured boundary.
-- **A single very long tool call**, including whether the signal is visible only after its
-  `tool_result` and how long that may be.
-- **A message written between two tool calls**, during prose generation rather than during a call in
-  flight. The measurement wrote into a running `sleep`; nothing establishes when a message arriving
-  in the gap is surfaced, and its delay would be a property of the generation, not of a tool call.
-- **The wake frame itself.** The measured message carried a word the assistant acted on. Whether the
-  fixed, information-free frame this entry calls a wake is surfaced -- rather than rejected, ignored,
-  or dropped for being empty -- is unmeasured, and an implementation could satisfy every rule here
-  and prompt no poll at all. Naming the frame and observing a poll in response is the experiment
-  this entry's mechanism still owes.
-- **Every other executor.** `codex exec 0.147.0` has no `--input-format` and no streaming-input
-  option; its stdin is the initial prompt only. F1 still holds there.
-
-**Falsifier (the measured fact).** A supported `claude` version at which a message written to a
-running `-p --input-format stream-json` session's stdin is *not* surfaced at the next tool-call
-boundary -- deferred to the end of the turn, rejected, or dropped. The fact is dated and versioned
-(`2.1.261`, 2026-09-05) precisely so that this can be checked rather than assumed; a newer version is
-a re-measurement, not an inference.
-
-**Falsifier (the settlement).** Any of the following would falsify or supersede the decision built on
-that fact, and they are independent of it:
-
-- A wake is observed to change which SQLite rows are due, their ordering, their settlement, their ack,
-  or recipient authority.
-- Correct liveness turns out to require reliable or authoritative push rather than fallback polling --
-  that is, a case where a lost wake loses work rather than delaying it.
-- A required deployment puts enqueue and the worker's pipe in separate processes with no IPC bridge,
-  making the co-location requirement unsatisfiable rather than merely unmet.
-- The fallback cadence is shown to be unenforceable by any of the three mechanisms named above, which
-  would make wake availability a liveness dependency after all.
+**On the number.** The shared control-plane band (`D-0019`..`D-0099`) was free from `D-0091` at
+`78d459e`, and the draft had already been renumbered twice while it sat unmerged -- `D-0089` went to
+the fencing layer's `Edit(...)` family entry and `D-0090` to the host-driven CLI seam. It was
+confirmed free again at `c92ab1a`, the moment the entry was actually written, and re-checked at
+rebase. The band is the shared one rather than messagebus's `D-05xx` because the decision binds four
+belts at once: messagebus, session, lap and the host.
 
 ---
 
-## 12. What the gate is asked to decide
+## 12. What the gate was asked to decide -- all six rows taken
 
-Six items, each overturnable without disturbing the others. D6 is the only one that gates *building*
-rather than deciding: nothing else here depends on its answer, and the mechanism does.
+Six items, each overturnable without disturbing the others. D6 was the only one that gated *building*
+rather than deciding: nothing else here depended on its answer, and the mechanism did.
 
-| | question | recommendation | if overturned |
+**All six rows were taken at continuo's human gate on 2026-09-05, as recommended, together as
+`D-0091` (accepted). The table keeps the rows and records the outcomes rather than dropping them:**
+
+- **D1** -- decided **yes, accept the draft**, as recommended: the entry is `D-0091` (2026-09-05).
+  One entry rather than six, because D2..D6 are facets of the one shape it settles -- where the
+  mechanism lives, how often it fires, what must be persisted before it can fire at all, and what
+  makes the fallback happen.
+- **D2** -- decided **structural capability on `ClaudeCliSessionProvider`**, as recommended
+  (`D-0091` decision item 3). S1 keeps its five verbs and `provider-contract.test.ts` is untouched.
+- **D3** -- decided **30 seconds**, as recommended, and explicitly *as the hint-write cadence defined
+  in 7.2/7.3 rather than as a latency bound* (`D-0091` decision item 5).
+- **D4** -- decided **yes, the start prompt becomes a record field first**, as recommended
+  (`D-0091` decision item 8). The row's escape hatch -- *measure whether the pipe can coexist with an
+  argv prompt; if it can, D4 is moot* -- was measured on 2026-09-05 and **closed**: it cannot, and it
+  fails silently (section 9.1). So D4 was not merely upheld; the cheaper alternative was eliminated.
+- **D5** -- decided **as recommended**: the composition layer's timer for layer 1, the completion
+  condition for layer 2, and a `Stop` hook to make layer 2 a property of the process rather than a
+  discipline (`D-0091` decision item 9).
+- **D6** -- decided **yes, name and measure the frame first**, as recommended -- and it has since been
+  measured (2026-09-05, section 5.1): an empty `text` block is surfaced, so the floor is zero bytes.
+  **The one row that gated building no longer does.** What it leaves open is narrower than the row
+  asked about: non-`text` content-block shapes, the cost of frequent frames, and -- because the
+  harness had no bus in it -- whether a worker answers a bare frame with a poll, which is a
+  prompt-and-recipient property rather than an executor one (5.1).
+
+| | question | recommendation, and the outcome | if overturned |
 |---|---|---|---|
-| **D1** | Is the draft entry above the settlement of continuo#97? | accept as `D-0091` | the two comment corrections still stand; they are true under A as well as B |
-| **D2** | Structural capability on `ClaudeCliSessionProvider`, or a sixth S1 verb? | structural, per `D-0056`/`D-0059` | a sixth verb reopens interlock `D-0021` and needs `provider-contract.test.ts` changed, which is a separate decision |
-| **D3** | Is 30 seconds the hint-write cadence? | yes, with the arithmetic in 7.2 and the latency it actually buys in 7.3 | any other number, provided it is *a* number and is neither `--poll-interval-ms` nor `D-0079`'s |
-| **D4** | Does the start prompt become a record field before the pipe is enabled? | yes -- 9.1 consequence 3 deletes the only durable copy otherwise | measure whether `--input-format stream-json` can coexist with an argv prompt first; if it can, D4 is moot |
-| **D5** | Which mechanism compels the fallback poll? | the composition layer's timer for layer 1, the completion condition for layer 2, a `Stop` hook to make layer 2 a process property | the role prompt alone is available and is weaker; the entry does not depend on the answer |
-| **D6** | Is the wake frame named and measured before the mechanism is built? | yes -- 5.1; an unmeasured frame could conform to every rule and prompt no poll | build first and measure after, which risks a wake nobody can observe failing |
+| **D1** | Is the drafted entry (section 11) the settlement of continuo#97? | accept as `D-0091` -- **taken as recommended**, `D-0091` accepted | the two comment corrections still stand; they are true under A as well as B |
+| **D2** | Structural capability on `ClaudeCliSessionProvider`, or a sixth S1 verb? | structural, per `D-0056`/`D-0059` -- **taken as recommended** | a sixth verb reopens interlock `D-0021` and needs `provider-contract.test.ts` changed, which is a separate decision |
+| **D3** | Is 30 seconds the hint-write cadence? | yes, with the arithmetic in 7.2 and the latency it actually buys in 7.3 -- **taken as recommended**, as a hint-write cadence and not a latency bound | any other number, provided it is *a* number and is neither `--poll-interval-ms` nor `D-0079`'s |
+| **D4** | Does the start prompt become a record field before the pipe is enabled? | yes -- 9.1 consequence 3 deletes the only durable copy otherwise -- **taken as recommended** | the escape hatch was measured on 2026-09-05 and closed: an argv prompt is silently discarded when the pipe is enabled (9.1), so D4 is not moot |
+| **D5** | Which mechanism compels the fallback poll? | the composition layer's timer for layer 1, the completion condition for layer 2, a `Stop` hook to make layer 2 a process property -- **taken as recommended** | the role prompt alone is available and is weaker; the entry does not depend on the answer |
+| **D6** | Is the wake frame named and measured before the mechanism is built? | yes -- 5.1; an unmeasured frame could conform to every rule and prompt no poll -- **taken as recommended, and measured on 2026-09-05**: an empty `text` block is surfaced, the floor is zero bytes | build first and measure after, which risks a wake nobody can observe failing |
 
 ---
 
@@ -716,12 +674,16 @@ rather than deciding: nothing else here depends on its answer, and the mechanism
   no producer to attach to (4.4), and building it now would fix a shape against a caller nobody has
   written.
 - **It does not design the publisher.** `D-0077` defers it, and a wake is not it (section 5).
-- **It does not decide how the worker is compelled to poll.** It names the three mechanisms, ranks
-  them, and leaves D5 to the gate, because the answer reaches into the role documents and the fence.
-- **It measures nothing itself.** The four unmeasured cases -- a boundary-free turn, a very long tool
-  call, a message arriving between two tool calls, and the wake frame -- are named in the entry as
-  unmeasured and stay that way. A document that inferred any of them from the shape of the measured
+- **It did not decide how the worker is compelled to poll.** As filed it named the three mechanisms,
+  ranked them, and left D5 to the gate, because the answer reaches into the role documents and the
+  fence. The gate has since taken D5 as recommended, and `D-0091` decision item 9 is where that now
+  lives -- this document is still the ranking, not the decision.
+- **It measured nothing itself.** As filed, the four unmeasured cases -- a boundary-free turn, a very
+  long tool call, a message arriving between two tool calls, and the wake frame -- were named as
+  unmeasured and left that way. A document that inferred any of them from the shape of the measured
   runs would be doing what section 1 of continuo#97 objected to: reading a capability out of a
-  document instead of an observation.
+  document instead of an observation. Two were **measured afterwards, by the operator**, and the
+  results were folded in above (5.1, 9.1) and into `D-0091` -- which is the same rule honoured, not
+  an exception to it. The first two remain unmeasured and are recorded that way in the entry.
 - **It does not touch cadenza or rondo.** `D-0087` names rondo the end-state owner; nothing here
   binds a repository that does not yet exist.
