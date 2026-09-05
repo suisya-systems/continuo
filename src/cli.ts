@@ -51,8 +51,9 @@
 
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { TOOL_VERSION } from "./about.js";
+import { formatVersionLine, TOOL_VERSION } from "./about.js";
 import * as attentionCli from "./attention/cli.js";
+import { BUILD_REVISION } from "./build_revision.js";
 import {
   ArgparseExit,
   type ArgparseStreams,
@@ -111,8 +112,14 @@ export function buildParser(): ArgumentParser {
   parser.addArgument({
     optionStrings: ["--version"],
     dest: "version",
-    version: `${PACKAGE_NAME} ${TOOL_VERSION}`,
-    help: "show the build's version and exit.",
+    // The revision comes from a module constant, never from a probe: the
+    // published package ships `dist/` with no repository beside it, so a build
+    // that asked git at startup would answer `unknown` in exactly the installed
+    // build whose identity the field is about -- or, worse, would report the
+    // HEAD of whatever unrelated checkout it happened to be installed inside.
+    // `src/build_revision.ts` carries the whole of that argument.
+    version: formatVersionLine(PACKAGE_NAME, TOOL_VERSION, BUILD_REVISION),
+    help: "show the build's version and the git revision it was built from, then exit.",
   });
   const sub = parser.addSubparsers("command");
 

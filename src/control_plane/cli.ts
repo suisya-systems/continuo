@@ -64,12 +64,24 @@
  * use, rather than being allowed to escape as an unhandled error with the
  * carefully written message buried above it.
  *
+ * **`--json` changes bytes, never behaviour (`D-0090`).** All three verbs take
+ * the flag, and it selects which rendering {@link reportVersion} and
+ * {@link refuse} emit -- nothing else. The migrator entry point each verb
+ * calls, the order it calls it in, the family of refusals caught, the handle
+ * closed in the `finally`, and both exit codes are the same with the flag and
+ * without it, so a host that drives this CLI and an operator who reads it are
+ * looking at the same run. Without the flag the human lines below are byte for
+ * byte what they have always been.
+ *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every string
  * here reaches `--help` on a cp932 console, where a character the console cannot
- * encode is a crash rather than a smudge.
+ * encode is a crash rather than a smudge. The JSON documents obey it too, by
+ * construction: `asciiJsonLine` escapes a non-ASCII byte that arrived in a
+ * `--db` path rather than passing it through.
  */
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import { addJsonArgument, jsonRequested, refusalLine, successLine } from "../cli/json_output.js";
 import {
   ArgparseExit,
   type ArgumentParser,
@@ -137,6 +149,52 @@ export const dbCliSeams = {
 };
 
 /**
+ * The pinned document identifier for each verb (`D-0090`).
+ *
+ * Three ids for one payload, on purpose. The two integers below are the same
+ * two integers whichever verb produced them, so a single `continuo.db/1` would
+ * have been the smaller document -- and it would have been unable to say
+ * whether the database was just created, brought forward, or merely inspected.
+ * That distinction is the operator's whole reason for having run one verb
+ * rather than another, and a host reading a captured document out of a log has
+ * nothing else to recover it from: the exit code is 0 for all three and the
+ * payload is identical. The human lines already carry it (`created` /
+ * `migrated` / `verified`), so collapsing the ids would have made the JSON
+ * strictly less informative than the text it replaces.
+ */
+const CREATE_SCHEMA = "continuo.db.create/1";
+const MIGRATE_SCHEMA = "continuo.db.migrate/1";
+const VERIFY_SCHEMA = "continuo.db.verify/1";
+
+/**
+ * What a single invocation needs in order to answer in the shape it was asked
+ * for: which verb it is, which database it was pointed at, and whether the
+ * caller wants a document.
+ *
+ * Threaded as one value rather than read from a module-level variable because
+ * `main` is called in-process by the test suite and by any host that embeds
+ * this CLI, and a module-level "current verb" would be state shared between
+ * two overlapping calls -- the one bug in this file that would reproduce only
+ * under concurrency. It is also what lets {@link refuse} stay the single
+ * refusal writer: the flag reaches it as data, so there is no path from a
+ * `ControlPlaneRefusal` to stderr that could be left spelling the human line
+ * while the success paths all learned the flag.
+ */
+interface Reporting {
+  /** The verb's pinned schema id. */
+  readonly schema: string;
+  /** `--db` verbatim, echoed into every document this invocation writes. */
+  readonly db: string;
+  /** Did the caller pass `--json`? */
+  readonly json: boolean;
+}
+
+/** Read the reporting shape a verb was asked for out of its parsed arguments. */
+function reportingOf(schema: string, args: Namespace): Reporting {
+  return { schema, db: String(args["db"]), json: jsonRequested(args) };
+}
+
+/**
  * Report a control-plane refusal on stderr and stop, rather than letting it
  * escape.
  *
@@ -147,19 +205,41 @@ export const dbCliSeams = {
  * directory that does not exist, is a defect or an environment fault rather than
  * a state these verbs exist to report, and burying it under a one-line "error:"
  * would cost the stack that diagnoses it.
+ *
+ * **`--json` is read here and nowhere else on the refusal path**, which is the
+ * property that makes the flag honest for refusals. All three verbs reach this
+ * one function through {@link reportingRefusals}, so there is no second place
+ * that turns a refusal into bytes and could be left behind when the flag was
+ * added. A `--json` branch written at each call site instead would have been
+ * green on every success case while some refusal -- whichever call site was
+ * missed -- still answered a host with `error: ...` text it cannot parse.
+ *
+ * `error.name` is carried by `refusalLine` verbatim rather than mapped through
+ * a table here: `MissingStateRefused`, `MigrationChecksumRefused` and
+ * `DatabaseAheadOfCodeRefused` are all caught as `ControlPlaneRefusal`, and an
+ * `instanceof` cascade in this file would have to be extended by hand every
+ * time the family grows -- with the failure mode being that a new subclass
+ * quietly reports as its parent, which is precisely the distinction an operator
+ * needs (restore the file, versus upgrade the build). The stream, the exit code
+ * and the caught family are identical either way: this branch changes bytes
+ * only.
  */
-function refuse(error: ControlPlaneRefusal): never {
-  dbCliSeams.writeError(`error: ${error.message}\n`);
+function refuse(reporting: Reporting, error: ControlPlaneRefusal): never {
+  dbCliSeams.writeError(
+    reporting.json
+      ? refusalLine(reporting.schema, reporting.db, error)
+      : `error: ${error.message}\n`,
+  );
   throw new ArgparseExit(2, "refused control plane database");
 }
 
 /** Run `action`, reporting a `ControlPlaneRefusal` as one stderr line and exit 2. */
-function reportingRefusals(action: () => number): number {
+function reportingRefusals(reporting: Reporting, action: () => number): number {
   try {
     return action();
   } catch (error) {
     if (error instanceof ControlPlaneRefusal) {
-      refuse(error);
+      refuse(reporting, error);
     }
     throw error;
   }
@@ -174,12 +254,29 @@ function reportingRefusals(action: () => number): number {
  * "ok" is what makes the output useful to the operator's next decision: `create`
  * and a `migrate` that applied nothing are indistinguishable from their exit
  * codes, and the version is what tells them apart.
+ *
+ * Under `--json` the same two numbers become `schema_version` and
+ * `head_version` -- integers, not the rendered sentence, so a host compares
+ * them rather than parsing English out of a line whose wording is free to
+ * change. `schema_version` is 0 for a ledger with no rows, which is the same
+ * fact the human line renders as `schema version 0`; there is no placeholder
+ * to turn into `null` here because a version is always a number. The two
+ * branches read the ledger identically and in the same order: only the
+ * rendering differs.
  */
-function reportVersion(verb: string, path: string, connection: SqliteDatabase): void {
+function reportVersion(verb: string, reporting: Reporting, connection: SqliteDatabase): void {
   const applied = appliedMigrations(connection);
   const last = applied[applied.length - 1];
   const current = last === undefined ? 0 : last.version;
-  dbCliSeams.write(`${verb} ${path}: schema version ${current} of ${headVersion()}\n`);
+  const head = headVersion();
+  dbCliSeams.write(
+    reporting.json
+      ? successLine(reporting.schema, reporting.db, {
+          schema_version: current,
+          head_version: head,
+        })
+      : `${verb} ${reporting.db}: schema version ${current} of ${head}\n`,
+  );
 }
 
 /** Close a handle whatever the caller did with it, then hand the result back. */
@@ -200,32 +297,32 @@ function nowMsOf(args: Namespace): number {
 
 /** `continuo db create`. */
 export function cmdDbCreate(args: Namespace): number {
-  const path = String(args["db"]);
+  const reporting = reportingOf(CREATE_SCHEMA, args);
   const nowMs = nowMsOf(args);
-  return reportingRefusals(() =>
-    closing(createProductionControlPlane(path, { nowMs }), (connection) => {
-      reportVersion("created", path, connection);
+  return reportingRefusals(reporting, () =>
+    closing(createProductionControlPlane(reporting.db, { nowMs }), (connection) => {
+      reportVersion("created", reporting, connection);
     }),
   );
 }
 
 /** `continuo db migrate`. */
 export function cmdDbMigrate(args: Namespace): number {
-  const path = String(args["db"]);
+  const reporting = reportingOf(MIGRATE_SCHEMA, args);
   const nowMs = nowMsOf(args);
-  return reportingRefusals(() =>
-    closing(migrateControlPlane(path, { nowMs }), (connection) => {
-      reportVersion("migrated", path, connection);
+  return reportingRefusals(reporting, () =>
+    closing(migrateControlPlane(reporting.db, { nowMs }), (connection) => {
+      reportVersion("migrated", reporting, connection);
     }),
   );
 }
 
 /** `continuo db verify`. */
 export function cmdDbVerify(args: Namespace): number {
-  const path = String(args["db"]);
-  return reportingRefusals(() =>
-    closing(openProductionControlPlane(path), (connection) => {
-      reportVersion("verified", path, connection);
+  const reporting = reportingOf(VERIFY_SCHEMA, args);
+  return reportingRefusals(reporting, () =>
+    closing(openProductionControlPlane(reporting.db), (connection) => {
+      reportVersion("verified", reporting, connection);
     }),
   );
 }
@@ -263,14 +360,17 @@ export function addSubparsers(sub: Subparsers): void {
   const create = sub.addParser("create", CREATE_DESCRIPTION);
   addDbArgument(create);
   addNowMsArgument(create);
+  addJsonArgument(create);
   create.setDefaults({ func: cmdDbCreate });
 
   const migrate = sub.addParser("migrate", MIGRATE_DESCRIPTION);
   addDbArgument(migrate);
   addNowMsArgument(migrate);
+  addJsonArgument(migrate);
   migrate.setDefaults({ func: cmdDbMigrate });
 
   const verify = sub.addParser("verify", VERIFY_DESCRIPTION);
   addDbArgument(verify);
+  addJsonArgument(verify);
   verify.setDefaults({ func: cmdDbVerify });
 }

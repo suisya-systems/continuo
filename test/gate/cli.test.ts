@@ -90,7 +90,7 @@ function countedClock(instant: number): { reads: () => number } {
  */
 function aDatabaseWithAGate(
   label: string,
-  options: { readonly deadlineAtMs?: number | null } = {},
+  options: { readonly deadlineAtMs?: number | null; readonly runId?: string | null } = {},
 ): { readonly path: string; readonly destination: string } {
   const root = caseRoot(label);
   const path = join(root, "control-plane.sqlite3");
@@ -124,7 +124,7 @@ function aDatabaseWithAGate(
       actorId: "worker-7",
       options: ["force-push", "abandon"],
       deadlineAtMs: options.deadlineAtMs ?? null,
-      runId: RUN_ID,
+      runId: options.runId === undefined ? RUN_ID : options.runId,
     });
   } finally {
     connection.close();
@@ -504,5 +504,486 @@ describe("the mount", () => {
         expect(isAscii(text), text).toBe(true);
       }
     }
+  });
+});
+
+/**
+ * `continuo#155`: the three verbs a host drives answer in the shared envelope.
+ *
+ * The shape is `src/cli/json_output.ts`'s and the policy is
+ * `docs/cli-output-policy.md`'s; what these cases own is that THIS subtree
+ * emits it -- one document, on the right stream, with the keys a host was
+ * promised and no others. `toStrictEqual` over a parsed document rather than a
+ * substring match, because a renamed or an extra key is precisely the change
+ * that breaks a host and that a `toContain` would not see.
+ */
+
+/** The one line a `--json` invocation wrote, parsed. */
+function oneDocument(text: string): unknown {
+  expect(text.endsWith("\n"), "the document must be one line, newline included").toBe(true);
+  expect(
+    text.slice(0, -1).includes("\n"),
+    "one invocation writes exactly one document; a host reads one line",
+  ).toBe(false);
+  return JSON.parse(text) as unknown;
+}
+
+/** Carry the gate to `presented`, in the human bytes, so `gate answer` is admissible. */
+function carryToPresented(path: string, destination: string): void {
+  // Captured and discarded: these three verbs are setup, and their human lines
+  // would otherwise land on the console of whoever runs the suite. The case's
+  // own captureStreams() call re-patches the seams afterwards.
+  captureStreams();
+  const presented = relayMessageId(GATE_ID, "presented");
+  expect(
+    main(["gate", "present", "--db", path, "--gate-id", GATE_ID, "--now-ms", String(T0 + MINUTE)]),
+  ).toBe(0);
+  expect(
+    main([
+      "gate",
+      "deliver",
+      "--db",
+      path,
+      "--destination-dir",
+      destination,
+      "--holder",
+      ACTOR,
+      "--now-ms",
+      String(T0 + 2 * MINUTE),
+    ]),
+  ).toBe(0);
+  expect(
+    main([
+      "gate",
+      "ack",
+      "--db",
+      path,
+      "--message-id",
+      presented,
+      "--actor-id",
+      ACTOR,
+      "--now-ms",
+      String(T0 + 3 * MINUTE),
+    ]),
+  ).toBe(0);
+}
+
+/** A production control plane with no gate in it at all. */
+function aDatabaseWithNoGates(label: string): string {
+  const path = join(caseRoot(label), "control-plane.sqlite3");
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+  return path;
+}
+
+describe("continuo#155: the JSON documents a host reads", () => {
+  test("gate list --json pins one object per open gate, under a key", () => {
+    // Without this, `gate list` could rename a key, drop `deadline_at_ms`, or
+    // ship the record's own camelCase field names, and every human-output case
+    // above would stay green while the host contract silently changed.
+    const { path } = aDatabaseWithAGate("gate-json-list", { deadlineAtMs: T0 + MINUTE });
+    const streams = captureStreams();
+
+    expect(main(["gate", "list", "--db", path, "--json"])).toBe(0);
+
+    expect(oneDocument(streams.out()), "gate list's success document changed shape").toStrictEqual({
+      schema: "continuo.gate.list/1",
+      ok: true,
+      db: path,
+      gates: [
+        {
+          gate_id: GATE_ID,
+          gate_type: "worker_escalation",
+          run_id: RUN_ID,
+          stage: "received",
+          stage_entered_at_ms: T0,
+          deadline_at_ms: T0 + MINUTE,
+        },
+      ],
+    });
+    expect(streams.err(), "a success writes nothing to stderr").toBe("");
+  });
+
+  test("a gate with no run and no deadline carries null, not the string '-'", () => {
+    // The hole this stands in front of is a rendering decision leaking into the
+    // document: the human line prints `-` for both, and a host that read `"-"`
+    // could not tell an absent run from a run whose id is one character long.
+    const { path } = aDatabaseWithAGate("gate-json-list-null", {
+      runId: null,
+      deadlineAtMs: null,
+    });
+    const streams = captureStreams();
+
+    expect(main(["gate", "list", "--db", path, "--json"])).toBe(0);
+
+    const document = oneDocument(streams.out()) as { gates: readonly Record<string, unknown>[] };
+    expect(document.gates[0]?.["run_id"], "an absent run must be JSON null").toBeNull();
+    expect(
+      document.gates[0]?.["deadline_at_ms"],
+      "an absent deadline must be JSON null",
+    ).toBeNull();
+  });
+
+  test("gate list --json on a control plane with nothing open emits an empty array", () => {
+    // The empty case is a result, not a special case. A host told "no open
+    // gates in <path>" in prose would have to recognise a sentence to learn the
+    // most ordinary answer this verb gives -- and the sentence embeds a
+    // filesystem path, so it is not even a stable one.
+    const path = aDatabaseWithNoGates("gate-json-list-empty");
+    const streams = captureStreams();
+
+    expect(main(["gate", "list", "--db", path, "--json"])).toBe(0);
+
+    expect(
+      oneDocument(streams.out()),
+      "the empty list must be a document, not prose",
+    ).toStrictEqual({ schema: "continuo.gate.list/1", ok: true, db: path, gates: [] });
+    expect(streams.out(), "the human sentence must not leak into the document").not.toContain(
+      "no open gates",
+    );
+  });
+
+  test("gate show --json pins the gate, its relays and its transitions", () => {
+    // The verb a host reads one gate with. Its two nested arrays are where a
+    // spread of the domain record would have shipped camelCase keys, and where
+    // a field added to `GateDetail` later would otherwise join a pinned host
+    // contract without anybody deciding it should.
+    const { path, destination } = aDatabaseWithAGate("gate-json-show");
+    carryToPresented(path, destination);
+    const streams = captureStreams();
+
+    expect(main(["gate", "show", "--db", path, "--gate-id", GATE_ID, "--json"])).toBe(0);
+
+    expect(oneDocument(streams.out()), "gate show's success document changed shape").toStrictEqual({
+      schema: "continuo.gate.show/1",
+      ok: true,
+      db: path,
+      gate_id: GATE_ID,
+      gate_type: "worker_escalation",
+      run_id: RUN_ID,
+      subject_kind: "run",
+      subject_id: RUN_ID,
+      stage: "presented",
+      deadline_at_ms: null,
+      outcome: null,
+      rationale: "the worker cannot decide whether to force-push",
+      options: '["force-push", "abandon"]',
+      relays: [
+        {
+          to_stage: "presented",
+          message_id: relayMessageId(GATE_ID, "presented"),
+          recipient: "external-notify",
+          status: "acked",
+          retry_count: 1,
+          delivered_at_ms: T0 + 2 * MINUTE,
+          acked_at_ms: T0 + 3 * MINUTE,
+        },
+      ],
+      transitions: [
+        {
+          seq: 1,
+          transition_kind: "open",
+          from_stage: null,
+          to_stage: "received",
+          actor_kind: "worker",
+          actor_id: "worker-7",
+          recorded_at_ms: T0,
+          body: null,
+        },
+        {
+          seq: 2,
+          transition_kind: "advance",
+          from_stage: "received",
+          to_stage: "presented",
+          actor_kind: "secretary",
+          actor_id: ACTOR,
+          recorded_at_ms: T0 + 3 * MINUTE,
+          body: null,
+        },
+      ],
+    });
+    expect(streams.err(), "a success writes nothing to stderr").toBe("");
+  });
+
+  test("gate answer --json carries booleans where the human line carries words", () => {
+    // The human line spells `enqueued` as "enqueued" / "already enqueued" --
+    // two phrasings of one boolean, one of which is the FALSE case. A host
+    // reading that has to keep a phrasebook, and a phrasebook is what goes
+    // stale when the wording is improved.
+    const { path, destination } = aDatabaseWithAGate("gate-json-answer");
+    carryToPresented(path, destination);
+    const streams = captureStreams();
+
+    expect(
+      main([
+        "gate",
+        "answer",
+        "--db",
+        path,
+        "--gate-id",
+        GATE_ID,
+        "--body",
+        "force-push, and record why",
+        "--actor-id",
+        ACTOR,
+        "--now-ms",
+        String(T0 + 4 * MINUTE),
+        "--json",
+      ]),
+    ).toBe(0);
+
+    expect(
+      oneDocument(streams.out()),
+      "gate answer's success document changed shape",
+    ).toStrictEqual({
+      schema: "continuo.gate.answer/1",
+      ok: true,
+      db: path,
+      advanced: true,
+      enqueued: true,
+      message_id: relayMessageId(GATE_ID, "forwarded"),
+      to_stage: "forwarded",
+    });
+    expect(streams.err(), "a success writes nothing to stderr").toBe("");
+  });
+
+  test("a re-run of gate answer reports false rather than a different sentence", () => {
+    // The idempotent repeat, which is the case a host actually branches on
+    // after a kill: both booleans go false, and they are still booleans.
+    const { path, destination } = aDatabaseWithAGate("gate-json-answer-again");
+    carryToPresented(path, destination);
+    const streams = captureStreams();
+    const argv = [
+      "gate",
+      "answer",
+      "--db",
+      path,
+      "--gate-id",
+      GATE_ID,
+      "--body",
+      "force-push, and record why",
+      "--actor-id",
+      ACTOR,
+      "--now-ms",
+      String(T0 + 4 * MINUTE),
+      "--json",
+    ];
+
+    expect(main(argv)).toBe(0);
+    expect(main(argv)).toBe(0);
+
+    const documents = streams
+      .out()
+      .trimEnd()
+      .split("\n")
+      .map((line) => oneDocument(`${line}\n`)) as readonly Record<string, unknown>[];
+    expect(documents[0]?.["advanced"], "the first call moved the stage").toBe(true);
+    expect(documents[1]?.["advanced"], "the repeat moved nothing, as a boolean").toBe(false);
+    expect(documents[1]?.["enqueued"], "'already enqueued' is the false case").toBe(false);
+  });
+});
+
+describe("continuo#155: a refusal is a document too", () => {
+  test("gate show --json refuses an unknown gate on stderr, exit 2, stdout empty", () => {
+    // The exit code and the stream are the host contract's load-bearing half:
+    // exit 2 means parse stderr. A refusal that arrived on stdout, or with a
+    // different status under --json, would make which stream carries the
+    // diagnosis depend on a flag.
+    const { path } = aDatabaseWithAGate("gate-json-show-refused");
+    const streams = captureStreams();
+
+    expect(main(["gate", "show", "--db", path, "--gate-id", "gate-nope", "--json"])).toBe(2);
+
+    expect(streams.out(), "a refusal writes nothing to stdout").toBe("");
+    expect(oneDocument(streams.err()), "gate show's refusal document changed shape").toStrictEqual({
+      schema: "continuo.gate.show/1",
+      ok: false,
+      db: path,
+      error: { class: "UnknownGateRefused", message: "gate gate-nope does not exist" },
+    });
+  });
+
+  test("gate answer --json refuses an unknown gate with the same status as without", () => {
+    // The status is what a host branches on before it parses anything, so it
+    // must not move: the flag changes bytes, never control flow.
+    const { path } = aDatabaseWithAGate("gate-json-answer-refused");
+    const streams = captureStreams();
+    const argv = [
+      "gate",
+      "answer",
+      "--db",
+      path,
+      "--gate-id",
+      "gate-nope",
+      "--body",
+      "irrelevant",
+      "--actor-id",
+      ACTOR,
+      "--now-ms",
+      String(T0 + MINUTE),
+    ];
+
+    const human = main(argv);
+    const machine = main([...argv, "--json"]);
+
+    expect(machine, "--json must not change the refusal's exit code").toBe(human);
+    expect(machine).toBe(2);
+    expect(streams.out(), "a refusal writes nothing to stdout, with or without the flag").toBe("");
+    const lines = streams.err().trimEnd().split("\n");
+    expect(lines[0], "the human refusal is unchanged").toBe("error: no gate 'gate-nope'");
+    expect(
+      oneDocument(`${lines[1] ?? ""}\n`),
+      "gate answer's refusal document changed shape",
+    ).toStrictEqual({
+      schema: "continuo.gate.answer/1",
+      ok: false,
+      db: path,
+      error: { class: "UnknownGateRefused", message: "no gate 'gate-nope'" },
+    });
+  });
+
+  test("gate list --json refuses a database that is not a control plane", () => {
+    // The refusal a host meets first, and the one where `db` earns its place in
+    // the envelope: the verb never opened anything, so nothing else in the
+    // document says which control plane was meant.
+    const absent = join(caseRoot("gate-json-list-refused"), "absent.sqlite3");
+    const streams = captureStreams();
+
+    expect(main(["gate", "list", "--db", absent])).toBe(2);
+    const humanMessage = streams.err().trimEnd().slice("error: ".length);
+    expect(main(["gate", "list", "--db", absent, "--json"])).toBe(2);
+
+    const document = oneDocument(`${streams.err().trimEnd().split("\n")[1] ?? ""}\n`);
+    expect(document, "gate list's refusal document changed shape").toStrictEqual({
+      schema: "continuo.gate.list/1",
+      ok: false,
+      db: absent,
+      error: { class: "MissingStateRefused", message: humanMessage },
+    });
+    expect(streams.out(), "a refusal writes nothing to stdout").toBe("");
+  });
+});
+
+/**
+ * Anti-vacuity: these checks, observed red.
+ *
+ * `AGENTS.md`: a check never seen red is not a check. Every case above would
+ * stay green against a `--json` that was ignored, hardcoded, or wired into the
+ * success paths only. Each case here names the hole it stands in front of and
+ * fails against exactly that build.
+ */
+describe("the --json documents, observed red", () => {
+  test("the same invocation without --json is the human line and no JSON", () => {
+    // The hole: a build that ignored the flag and emitted the document always.
+    // Every success case above would be green, and every operator's terminal
+    // would have filled with JSON -- and rule 2 (the human bytes are unchanged)
+    // would be broken without a single case going red.
+    const { path } = aDatabaseWithAGate("gate-json-absent", { deadlineAtMs: T0 + MINUTE });
+    const streams = captureStreams();
+
+    expect(main(["gate", "list", "--db", path])).toBe(0);
+
+    expect(streams.out(), "the human line must be byte-identical to what it was").toBe(
+      `${GATE_ID} worker_escalation run=${RUN_ID} stage=received since=${T0} ` +
+        `deadline=${T0 + MINUTE}\n`,
+    );
+    expect(() => JSON.parse(streams.out()), "no --json, no document").toThrow();
+  });
+
+  test("a key's value changes when the fact under it changes", () => {
+    // The hole: a document built from a literal rather than from the record.
+    // A `listPayload` that returned a hardcoded object would satisfy every
+    // toStrictEqual above, because those cases fix the database too. Two
+    // databases differing in exactly one fact, and one key differing with it,
+    // is what a literal cannot fake.
+    const withDeadline = aDatabaseWithAGate("gate-json-vary-deadline", {
+      deadlineAtMs: T0 + 9 * MINUTE,
+    });
+    const withoutDeadline = aDatabaseWithAGate("gate-json-vary-none", { deadlineAtMs: null });
+    const streams = captureStreams();
+
+    expect(main(["gate", "list", "--db", withDeadline.path, "--json"])).toBe(0);
+    expect(main(["gate", "list", "--db", withoutDeadline.path, "--json"])).toBe(0);
+
+    const [first, second] = streams
+      .out()
+      .trimEnd()
+      .split("\n")
+      .map((line) => oneDocument(`${line}\n`)) as readonly {
+      gates: readonly Record<string, unknown>[];
+    }[];
+    expect(first?.gates[0]?.["deadline_at_ms"], "the deadline must come from the row").toBe(
+      T0 + 9 * MINUTE,
+    );
+    expect(
+      second?.gates[0]?.["deadline_at_ms"],
+      "the absent deadline must come from the row too",
+    ).toBeNull();
+    // The vacuity check on this vacuity check: the two documents differ in that
+    // one key and agree everywhere else, so the assertion above is about the
+    // field and not about two unrelated documents.
+    expect(first?.gates[0]?.["gate_id"], "the two runs describe the same gate").toBe(
+      second?.gates[0]?.["gate_id"],
+    );
+    expect(first?.gates[0]?.["stage_entered_at_ms"], "only the deadline differed").toBe(
+      second?.gates[0]?.["stage_entered_at_ms"],
+    );
+  });
+
+  test("the refusal path honours --json, and not only the success path", () => {
+    // The hole rule 3 names: a build that read the flag at each success site and
+    // left `refuse` alone. Every success case above would be green, and a host
+    // would get a parse error at the exact moment something went wrong. The
+    // same refusal, run both ways, is what tells the two builds apart.
+    const { path } = aDatabaseWithAGate("gate-json-refusal-red");
+    const streams = captureStreams();
+    const argv = ["gate", "show", "--db", path, "--gate-id", "gate-nope"];
+
+    expect(main(argv)).toBe(2);
+    expect(main([...argv, "--json"])).toBe(2);
+
+    const [human, machine] = streams.err().trimEnd().split("\n");
+    expect(human, "without the flag the refusal is the operator's line").toBe(
+      "error: gate gate-nope does not exist",
+    );
+    expect(machine?.startsWith("{"), "with the flag the refusal is a document").toBe(true);
+    expect(
+      human,
+      "a refusal writer that ignored the flag would emit the same bytes twice",
+    ).not.toBe(machine);
+  });
+
+  test("a gate verb with no --json flag refuses exactly as it did before", () => {
+    // The hole: `refuse` is shared by all eight verbs, and teaching it the flag
+    // could have changed the five that never opted in -- the worst kind of
+    // regression, because it lands on the verbs this task was told not to
+    // touch. `gate present` is one of them: same line, same status.
+    const { path } = aDatabaseWithAGate("gate-json-out-of-scope");
+    const streams = captureStreams();
+
+    expect(main(["gate", "present", "--db", path, "--gate-id", "gate-nope"])).toBe(2);
+
+    expect(streams.err(), "an out-of-scope verb's refusal must be byte-identical").toBe(
+      "error: gate gate-nope does not exist\n",
+    );
+    expect(streams.out(), "and it writes nothing to stdout").toBe("");
+  });
+
+  test("--json is mounted on the three verbs a host drives, and on no others", () => {
+    // The vacuity check on the vacuity checks: a flag mounted everywhere would
+    // satisfy the cases above (nothing here asserts the parser REFUSES it
+    // elsewhere), and a flag mounted nowhere would fail them all for one
+    // reason. This states the boundary itself.
+    const usage: string[] = [];
+    patchSeam(topLevelSeams, "err", (text: string) => {
+      usage.push(text);
+    });
+    const { path } = aDatabaseWithAGate("gate-json-mount");
+    captureStreams();
+
+    expect(
+      main(["gate", "present", "--db", path, "--gate-id", GATE_ID, "--json"]),
+      "gate present must not accept a flag it does not implement",
+    ).toBe(2);
+    expect(usage.join("")).toContain("--json");
   });
 });

@@ -48,6 +48,25 @@
  * `admit`'s is not reachable from here at all, because the parser has already
  * established that `--run-id` is a string and `--now-ms` an int.
  *
+ * **`--json` changes the bytes and nothing else.** Both verbs answer a host in
+ * the one envelope `src/cli/json_output.ts` declares, under the pinned schema
+ * ids {@link ADMIT_SCHEMA} and {@link CLOSE_SCHEMA}. Without the flag the two
+ * report lines are byte-identical to what they have always been. With it, the
+ * exit codes, the refusal families {@link isOperatorRefusal} names, the order of
+ * operations and the `finally` that closes the handle are all unchanged: the
+ * flag is read once per verb and reaches exactly two places, the report and
+ * {@link refuse}. A verb that behaved differently under a flag a host sets for
+ * its own convenience would make the flag part of the contract of what the verb
+ * does, which is the thing this seam exists to keep out.
+ *
+ * **What `--json` does not reach, deliberately.** The two usage errors and
+ * `LapRunIntentUsageError` still escape as a stack trace and exit 1, under
+ * `--json` exactly as without it. Wrapping them in a refusal document would
+ * erase the distinction the paragraph above draws, which is the only signal a
+ * host has that it called this CLI wrongly rather than being told no. A host's
+ * rule is therefore three-valued and is stated in `json_output.ts`: exit 0,
+ * parse stdout; exit 2, parse stderr; anything else, stderr is text.
+ *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every string
  * here reaches `--help` on a cp932 console, where a character the console cannot
  * encode is a crash rather than a smudge.
@@ -68,13 +87,18 @@
  * printing the same value under two rules.
  */
 
+import { addJsonArgument, jsonRequested, refusalLine, successLine } from "../cli/json_output.js";
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
 import { LapRunIntent } from "./lap_run_intent.js";
 import { LeaseRefusal } from "./lease.js";
 import { openProductionControlPlane } from "./migrator.js";
 import { ControlPlaneRefusal } from "./refusals.js";
-import { admitRun } from "./run_admission.js";
+import {
+  admitRun,
+  RUN_CREATED_EVENT_TYPE,
+  RUN_DELEGATION_RECORDED_EVENT_TYPE,
+} from "./run_admission.js";
 import { closeRun, RUN_CLOSE_OUTCOMES } from "./run_close.js";
 import { type RunStatus, RunTransitionRefused, UnknownRunRefused } from "./run_lifecycle.js";
 
@@ -147,6 +171,23 @@ const CLOSE_DESCRIPTION =
   "with the reason.";
 
 /**
+ * The pinned shape identifiers this subtree's `--json` documents carry.
+ *
+ * One per verb rather than one per subtree, because a host reads the
+ * discriminator to know which payload keys it may expect and `admit` and
+ * `close` answer with different ones. The `/1` is the whole of the version
+ * story `src/cli/json_output.ts` states: a field added later leaves it alone,
+ * and only a change a host cannot absorb makes it `/2`.
+ *
+ * Written here as literals rather than derived from the subcommand names, so
+ * that renaming a subcommand -- a thing an operator sees immediately -- cannot
+ * silently rename the contract a host parses, which nobody would see until the
+ * host broke.
+ */
+const ADMIT_SCHEMA = "continuo.run.admit/1";
+const CLOSE_SCHEMA = "continuo.run.close/1";
+
+/**
  * The three effects this module has on the world, as a replaceable record.
  *
  * The same shape and the same reason as `cli.ts`'s `dbCliSeams`: ESM bindings
@@ -212,9 +253,27 @@ function isOperatorRefusal(error: unknown): error is Error {
  * `ArgparseExit` rather than `process.exit`, because `src/cli.ts`'s `main`
  * already catches it and turns it into the process's status -- the one place
  * that is a process boundary.
+ *
+ * **The one place either verb refuses, and the reason `--json` is taught here
+ * rather than at the two call sites.** Both verbs funnel every operator refusal
+ * through this function, so teaching it the flag makes "a refusal a host can
+ * parse" a property of the subtree instead of a property of whichever branch a
+ * particular refusal took. Branching per call site would have left the families
+ * `close` alone meets -- `LeaseHeld`, a lost fenced write, a run another writer
+ * closed in between -- emitting human text under `--json` while every success
+ * case stayed green, which is exactly the silent half-conversion this shape
+ * rules out.
+ *
+ * `schema`, `db` and `json` are parameters rather than module state because
+ * this function returns `never` and is reached from two verbs with two schema
+ * ids: a module-level "current verb" would be a second answer to which verb is
+ * running, and two answers eventually disagree.
+ *
+ * The exit code, the stream and the fact that this throws are identical either
+ * way. `--json` changes the bytes, never the control flow.
  */
-function refuse(error: Error): never {
-  runCliSeams.writeError(`error: ${error.message}\n`);
+function refuse(error: Error, schema: string, db: string, json: boolean): never {
+  runCliSeams.writeError(json ? refusalLine(schema, db, error) : `error: ${error.message}\n`);
   throw new ArgparseExit(2, "refused run verb");
 }
 
@@ -275,6 +334,7 @@ export function cmdRunAdmit(args: Namespace): number {
   // it must be reached on the path where nothing is open yet.
   const intent = intentOf(args);
   const nowMs = nowMsOf(args);
+  const json = jsonRequested(args);
 
   try {
     const connection = openProductionControlPlane(path);
@@ -284,17 +344,48 @@ export function cmdRunAdmit(args: Namespace): number {
       // read to know the work statement landed with the run rather than after
       // it -- reporting only the first would make the transaction's whole point
       // invisible at the surface that performs it.
+      //
+      // The JSON document says the same thing, plus `created_at_ms`. That value
+      // is not on the human line, and it is the resolved clock -- `--now-ms` if
+      // given and this build's one read of the system clock otherwise. A host
+      // that omitted `--now-ms` could otherwise learn what its own run was
+      // stamped with only by reopening the database, which is the one thing a
+      // thin verb should not make its caller do.
+      //
+      // `events` is a NAMED object keyed by the event type constants rather than
+      // an array. `AdmittedRun` carries two named pairs and promises nothing
+      // about their relative order beyond the append order the seq numbers
+      // already state; a host writing `events[0]` would be reading an order off
+      // a position this record never fixed. The keys come from the exported
+      // constants for the same reason `--outcome`'s `choices` reads
+      // `RUN_CLOSE_OUTCOMES`: the vocabulary itself, not a copy of it.
       runCliSeams.write(
-        `admitted ${admitted.runId} in ${path}: status ${admitted.status}, ` +
-          `${admitted.eventId} at seq ${admitted.eventSeq}, ` +
-          `${admitted.delegationEventId} at seq ${admitted.delegationEventSeq}\n`,
+        json
+          ? successLine(ADMIT_SCHEMA, path, {
+              run_id: admitted.runId,
+              status: admitted.status,
+              created_at_ms: admitted.createdAtMs,
+              events: {
+                [RUN_CREATED_EVENT_TYPE]: {
+                  event_id: admitted.eventId,
+                  seq: admitted.eventSeq,
+                },
+                [RUN_DELEGATION_RECORDED_EVENT_TYPE]: {
+                  event_id: admitted.delegationEventId,
+                  seq: admitted.delegationEventSeq,
+                },
+              },
+            })
+          : `admitted ${admitted.runId} in ${path}: status ${admitted.status}, ` +
+              `${admitted.eventId} at seq ${admitted.eventSeq}, ` +
+              `${admitted.delegationEventId} at seq ${admitted.delegationEventSeq}\n`,
       );
     } finally {
       connection.close();
     }
   } catch (error) {
     if (isOperatorRefusal(error)) {
-      refuse(error);
+      refuse(error, ADMIT_SCHEMA, path, json);
     }
     throw error;
   }
@@ -314,6 +405,7 @@ export function cmdRunAdmit(args: Namespace): number {
 export function cmdRunClose(args: Namespace): number {
   const path = String(args["db"]);
   const nowMs = nowMsOf(args);
+  const json = jsonRequested(args);
 
   try {
     const connection = openProductionControlPlane(path);
@@ -330,16 +422,31 @@ export function cmdRunClose(args: Namespace): number {
       // of `created` should see that it never ran; the epoch, because it is the
       // link between this row and the lease row naming who closed it, and it is
       // the whole of the close's audit trail.
+      //
+      // The document carries the same five facts, field by field off the
+      // record: `from` and `to` are the step, and `writer_epoch` is a number
+      // rather than the string the human line interpolates, because it is the
+      // integer that links this row to the lease row naming who closed the run
+      // and a host comparing it against a lease would otherwise be comparing
+      // text to an integer.
       runCliSeams.write(
-        `closed ${closed.runId} in ${path}: status ${closed.from} -> ${closed.to} ` +
-          `by ${closed.actorId} under writer epoch ${closed.writerEpoch}\n`,
+        json
+          ? successLine(CLOSE_SCHEMA, path, {
+              run_id: closed.runId,
+              from: closed.from,
+              to: closed.to,
+              actor_id: closed.actorId,
+              writer_epoch: closed.writerEpoch,
+            })
+          : `closed ${closed.runId} in ${path}: status ${closed.from} -> ${closed.to} ` +
+              `by ${closed.actorId} under writer epoch ${closed.writerEpoch}\n`,
       );
     } finally {
       connection.close();
     }
   } catch (error) {
     if (isOperatorRefusal(error)) {
-      refuse(error);
+      refuse(error, CLOSE_SCHEMA, path, json);
     }
     throw error;
   }
@@ -400,6 +507,11 @@ export function addSubparsers(sub: Subparsers): void {
     metavar: "NOW_MS",
     help: NOW_MS_HELP,
   });
+  // Declared by `cli/json_output.ts` rather than here: this is the one flag in
+  // the CLI whose whole value is that nine verbs spell it identically, and that
+  // module says why it is the deliberate exception to "a subtree declares its
+  // own flags".
+  addJsonArgument(admit);
   admit.setDefaults({ func: cmdRunAdmit });
 
   const close = sub.addParser("close", CLOSE_DESCRIPTION);
@@ -434,5 +546,6 @@ export function addSubparsers(sub: Subparsers): void {
     metavar: "NOW_MS",
     help: CLOSE_NOW_MS_HELP,
   });
+  addJsonArgument(close);
   close.setDefaults({ func: cmdRunClose });
 }

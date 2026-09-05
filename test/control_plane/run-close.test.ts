@@ -640,3 +640,274 @@ describe("continuo run close", () => {
     }
   });
 });
+
+// --------------------------------------------------------------------------
+// the host-facing document (--json)
+// --------------------------------------------------------------------------
+
+/** The pinned identifier of `run close`'s document shape. */
+const CLOSE_SCHEMA = "continuo.run.close/1";
+
+/**
+ * One captured line, parsed, having first been checked for being ONE line.
+ *
+ * The single-line check is part of the contract rather than tidiness: a host
+ * driving this CLI as a subprocess reads a stream, and a document split over
+ * two writes or followed by a stray second line is a document a line-oriented
+ * reader mis-frames. `JSON.parse` alone would not notice either.
+ */
+function parsedDocument(line: string): Record<string, unknown> {
+  expect(line.endsWith("\n"), "the document must end in exactly one newline").toBe(true);
+  expect(
+    line.slice(0, -1).includes("\n"),
+    "the document must be one line: a host reads this stream line by line",
+  ).toBe(false);
+  return JSON.parse(line) as Record<string, unknown>;
+}
+
+describe("continuo run close --json", () => {
+  test("answers one document carrying the step, the actor and the epoch", () => {
+    // Without this case a host would have no pinned shape at all: every key
+    // below could be renamed, and the only reader that would notice is a host
+    // in production. `toStrictEqual` on the whole object is the point -- an
+    // extra key is as much a change to the contract as a missing one, because
+    // it is the shape this schema id promises.
+    const { connection, path } = admittedFixture("json-ok");
+    connection.close();
+    const streams = captureStreams();
+
+    const code = main([
+      ...closeArgv(path, { "--run-id": "json-ok", "--now-ms": String(T1) }),
+      "--json",
+    ]);
+
+    expect(code).toBe(0);
+    expect(streams.err(), "a success writes nothing to stderr").toBe("");
+    expect(parsedDocument(streams.out())).toStrictEqual({
+      schema: CLOSE_SCHEMA,
+      ok: true,
+      db: path,
+      run_id: "json-ok",
+      from: "created",
+      to: "completed",
+      actor_id: ACTOR,
+      // A number, not the string the human line interpolates: it is the integer
+      // that links this row to the lease row naming who closed the run, and a
+      // host comparing text to an integer would compare wrongly in silence.
+      writer_epoch: 1,
+    });
+  });
+
+  test("puts a refusal document on stderr, leaves stdout empty, and still exits 2", () => {
+    // Without this case a host would have to parse `error: ...` text to learn
+    // why it was refused, and the exit code could drift under the flag. The
+    // exit code is asserted against the non-json run's rather than against a
+    // literal 2, so that the two cannot diverge unnoticed.
+    // Both planes hold a run of the SAME id, in two temporary directories: the
+    // refusal quotes the run id, so two ids would make the two messages differ
+    // for a reason that has nothing to do with the flag under test.
+    const human = admittedFixture("json-refuse");
+    human.connection.close();
+    const json = admittedFixture("json-refuse");
+    json.connection.close();
+    const streams = captureStreams();
+
+    expect(main(closeArgv(human.path, { "--run-id": "json-refuse", "--now-ms": String(T1) }))).toBe(
+      0,
+    );
+    const humanCode = main(
+      closeArgv(human.path, {
+        "--run-id": "json-refuse",
+        "--outcome": "cancelled",
+        "--now-ms": String(T2),
+      }),
+    );
+    const humanLine = streams.err();
+
+    expect(main(closeArgv(json.path, { "--run-id": "json-refuse", "--now-ms": String(T1) }))).toBe(
+      0,
+    );
+    const jsonCode = main([
+      ...closeArgv(json.path, {
+        "--run-id": "json-refuse",
+        "--outcome": "cancelled",
+        "--now-ms": String(T2),
+      }),
+      "--json",
+    ]);
+
+    expect(jsonCode, "the flag must not move the exit code").toBe(humanCode);
+    expect(jsonCode).toBe(2);
+    // Two successes and nothing else on stdout: the refusal document went to
+    // stderr, so a host reading stdout on exit 2 reads nothing at all.
+    expect(streams.out().split("\n").filter(Boolean)).toHaveLength(2);
+    expect(parsedDocument(streams.err().slice(humanLine.length))).toStrictEqual({
+      schema: CLOSE_SCHEMA,
+      ok: false,
+      db: json.path,
+      error: {
+        class: "RunCloseRefused",
+        // The same sentence the human line carries, taken from that line rather
+        // than written down: a document whose message drifted from the text
+        // would give an operator and a host two accounts of one refusal.
+        message: humanLine.replace(/^error: /, "").replace(/\n$/, ""),
+      },
+    });
+  });
+
+  test("reports the lease family in the same shape as the lifecycle family", () => {
+    // Without this case only `RunCloseRefused` would be covered, and `close`
+    // meets four families through one writer -- a host must not have to know
+    // which family it hit to know how to read the answer. `LeaseHeld` is the
+    // one an operator meets most: a lap is still driving this run.
+    const { connection, path } = admittedFixture("json-leased");
+    acquire(connection, {
+      resource: runLeaseResource("json-leased"),
+      holder: "lap-1",
+      nowMs: T1,
+      ttlMs: 60_000,
+    });
+    connection.close();
+    const streams = captureStreams();
+
+    const code = main([
+      ...closeArgv(path, { "--run-id": "json-leased", "--now-ms": String(T1) }),
+      "--json",
+    ]);
+
+    expect(code).toBe(2);
+    expect(streams.out()).toBe("");
+    const document = parsedDocument(streams.err());
+    expect(document["schema"]).toBe(CLOSE_SCHEMA);
+    expect(document["ok"]).toBe(false);
+    expect(document["db"]).toBe(path);
+    // The class is the refusal's own `name`, not a hand-written code table:
+    // `json_output.ts` argues why, and this pins that the field is populated
+    // from the error rather than left as a constant.
+    expect((document["error"] as Record<string, unknown>)["class"]).toBe(LeaseHeld.name);
+  });
+});
+
+// --------------------------------------------------------------------------
+// anti-vacuity for --json
+// --------------------------------------------------------------------------
+
+/**
+ * The `--json` cases above, observed RED against the ways they could be vacuous.
+ *
+ * `AGENTS.md`: a check never seen red is not a check. Each case here names the
+ * hole it stands in front of -- a way the block above could stay green while
+ * the flag did nothing, or did everything, or reported a fixed literal.
+ */
+describe("continuo run close --json, observed red", () => {
+  test("the same invocation without --json is unchanged and emits no document", () => {
+    // The hole: `--json` never read, or JSON made the new default. Either would
+    // leave every case above green -- the first if the verb always emitted the
+    // document, the second if it never did and the cases asserted on a stream
+    // nobody wrote. This is the case that fails in both directions.
+    const { connection, path } = admittedFixture("json-red-human");
+    connection.close();
+    const streams = captureStreams();
+
+    expect(main(closeArgv(path, { "--run-id": "json-red-human", "--now-ms": String(T1) }))).toBe(0);
+
+    expect(streams.out()).toBe(
+      `closed json-red-human in ${path}: status created -> completed by ${ACTOR} ` +
+        "under writer epoch 1\n",
+    );
+    expect(() => JSON.parse(streams.out()), "the human line must not be a document").toThrow();
+  });
+
+  test("a field moves when the fact under it moves", () => {
+    // The hole: a document built from literals rather than from the record.
+    // Every assertion above would pass against a hardcoded object as long as
+    // the fixtures never varied. Two closes differing in exactly two inputs --
+    // the outcome and the actor -- must differ in exactly those keys.
+    const first = admittedFixture("json-vary-a");
+    first.connection.close();
+    const second = admittedFixture("json-vary-b");
+    second.connection.close();
+    const streams = captureStreams();
+
+    expect(
+      main([
+        ...closeArgv(first.path, { "--run-id": "json-vary-a", "--now-ms": String(T1) }),
+        "--json",
+      ]),
+    ).toBe(0);
+    const a = parsedDocument(streams.out());
+    const before = streams.out().length;
+    expect(
+      main([
+        ...closeArgv(second.path, {
+          "--run-id": "json-vary-b",
+          "--outcome": "cancelled",
+          "--actor-id": "operator-2",
+          "--now-ms": String(T1),
+        }),
+        "--json",
+      ]),
+    ).toBe(0);
+    const b = parsedDocument(streams.out().slice(before));
+
+    expect(b["run_id"], "run_id is echoed from the record, not fixed").not.toBe(a["run_id"]);
+    expect(b["to"], "to is the outcome this close reached, not fixed").not.toBe(a["to"]);
+    expect(b["actor_id"], "actor_id is who closed the run, not fixed").not.toBe(a["actor_id"]);
+    expect(b["db"], "db is the path this invocation was given").not.toBe(a["db"]);
+    // And the keys whose facts did NOT move must not move: a document that
+    // varied everything would satisfy the four assertions above while telling a
+    // host nothing.
+    expect(b["from"], "both runs were closed out of 'created'").toBe(a["from"]);
+    expect(b["writer_epoch"], "both closes took the run's first writer epoch").toBe(
+      a["writer_epoch"],
+    );
+  });
+
+  test("the refusal path reads the flag too, and not only the success path", () => {
+    // The hole: `--json` read where the report is written but not where the
+    // refusal is. Every success case above would stay green while a host got
+    // `error: ...` text it cannot parse -- and this subtree has ONE refusal
+    // writer precisely so that this cannot be half-done.
+    const { connection, path } = admittedFixture("json-red-refusal");
+    connection.close();
+    const streams = captureStreams();
+
+    expect(main(closeArgv(path, { "--run-id": "json-red-refusal", "--now-ms": String(T1) }))).toBe(
+      0,
+    );
+    const before = streams.err().length;
+    expect(
+      main([
+        ...closeArgv(path, {
+          "--run-id": "json-red-refusal",
+          "--outcome": "cancelled",
+          "--now-ms": String(T2),
+        }),
+        "--json",
+      ]),
+    ).toBe(2);
+
+    const written = streams.err().slice(before);
+    expect(written.startsWith("error: "), "a refusal under --json is not the human line").toBe(
+      false,
+    );
+    expect(parsedDocument(written)["ok"]).toBe(false);
+  });
+
+  test("the vacuity check on the vacuity checks: the human line is still emitted", () => {
+    // A suite whose "no document" assertions passed because the verb printed
+    // NOTHING would satisfy every red case above while the command had stopped
+    // reporting altogether. So: without the flag, stdout is non-empty and is
+    // the sentence an operator reads.
+    const { connection, path } = admittedFixture("json-red-silent");
+    connection.close();
+    const streams = captureStreams();
+
+    expect(main(closeArgv(path, { "--run-id": "json-red-silent", "--now-ms": String(T1) }))).toBe(
+      0,
+    );
+
+    expect(streams.out().length, "the human report must not have gone silent").toBeGreaterThan(0);
+    expect(streams.out().startsWith("closed json-red-silent in ")).toBe(true);
+  });
+});
