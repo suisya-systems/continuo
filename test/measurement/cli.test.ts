@@ -37,6 +37,7 @@ import { join } from "node:path";
 
 import type Database from "better-sqlite3";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { formatVersionLine, REVISION_UNKNOWN, TOOL_VERSION } from "../../src/about.js";
 import { helpStrings } from "../../src/cli/parser.js";
 import * as topLevelCli from "../../src/cli.js";
 import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
@@ -45,6 +46,7 @@ import { FINGERPRINT_AGGREGATE } from "../../src/measurement/provenance.js";
 import { ControlPlaneRefusal } from "../../src/measurement/reader.js";
 import { cell } from "../../src/measurement/render.js";
 import { WindowRefusal } from "../../src/measurement/windows.js";
+import { PACKAGE_NAME } from "../../src/meta.js";
 import { caseRoot, rawConnection, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { parametrize } from "../testkit/parametrize.js";
@@ -797,7 +799,54 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
 
       const stdout = execFileSync(process.execPath, [link, "--version"], { encoding: "utf8" });
 
-      expect(stdout.trim()).toBe("@suisya-systems/continuo 0.0.0");
+      // The BUILT half of the revision mechanism (`D-0090`). The source-tree
+      // half is in test/contract/build-revision.test.ts and asserts the
+      // placeholder; this one asserts that the build REPLACED it. Neither half
+      // can pass if the other's mechanism is broken.
+      //
+      // Read back from the generated module rather than re-derived here, so
+      // this pins that the CLI prints the value that was BAKED IN -- a CLI that
+      // asked git at startup would satisfy a re-derivation and fail this.
+      const generated = join(REPO_ROOT, "dist", "build_revision.js");
+      expect(
+        existsSync(generated),
+        "dist/build_revision.js is missing; `npm run build` runs scripts/generate-revision.mjs",
+      ).toBe(true);
+      const built = /BUILD_REVISION = "([^"]*)"/.exec(readFileSync(generated, "utf8"))?.[1];
+      expect(built, `${generated} does not declare BUILD_REVISION`).toBeDefined();
+
+      expect(stdout.trim()).toBe(formatVersionLine(PACKAGE_NAME, TOOL_VERSION, String(built)));
+
+      // The anti-vacuity half, and it is conditional on the environment rather
+      // than on a hardcoded commit -- a case naming a sha would have to be
+      // edited by every rebase. Where this suite IS running inside its own
+      // checkout, the built value must be that checkout's commit and must not be
+      // the placeholder. That fails if the generator ever stops running, ever
+      // leaves the placeholder in place, or ever stamps another repository's
+      // commit; and it encodes nothing a rebase invalidates. Where git is
+      // unavailable the branch is skipped and only the equality above stands.
+      //
+      // The probe must not THROW where git is unavailable, or this case would
+      // fail on exactly the machine whose supported answer it is describing --
+      // `execFileSync` raises ENOENT rather than returning a status, so the
+      // skip has to be written as a catch.
+      const git = (...args: string[]): string | null => {
+        try {
+          return execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+        } catch {
+          return null;
+        }
+      };
+      const head = git("rev-parse", "HEAD");
+      const toplevel = git("rev-parse", "--path-format=absolute", "--show-toplevel");
+      if (head !== null && toplevel === REPO_ROOT) {
+        expect(
+          built,
+          "the built CLI reports a revision that is not this checkout's commit; " +
+            "scripts/generate-revision.mjs did not run, or ran somewhere else",
+        ).not.toBe(REVISION_UNKNOWN);
+        expect(String(built).startsWith(head)).toBe(true);
+      }
     },
   );
 
@@ -1018,10 +1067,227 @@ describe("target-only -- the parser has no source to be underwritten by", () => 
   });
 
   test("target-only -- the top-level CLI reports the build's version", () => {
+    // The mirror image of the built-CLI case above, and the pair IS the design
+    // (`D-0090`): a run out of `src/` is not a build, so it honestly reports
+    // `unknown`, while a built `dist/` reports the commit it was made from. If
+    // this ever printed a real sha, the build would have written into `src/` --
+    // which would dirty the tree it was produced from and make the next build
+    // report `-dirty` for no reason.
     const { code, out } = capturedTop(() => topLevelCli.main(["--version"]));
 
     expect(code).toBe(0);
-    expect(out.trim()).toBe("@suisya-systems/continuo 0.0.0");
+    expect(out.trim()).toBe(formatVersionLine(PACKAGE_NAME, TOOL_VERSION, REVISION_UNKNOWN));
+  });
+});
+
+// --------------------------------------------------------------------------
+// --json, the host's spelling of --format json (D-0090)
+// --------------------------------------------------------------------------
+
+describe("--json is another spelling of --format json", () => {
+  test("--json writes exactly the bytes --format json writes", () => {
+    // The whole of what this flag is. A host drives nine verbs of this CLI and
+    // asks each of them for machine output with one flag; this verb had a
+    // rendering selector before the host seam existed, so `--json` here must
+    // resolve to that rendering rather than grow a second machine format --
+    // and "resolve to" is a claim about BYTES, because a host reads bytes. An
+    // implementation that built its own document from the report would satisfy
+    // "emits JSON" and fail this.
+    const path = db();
+
+    const viaFlag = captured(() => measurementCli.main(argvFor(path, "--json")));
+    const viaFormat = captured(() => measurementCli.main(argvFor(path, "--format", "json")));
+
+    expect(viaFlag.code, "the spelling changes no exit code").toBe(viaFormat.code);
+    expect(viaFlag.code).toBe(0);
+    expect(
+      viaFlag.out,
+      "--json must select the existing json rendering, not a second machine format of its own",
+    ).toBe(viaFormat.out);
+  });
+
+  test("--json is not wrapped in the host envelope the other verbs answer in", () => {
+    // Stated as a case because it is a deliberate exception a later edit would
+    // "fix". The other host-facing verbs answer inside
+    // {"schema","ok","db",...}; this one does not, because the suite pins that
+    // the markdown and the json renderings of one invocation carry identical
+    // facts (see "the JSON rendering carries the same facts from the command"),
+    // and an envelope would put three facts in the json rendering that the
+    // markdown one cannot carry. The report's own report_kind already does the
+    // envelope's identifying job.
+    const path = db();
+
+    const document = parseReportJson(
+      captured(() => measurementCli.main(argvFor(path, "--json"))).out,
+    );
+
+    const keys = Object.keys(document as Record<string, unknown>);
+    expect(keys, "the top level is the report itself, not an envelope around it").not.toContain(
+      "schema",
+    );
+    expect(keys).not.toContain("ok");
+    expect((document as Record<string, unknown>)["report_kind"]).toBe(
+      "interlock-measurement-report",
+    );
+  });
+
+  test("--json together with an explicit --format json is accepted", () => {
+    // The two agree, so there is nothing to refuse: a host that always passes
+    // --json must not force an operator to delete the --format they already
+    // wrote from a command line the host is running for them.
+    const path = db();
+
+    const both = captured(() => measurementCli.main(argvFor(path, "--json", "--format", "json")));
+
+    expect(both.code).toBe(0);
+    expect(both.out).toBe(
+      captured(() => measurementCli.main(argvFor(path, "--format", "json"))).out,
+    );
+  });
+
+  test("--json together with --format markdown is refused, not resolved", () => {
+    // The failure this closes is an ACCEPTED command line, not a rejected one.
+    // Last-one-wins would hand back one of the two renderings and the report
+    // would carry no sign of which half of the command line won -- which is the
+    // reason `--format json --format markdown` is refused three flags up, met
+    // through a different door. Refused before the clock is read and before the
+    // database is opened, so a contradiction costs nothing and holds no lock.
+    const path = db();
+    driver.opened.length = 0;
+
+    const refused = captureStderr(() =>
+      measurementCli.main(argvFor(path, "--json", "--format", "markdown")),
+    );
+
+    expect(refused.code, "the parser's own status for a command line it refuses").toBe(2);
+    expect(refused.text).toContain("argument --json");
+    expect(refused.text, "the refusal names the rendering it contradicts").toContain(
+      "--format markdown",
+    );
+    expect(refused.text, "the usage block an argparse refusal prints first").toContain(
+      "usage: continuo measure report",
+    );
+    expect(
+      driver.opened,
+      "a self-contradicting command line opened a database before refusing",
+    ).toEqual([]);
+  });
+
+  test("the contradiction is refused with the same status through the top-level CLI", () => {
+    // Both entry points, because the refusal travels as an ArgparseExit raised
+    // by the HANDLER rather than by the parser, and only a main that catches
+    // one turns it into a status. The top-level CLI already carried that catch;
+    // this module's own main did not, and without it the same command line was
+    // an unhandled error with a stack trace over the message it had just
+    // written -- exit 1 where the parser would have said 2.
+    const path = db();
+
+    const refused = captureStderr(() =>
+      topLevelCli.main(["measure", ...argvFor(path, "--json", "--format", "markdown")]),
+    );
+
+    expect(refused.code).toBe(2);
+    expect(refused.text).toContain("argument --json");
+  });
+});
+
+// --------------------------------------------------------------------------
+// anti-vacuity: every case above must be able to fail (AGENTS.md)
+// --------------------------------------------------------------------------
+
+describe("anti-vacuity on the --json spelling", () => {
+  test("without --json the command still renders Markdown and no JSON", () => {
+    // The hole: a --json that is never read, or a rendering that quietly became
+    // json for everyone. Every case above stays green under both -- they all
+    // pass --json -- and an operator's plain `measure report` would have
+    // changed its output. This is the half that proves the flag is read.
+    const path = db();
+
+    const { code, out } = captured(() => measurementCli.main(argvFor(path)));
+
+    expect(code).toBe(0);
+    expect(out.trimStart().startsWith("{"), "the default rendering became JSON").toBe(false);
+    expect(parseMarkdown(out).get("header.db_path")).toBe(cell(path));
+  });
+
+  test("the two renderings differ, so 'identical bytes' is a claim and not a tautology", () => {
+    // The hole: `--json` and `--format json` agreeing because BOTH silently fell
+    // through to the same default. If the markdown and the json rendering were
+    // the same bytes, the equality case above would pass against an
+    // implementation that ignored --json entirely.
+    const path = db();
+
+    const markdown = captured(() => measurementCli.main(argvFor(path))).out;
+    const json = captured(() => measurementCli.main(argvFor(path, "--json"))).out;
+
+    expect(markdown.length, "the markdown rendering wrote nothing to compare").toBeGreaterThan(0);
+    expect(json.length, "the json rendering wrote nothing to compare").toBeGreaterThan(0);
+    expect(json, "the equality case above is vacuous if these are the same bytes").not.toBe(
+      markdown,
+    );
+  });
+
+  test("the JSON document changes when the run it reports changes", () => {
+    // The hole: a document assembled from a literal rather than from the report.
+    // Two runs differing in ONE input -- the database they read -- must differ
+    // in the corresponding field and in no other way that matters here.
+    const first = db("json-first");
+    const second = db("json-second");
+
+    const fromFirst = walkJson(
+      parseReportJson(captured(() => measurementCli.main(argvFor(first, "--json"))).out),
+    );
+    const fromSecond = walkJson(
+      parseReportJson(captured(() => measurementCli.main(argvFor(second, "--json"))).out),
+    );
+
+    expect(fromFirst.get("header.db_path")).toBe(cell(first));
+    expect(
+      fromSecond.get("header.db_path"),
+      "the reported path did not follow the --db it was given",
+    ).toBe(cell(second));
+    expect(fromFirst.get("header.db_path")).not.toBe(fromSecond.get("header.db_path"));
+  });
+
+  test("--json alone is accepted, so the refusal above is a real distinction", () => {
+    // The hole: refusing --json against the DEFAULT format. --format declares
+    // markdown as its default nowhere the namespace can see, precisely so that
+    // an absent --format is distinguishable from an explicit --format markdown.
+    // Get that wrong the other way -- a default that reaches the namespace --
+    // and either every plain `--json` refuses (caught here) or no
+    // `--json --format markdown` ever does (caught by the refusal case above).
+    // The two cases only both pass when the distinction is real.
+    const path = db();
+
+    const alone = captured(() => measurementCli.main(argvFor(path, "--json")));
+
+    expect(alone.code, "--json with no --format must be accepted").toBe(0);
+    expect(alone.out.trimStart().startsWith("{")).toBe(true);
+  });
+
+  test("a vacuity check on the vacuity checks", () => {
+    // The hole in the hole-fillers: every case above reads what `captured`
+    // returns, so a `captured` that returned an empty string for everything --
+    // a write seam patched onto the wrong record, say -- would make the
+    // "startsWith" and "not.toBe" assertions above pass or fail for reasons
+    // that have nothing to do with --json. These two are the ones that would
+    // have to be red first.
+    const path = db();
+
+    const markdown = captured(() => measurementCli.main(argvFor(path))).out;
+    const json = captured(() => measurementCli.main(argvFor(path, "--json"))).out;
+
+    expect(markdown, "the capture seam read nothing at all").toContain(
+      "interlock-measurement-report",
+    );
+    expect(json, "the capture seam read nothing at all").toContain("interlock-measurement-report");
+    // And the refusal capture: a captureStderr that recorded nothing would make
+    // every `toContain` in the refusal cases pass only because the text is
+    // empty... which it would not, so the check is that it is NOT empty.
+    const refused = captureStderr(() =>
+      measurementCli.main(argvFor(path, "--json", "--format", "markdown")),
+    );
+    expect(refused.text.length, "the stderr capture recorded nothing").toBeGreaterThan(0);
   });
 });
 

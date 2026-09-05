@@ -1189,6 +1189,237 @@ describe("continuo run admit", () => {
   });
 });
 
+// --------------------------------------------------------------------------
+// the host-facing document (--json)
+// --------------------------------------------------------------------------
+
+/** The pinned identifier of `run admit`'s document shape. */
+const ADMIT_SCHEMA = "continuo.run.admit/1";
+
+/**
+ * One captured line, parsed, having first been checked for being ONE line.
+ *
+ * The single-line check is part of the contract rather than tidiness: a host
+ * driving this CLI as a subprocess reads a stream, and a document split over
+ * two writes or followed by a stray second line is a document a line-oriented
+ * reader mis-frames. `JSON.parse` alone would not notice either.
+ */
+function parsedDocument(line: string): Record<string, unknown> {
+  expect(line.endsWith("\n"), "the document must end in exactly one newline").toBe(true);
+  expect(
+    line.slice(0, -1).includes("\n"),
+    "the document must be one line: a host reads this stream line by line",
+  ).toBe(false);
+  return JSON.parse(line) as Record<string, unknown>;
+}
+
+describe("continuo run admit --json", () => {
+  test("answers one document carrying the run, its clock and both events", () => {
+    // Without this case a host would have no pinned shape at all: every key
+    // below could be renamed, and the only reader that would notice is a host
+    // in production. `toStrictEqual` on the whole object is the point -- an
+    // extra key is as much a change to the contract as a missing one, because
+    // it is the shape this schema id promises.
+    const path = productionTemplate.copyInto(caseRoot("run-admit-json"));
+    const streams = captureStreams();
+
+    const code = main([...admitArgv(path, { "--now-ms": String(T0) }), "--json"]);
+
+    expect(code).toBe(0);
+    expect(streams.err(), "a success writes nothing to stderr").toBe("");
+    expect(parsedDocument(streams.out())).toStrictEqual({
+      schema: ADMIT_SCHEMA,
+      ok: true,
+      db: path,
+      run_id: RUN_ID,
+      status: ADMITTED_RUN_STATUS,
+      // On the document and not on the human line: it is the resolved value of
+      // --now-ms, and a host that omitted the flag can learn it no other way
+      // without reopening the database.
+      created_at_ms: T0,
+      // A NAMED object, not a positional array: `AdmittedRun` carries two named
+      // pairs and promises no order between them, so a host reading events[0]
+      // would be depending on something this record never fixed.
+      events: {
+        [RUN_CREATED_EVENT_TYPE]: { event_id: `${RUN_CREATED_EVENT_TYPE}/${RUN_ID}`, seq: 1 },
+        [RUN_DELEGATION_RECORDED_EVENT_TYPE]: {
+          event_id: `${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${RUN_ID}`,
+          seq: 2,
+        },
+      },
+    });
+  });
+
+  test("carries the resolved clock when --now-ms is omitted, read once", () => {
+    // Without this case `created_at_ms` could be the flag echoed back rather
+    // than what admission stamped, and the difference is invisible on every
+    // invocation that passes --now-ms. It also pins that answering in JSON did
+    // not add a clock read: the document is built from the record, not from a
+    // second look at the time.
+    const path = productionTemplate.copyInto(caseRoot("run-admit-json-clock"));
+    const streams = captureStreams();
+    const clock = countedClock(T1);
+
+    expect(main([...admitArgv(path), "--json"])).toBe(0);
+
+    expect(clock.reads(), "answering in JSON must not cost a second clock read").toBe(1);
+    expect(parsedDocument(streams.out())["created_at_ms"]).toBe(T1);
+  });
+
+  test("puts a refusal document on stderr, leaves stdout empty, and still exits 2", () => {
+    // Without this case a host would have to parse `error: ...` text to learn
+    // why it was refused, and the exit code could drift under the flag. The
+    // exit code is asserted against the non-json run's rather than against a
+    // literal 2, so that the two cannot diverge unnoticed.
+    const humanPath = productionTemplate.copyInto(caseRoot("run-admit-json-refusal-human"));
+    const jsonPath = productionTemplate.copyInto(caseRoot("run-admit-json-refusal"));
+    const streams = captureStreams();
+
+    expect(main(admitArgv(humanPath, { "--now-ms": String(T0) }))).toBe(0);
+    const humanCode = main(admitArgv(humanPath, { "--now-ms": String(T1) }));
+    const humanLine = streams.err();
+
+    expect(main(admitArgv(jsonPath, { "--now-ms": String(T0) }))).toBe(0);
+    const jsonCode = main([...admitArgv(jsonPath, { "--now-ms": String(T1) }), "--json"]);
+
+    expect(jsonCode, "the flag must not move the exit code").toBe(humanCode);
+    expect(jsonCode).toBe(2);
+    // Two successes and nothing else on stdout: the refusal document went to
+    // stderr, so a host reading stdout on exit 2 reads nothing at all.
+    expect(streams.out().split("\n").filter(Boolean)).toHaveLength(2);
+    const document = parsedDocument(streams.err().slice(humanLine.length));
+    expect(document).toStrictEqual({
+      schema: ADMIT_SCHEMA,
+      ok: false,
+      db: jsonPath,
+      error: {
+        class: "RunAlreadyAdmitted",
+        // The same sentence the human line carries, taken from that line rather
+        // than written down: a document whose message drifted from the text
+        // would give an operator and a host two accounts of one refusal.
+        message: humanLine.replace(/^error: /, "").replace(/\n$/, ""),
+      },
+    });
+  });
+
+  test("reports a refusal raised before the database is opened, in the same shape", () => {
+    // Without this case only the refusal thrown from inside the try block would
+    // be covered, and `run admit` refuses an absent database from the same
+    // place -- the shape of a refusal must not depend on how far the verb got.
+    const path = databasePath(caseRoot("run-admit-json-absent"));
+    const streams = captureStreams();
+
+    const code = main([...admitArgv(path, { "--now-ms": String(T0) }), "--json"]);
+
+    expect(code).toBe(2);
+    expect(streams.out()).toBe("");
+    const document = parsedDocument(streams.err());
+    expect(document["schema"]).toBe(ADMIT_SCHEMA);
+    expect(document["ok"]).toBe(false);
+    expect(document["db"]).toBe(path);
+    // The class is the refusal's own `name`, not a hand-written code table:
+    // `json_output.ts` argues why, and this pins that the field is populated
+    // from the error rather than left as a constant.
+    expect(String((document["error"] as Record<string, unknown>)["class"])).toMatch(/Refus/);
+  });
+});
+
+// --------------------------------------------------------------------------
+// anti-vacuity for --json
+// --------------------------------------------------------------------------
+
+/**
+ * The `--json` cases above, observed RED against the ways they could be vacuous.
+ *
+ * `AGENTS.md`: a check never seen red is not a check. Each case here names the
+ * hole it stands in front of -- a way the block above could stay green while
+ * the flag did nothing, or did everything, or reported a fixed literal.
+ */
+describe("continuo run admit --json, observed red", () => {
+  test("the same invocation without --json is unchanged and emits no document", () => {
+    // The hole: `--json` never read, or JSON made the new default. Either would
+    // leave every case above green -- the first if the verb always emitted the
+    // document, the second if it never did and the cases asserted on a stream
+    // nobody wrote. This is the case that fails in both directions.
+    const path = productionTemplate.copyInto(caseRoot("run-admit-json-absent-flag"));
+    const streams = captureStreams();
+
+    expect(main(admitArgv(path, { "--now-ms": String(T0) }))).toBe(0);
+
+    expect(streams.out()).toBe(
+      `admitted ${RUN_ID} in ${path}: status created, ` +
+        `${RUN_CREATED_EVENT_TYPE}/${RUN_ID} at seq 1, ` +
+        `${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${RUN_ID} at seq 2\n`,
+    );
+    expect(() => JSON.parse(streams.out()), "the human line must not be a document").toThrow();
+  });
+
+  test("a field moves when the fact under it moves", () => {
+    // The hole: a document built from literals rather than from the record.
+    // Every assertion above would pass against a hardcoded object as long as
+    // the fixtures never varied. Two admissions differing in exactly one input
+    // each -- the run id and the clock -- must differ in exactly those keys.
+    const first = productionTemplate.copyInto(caseRoot("run-admit-json-vary-a"));
+    const second = productionTemplate.copyInto(caseRoot("run-admit-json-vary-b"));
+    const streams = captureStreams();
+
+    expect(main([...admitArgv(first, { "--now-ms": String(T0) }), "--json"])).toBe(0);
+    const a = parsedDocument(streams.out());
+    const before = streams.out().length;
+    expect(
+      main([...admitArgv(second, { "--run-id": "run-2", "--now-ms": String(T1) }), "--json"]),
+    ).toBe(0);
+    const b = parsedDocument(streams.out().slice(before));
+
+    expect(b["run_id"], "run_id is echoed from the record, not fixed").not.toBe(a["run_id"]);
+    expect(b["created_at_ms"], "created_at_ms is the resolved clock, not fixed").not.toBe(
+      a["created_at_ms"],
+    );
+    expect(b["db"], "db is the path this invocation was given").not.toBe(a["db"]);
+    // And the keys whose facts did NOT move must not move: a document that
+    // varied everything would satisfy the three assertions above while telling
+    // a host nothing.
+    expect(b["status"]).toBe(a["status"]);
+    expect(
+      Object.keys(b["events"] as Record<string, unknown>),
+      "both runs carry the same two named events",
+    ).toStrictEqual(Object.keys(a["events"] as Record<string, unknown>));
+  });
+
+  test("the refusal path reads the flag too, and not only the success path", () => {
+    // The hole: `--json` read where the report is written but not where the
+    // refusal is. Every success case above would stay green while a host got
+    // `error: ...` text it cannot parse -- and this subtree has ONE refusal
+    // writer precisely so that this cannot be half-done.
+    const path = productionTemplate.copyInto(caseRoot("run-admit-json-red-refusal"));
+    const streams = captureStreams();
+
+    expect(main(admitArgv(path, { "--now-ms": String(T0) }))).toBe(0);
+    const before = streams.err().length;
+    expect(main([...admitArgv(path, { "--now-ms": String(T1) }), "--json"])).toBe(2);
+
+    const written = streams.err().slice(before);
+    expect(written.startsWith("error: "), "a refusal under --json is not the human line").toBe(
+      false,
+    );
+    expect(parsedDocument(written)["ok"]).toBe(false);
+  });
+
+  test("the vacuity check on the vacuity checks: the human line is still emitted", () => {
+    // A suite whose "no document" assertions passed because the verb printed
+    // NOTHING would satisfy every red case above while the command had stopped
+    // reporting altogether. So: without the flag, stdout is non-empty and is
+    // the sentence an operator reads.
+    const path = productionTemplate.copyInto(caseRoot("run-admit-json-red-human"));
+    const streams = captureStreams();
+
+    expect(main(admitArgv(path, { "--now-ms": String(T0) }))).toBe(0);
+
+    expect(streams.out().length, "the human report must not have gone silent").toBeGreaterThan(0);
+    expect(streams.out().startsWith(`admitted ${RUN_ID} in `)).toBe(true);
+  });
+});
+
 describe("reading the delegation record back (D-0063)", () => {
   /** Admit one run through the real writer, and hand back its plane. */
   function admitted(cliArgs: readonly string[] = []): {

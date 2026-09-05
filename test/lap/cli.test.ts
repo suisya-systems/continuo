@@ -29,6 +29,7 @@
  * drift from it.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 import process from "node:process";
@@ -41,6 +42,7 @@ import { dbCliSeams } from "../../src/control_plane/cli.js";
 import { HUMAN_GATED_RECIPIENT, NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { acquire as acquireLease } from "../../src/control_plane/lease.js";
 import { openProductionControlPlane } from "../../src/control_plane/migrator.js";
+import { pythonRepr } from "../../src/control_plane/python_repr.js";
 import {
   WORKER_ESCALATION_EVENT_TYPE,
   WORKER_ESCALATION_GATE_TYPE,
@@ -49,6 +51,7 @@ import { RUN_DELEGATION_RECORDED_EVENT_TYPE } from "../../src/control_plane/run_
 import { runCliSeams } from "../../src/control_plane/run_cli.js";
 import { EVENT_ADMITTED } from "../../src/fencing/spawn.js";
 import { lapCliSeams } from "../../src/lap/cli.js";
+import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import {
   FENCE_FILENAME,
@@ -885,6 +888,367 @@ describe("what the verb refuses, and what it leaves behind", () => {
     expect(
       eventTypes(connection).filter((type) => type === WORKSPACE_MATERIALIZED_EVENT_TYPE),
     ).toHaveLength(1);
+  });
+});
+
+// --------------------------------------------------------------------------
+
+/** The pinned shape identifier every document this verb writes carries. */
+const PERFORM_SCHEMA = "continuo.lap.perform/1";
+
+/**
+ * The one document a `--json` run wrote, parsed.
+ *
+ * The line count is asserted rather than assumed: this verb's human report is a
+ * success line plus up to two conditional `note:` lines, and the whole claim of
+ * the JSON path is that all three become ONE document. A half-converted report
+ * -- the document plus a human note beside it -- is exactly what a host reading
+ * with a line reader would choke on, and it is what this catches.
+ */
+function oneDocument(written: readonly string[]): Record<string, unknown> {
+  const text = written.join("");
+  expect(
+    text.endsWith("\n"),
+    "the document must end in exactly one newline: a host reads it a line at a time",
+  ).toBe(true);
+  expect(
+    text.trimEnd().split("\n"),
+    "a --json run writes ONE document; a second line means part of the report stayed human",
+  ).toHaveLength(1);
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
+/**
+ * Does this text look like one of the documents, rather than like a human line?
+ *
+ * Deliberately weak -- it asks only "does this parse as a JSON object" -- because
+ * its job is to separate the two SPELLINGS, and a stronger predicate would start
+ * restating the assertions the cases make about the document's contents.
+ */
+function looksLikeDocument(text: string): boolean {
+  if (!text.startsWith("{")) {
+    return false;
+  }
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The facts the spine holds about a finished lap, read back independently. */
+function spineFacts(databasePath: string): {
+  readonly baseCommit: string;
+  readonly sessionId: string;
+  readonly gateId: string;
+  readonly eventId: string;
+  readonly eventSeq: number;
+} {
+  const connection = inspect(databasePath);
+  const escalation = connection
+    .prepare("SELECT event_id, seq FROM event WHERE event_type = :type")
+    .get({ type: WORKER_ESCALATION_EVENT_TYPE }) as { event_id: string; seq: number };
+  const materialized = connection
+    .prepare("SELECT payload FROM event WHERE event_type = :type")
+    .get({ type: WORKSPACE_MATERIALIZED_EVENT_TYPE }) as { payload: string };
+  const gate = connection.prepare("SELECT gate_id FROM gate").get() as { gate_id: string };
+  const session = connection.prepare("SELECT session_id FROM session").get() as {
+    session_id: string;
+  };
+  return {
+    baseCommit: (JSON.parse(materialized.payload) as { base_commit: string }).base_commit,
+    sessionId: session.session_id,
+    gateId: gate.gate_id,
+    eventId: escalation.event_id,
+    eventSeq: escalation.seq,
+  };
+}
+
+/** `lap perform --json`, as a host drives it. */
+function jsonArgv(f: Lap, overrides: Readonly<Record<string, string>> = {}): string[] {
+  const argv = f.argv(overrides);
+  // Pushed rather than passed through `argv(overrides)`: `--json` is a
+  // `storeTrue` flag and the override map is flag-to-value pairs, so spelling it
+  // there would put a positional value after it.
+  argv.push("--json");
+  return argv;
+}
+
+describe("D-0090: the host seam, continuo lap perform --json", () => {
+  test("a clean lap answers a host with one document, and this is that document", async () => {
+    // Without this, nothing pins the document a host parses: a key could be
+    // renamed, dropped or added by an unrelated edit and every behavioural case
+    // in this file would stay green, because none of them reads the JSON path at
+    // all. `toStrictEqual` over the WHOLE object is what makes an extra key a
+    // failure rather than a silent widening of the contract.
+    const f = lap("lap-json-clean");
+    // The two setup verbs wrote their own lines into these arrays; what is
+    // under test is what `lap perform` writes, so the slate is cleared here.
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f)), f.err.join("")).toBe(0);
+    expect(
+      f.err.join(""),
+      "a successful --json run writes nothing to stderr: exit 0 means the host parses stdout",
+    ).toBe("");
+
+    // Every value is read back off the spine and off the fixture rather than
+    // off the line that produced it, so the document is checked against the
+    // facts and not against itself.
+    const facts = spineFacts(f.databasePath);
+    expect(
+      oneDocument(f.out),
+      "the document a host parses changed shape; if that was deliberate the schema id owes a /2",
+    ).toStrictEqual({
+      schema: PERFORM_SCHEMA,
+      ok: true,
+      db: f.databasePath,
+      run_id: RUN_ID,
+      workspace: f.workspace,
+      topic_branch: TOPIC_BRANCH,
+      base_commit: facts.baseCommit,
+      session_id: facts.sessionId,
+      // The walk's own name for the road it took, which is what the human line
+      // prints beside the session id too -- not a filesystem path.
+      session_path: "started",
+      gate_id: facts.gateId,
+      event_id: facts.eventId,
+      event_seq: facts.eventSeq,
+      // Both conditionals present and null: this lap was clean, and a host must
+      // not have to tell an absent key from a null one to learn that.
+      endpoint_lease_failure: null,
+      elapsed_deadline_at_ms: null,
+    });
+  });
+
+  test("the two conditional keys carry values when the lap was not clean", async () => {
+    // Without this, the document would be pinned only in the shape where both
+    // conditionals are null -- and an implementation that hardcoded `null` for
+    // both, or that omitted the keys whenever there was something to say, would
+    // pass the case above while being permanently broken for exactly the laps a
+    // host most needs to hear about.
+    //
+    // Both conditions are provoked in ONE lap because they are independent: the
+    // deadline is decided at the ingest and the lease failure at a renewal, and
+    // a lap that carries both is the one the human path prints two `note:` lines
+    // for.
+    const f = lap("lap-json-notes", "run-json-notes");
+    const deadline = T0 + 5_000;
+    const stealer = inspect(f.databasePath);
+    let reads = 0;
+    patchSeams(lapCliSeams, {
+      // The deadline must be in the future when the lap starts -- or it is
+      // refused up front -- and in the past when the gate is created. This clock
+      // jumps exactly once, on its first read, which is the acquisition of the
+      // delivery lease; every later step is on the far side of the deadline
+      // without depending on how long anything took.
+      nowMs: () => {
+        reads += 1;
+        return reads === 1 ? T0 : T0 + 10_000;
+      },
+      // The delivery lease, expired under the lap while the walk holds it. The
+      // seam is called by the orchestrator as it mints the session id, which is
+      // after the materialisation renewal `performLap` requires to have
+      // succeeded and before the one it makes by hand once the turn is over --
+      // so the failure lands exactly where `D-0073` says it costs the lease and
+      // never the report.
+      //
+      // Taken over rather than deleted or back-dated. The schema forbids
+      // deleting a lease row (a deleted row lets the next acquisition restart
+      // the epoch at 1) and CHECKs `expires_at_ms > acquired_at_ms`, so neither
+      // of those spells the state. Raising the epoch under a new holder is the
+      // state itself: `renew` matches on holder AND epoch, so the lap's token
+      // stops matching the live row and the renewal is refused exactly as it
+      // would be against a real second claimant. A second connection, because
+      // the lap owns its own.
+      sessionUuid: () => {
+        stealer
+          .prepare(
+            "UPDATE lease SET holder = :holder, epoch = epoch + 1 WHERE resource = :resource",
+          )
+          .run({ holder: "someone-else", resource: DELIVERY_LEASE_RESOURCE });
+        return randomUUID();
+      },
+    });
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--gate-deadline-at-ms": String(deadline) })),
+      f.err.join(""),
+    ).toBe(0);
+
+    const facts = spineFacts(f.databasePath);
+    expect(oneDocument(f.out)).toStrictEqual({
+      schema: PERFORM_SCHEMA,
+      ok: true,
+      db: f.databasePath,
+      run_id: "run-json-notes",
+      workspace: f.workspace,
+      topic_branch: TOPIC_BRANCH,
+      base_commit: facts.baseCommit,
+      session_id: facts.sessionId,
+      session_path: "started",
+      gate_id: facts.gateId,
+      event_id: facts.eventId,
+      event_seq: facts.eventSeq,
+      // The failure reduced to its message. An `Error` handed to a JSON encoder
+      // serialises as whatever its enumerable fields are, which for an `Error`
+      // is nothing at all -- so the object is built by hand from the one field
+      // an operator acts on.
+      endpoint_lease_failure: { message: expect.stringContaining(DELIVERY_LEASE_RESOURCE) },
+      // The operator's own number, handed back so a host can tell "my deadline
+      // was too tight" from "the worker ran long".
+      elapsed_deadline_at_ms: deadline,
+    });
+  });
+
+  test("a refusal is a document on stderr, and the exit code does not move", async () => {
+    // The half a success-only pinning would miss twice over: a host that gets
+    // exit 2 has to be able to parse the reason, and the flag must not have
+    // changed WHICH code it gets. Both spellings of the same refusal are run
+    // here so the codes are compared rather than merely asserted.
+    const human = lap("lap-json-refusal-human");
+    human.out.length = 0;
+    human.err.length = 0;
+    const humanStatus = await human.perform({ "--run-id": "no-such-run" });
+
+    const document = lap("lap-json-refusal-document");
+    document.out.length = 0;
+    document.err.length = 0;
+    const documentStatus = await mainAsync(jsonArgv(document, { "--run-id": "no-such-run" }));
+
+    expect(humanStatus, "the refusal's exit code is the contract; --json may not move it").toBe(2);
+    expect(documentStatus, "--json changed the exit code, which is a change of behaviour").toBe(
+      humanStatus,
+    );
+    expect(
+      document.out.join(""),
+      "a refused --json run must leave stdout empty: exit 2 means the host parses stderr",
+    ).toBe("");
+
+    const refusal = oneDocument(document.err);
+    expect(refusal["schema"]).toBe(PERFORM_SCHEMA);
+    expect(refusal["ok"]).toBe(false);
+    expect(refusal["db"]).toBe(document.databasePath);
+    const error = refusal["error"] as Record<string, unknown>;
+    // `class` is the refusal's own `name`, which is a hint and not a taxonomy:
+    // what a host branches on is the exit code and the message.
+    expect(typeof error["class"]).toBe("string");
+    expect(String(error["message"])).toContain("run_delegation_recorded");
+    // And the same fact reached the human spelling, so the two are two
+    // renderings of one refusal rather than two refusals.
+    expect(human.err.join("")).toMatch(/^error: /);
+    expect(human.err.join("")).toContain("run_delegation_recorded");
+  });
+});
+
+/**
+ * Anti-vacuity: the `--json` cases above, observed over runs built to break them.
+ *
+ * `AGENTS.md`'s rule is that a check never seen red is not a check. Every case
+ * above would stay green under an implementation that made JSON the only
+ * spelling, that hardcoded the document, or that taught the flag to the success
+ * path alone. Each case here names the hole it stands in front of and runs the
+ * REAL verb through `mainAsync` over a real lap.
+ */
+describe("the --json contract, observed red", () => {
+  test("without --json the report is the human line it has always been", async () => {
+    // The hole: JSON as the new default. Every case above passes `--json`, so an
+    // implementation that ignored the flag and always emitted the document would
+    // satisfy all of them while breaking every operator and every existing
+    // script -- and rule 2 of this change is that the human bytes do not move.
+    const f = lap("lap-json-absent");
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await f.perform(), f.err.join("")).toBe(0);
+
+    const written = f.out.join("");
+    expect(
+      looksLikeDocument(written),
+      "the human path emitted a JSON document: --json is not being read at all",
+    ).toBe(false);
+    expect(written).toMatch(/^performed /);
+    expect(written).toContain(`performed ${pythonRepr(RUN_ID)}`);
+    expect(written).toContain("worktree");
+    expect(written).toContain(", gate ");
+  });
+
+  test("the payload follows the record rather than a literal", async () => {
+    // The hole: a document assembled from constants. Every field of the case
+    // above is compared against the spine of the SAME run, so a builder that
+    // wrote the run id it was given and invented everything else would still be
+    // caught -- but one that echoed a fixed identifier would not be, because
+    // nothing there varies. Two laps that differ in exactly one input are what
+    // make the difference observable.
+    const first = lap("lap-json-varies-a", "run-json-varies-a");
+    first.out.length = 0;
+    expect(await mainAsync(jsonArgv(first)), first.err.join("")).toBe(0);
+    const a = oneDocument(first.out);
+
+    const second = lap("lap-json-varies-b", "run-json-varies-b");
+    second.out.length = 0;
+    expect(await mainAsync(jsonArgv(second)), second.err.join("")).toBe(0);
+    const b = oneDocument(second.out);
+
+    expect(a["run_id"]).toBe("run-json-varies-a");
+    expect(b["run_id"], "the run id in the document is not the run the host asked for").toBe(
+      "run-json-varies-b",
+    );
+    // And the fields the operator did NOT choose moved with the lap too: a
+    // document whose gate and session came from anywhere but this run's record
+    // would repeat here.
+    expect(a["gate_id"]).not.toBe(b["gate_id"]);
+    expect(a["session_id"]).not.toBe(b["session_id"]);
+    expect(a["event_id"]).not.toBe(b["event_id"]);
+    expect(a["workspace"]).not.toBe(b["workspace"]);
+  });
+
+  test("a second refusal family is a document too, not just the one that was tested", async () => {
+    // The hole: `--json` taught at a call site instead of to `refuse()`. This
+    // verb funnels six refusal families through one writer; a flag read on the
+    // path somebody happened to test would leave the rest human, and every
+    // success case would stay green. `--turn-timeout-ms -1` is a
+    // `LapUsageError` -- a different family, raised from a different depth, than
+    // the unadmitted run above -- and it must come out as the same document.
+    const f = lap("lap-json-second-family");
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "-1" }))).toBe(2);
+    expect(f.out.join(""), "a refused --json run must leave stdout empty").toBe("");
+
+    const refusal = oneDocument(f.err);
+    expect(refusal["ok"]).toBe(false);
+    expect(refusal["schema"]).toBe(PERFORM_SCHEMA);
+    expect(String((refusal["error"] as Record<string, unknown>)["message"])).toContain(
+      "timeout_ms",
+    );
+    // Nothing was built, exactly as in the human spelling: `--json` changes the
+    // bytes and never what the verb does.
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("the predicate the cases above rest on tells the two spellings apart", async () => {
+    // The vacuity check on the vacuity checks. `looksLikeDocument` returning
+    // `false` for everything would make the human case pass over a document, and
+    // returning `true` for everything would make it fail over a human line
+    // nobody had broken. Both spellings of ONE refusal are put through it here,
+    // so the predicate is observed separating them rather than asserted to.
+    const f = lap("lap-json-predicate");
+    f.err.length = 0;
+    expect(await f.perform({ "--run-id": "no-such-run" })).toBe(2);
+    const humanLine = f.err.join("");
+
+    f.err.length = 0;
+    expect(await mainAsync(jsonArgv(f, { "--run-id": "no-such-run" }))).toBe(2);
+    const documentLine = f.err.join("");
+
+    expect(looksLikeDocument(humanLine)).toBe(false);
+    expect(looksLikeDocument(documentLine)).toBe(true);
   });
 });
 

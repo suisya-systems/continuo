@@ -1,0 +1,206 @@
+import { describe, expect, test } from "vitest";
+// The derivation, imported as a pure function. The module also exports
+// `readGitRevision`, which spawns git -- nothing here calls it, and no case in
+// this file starts a child process. `scripts/run-suite.mjs` needs no
+// classification for that: its walk follows imports only within `test/`, and
+// this one leaves it.
+import { deriveRevision } from "../../scripts/lib/build-revision.mjs";
+import { formatVersionLine, REVISION_PATTERN, REVISION_UNKNOWN } from "../../src/about.js";
+import { BUILD_REVISION } from "../../src/build_revision.js";
+
+/**
+ * `--version` carries the build's git revision, and it is derived at build time
+ * (`D-0090`).
+ *
+ * **What this file can and cannot pin.** The mechanism has two halves and they
+ * live in different layouts. The half here is everything that can be decided
+ * without a build: the shape of the line, the alphabet a revision may use, and
+ * the derivation's behaviour on each way git can fail to answer. The other half
+ * -- that a BUILT `dist/` prints a real commit rather than the placeholder --
+ * needs `dist/`, so it lives beside the existing built-CLI case in
+ * `test/measurement/cli.test.ts`. The pair is the executable statement of the
+ * design: a source-tree run says `unknown`, a build says a sha, and neither half
+ * can pass if the other's mechanism is broken.
+ *
+ * **Nothing here names the current commit.** A case that pinned a sha would
+ * have to be edited by every rebase, which is how a check stops being read.
+ * `deriveRevision` is a pure function over three already-collected git results
+ * precisely so the interesting rows can be written as a table.
+ *
+ * **ASCII only**, comments and test names included, per
+ * `docs/cli-output-policy.md`.
+ */
+
+/** A stand-in commit. Any 40 hex digits; the value is never asserted against git. */
+const SHA = "a".repeat(40);
+/** A second one, so a case can show the output tracking its input. */
+const OTHER_SHA = "b".repeat(40);
+
+const ROOT = "/repo/continuo";
+const CLEAN = { status: 0, stdout: "" };
+const AT_ROOT = { status: 0, stdout: ROOT };
+
+/** `deriveRevision`'s inputs, with the clean-tree case as the default. */
+function derive(overrides: {
+  toplevel?: { status: number | null; stdout: string; error?: unknown };
+  head?: { status: number | null; stdout: string; error?: unknown };
+  status?: { status: number | null; stdout: string; error?: unknown };
+  root?: string;
+}): string {
+  return deriveRevision({
+    toplevel: AT_ROOT,
+    head: { status: 0, stdout: SHA },
+    status: CLEAN,
+    root: ROOT,
+    ...overrides,
+  });
+}
+
+describe("the --version line", () => {
+  test("carries the name, the version and the revision", () => {
+    // Without this the line's shape is decided only by whatever the CLI happens
+    // to emit, and a host parsing it has nothing to hold the build to.
+    expect(
+      formatVersionLine("@suisya-systems/continuo", "0.0.0", SHA),
+      "the --version line is a host-facing contract (D-0090); changing its shape " +
+        "breaks every host parsing it, so change the decision entry too",
+    ).toBe(`@suisya-systems/continuo 0.0.0 (rev ${SHA})`);
+  });
+
+  test("keeps the (rev ...) suffix when the revision is unknown", () => {
+    // The hole: the tempting implementation elides the suffix when there is
+    // nothing to say, which makes the field OPTIONAL for every host that parses
+    // this line -- to save a word in the one case where the answer matters
+    // least. A host must never have to handle a missing field.
+    expect(
+      formatVersionLine("pkg", "1.2.3", REVISION_UNKNOWN),
+      "the revision is always present, even when it is not known; an absent " +
+        "suffix would make the field optional for every host",
+    ).toBe("pkg 1.2.3 (rev unknown)");
+  });
+
+  test("tracks the revision it is given", () => {
+    // Anti-vacuity for the two cases above: a formatter that ignored its third
+    // argument would satisfy either one alone if the expectation were written
+    // to match it.
+    expect(formatVersionLine("p", "v", SHA)).not.toBe(formatVersionLine("p", "v", OTHER_SHA));
+  });
+});
+
+describe("the revision alphabet", () => {
+  test.each([
+    ["a bare commit", SHA, true],
+    ["a dirty commit", `${SHA}-dirty`, true],
+    ["the unknown literal", REVISION_UNKNOWN, true],
+    ["an abbreviated commit", "a1b2c3d", false],
+    ["an upper-case commit", SHA.toUpperCase(), false],
+    ["a branch name", "main", false],
+    ["a shell fragment", '";process.exit(1);//', false],
+    // Constructed rather than typed, so this file stays ASCII while the value
+    // at runtime does not (docs/cli-output-policy.md).
+    ["a non-ASCII string", "\u3042", false],
+  ])("%s is %s", (_label, candidate, accepted) => {
+    // The generator checks this pattern BEFORE writing the value into a
+    // JavaScript module. Without it the module is an injection seam, and the
+    // generated bytes -- which the ASCII scan cannot see, because it skips
+    // dist/ -- would be unguarded.
+    expect(
+      REVISION_PATTERN.test(candidate),
+      "scripts/generate-revision.mjs writes this value verbatim into " +
+        "dist/build_revision.js, so the pattern is what keeps the module both " +
+        "ASCII and free of injected code",
+    ).toBe(accepted);
+  });
+});
+
+describe("deriving a revision from git", () => {
+  test("a clean checkout is its commit", () => {
+    expect(derive({})).toBe(SHA);
+  });
+
+  test("a dirty checkout is marked", () => {
+    // A build from a modified tree is not reproducible from the commit it
+    // names, and the mark is the only place that can be said.
+    expect(derive({ status: { status: 0, stdout: " M src/cli.ts\n" } })).toBe(`${SHA}-dirty`);
+  });
+
+  test("an untracked file counts as dirty", () => {
+    // Untracked is deliberate: an untracked .ts under src/ is compiled into
+    // dist/ exactly like a tracked one, so a tree holding one does not match
+    // its commit.
+    expect(derive({ status: { status: 0, stdout: "?? src/scratch.ts\n" } })).toBe(`${SHA}-dirty`);
+  });
+
+  test("a git that will not run yields unknown", () => {
+    // The hole: a build on a machine with no git must still build. It reports
+    // that it does not know its revision rather than failing or guessing.
+    expect(derive({ toplevel: { status: null, stdout: "", error: new Error("ENOENT") } })).toBe(
+      REVISION_UNKNOWN,
+    );
+  });
+
+  test("a repository with no commit yet yields unknown", () => {
+    expect(derive({ head: { status: 128, stdout: "" } })).toBe(REVISION_UNKNOWN);
+  });
+
+  test("a DIFFERENT repository's commit is refused, though git answered", () => {
+    // The hole this stands in front of is the only failure in the set that is
+    // confidently WRONG rather than merely absent, and it is the reason the
+    // toplevel is checked before the commit. A continuo tree vendored inside
+    // some unrelated outer repository gets a perfectly successful
+    // `rev-parse HEAD` -- for the OUTER repository -- and without this guard the
+    // build would ship a stranger's sha as its own identity. Note the head
+    // result here is a valid commit: a derivation that read it would go green.
+    expect(
+      derive({ toplevel: { status: 0, stdout: "/repo/some-monorepo" } }),
+      "a revision derived from a repository that is not this package's own is " +
+        "worse than no revision, because it is believable",
+    ).toBe(REVISION_UNKNOWN);
+  });
+
+  test("a status that could not run is dirty rather than clean", () => {
+    // Failing toward -dirty can only overstate the warning. Failing toward
+    // clean would produce a build claiming to match a commit it may not.
+    expect(derive({ status: { status: 1, stdout: "" } })).toBe(`${SHA}-dirty`);
+  });
+
+  test("every derivation is a value this build may ship", () => {
+    // Anti-vacuity across the whole table: a derivation that returned some
+    // fourth kind of string would satisfy the rows above that only assert
+    // `unknown`, while writing something unshippable into a module.
+    for (const candidate of [
+      derive({}),
+      derive({ status: { status: 0, stdout: " M x\n" } }),
+      derive({ head: { status: 128, stdout: "" } }),
+      derive({ toplevel: { status: 0, stdout: "/elsewhere" } }),
+    ]) {
+      expect(REVISION_PATTERN.test(candidate), `${candidate} is not a shippable revision`).toBe(
+        true,
+      );
+    }
+  });
+
+  test("the derivation tracks the commit it is given", () => {
+    // Anti-vacuity for the happy path: a function that returned a constant
+    // would pass "a clean checkout is its commit" as written.
+    expect(derive({ head: { status: 0, stdout: OTHER_SHA } })).toBe(OTHER_SHA);
+  });
+});
+
+describe("src/build_revision.ts", () => {
+  test("is the placeholder, because a source-tree run is not a build", () => {
+    // The hole: if the build ever wrote into src/ instead of dist/, this would
+    // hold a real sha -- and every build would dirty the tree it was produced
+    // from, which would make the NEXT build report -dirty for no reason. This
+    // suite runs over src/, so this case is where that regression surfaces.
+    expect(
+      BUILD_REVISION,
+      "src/build_revision.ts is committed and must never be rewritten by a " +
+        "build; scripts/generate-revision.mjs overwrites dist/build_revision.js",
+    ).toBe(REVISION_UNKNOWN);
+  });
+
+  test("is a shippable revision whatever it holds", () => {
+    expect(REVISION_PATTERN.test(BUILD_REVISION)).toBe(true);
+  });
+});

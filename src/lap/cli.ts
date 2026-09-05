@@ -40,6 +40,24 @@
  * and why the usage errors are among them here when they are not in
  * `run_cli.ts`.
  *
+ * **`--json` changes the bytes and nothing else.** A host driving this verb as a
+ * subprocess reads one document in the envelope `src/cli/json_output.ts`
+ * declares, under the pinned schema id {@link PERFORM_SCHEMA}. Without the flag
+ * every byte this file writes is what it has always been. The exit codes, the
+ * refusal families {@link isOperatorRefusal} names, the order of the steps and
+ * the `finally` that closes the handle are identical either way -- this verb
+ * materialises a worktree and starts a fenced child, and an output flag that
+ * could reach any of that would be a flag that decides what happened rather
+ * than how it is spelled.
+ *
+ * **The whole report is one document, and this verb is the one where that is a
+ * claim worth making.** `report()` writes a success line plus up to two
+ * conditional `note:` lines, and it writes all of them after the lap is over --
+ * there is no streaming progress to interleave. So the document has no partial
+ * state to represent, and the two notes become two always-present keys rather
+ * than two optional ones: a host must not have to tell "absent" from "null" to
+ * learn that the lap was clean.
+ *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every string
  * here reaches `--help` on a cp932 console, where a character the console cannot
  * encode is a crash rather than a smudge.
@@ -47,6 +65,7 @@
 
 import { randomUUID } from "node:crypto";
 
+import { addJsonArgument, jsonRequested, refusalLine, successLine } from "../cli/json_output.js";
 import {
   ArgparseExit,
   type ArgumentParser,
@@ -167,6 +186,17 @@ const PERFORM_DESCRIPTION =
   "terminal report, and open the human gate over it. Refuses with the reason " +
   "and exits 2 when a step will not proceed.";
 
+/**
+ * The pinned shape identifier this subtree's `--json` documents carry.
+ *
+ * `continuo.lap.perform/1`, and the `/1` is the whole of the version story
+ * `src/cli/json_output.ts` states: a field added later leaves it alone, because
+ * an unread key is one every JSON reader already handles, and a change a host
+ * cannot absorb -- a key renamed, a null that starts meaning something else --
+ * becomes `/2` so the two can be told apart by reading one key.
+ */
+const PERFORM_SCHEMA = "continuo.lap.perform/1";
+
 /** Milliseconds between transcript reads when --poll-interval-ms is omitted. */
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
@@ -261,9 +291,31 @@ function isOperatorRefusal(error: unknown): error is Error {
   );
 }
 
-/** Report a refusal on stderr and stop, rather than letting it escape. */
-function refuse(error: Error): never {
-  lapCliSeams.writeError(`error: ${error.message}\n`);
+/**
+ * Report a refusal on stderr and stop, rather than letting it escape.
+ *
+ * **The one place this verb refuses, and the reason `--json` is taught here
+ * rather than at the call site.** Every family {@link isOperatorRefusal} names
+ * -- four subsystems' taxonomies plus the two usage-error families -- funnels
+ * through this function, so teaching it the flag makes "a refusal a host can
+ * parse" a property of the subtree rather than of whichever branch a particular
+ * refusal took. A flag read at the call site would have been read on the paths
+ * somebody looked at and missed on the rest, leaving `LeaseHeld`, a timed-out
+ * turn and a worker CLI that will not start emitting human text under `--json`
+ * while every success case stayed green.
+ *
+ * `db` is a parameter because the document carries it on refusals for the same
+ * reason it carries it on successes: a host driving several control planes
+ * cannot attribute a refusal it read from a log without it, and the human line
+ * carries the path only when the message happens to quote it.
+ *
+ * The stream, the exit code and the fact that this throws are identical either
+ * way. `--json` changes the bytes, never the control flow.
+ */
+function refuse(error: Error, db: string, json: boolean): never {
+  lapCliSeams.writeError(
+    json ? refusalLine(PERFORM_SCHEMA, db, error) : `error: ${error.message}\n`,
+  );
   throw new ArgparseExit(2, "refused lap");
 }
 
@@ -304,8 +356,53 @@ function gateOptionsOf(args: Namespace): readonly string[] {
  * that a human is now being asked something and where to find the answer's
  * subject. The workspace and the session are on it too, because they are what
  * the next two steps of the lap operate on.
+ *
+ * **Under `--json` the same facts are one document**, built field by field off
+ * the `LapOutcome` record rather than by parsing the line above: the two
+ * spellings are two renderings of one record, and a document assembled from the
+ * text would be a rendering of a rendering.
+ *
+ * **`pythonRepr` is deliberately absent from the JSON path**, and its absence is
+ * not the guard being forgotten. The quoting below exists because a POSIX
+ * filename may hold a newline or a terminal control sequence and a one-line
+ * report is forgeable by one; a JSON document is not, because
+ * `asciiJsonLine` escapes every such byte on its way out and a host parses the
+ * result instead of reading it. Applying both would put a repr's own quotes
+ * inside a JSON string, which is a value naming a path nothing on the host's
+ * side can open.
  */
-function report(path: string, outcome: LapOutcome): void {
+function report(path: string, outcome: LapOutcome, json: boolean): void {
+  if (json) {
+    lapCliSeams.write(
+      successLine(PERFORM_SCHEMA, path, {
+        run_id: outcome.intent.runId,
+        workspace: outcome.materialized.workspace,
+        topic_branch: outcome.intent.topicBranch,
+        base_commit: outcome.materialized.baseCommit,
+        session_id: outcome.orchestration.sessionId,
+        // The walk's own name for the road it took -- `started`, `respawned`,
+        // `resumed` -- and not a filesystem path, which is what the human line
+        // beside the session id says too.
+        session_path: outcome.orchestration.path,
+        gate_id: outcome.ingested.gateId,
+        event_id: outcome.ingested.eventId,
+        event_seq: outcome.ingested.eventSeq,
+        // **Always present, and `null` when there is nothing to say.** These are
+        // the two conditional `note:` lines below, and a host that had to tell
+        // an absent key from a null one to learn that the lap was clean would be
+        // reading the absence of evidence as evidence. The failure is reduced to
+        // its message rather than carried as the Error it is: `successLine` takes
+        // primitives, and a class instance handed to a JSON encoder is whatever
+        // its enumerable fields happen to be -- for an `Error`, nothing.
+        endpoint_lease_failure:
+          outcome.endpointLeaseFailure === null
+            ? null
+            : { message: outcome.endpointLeaseFailure.message },
+        elapsed_deadline_at_ms: outcome.elapsedDeadlineAtMs,
+      }),
+    );
+    return;
+  }
   // **The paths are quoted on the SUCCESS line too, and that is the half this
   // verb had missed.** Every refusal below already goes out through `pythonRepr`
   // -- the run identifier, the parser's diagnostic, the containment paths -- on
@@ -382,6 +479,10 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
   const python = optionalText(args, "python");
   const gitTimeoutMs = optionalInt(args, "git_timeout_ms");
   const deadlineAtMs = optionalInt(args, "gate_deadline_at_ms");
+  // Read once, at the top, and carried to the two places that write bytes. The
+  // value cannot change while the lap runs, and reading it inside `report` or
+  // `refuse` would make two functions ask the namespace the same question.
+  const json = jsonRequested(args);
 
   try {
     const connection = openProductionControlPlane(path);
@@ -419,7 +520,7 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         gateOptions: gateOptionsOf(args),
         ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
       });
-      report(path, outcome);
+      report(path, outcome, json);
     } finally {
       // Closed before the session is stopped, so a stop that hangs cannot hold
       // the database open: everything durable this verb writes has already
@@ -428,7 +529,7 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
     }
   } catch (error) {
     if (isOperatorRefusal(error)) {
-      refuse(error);
+      refuse(error, path, json);
     }
     throw error;
   }
@@ -522,6 +623,12 @@ export function addSubparsers(sub: Subparsers): void {
     help: GATE_OPTION_HELP,
   });
   addOptionalInt(perform, "--gate-deadline-at-ms", "gate_deadline_at_ms", GATE_DEADLINE_HELP);
+
+  // Declared by `cli/json_output.ts` rather than here: this is the one flag in
+  // the CLI whose whole value is that every host-facing verb spells it
+  // identically, and that module says why it is the deliberate exception to
+  // "a subtree declares its own flags".
+  addJsonArgument(perform);
 
   // `asynchronous` is read by `dispatch` BEFORE the handler is called: this
   // verb materialises a worktree, publishes a fence and starts a child, and a
