@@ -25,7 +25,7 @@ structural-capability move section 4 makes twice.
 
 | Subject | Revision / version read |
 |---|---|
-| continuo | `2d4d2a4` (`origin/main`), the tip that carries `D-0089` |
+| continuo | `78d459e` (`origin/main`), the tip that carries `D-0090` |
 | Claude Code | `2.1.261`, the version the 2026-09-05 measurement was taken at |
 | `codex exec` | `codex-cli 0.147.0`, from continuo#97's first comment |
 | interlock | frozen at `65f36c5`; read for what the port inherited, never for a decision (`D-0036`) |
@@ -561,17 +561,18 @@ not need it relaxed.
 
 Proposed, not written to [`DECISIONS.md`](../../DECISIONS.md).
 
-**On the number.** The shared control-plane band (`D-0019`..`D-0099`) is free from `D-0090` at
-`2d4d2a4`: `D-0089` was taken by the fencing layer's `Edit(...)` family entry while this was being
-written, and the number here was confirmed against `DECISIONS.md` on rebasing onto that tip. It is
-confirmed again at the moment the entry is actually written, because nothing stops another change
-taking it first. The band is the shared one rather than messagebus's `D-05xx` because the decision binds four
-belts at once: messagebus, session, lap and the host. Precedent for the number moving: this
-document's neighbour drafted `D-0087` and landed as `D-0088`.
+**On the number.** The shared control-plane band (`D-0019`..`D-0099`) is free from `D-0091` at
+`78d459e`, which is where it was last confirmed. The draft has now been renumbered twice while it
+sat unmerged: `D-0089` went to the fencing layer's `Edit(...)` family entry, and `D-0090` to the
+host-driven CLI seam. It is confirmed again at the moment the entry is actually written, because
+nothing stops another change taking it first -- and on this evidence something usually does. The
+band is the shared one rather than messagebus's `D-05xx` because the decision binds four belts at
+once: messagebus, session, lap and the host. Precedent for the number moving: this document's
+neighbour drafted `D-0087` and landed as `D-0088`.
 
 ---
 
-### D-0090 (draft) -- A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement
+### D-0091 (draft) -- A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement
 
 **Context.** `src/messagebus/index.ts` and `src/messagebus/endpoint.ts` each derive worker-outbound
 delivery from interlock's F1: *there is no non-interactive way to push a message into a running
@@ -700,7 +701,7 @@ rather than deciding: nothing else here depends on its answer, and the mechanism
 
 | | question | recommendation | if overturned |
 |---|---|---|---|
-| **D1** | Is the draft entry above the settlement of continuo#97? | accept as `D-0090` | the two comment corrections still stand; they are true under A as well as B |
+| **D1** | Is the draft entry above the settlement of continuo#97? | accept as `D-0091` | the two comment corrections still stand; they are true under A as well as B |
 | **D2** | Structural capability on `ClaudeCliSessionProvider`, or a sixth S1 verb? | structural, per `D-0056`/`D-0059` | a sixth verb reopens interlock `D-0021` and needs `provider-contract.test.ts` changed, which is a separate decision |
 | **D3** | Is 30 seconds the hint-write cadence? | yes, with the arithmetic in 7.2 and the latency it actually buys in 7.3 | any other number, provided it is *a* number and is neither `--poll-interval-ms` nor `D-0079`'s |
 | **D4** | Does the start prompt become a record field before the pipe is enabled? | yes -- 9.1 consequence 3 deletes the only durable copy otherwise | measure whether `--input-format stream-json` can coexist with an argv prompt first; if it can, D4 is moot |
