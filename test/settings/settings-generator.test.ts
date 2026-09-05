@@ -1364,19 +1364,29 @@ describe("structured anchors, role_kind and Pattern B context", () => {
     expect(error.message).toContain("unknown role_kind");
   });
 
-  test("a structured entry with an invalid anchor is kept untouched", () => {
+  test("a structured entry with an invalid anchor is kept untouched, and refuses (D-0094)", () => {
+    // ADAPTED (D-0094). The source asserts the PASS leaves the entry alone --
+    // no anchoring, no substitution, no suppression -- and then that the entry
+    // is WRITTEN. The first half is unchanged and is what the refusal quotes:
+    // an entry the pass had touched would appear in the message as something
+    // other than the dict authored below. The second half is the premise
+    // D-0093 measured false, so the document is refused instead of written.
     const root = tmpPath();
     const workerDir = workerDirIn(root);
     const weird = { anchor: "moon", path: "x", suppressOnSymlinkEscape: true };
     const schema = { worker_roles: { demo: sandboxRole({ denyRead: [weird] }) } };
-    const result = renderRoleWithMetadata(schema, {
-      role: "demo",
-      workerDir,
-      claudeOrgPath: join(root, "co"),
-      wslDetector: () => false,
-    });
-    expect(result.sandbox.suppressions).toStrictEqual([]);
-    expect(filesystemOf(result)["denyRead"]).toStrictEqual([weird]);
+    const error = expectRaises(PyValueError, () =>
+      renderRoleWithMetadata(schema, {
+        role: "demo",
+        workerDir,
+        claudeOrgPath: join(root, "co"),
+        wslDetector: () => false,
+      }),
+    );
+    expect(error.message).toContain("sandbox.filesystem.denyRead[0]");
+    expect(error.message, "quoted as authored, so the pass demonstrably left it alone").toContain(
+      "{'anchor': 'moon', 'path': 'x', 'suppressOnSymlinkEscape': True}",
+    );
   });
 
   test("a legacy absolute string normalises to anchor=absolute", () => {
@@ -1437,19 +1447,27 @@ describe("structured anchors, role_kind and Pattern B context", () => {
 });
 
 describe("strict bool, malformed absolute, additionalDirectories and CLI plumbing", () => {
-  test("a non-bool suppressOnSymlinkEscape passes the entry through as-is", () => {
+  test("a non-bool suppressOnSymlinkEscape passes the entry through as-is, and refuses (D-0094)", () => {
+    // ADAPTED (D-0094), on the same terms as the invalid-anchor case above: the
+    // source's "passes through as-is" is what the refusal quotes, and its "and
+    // is written" is the half D-0093 falsified. The escaping realpath is kept
+    // so the entry still travels the branch that would have suppressed it had
+    // `normalizeSandboxEntry` accepted the string flag.
     const workerDir = "/home/u/work/wd";
     const bad = { anchor: "worker_dir", path: "secrets.env", suppressOnSymlinkEscape: "false" };
     const schema = { worker_roles: { demo: sandboxRole({ denyRead: [bad] }) } };
-    const result = renderRoleWithMetadata(schema, {
-      role: "demo",
-      workerDir,
-      claudeOrgPath: "/home/u/co",
-      realpathFn: escapingRealpath(workerDir, "/mnt/c/Users/u/work/wd"),
-      wslDetector: () => true,
-    });
-    expect(result.sandbox.suppressions).toStrictEqual([]);
-    expect(filesystemOf(result)["denyRead"]).toStrictEqual([bad]);
+    const error = expectRaises(PyValueError, () =>
+      renderRoleWithMetadata(schema, {
+        role: "demo",
+        workerDir,
+        claudeOrgPath: "/home/u/co",
+        realpathFn: escapingRealpath(workerDir, "/mnt/c/Users/u/work/wd"),
+        wslDetector: () => true,
+      }),
+    );
+    expect(error.message).toContain(
+      "{'anchor': 'worker_dir', 'path': 'secrets.env', 'suppressOnSymlinkEscape': 'false'}",
+    );
   });
 
   test("_normalize_sandbox_entry rejects non-bool suppress flags", () => {
@@ -1461,18 +1479,27 @@ describe("strict bool, malformed absolute, additionalDirectories and CLI plumbin
     ).toBeNull();
   });
 
-  test("anchor=absolute with a relative path is malformed and kept as-is", () => {
+  test("anchor=absolute with a relative path is malformed, kept as-is, and refuses (D-0094)", () => {
+    // ADAPTED (D-0094). Unchanged: the malformed entry is NOT anchored against
+    // CWD or against any other base -- the refusal quotes `etc/shadow`, not a
+    // resolved path. Changed: the document is refused rather than written,
+    // because the reader that was supposed to surface this to the operator
+    // accepts the file and voids the fence instead (D-0093).
     const bad = { anchor: "absolute", path: "etc/shadow", suppressOnSymlinkEscape: true };
     const schema = { worker_roles: { demo: sandboxRole({ denyRead: [bad], additional: [] }) } };
-    const result = renderRoleWithMetadata(schema, {
-      role: "demo",
-      workerDir: "/home/u/wd",
-      claudeOrgPath: "/home/u/co",
-      realpathFn: (p) => p,
-      wslDetector: () => false,
-    });
-    expect(result.sandbox.suppressions).toStrictEqual([]);
-    expect(filesystemOf(result)["denyRead"]).toStrictEqual([bad]);
+    const error = expectRaises(PyValueError, () =>
+      renderRoleWithMetadata(schema, {
+        role: "demo",
+        workerDir: "/home/u/wd",
+        claudeOrgPath: "/home/u/co",
+        realpathFn: (p) => p,
+        wslDetector: () => false,
+      }),
+    );
+    expect(error.message).toContain(
+      "{'anchor': 'absolute', 'path': 'etc/shadow', 'suppressOnSymlinkEscape': True}",
+    );
+    expect(error.message, "the refusal names what a run would lose").toContain("D-0093");
   });
 
   test("an absent additionalDirectories stays absent", () => {
@@ -2464,9 +2491,17 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
   test("every rebuild on the render path carries the spelling (target-only)", () => {
     // Reaches the branches a render with no suppression and no rewrite passes
     // through: the role-template copy, `substitute`'s object and array
-    // branches, `list(...)` over each deny array, the `additionalDirectories`
-    // map, and the two rebuilds inside the suppression evaluator. One float per
-    // container, so a missing carry names the container it was missing from.
+    // branches, the `additionalDirectories` map, and the two rebuilds inside
+    // the suppression evaluator. One float per container, so a missing carry
+    // names the container it was missing from.
+    //
+    // The deny arrays carry no float HERE since D-0094: a number that survives
+    // to the end of a render is refused rather than written, so their two
+    // branches -- `list(...)` over the array, and the filtered KEPT list -- are
+    // pinned by the two cases below instead, which read the spelling out of the
+    // refusal. Nothing is lost: `pyTypeNameOf` consults the same record on the
+    // same final container, so a dropped carry turns `float` into `int` there
+    // exactly as it turns `5.0` into `5` here.
     const root = tmpPath();
     const schemaPath = join(root, "schema.json");
     writeFileSync(
@@ -2481,7 +2516,7 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
               enabled: true,
               filesystem: {
                 fsFloat: "@4.0@",
-                denyRead: ["@5.0@"],
+                denyRead: [],
                 denyWrite: [],
                 additionalDirectories: ["@0.0@"],
               },
@@ -2507,7 +2542,6 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
     expect(text, "substitute's array branch").toContain("2.0");
     expect(text, "substitute's object branch, on the sandbox").toContain('"sandboxFloat": 3.0');
     expect(text, "the filesystem rebuild in the suppression evaluator").toContain('"fsFloat": 4.0');
-    expect(text, "list() over denyRead, then the kept list").toContain("5.0");
     // `0.0` rather than another positive float: a truthy non-string in this
     // array is a `TypeError` from `os.path.normpath` one line later, exactly as
     // it is in the source, so a falsy one is the only number that can sit here.
@@ -2519,8 +2553,13 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
     // merely missing. `kept` is a FILTERED copy, so its indices do not line up
     // with the input's: carrying the record wholesale hands element 0 of `kept`
     // the spelling recorded for element 0 of the INPUT -- the suppressed
-    // string, which has none -- and the number is then classified by value and
-    // written `1`.
+    // string, which has none -- and the number is then classified by value.
+    //
+    // Read out of the refusal since D-0094, because a number in a deny array is
+    // no longer written. The two assertions are the same two facts the file
+    // assertion carried: `[0]` says the string was suppressed and the number
+    // moved down a slot, and `float` says the record moved WITH it. A wholesale
+    // carry says `int` here for exactly the reason it wrote `1` there.
     const root = tmpPath();
     const schemaPath = join(root, "schema.json");
     writeFileSync(
@@ -2531,17 +2570,46 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
       { encoding: "utf8" },
     );
     const workerDir = "/home/u/work/wd";
-    const result = renderRoleWithMetadata(loadSchema(schemaPath), {
-      role: "demo",
-      workerDir,
-      claudeOrgPath: "/home/u/co",
-      realpathFn: escapingRealpath(workerDir, "/mnt/c/Users/u/work/wd"),
-      wslDetector: () => true,
-    });
-    // The string was suppressed, so the number moved from index 1 to index 0.
-    expect(result.sandbox.suppressions).toHaveLength(1);
-    expect(filesystemOf(result)["denyRead"]).toStrictEqual([1]);
-    expect(pyJsonDumps(result.settings, { indent: 2, ensureAscii: false })).toContain("1.0");
+    const error = expectRaises(PyValueError, () =>
+      renderRoleWithMetadata(loadSchema(schemaPath), {
+        role: "demo",
+        workerDir,
+        claudeOrgPath: "/home/u/co",
+        realpathFn: escapingRealpath(workerDir, "/mnt/c/Users/u/work/wd"),
+        wslDetector: () => true,
+      }),
+    );
+    expect(error.message).toContain(
+      "sandbox.filesystem.denyRead[0] would reach the child as float",
+    );
+  });
+
+  test("list() over a deny array carries the spelling into the refusal (target-only)", () => {
+    // Branch 3 (`pyList` over the deny array) and branch 7 (the KEPT list) on a
+    // render that suppresses nothing, so the number reaches the post-condition
+    // through the plain path rather than the re-keyed one above. Drop either
+    // carry and `pyTypeNameOf` classifies by value: `int`, not `float`.
+    const root = tmpPath();
+    const schemaPath = join(root, "schema.json");
+    writeFileSync(
+      schemaPath,
+      '{"worker_roles": {"demo": {"sandbox": {"enabled": true, "filesystem": ' +
+        '{"denyRead": [], "denyWrite": [5.0], "additionalDirectories": []}, ' +
+        '"failIfUnavailable": false}}}}',
+      { encoding: "utf8" },
+    );
+    const error = expectRaises(PyValueError, () =>
+      renderRoleWithMetadata(loadSchema(schemaPath), {
+        role: "demo",
+        workerDir: "/home/u/work/wd",
+        claudeOrgPath: "/home/u/co",
+        realpathFn: (p) => p,
+        wslDetector: () => false,
+      }),
+    );
+    expect(error.message).toContain(
+      "sandbox.filesystem.denyWrite[0] would reach the child as float",
+    );
   });
 
   test("the canonicalising rebuilds carry the spelling too (target-only)", () => {
@@ -2562,7 +2630,7 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
               enabled: false,
               filesystem: {
                 fsFloat: "@4.0@",
-                denyRead: ["@5.0@", "/home/u/link/y"],
+                denyRead: ["/home/u/link/y"],
                 denyWrite: [],
               },
             },
@@ -2593,7 +2661,36 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
     expect(text, "canonicalizePermissionDeny's output list").toContain("2.0");
     expect(text, "the sandbox rebuild in the canonicaliser").toContain('"sandboxFloat": 3.0');
     expect(text, "the filesystem rebuild in the canonicaliser").toContain('"fsFloat": 4.0');
-    expect(text, "canonicalizeSandboxDeny's output list").toContain("5.0");
+  });
+
+  test("canonicalizeSandboxDeny's output list carries the spelling too (target-only)", () => {
+    // Branch 11, split off from the case above because its float can no longer
+    // ride in the rendered file (D-0094). The rewrite is still forced, so the
+    // canonicaliser's `out` -- not the suppression evaluator's `kept` -- is the
+    // last container to hold the number before the post-condition reads it.
+    const root = tmpPath();
+    const schemaPath = join(root, "schema.json");
+    writeFileSync(
+      schemaPath,
+      '{"worker_roles": {"demo": {"sandbox": {"enabled": false, "filesystem": ' +
+        '{"denyRead": [5.0, "/home/u/link/y"], "denyWrite": []}}}}}',
+      { encoding: "utf8" },
+    );
+    patchSeam(generatorSeams, "absoluteSymlinkInChain", (path: string) =>
+      path.startsWith("/home/u/link") ? "/home/u/link" : null,
+    );
+    const error = expectRaises(PyValueError, () =>
+      renderRoleWithMetadata(loadSchema(schemaPath), {
+        role: "demo",
+        workerDir: "/home/u/work/wd",
+        claudeOrgPath: "/home/u/co",
+        realpathFn: escapingRealpath("/home/u/link", "/mnt/c/link"),
+        wslDetector: () => false,
+      }),
+    );
+    expect(error.message).toContain(
+      "sandbox.filesystem.denyRead[0] would reach the child as float",
+    );
   });
 
   test("a placeholder written twice in one string is substituted twice (target-only)", () => {
@@ -2651,22 +2748,29 @@ describe("the two in-pass repairs (target-only, D-0213)", () => {
     expect(typeof kept[0], "the contract's arrays are lists of STRINGS").toBe("string");
   });
 
-  test("anchor=absolute with a relative path is still kept as the dict (target-only)", () => {
+  test("anchor=absolute with a relative path is still refused as the dict (target-only)", () => {
     // The half the repair must not break. `osIsabs` widens what counts as
     // absolute; it must not turn the MALFORMED case -- `anchor='absolute'` with
     // a path that is absolute under no namespace -- into a silently
-    // wrong-anchored string. The source keeps the dict so the launcher surfaces
-    // the operator error, and so does this.
+    // wrong-anchored string. Under D-0094 the observation moved from the
+    // rendered file to the refusal, and it says the same thing in the same
+    // direction: a message naming a PATH rather than the dict would mean
+    // `osIsabs` had judged this entry absolute and anchored it somewhere.
     const bad = { anchor: "absolute", path: "etc/shadow", suppressOnSymlinkEscape: true };
     const schema = { worker_roles: { demo: sandboxRole({ denyRead: [bad], additional: [] }) } };
-    const result = renderRoleWithMetadata(schema, {
-      role: "demo",
-      workerDir: "/home/u/wd",
-      claudeOrgPath: "/home/u/co",
-      realpathFn: (p) => p,
-      wslDetector: () => false,
-    });
-    expect(filesystemOf(result)["denyRead"]).toStrictEqual([bad]);
+    const error = expectRaises(PyValueError, () =>
+      renderRoleWithMetadata(schema, {
+        role: "demo",
+        workerDir: "/home/u/wd",
+        claudeOrgPath: "/home/u/co",
+        realpathFn: (p) => p,
+        wslDetector: () => false,
+      }),
+    );
+    expect(error.message).toContain("would reach the child as dict");
+    expect(error.message).toContain(
+      "{'anchor': 'absolute', 'path': 'etc/shadow', 'suppressOnSymlinkEscape': True}",
+    );
   });
 
   /**
