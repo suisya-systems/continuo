@@ -38,12 +38,23 @@ import { type DeliveredEnvelope, MessageBus } from "./bus.js";
  * Ported from interlock `src/claude_org_runtime/messagebus/endpoint.py` at
  * `65f36c5`.
  *
- * **Why worker-outbound.** Per interlock's F1 there is no non-interactive path
- * to deliver a message *into* a running background session, so delivery is a
- * pull: the worker runs this endpoint as one of its MCP servers and calls
- * `poll`. Nothing here pushes, nudges, or injects; an idle worker that never
- * polls simply leaves its rows due, visible to any operator via the outbox
- * tables.
+ * **Why worker-outbound.** Delivery is a pull: the worker runs this endpoint as
+ * one of its MCP servers and calls `poll`. Nothing here pushes, nudges, or
+ * injects; an idle worker that never polls simply leaves its rows due, visible
+ * to any operator via the outbox tables.
+ *
+ * **Not because a push is impossible.** interlock's F1 said there is no
+ * non-interactive path to deliver a message into a running background session,
+ * and a measurement on 2026-09-05 (`claude 2.1.261`, `-p --input-format
+ * stream-json`) refutes that clause for this executor, at the granularity of a
+ * tool-call boundary. The pull stands on its own grounds instead: what is due is
+ * read from SQLite alone, a response lost on the wire costs nothing because the
+ * row stays due, and only the recipient's ack settles anything. Any wake would
+ * be executor-specific, would travel the *worker's* stdin rather than this
+ * endpoint's -- which carries line-delimited MCP JSON-RPC and would be corrupted
+ * by an extra line -- and would carry no payload, so it could prompt a poll and
+ * never stand in for one. See `docs/design/messagebus-wake-hint.md`,
+ * propose-only.
  *
  * **Transport shape.** Line-delimited JSON-RPC over stdio (one message per
  * line). Unlike a push channel this server *does* declare tools -- it is a tool
