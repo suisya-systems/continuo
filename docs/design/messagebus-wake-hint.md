@@ -87,11 +87,17 @@ a push. That is the whole of section 2.
 - **Pure text generation with no tool-call boundary.** Every observation above is anchored to a
   `tool_result`. A turn that generates prose and calls nothing has no measured boundary, and this
   measurement says nothing about when -- or whether -- a stdin message is seen inside one.
-- **A single very long tool call.** In the runs measured, latency is bounded by the *longest single
-  tool call* -- and the longest one measured is 20 seconds. Whether a 40-minute tool call defers the
-  signal for 40 minutes is unmeasured; the shape of the observation suggests it does, but suggestion
-  is not measurement, and "bounded by the longest tool call" is a claim about turns that reach a
-  boundary rather than a general latency bound.
+- **A single very long tool call.** For a message written into a call in flight, discovery is bounded
+  by the remainder of that call -- and the longest call measured is 20 seconds. Whether a 40-minute
+  call defers the signal for 40 minutes is unmeasured; the shape of the observation suggests it does,
+  but suggestion is not measurement.
+- **A message written between two tool calls**, during prose generation rather than into a call in
+  flight. Nothing here establishes when that one is surfaced, and its delay would be a property of
+  the generation rather than of any tool call -- so "bounded by the longest tool call" is a claim
+  about the measured arrival time, not a general latency bound.
+- **The wake frame.** The measured message carried a word the assistant acted on. Whether the fixed,
+  information-free frame section 5.1 calls a wake is surfaced at all is unmeasured, and it is the
+  one gap that could make a conforming implementation prompt no poll.
 - **Any other executor.** `codex exec 0.147.0` has no `--input-format` and no streaming-input option:
   its stdin is the initial prompt only, and `--json` is output-side. F1 still holds there. The
   capability is a property of one executor, not of the transport -- which is itself an argument for
@@ -279,6 +285,28 @@ reader can never tell.
 The positive statement is one sentence: **a wake says "a poll may be useful now", and nothing else.**
 Everything the recipient then does, it does by reading SQLite.
 
+### 5.1 "Empty" is a statement about authority, not about bytes -- and the frame is unmeasured
+
+Everything above is about what a wake may *mean*. At the wire it is still a `stream-json` user
+message, and that message has to contain something, so the two senses of "empty" must not be
+conflated:
+
+- **Empty of authority** -- the table above. No message id, recipient, epoch, count or ack, and no
+  content a delivery decision could be read out of. This is the design.
+- **Empty of bytes** -- not required, and possibly not even accepted. The measurement sent a
+  *non-empty* message ("The word is PELICAN ...") and observed the assistant act on it. Whether a
+  zero-length or whitespace-only `stream-json` user message is surfaced at all, rather than rejected
+  or silently dropped, **was not measured**.
+
+So the frame is a fixed constant this design owes and does not yet have: one literal string,
+identical for every wake, saying only that polling may be useful now. That is what makes wakes
+coalescible -- two identical frames are indistinguishable by construction -- and it keeps the
+authority table true, because a constant carries no per-message information. But **it must be
+chosen and then measured**: an implementation that writes an empty frame the executor ignores would
+conform to every rule in this section and never prompt a single poll. Naming the frame and
+observing a worker poll in response to it is the smallest experiment that would make D1's mechanism
+real rather than argued, and it is D6 in section 12.
+
 **A wake is not publisher functionality.** `D-0077` defers the privileged publisher, and lap 1's
 operator is the publisher. A wake grants no ability to enqueue, publish, approve, or act on a
 payload; being wakeable is not a permission, and a component that can wake a worker gains nothing it
@@ -359,19 +387,25 @@ to be lossy.
 
 ### 7.2 The number, and why it is a new one
 
-**Recommended: a maximum of 30 seconds between message polls while a turn is in flight**, as a named
-constant owned by the composition layer that owns the wake. It is a **hint-write cadence**, not a
-delivery guarantee: section 7.3 works out the latency it actually buys, which carries a second term
-this design cannot bound.
+**Recommended: 30 seconds as the maximum interval between hint writes while a turn is in flight**, as
+a named constant owned by the composition layer that owns the wake.
+
+**It is a hint-write cadence and nothing more.** It is deliberately *not* stated as a maximum
+between message polls, because no mechanism in this design can promise that: what the hint buys is
+worked out in 7.3 and carries a second term -- the time to the next tool-call boundary -- that this
+design cannot bound. Every sentence about the number has to survive that, so the two bounds below
+are bounds on *writing*, not on discovery.
 
 The reasoning is arithmetic, and both bounds are checkable:
 
-- **Not shorter**, because a message poll is a tool call inside the worker's turn. It costs a
-  boundary and context, and it competes with the work. The measured boundary spacing in the harness
-  was about 20 seconds; a cadence below that would put a hint between essentially every boundary.
+- **Not shorter**, because each hint that is actually observed costs the worker a poll, and a poll
+  is a tool call inside its turn: it costs a boundary and context, and it competes with the work.
+  The measured boundary spacing in the harness was about 20 seconds, so a cadence below that would
+  put a hint between essentially every boundary.
 - **Not longer**, because the lap's default turn timeout is fifteen minutes
-  (`DEFAULT_TURN_TIMEOUT_MS`, `src/lap/cli.ts`). At 30 seconds the worst-case discovery latency is a
-  small fraction of a turn and at most thirty polls fit in a default-length one.
+  (`DEFAULT_TURN_TIMEOUT_MS`, `src/lap/cli.ts`). At 30 seconds a turn of default length carries at
+  most thirty hints, which is a cost worth paying; at, say, five minutes the mechanism would write
+  three hints in a whole turn and buy almost nothing over layer 2's turn-boundary poll.
 
 **It is not `--poll-interval-ms`.** That is 1000 ms and it controls the lap's *transcript reads* --
 the composition root stat-ing a file it owns, in its own process, costing nothing but a syscall
@@ -546,10 +580,12 @@ false for the executor this stack targets. At `claude 2.1.261`, under
 second user message written to stdin 8 s into a turn was replayed on stdout immediately after the
 running tool call's `tool_result` (t=26 s), acknowledged by the assistant at t=28 s, and the turn ran
 on to its own end at t=74 s. Two runs, identical in shape, no error or rejection event. So a message
-can be delivered into a running turn, at the granularity of a tool-call boundary. **In a turn that
-reaches such boundaries** -- which is every run measured -- delivery latency is therefore bounded by
-the longest single tool call rather than by the turn. For a turn that reaches none, the measurement
-says nothing; see what is unmeasured, below.
+can be delivered into a running turn, at the granularity of a tool-call boundary. **For a message
+written while a tool call is in flight** -- which is the only case measured -- discovery is therefore
+bounded by the remainder of that call rather than by the turn. Every other arrival time is
+unmeasured, including one that is easy to read into the table and is not there: a message written
+during a long prose interval *between* two tool calls, whose delay is a property of the generation
+rather than of any tool call. See what is unmeasured, below.
 
 **Decision. Pull over SQLite remains the settlement and the only source of delivery decisions. A
 wake is added as an empty, best-effort, coalescible hint whose only effect is to advance the next
@@ -625,6 +661,14 @@ pair, 5 Major, 2 Minor).
   `tool_result`; a turn that calls nothing has no measured boundary.
 - **A single very long tool call**, including whether the signal is visible only after its
   `tool_result` and how long that may be.
+- **A message written between two tool calls**, during prose generation rather than during a call in
+  flight. The measurement wrote into a running `sleep`; nothing establishes when a message arriving
+  in the gap is surfaced, and its delay would be a property of the generation, not of a tool call.
+- **The wake frame itself.** The measured message carried a word the assistant acted on. Whether the
+  fixed, information-free frame this entry calls a wake is surfaced -- rather than rejected, ignored,
+  or dropped for being empty -- is unmeasured, and an implementation could satisfy every rule here
+  and prompt no poll at all. Naming the frame and observing a poll in response is the experiment
+  this entry's mechanism still owes.
 - **Every other executor.** `codex exec 0.147.0` has no `--input-format` and no streaming-input
   option; its stdin is the initial prompt only. F1 still holds there.
 
@@ -650,7 +694,8 @@ that fact, and they are independent of it:
 
 ## 12. What the gate is asked to decide
 
-Five items, each overturnable without disturbing the others.
+Six items, each overturnable without disturbing the others. D6 is the only one that gates *building*
+rather than deciding: nothing else here depends on its answer, and the mechanism does.
 
 | | question | recommendation | if overturned |
 |---|---|---|---|
@@ -659,6 +704,7 @@ Five items, each overturnable without disturbing the others.
 | **D3** | Is 30 seconds the hint-write cadence? | yes, with the arithmetic in 7.2 and the latency it actually buys in 7.3 | any other number, provided it is *a* number and is neither `--poll-interval-ms` nor `D-0079`'s |
 | **D4** | Does the start prompt become a record field before the pipe is enabled? | yes -- 9.1 consequence 3 deletes the only durable copy otherwise | measure whether `--input-format stream-json` can coexist with an argv prompt first; if it can, D4 is moot |
 | **D5** | Which mechanism compels the fallback poll? | the composition layer's timer for layer 1, the completion condition for layer 2, a `Stop` hook to make layer 2 a process property | the role prompt alone is available and is weaker; the entry does not depend on the answer |
+| **D6** | Is the wake frame named and measured before the mechanism is built? | yes -- 5.1; an unmeasured frame could conform to every rule and prompt no poll | build first and measure after, which risks a wake nobody can observe failing |
 
 ---
 
@@ -670,8 +716,10 @@ Five items, each overturnable without disturbing the others.
 - **It does not design the publisher.** `D-0077` defers it, and a wake is not it (section 5).
 - **It does not decide how the worker is compelled to poll.** It names the three mechanisms, ranks
   them, and leaves D5 to the gate, because the answer reaches into the role documents and the fence.
-- **It does not measure the two unmeasured cases.** They are named, in the entry, as unmeasured. A
-  document that inferred them from the shape of the measured ones would be doing what section 1 of
-  continuo#97 objected to: reading a capability out of help text.
+- **It measures nothing itself.** The four unmeasured cases -- a boundary-free turn, a very long tool
+  call, a message arriving between two tool calls, and the wake frame -- are named in the entry as
+  unmeasured and stay that way. A document that inferred any of them from the shape of the measured
+  runs would be doing what section 1 of continuo#97 objected to: reading a capability out of a
+  document instead of an observation.
 - **It does not touch cadenza or rondo.** `D-0087` names rondo the end-state owner; nothing here
   binds a repository that does not yet exist.
