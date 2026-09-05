@@ -13874,8 +13874,11 @@ poll.** Specifically:
 2. **A wake carries nothing** -- no payload, message id, recipient, epoch, due count, or
    acknowledgement -- and grants no authority. Two wakes are indistinguishable from one. Measurement 3
    is what makes this buildable rather than merely stated: the executor surfaces a frame with no text
-   in it, so "empty of authority" can be spelled as "empty of bytes" without the hint becoming
-   unobservable.
+   in it, so "empty of authority" can be spelled as "empty of bytes" without the hint being swallowed
+   by the transport. What it establishes is *delivery*, not *response*: the model observed the frame
+   and said so. Whether a worker under its role document answers a bare frame by issuing a message
+   poll is a property of the prompt and the recipient, not of the executor, and is untested -- see
+   what is unmeasured.
 3. **The mechanism is the Claude session provider's.** The stdin pipe, its framing and its write live
    in `ClaudeCliSessionProvider` and are exposed to composition as a narrow structural capability, on
    the precedent of `readTerminalReport` (`D-0056`, `D-0059`). **S1 keeps its five verbs**
@@ -13886,13 +13889,24 @@ poll.** Specifically:
    co-located: a separate CLI process calling `MessageBus.send` cannot write a pipe it does not hold.
    Enqueue success is never rolled back or reclassified by wake failure, and no session readout
    precedes an enqueue.
-5. **A bounded fallback message-poll cadence remains mandatory**, because a dropped wake, a closed
-   pipe, Codex and a boundary-free turn each leave a due row undiscovered otherwise. The cadence is
-   **30 seconds between hint writes** while a turn is in flight, a new number that is neither
-   `--poll-interval-ms` (transcript reads, 1000 ms, a different process and a different resource) nor
-   `D-0079`'s operator cadence (gate reconciliation, at human scale). It bounds *writing*, never
-   discovery: the latency it buys is 30 seconds **plus** the time to the next tool-call boundary, and
-   nothing here bounds the second term.
+5. **A fallback that does not depend on the wake remains mandatory**, because a dropped or coalesced
+   wake, a closed pipe, Codex and a boundary-free turn each leave a due row undiscovered otherwise.
+   Two distinct things carry it, and they must not be collapsed into one number:
+
+   - **The fallback proper is executor-independent and is not a hint at all**: the recipient polls at
+     each turn boundary (bounded by the turn), and underneath it rows stay due and visible in SQLite
+     (bounded by nothing, and the only load-bearing layer). Every one of the four cases above is
+     covered here and nowhere else. Decision item 9 is what makes the turn-boundary half happen.
+   - **The hint-write cadence is 30 seconds**, a separate, Claude-only, latency-only layer that
+     covers only the dropped-or-coalesced-wake case: while a turn is in flight the composition layer
+     repeats the hint at most that often. It bounds *writing*, never discovery -- the latency it buys
+     is 30 seconds **plus** the time to the next tool-call boundary, and nothing here bounds the
+     second term. On a closed pipe or on Codex it buys nothing at all, which is exactly why it is not
+     the fallback.
+
+   The 30 seconds is a new number: neither `--poll-interval-ms` (transcript reads, 1000 ms, a
+   different process and a different resource) nor `D-0079`'s operator cadence (gate reconciliation,
+   at human scale).
 6. **Repeated polling is replay-safe, not idempotent.** Presentation is at-least-once and duplicate
    envelopes are deduplicated by the sender's `dedupKey`; an extra poll creates no second destination
    effect and no second settlement.
@@ -13981,6 +13995,12 @@ written down is a decision nobody can cite.
 - **The cost of frequent frames.** Thirty hints in a default-length turn is the arithmetic behind the
   cadence, not an observation; what a hint costs the worker in context and boundaries was not
   measured.
+- **Whether a worker answers a frame with a poll.** Measurement 3 observed the model *report* the
+  frame, which is what closes the transport question D6 asked. It did not observe a `poll` tool call,
+  because the harness had no bus in it. The remaining gap is a prompt-and-recipient property rather
+  than an executor one, and it is where decision item 9's compulsion mechanisms do their work -- but
+  the end-to-end "hint written, poll issued" has not been observed, and the first implementation
+  should observe it.
 - **Every other executor.** `codex exec 0.147.0` has no `--input-format` and no streaming-input
   option; its stdin is the initial prompt only. F1 still holds there.
 

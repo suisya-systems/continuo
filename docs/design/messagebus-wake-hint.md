@@ -312,14 +312,19 @@ conflated:
 So the frame is a fixed constant: one literal string -- possibly the empty one -- identical for every
 wake, saying only that polling may be useful now. That is what makes wakes coalescible -- two
 identical frames are indistinguishable by construction -- and it keeps the authority table true,
-because a constant carries no per-message information. The risk this section named -- an
-implementation that writes a frame the executor ignores would conform to every rule here and never
-prompt a single poll -- is retired for the `text` block: the executor does not ignore it. **D6 is
-therefore no longer a gate on building.**
+because a constant carries no per-message information. The risk this section named had two halves,
+and the measurement retires the first: an empty `text` frame is **not** swallowed by the transport --
+it is delivered, replayed, and observed by the model. The second half is untouched by it. The
+harness had no message bus in it, so what was observed is the model *reporting* the frame, not a
+worker *issuing a poll* in response. Whether a bare frame is answered with a poll is a property of
+the role document and the recipient rather than of the executor, and it is what decision item 9's
+compulsion mechanisms exist for. **D6 is no longer a gate on building** -- the gate took it as
+measured on 2026-09-05 -- but the end-to-end "hint written, poll issued" is still unobserved and the
+first implementation should observe it.
 
-What the measurement does *not* cover is the shape of the block rather than its length: an omitted
-`content` block and an empty `content` array were not tested, and neither was the cost of writing
-frames often. So the frame this design authorises is a `text` block whose text may be empty, not any
+What the measurement does *not* cover is otherwise the shape of the block rather than its length: an
+omitted `content` block and an empty `content` array were not tested, and neither was the cost of
+writing frames often. So the frame this design authorises is a `text` block whose text may be empty, not any
 representation of emptiness the protocol admits.
 
 **A wake is not publisher functionality.** `D-0077` defers the privileged publisher, and lap 1's
@@ -468,9 +473,9 @@ it is load-bearing for correctness.
 
 **Recommendation: layer 1 by the composition layer's timer, layer 2 by the completion condition,
 and the `Stop` hook as the executor-specific way to make layer 2 a property of the process rather
-than a discipline.** Recorded here rather than decided, because it reaches into the role documents
-and the fence, and D5 in section 12 is where the gate took it -- as recommended, on 2026-09-05
-(`D-0091` decision item 9).
+than a discipline.** Recorded as a recommendation when this document was filed, because it reaches
+into the role documents and the fence; **the gate took it as recommended on 2026-09-05**, and it is
+now `D-0091` decision item 9.
 
 ---
 
@@ -648,7 +653,9 @@ rather than deciding: nothing else here depended on its answer, and the mechanis
 - **D6** -- decided **yes, name and measure the frame first**, as recommended -- and it has since been
   measured (2026-09-05, section 5.1): an empty `text` block is surfaced, so the floor is zero bytes.
   **The one row that gated building no longer does.** What it leaves open is narrower than the row
-  asked about: non-`text` content-block shapes, and the cost of frequent frames.
+  asked about: non-`text` content-block shapes, the cost of frequent frames, and -- because the
+  harness had no bus in it -- whether a worker answers a bare frame with a poll, which is a
+  prompt-and-recipient property rather than an executor one (5.1).
 
 | | question | recommendation, and the outcome | if overturned |
 |---|---|---|---|
@@ -667,8 +674,10 @@ rather than deciding: nothing else here depended on its answer, and the mechanis
   no producer to attach to (4.4), and building it now would fix a shape against a caller nobody has
   written.
 - **It does not design the publisher.** `D-0077` defers it, and a wake is not it (section 5).
-- **It does not decide how the worker is compelled to poll.** It names the three mechanisms, ranks
-  them, and leaves D5 to the gate, because the answer reaches into the role documents and the fence.
+- **It did not decide how the worker is compelled to poll.** As filed it named the three mechanisms,
+  ranked them, and left D5 to the gate, because the answer reaches into the role documents and the
+  fence. The gate has since taken D5 as recommended, and `D-0091` decision item 9 is where that now
+  lives -- this document is still the ranking, not the decision.
 - **It measured nothing itself.** As filed, the four unmeasured cases -- a boundary-free turn, a very
   long tool call, a message arriving between two tool calls, and the wake frame -- were named as
   unmeasured and left that way. A document that inferred any of them from the shape of the measured
