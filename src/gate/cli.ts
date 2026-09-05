@@ -46,13 +46,22 @@
  * operator typed. They become one stderr line and exit 2, the same code
  * `run admit` and `db verify` use.
  *
- * **`--json` on the three verbs a host reads, and on no others.** `gate list`,
- * `gate show` and `gate answer` are the ones a program drives -- it enumerates
- * the open questions, reads one, and records the answer it obtained -- so they
- * carry the shared envelope from `src/cli/json_output.ts` (`D-0090`). `present`,
- * `deliver`, `ack`, `close` and `reconcile` are the operator's own hands and
- * stay human-only until something actually needs to parse them; a flag added
- * ahead of a reader is a shape nobody has checked against a real consumer.
+ * **`--json` on the four verbs a host reads, and on no others.** `gate list`,
+ * `gate show`, `gate answer` and `gate close` are the ones a program drives --
+ * it enumerates the open questions, reads one, records the answer it obtained,
+ * and closes the question it withdrew -- so they carry the shared envelope from
+ * `src/cli/json_output.ts` (`D-0090`, `D-0092`). `present`, `deliver`, `ack` and
+ * `reconcile` are the operator's own hands and stay human-only until something
+ * actually needs to parse them; a flag added ahead of a reader is a shape nobody
+ * has checked against a real consumer.
+ *
+ * `close` is here because a reader appeared and was measured, not because the
+ * set looked incomplete: the host's own operating surface drives it (rondo
+ * `D-0013`), and, with no flag to read, rondo `D-0015` rule 5 had to treat the
+ * exit code as opaque and re-read the gate through a second `gate show --json`
+ * subprocess. That is the case `D-0090` named as its falsifier, and `D-0092`
+ * answers it by widening the reach rather than by leaving a host to parse
+ * `closed g as withdrawn` with a regular expression.
  *
  * The flag changes **bytes and nothing else**: the same entry point is called,
  * the same refusals are caught, the handle is closed in the same `finally`, and
@@ -64,7 +73,7 @@
  * have left the refusals of a verb whose author forgot silently human under
  * `--json` while its success case stayed green -- a host would then get a
  * parse error exactly when something went wrong, which is the worst moment for
- * one. The five verbs with no flag pass no report and reach the same line they
+ * one. The four verbs with no flag pass no report and reach the same line they
  * always did.
  *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives: every
@@ -206,10 +215,11 @@ export const gateCliSeams = {
   },
 };
 
-/** The pinned document shapes, one per verb a host drives (`D-0090`). */
+/** The pinned document shapes, one per verb a host drives (`D-0090`, `D-0092`). */
 const LIST_SCHEMA = "continuo.gate.list/1";
 const SHOW_SCHEMA = "continuo.gate.show/1";
 const ANSWER_SCHEMA = "continuo.gate.answer/1";
+const CLOSE_SCHEMA = "continuo.gate.close/1";
 
 /**
  * What a verb needs in order to answer in JSON: which shape, and which database.
@@ -596,21 +606,87 @@ export function cmdGateAnswer(args: Namespace): number {
   );
 }
 
+/**
+ * `gate close`'s payload: what this invocation did, and the closure it left.
+ *
+ * `closed` is `closeOpenGate`'s own boolean and means what that function means
+ * by it -- whether THIS invocation performed the close. `false` is the
+ * idempotent repeat of an identical close, which is a success and not a
+ * refusal, and the exit code says so: a different outcome on a closed gate
+ * raises `GateClosedRefused` and never reaches here. The human line renders the
+ * same boolean as the words "closed" / "already closed", which is two spellings
+ * of one fact for a host, so this document carries the boolean instead -- the
+ * same argument `answerPayload` makes about "already enqueued".
+ *
+ * `outcome`, `from_stage` and `to_stage` are read back from the durable record
+ * AFTER the write, not echoed from the command line, which is what makes them
+ * the confirmed effect rather than a restatement of the request. It is the read
+ * a host would otherwise have to make for itself: with no flag here, rondo
+ * `D-0015` rule 5 ran a second `gate show --json` subprocess to learn exactly
+ * these three fields.
+ *
+ * `from_stage` and `to_stage` are equal for every close this verb writes,
+ * because a close is deliberately stage-preserving -- `gates.ts` leaves `stage`
+ * untouched, since the stage a gate was closed AT is part of what the outcome
+ * means (an `expired` at `answered` is a different failure from one at
+ * `presented`). Both are still emitted, under the names the transition records
+ * in `gate show`'s document already use, so a host reads one vocabulary for
+ * every stage movement it is told about and does not have to know which
+ * transitions happen to preserve the stage.
+ *
+ * `outcome` is typed `string | null` because the column is, and is never null
+ * on this path: `closeOpenGate` either recorded an outcome or raised. Emitting
+ * the column rather than a narrowed copy of the argument keeps the field a fact
+ * about the row.
+ */
+function closePayload(
+  gateId: string,
+  closed: boolean,
+  gate: GateDetail,
+): { readonly [key: string]: JsonValue } {
+  return {
+    gate_id: gateId,
+    closed,
+    outcome: gate.outcome,
+    from_stage: gate.stage,
+    to_stage: gate.stage,
+  };
+}
+
 export function cmdGateClose(args: Namespace): number {
   const path = String(args["db"]);
   const gateId = String(args["gate_id"]);
   const outcome = String(args["outcome"]);
   const nowMs = nowMsOf(args);
-  return withControlPlane(path, (connection) => {
-    const closed = closeOpenGate(connection, {
-      gateId,
-      outcome,
-      actorId: String(args["actor_id"]),
-      nowMs,
-    });
-    gateCliSeams.write(`${closed ? "closed" : "already closed"} ${gateId} as ${outcome}\n`);
-    return 0;
-  });
+  const report = jsonReportOf(args, CLOSE_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const closed = closeOpenGate(connection, {
+        gateId,
+        outcome,
+        actorId: String(args["actor_id"]),
+        nowMs,
+      });
+      if (report !== null) {
+        // The read-back is inside the `--json` branch and not above it: without
+        // the flag this verb issues exactly the queries it always issued, so
+        // "the flag changes bytes and nothing else" stays true of the work as
+        // well as of the output.
+        gateCliSeams.write(
+          successLine(
+            report.schema,
+            report.db,
+            closePayload(gateId, closed, gateDetail(connection, gateId)),
+          ),
+        );
+        return 0;
+      }
+      gateCliSeams.write(`${closed ? "closed" : "already closed"} ${gateId} as ${outcome}\n`);
+      return 0;
+    },
+    report,
+  );
 }
 
 export function cmdGateReconcile(args: Namespace): number {
@@ -787,6 +863,7 @@ export function addSubparsers(sub: Subparsers): void {
   });
   addActorIdArgument(close);
   addNowMsArgument(close);
+  addJsonArgument(close);
   close.setDefaults({ func: cmdGateClose });
 
   const reconcilePass = sub.addParser("reconcile", RECONCILE_DESCRIPTION);
