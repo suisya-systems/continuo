@@ -14431,3 +14431,124 @@ this unifies. `D-0082` for the repair this fences and the two claims corrected a
 open until that issue resolves, because the guarantee sentence above holds only while it does.
 Decision id allocated from the `D-0019`..`D-0099` shared band, checked against `origin/main` at
 `44f6233`, where `D-0092` is the last taken id, and re-checked at rebase.
+
+## D-0095 -- A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way
+
+**Context.** `parity/fencing.renderer.ledger.json` has carried one inherited limitation since the
+renderer was ported: JavaScript has a single number type, so `JSON.parse` destroys both the
+`int`/`float` distinction a role document wrote and the exact digits of an integer past `2**53`.
+The entry names two losses -- the TYPE a refusal reports, and the VALUE the settings payload
+persists -- and it is the last unrepaired item of `suisya-systems/continuo#18` (the other seven
+inherited defects that issue tracks are already repaired). `D-0022` deferred it; `D-0023`
+superseded `D-0022` the same day, so "inherited" stopped being a reason to defer and the repair
+belongs in the belt that touches the code.
+
+`D-0210` through `D-0214` had already done most of it. `pyJsonLoads` rescans the source text and
+records each number's Python spelling -- `int`/`float` by CPython's syntactic rule, plus the
+literal digits -- on the CONTAINER slot the number sits in; every container rebuild carries the
+record across (`D-0212` enumerated the ten branches in `src/fencing` mechanically rather than by
+reading a comment, and `D-0213`/`D-0214` did the same for `src/settings`); `pyJsonDumps` re-emits
+the recorded spelling, and `pyTypeNameOf` answers `got float` from the document. That closed the
+TYPE loss for a refusal and the VALUE loss for everything leaving through `json.dumps`.
+
+**The measurement.** Taken on 2026-09-06, before any code changed, by rendering the shipped
+`roles.json` with numeric literals patched into it as TEXT and comparing against CPython 3.12.3.
+Three values still left the document by a door that is not `json.dumps`, and each one lands in an
+artefact the restart check compares BY BYTES:
+
+| authored | interlock | continuo (before) | where |
+| --- | --- | --- | --- |
+| `"role_kind": 9007199254740993` | `"9007199254740993"` | `"9007199254740992"` | persisted fence, `role_kind` |
+| `"permission_mode": 1.0` | `"1.0"` | `"1"` | persisted fence, `permission_mode` |
+| `"permission_mode": 1.0` | `"permissionMode": 1.0` | `"permissionMode": 1` | `settings.local.json`, fence digest |
+| `"role_kind": 1e400` | `"inf"` | `"Infinity"` | persisted fence, `role_kind` |
+| `sandbox.filesystem.denyRead: [1.0]` | `unparseable sandbox entry: 1.0` | `... : 1` | refusal detail, persisted in the ledger |
+| `permissions.deny: [9007199254740993]` | `... string: 9007199254740993` | `... : 9007199254740992` | refusal detail, persisted in the ledger |
+
+The first four are `pyStr`, which fell through to `String` for a number. The last two are `pyRepr`,
+which formatted from the double alone. `role_kind` and `permission_mode` are wire fields of the
+persisted fence (`D-0201`) and are exactly what `diffFences` compares, so each row above is a fence
+that reports "changed" forever for a document interlock renders stably.
+
+The `permissionMode` row is a defect no rebuild carry could have reached, and no prior entry named
+it. `settingsPayload` copies the RAW authored value into the payload -- the source annotates the
+parameter `str` and never coerces it, which this port reproduces deliberately -- and
+`permission_mode` is a META key, so `stripMeta` has already removed the slot its spelling hung on
+by the time the payload is built. The spelling had to travel as a VALUE, from the role body to the
+payload, or it could not travel at all.
+
+**`str()`/`repr()` and `json.dumps` are one primitive with three exceptions.** CPython builds all
+three number texts from `float.__repr__` / `int.__repr__`, so reusing `formatNumber` is right for
+every finite value -- and wrong for exactly the non-finite three, where `repr()` gives
+`inf`/`-inf`/`nan` and `json.dumps` gives `Infinity`/`-Infinity`/`NaN`. Both spellings are live in
+this port for one document: `"role_kind": 1e400` overflows identically on both sides, and the same
+value must be written `inf` in the fence's `role_kind` and `Infinity` if it ever reached a settings
+value. So the shared text gets a name (`pyNumberText`), and it post-processes `formatNumber`'s
+answer rather than testing the value first -- an `int` spelling past the double's range parses to
+`Infinity` while CPython holds the exact digits, and a leading non-finite test would print `inf`
+for a value CPython prints in full.
+
+**Decision.** `pyStr` and `pyRepr` take the document's spelling, in the shape `pyTypeName` already
+established:
+
+1. `pyNumberText(value, spelling?)` in `src/fencing/pyjson.ts` is the one transcription of
+   `str()`/`repr()` for a number, beside `formatNumber` and defined in terms of it.
+2. `pyStr(value, spelling?)` and `pyRepr(value, spelling?)` take an optional `PyNumberSpelling`, and
+   `pyStrOf(container, key)` / `pyReprOf(container, key)` are the container-and-key forms, beside
+   `pyTypeNameOf`. `pyRepr`'s ARRAY and OBJECT arms look each child's spelling up themselves, so
+   every nested case is repaired with no call-site change at all.
+3. The four sites that hand a bare document number to a refusal or a wire field carry the slot:
+   `roleKind` and the settings payload's `permissionMode` from the role BODY, the sandbox entry and
+   the `permissions.deny` entry by the index of the document's own array, and
+   `checkPermissionMode`'s `sorted(allowed)` by the index of `allowed`.
+4. `fenceFromJson` reads `role`, `role_kind` and `permission_mode` back with the spelling the
+   PERSISTED FILE carries, so a fence whose field is a number is not silently re-spelled on the
+   next write. `getItem` stays the lookup, because it is what raises the `KeyError` whose
+   left-to-right argument order the source makes observable.
+
+**What is deliberately NOT carried.** A call site that iterates a `pyIterate` COPY does not get the
+spelling from the copy. `D-0212` proved that branch is safe precisely by NOT carrying -- an
+index-keyed record does not survive a caller reordering the copy, so arming it would arm a trap
+rather than close one -- and that proof is left standing. `checkPermissionMode` reads from the
+ORIGINAL container instead. `D-0212`'s proof text is amended where it leaned on "the result only
+ends in `pyRepr`", which was a reason before `pyRepr` could tell the difference; what carries the
+proof now is that no `pyIterate` result reaches a serialiser, so the drop is invisible in the
+artefacts even where it would be visible in a sentence.
+
+**What remains, and why it is the boundary rather than the defect.** The VALUE of an integer past
+`2**53` is still the rounded double -- the digits are recovered for RE-EMISSION only, so arithmetic
+on it is arithmetic on the rounded value. A number at the ROOT of a document has no container slot
+to hang a spelling on, so an integral float there is classified and re-emitted as an `int`; every
+fencing artefact has an object at its root. Both were already stated in the header of
+`src/fencing/pyjson.ts` and are pinned in both directions by the differential corpus.
+
+**Alternatives.** A global `BigInt` switch, or a lossless number type at the parse boundary, would
+have made the VALUE exact as well as the digits -- and would have changed the type of every number
+in the subsystem, including the ones `===` comparisons and the fence's own arithmetic are built on.
+Recording the spelling on the container was already the shipped answer for `json.dumps` (`D-0210`),
+and extending it to the other two exits is strictly smaller than introducing a second numeric type.
+REFUSING an out-of-range number was the other option the ledger raised with the operator; it is a
+deliberate divergence from interlock (which accepts such a document) rather than a bug fix, and
+nothing in the repair needs it.
+
+**How it is pinned.** The differential vector gains a `texts` row -- `str(x)` and `repr(x)` -- beside
+the `types` row it already recorded, over the same 37 number documents in
+`parity/oracle/fnmatch-shlex-corpus.json`, which already include `1e400`, `-1e400` and 400-digit
+integers. Both entry points are asserted separately because they are separate functions here:
+control, with the spelling dropped from `pyRepr`'s number arm the vector reports 19 divergences from
+CPython while the `str` column stays green. Four target-only cases in
+`test/fencing/spawn-precondition.test.ts` drive `FencedSpawner.spawn` over documents whose numeric
+literals are patched in as TEXT -- the JavaScript literal `1.0` IS `1`, so a body built in code
+carries no spelling and would pass against the unrepaired renderer -- and assert on the BYTES of the
+published fence and `settings.local.json`.
+
+**What records it.** `parity/fencing.renderer.ledger.json` flips the inherited limitation to
+REPAIRED and states what remains; `parity/fencing.spawn-precondition.ledger.json` registers the four
+cases and corrects the residue note that still listed `pyStr`; the headers of
+`src/fencing/pyjson.ts` and the `pyStr` note in `src/fencing/pysemantics.ts` are corrected in the
+same change. `suisya-systems/continuo#18` has one item left after this, the `D-0204` `hook.mjs`
+TypeScript revisit, which is untouched here.
+
+Decision id allocated from the `D-0019`..`D-0099` shared band, checked against `origin/main` at
+`ee2a399`, where `D-0093` is the last taken id; `D-0094` is claimed by the parallel lane on #163, so
+this entry takes `D-0095`. Re-checked at rebase.

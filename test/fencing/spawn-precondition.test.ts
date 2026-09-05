@@ -28,6 +28,7 @@ import {
   type SpawnOutcome,
   spawnSeams,
 } from "../../src/fencing/spawn.js";
+import { readFence } from "../../src/fencing/state.js";
 import * as api from "../../src/index.js";
 import { patchSeam } from "../testkit/seams.js";
 import {
@@ -850,6 +851,187 @@ describe("a document's number spelling reaches settings.local.json (target-only,
  * a silent one; the second and third are the proof's two premises, each of
  * which fails loudly when it stops holding.
  */
+describe("str() of a document number reaches the fence and the payload (target-only, D-0095)", () => {
+  // The last item of the inherited numeric round-trip defect (#18), and the
+  // half D-0210 and D-0211 could not reach from where they stood. Those two put
+  // a JSON number's Python spelling on its container slot and carried it across
+  // every container REBUILD, which fixed `json.dumps`. Three values leave the
+  // document by a different door: `role_kind` and `permission_mode` are read out
+  // of the role body and converted with `str()`, and `permission_mode` is then
+  // ALSO persisted raw into the settings payload -- and `str()` had no spelling
+  // to take, while `settingsPayload` copies the raw value out of a container it
+  // was never given.
+  //
+  // All three are compared BY BYTES across an Interlock-initiated restart:
+  // `role_kind` and `permission_mode` are wire fields of the persisted fence
+  // (D-0201) and `permissionMode` is a key of `settings.local.json` and of the
+  // fence digest. So each one was a fence that reports "changed" forever for a
+  // document interlock renders stably.
+  //
+  // As with the D-0211 cases above, the values arrive as DOCUMENT TEXT: the
+  // JavaScript literal `1.0` IS `1`, so a body built in code carries no
+  // spelling and would pass against the unrepaired renderer.
+
+  /** The shipped document with sentinels replaced by real numeric literals. */
+  function documentWithNumbers(
+    root: string,
+    name: string,
+    changes: Readonly<Record<string, unknown>>,
+    permissionModes?: readonly unknown[],
+  ): RoleDocument {
+    const authored = mutate(fenceDocument(), "worker", changes) as Record<string, unknown>;
+    if (permissionModes !== undefined) {
+      // `mutate` reaches the role body only, and `permission_mode` is checked
+      // against the GLOBAL list -- a mode the document does not authorise is a
+      // refusal, which is a different case from the one under test.
+      const globalCfg = authored["global"] as Record<string, unknown>;
+      globalCfg["permission_modes"] = permissionModes;
+    }
+    const text = pyJsonDumps(authored, { indent: 2 }).replaceAll(
+      /"<<([^"]+)>>"/g,
+      (_whole, literal: string) => literal,
+    );
+    const path = join(root, name);
+    writeFileSync(path, text, "utf8");
+    return loadDocument(path);
+  }
+
+  test("an integral float and an exact big integer survive str() into the persisted fence", () => {
+    const { root, ctx, ledger } = fixtures();
+    const document = documentWithNumbers(
+      root,
+      "roles-with-numeric-kind.json",
+      { role_kind: "<<9007199254740993>>", permission_mode: "<<1.0>>" },
+      ["<<1.0>>"],
+    );
+    const outcome = new FencedSpawner({ ledger, document }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    expect(outcome.admitted, JSON.stringify(outcome.reasons)).toBe(true);
+    const plan = outcome.plan;
+    expect(plan).not.toBeNull();
+    if (plan === null) {
+      return;
+    }
+    // BYTES. Both fields are `str()` of the document's value, so they are
+    // JSON STRINGS carrying Python's text: `str(1.0)` is `1.0`, not `1`, and
+    // `str(9007199254740993)` is the digits, not the rounded double the parse
+    // produced. Before the repair these read `"9007199254740992"` and `"1"`.
+    const fence = readFileSync(plan.fencePath, "utf8");
+    expect(fence).toContain('"role_kind": "9007199254740993"');
+    expect(fence).toContain('"permission_mode": "1.0"');
+    // And the same authored `1.0` reaches `settings.local.json` as a NUMBER,
+    // because `settingsPayload` persists the raw value the document carried
+    // rather than the `str()` of it -- the split `renderFence` reproduces
+    // deliberately. CPython writes `1.0` here; this port wrote `1`.
+    expect(readFileSync(plan.settingsPath, "utf8")).toContain('"permissionMode": 1.0');
+  });
+
+  test("an overflowing literal is Python's inf, not JavaScript's Infinity", () => {
+    // `1e400` has an exponent, so CPython reads it as a FLOAT and overflows to
+    // `inf` exactly as `JSON.parse` does -- the two agree about the value and
+    // disagree about its text. `str()` writes `inf`; `String` wrote
+    // `Infinity`, and `json.dumps` writes `Infinity` for the same value, so
+    // the two spellings are both live and neither may be used for the other.
+    const { root, ctx, ledger } = fixtures();
+    const document = documentWithNumbers(root, "roles-with-inf-kind.json", {
+      role_kind: "<<1e400>>",
+    });
+    const outcome = new FencedSpawner({ ledger, document }).spawn(
+      "worker",
+      ctx,
+      recordingSpawner(),
+    );
+    expect(outcome.admitted, JSON.stringify(outcome.reasons)).toBe(true);
+    const plan = outcome.plan;
+    expect(plan).not.toBeNull();
+    if (plan === null) {
+      return;
+    }
+    expect(readFileSync(plan.fencePath, "utf8")).toContain('"role_kind": "inf"');
+  });
+
+  test("a refusal names the value the document wrote", () => {
+    // The other half of the ledger's disclosure. `pyTypeNameOf` already made
+    // the TYPE document-derived (`got float`, not `got int`); the VALUE beside
+    // it was still `String`'s. Both sentences are persisted in the ledger as
+    // refusal details, so the difference is durable.
+    const { root, ctx, ledger } = fixtures();
+    const modeDocument = documentWithNumbers(root, "roles-with-bad-numeric-mode.json", {
+      permission_mode: "<<1.0>>",
+    });
+    const modeRefusal = refuse(ledger, modeDocument, ctx).outcome;
+    expect(modeRefusal.codes).toContain(RefusalReason.PERMISSION_MODE_INVALID);
+    expect(modeRefusal.reasons.map(([, detail]) => detail).join("; ")).toContain(
+      "permission_mode 1.0 is not one of",
+    );
+
+    // And the sandbox entry, which is refused one layer down in `rules.ts`.
+    // The index is carried into `parseSandboxEntry` for this: `entries` is the
+    // document's own array, not a `pyIterate` copy, so the slot still holds the
+    // spelling the refusal names. Measured before the carry: `unparseable
+    // sandbox entry: 1`.
+    const entryDocument = documentWithNumbers(root, "roles-with-numeric-sandbox.json", {
+      sandbox: { filesystem: { denyRead: ["<<1.0>>"], denyWrite: ["{worker_dir}/x"] } },
+    });
+    const entryRefusal = refuse(ledger, entryDocument, ctx).outcome;
+    expect(entryRefusal.reasons.map(([, detail]) => detail).join("; ")).toContain(
+      "unparseable sandbox entry: 1.0",
+    );
+
+    // And `permissions.deny`, the other rule list, whose loop carries the index
+    // for the same reason. Measured before the carry: `permission rule must be
+    // a non-empty string: 9007199254740992` -- the ROUNDED double, so the
+    // sentence named a value the document does not contain.
+    const denyDocument = documentWithNumbers(root, "roles-with-numeric-deny.json", {
+      permissions: { allow: [], deny: ["<<9007199254740993>>"] },
+    });
+    const denyRefusal = refuse(ledger, denyDocument, ctx).outcome;
+    expect(denyRefusal.reasons.map(([, detail]) => detail).join("; ")).toContain(
+      "permission rule must be a non-empty string: 9007199254740993",
+    );
+  });
+
+  test("a persisted fence carrying a number in a str() field round-trips its spelling", () => {
+    // The READ side of the same field. `fenceFromJson` reads `role_kind` and
+    // `permission_mode` back through `str()`, and the payload it reads them out
+    // of came through `pyJsonLoads`, so the slot carries a spelling. A fence
+    // file this port wrote always has strings in those fields; what this pins
+    // is that a file with a NUMBER there -- hand-edited, or written by another
+    // implementation -- is not silently rewritten on the next write.
+    const { root } = fixtures();
+    const path = join(root, "hand-edited-fence.json");
+    writeFileSync(
+      path,
+      pyJsonDumps(
+        {
+          format: 1,
+          role: "worker",
+          role_kind: "<<1.0>>",
+          permission_mode: "<<9007199254740993>>",
+          rules: [
+            {
+              layer: "permissions",
+              kind: "permission-deny",
+              tool: "Bash",
+              spec: "git push",
+              rule_id: "permissions:permission-deny:Bash:git push",
+            },
+          ],
+          settings: {},
+        },
+        { indent: 2 },
+      ).replaceAll(/"<<([^"]+)>>"/g, (_whole, literal: string) => literal),
+      "utf8",
+    );
+    const fence = readFence(path);
+    expect(fence.roleKind).toBe("1.0");
+    expect(fence.permissionMode).toBe("9007199254740993");
+  });
+});
+
 describe("pyIterate's array branch drops the record, provably harmlessly (target-only, D-0212)", () => {
   test("the drop is real, and would be a divergence if a result were ever dumped", () => {
     // The measurement behind the enumeration entry, kept executable so the

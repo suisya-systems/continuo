@@ -33,7 +33,7 @@
  * else is a `TypeError` in Python and a {@link PyTypeError} here.
  */
 
-import { formatNumber } from "./pyjson.js";
+import { formatNumber, pyNumberText } from "./pyjson.js";
 import { pyRepr } from "./pyrepr.js";
 
 /**
@@ -673,18 +673,26 @@ export function pyTypeNameOf(container: unknown, key: string | number): string {
  * `"role_kind": null` must persist `"None"` or the two sides disagree about
  * whether the fence changed.
  *
- * Floats are left to `String`, which differs from Python for whole-valued
- * floats (`str(1.0)` is `"1.0"`, `String(1)` is `"1"`). This is now a REDUCIBLE
- * residue rather than an impossibility: since {@link PyNumberSpelling} the
- * document's spelling is recoverable, and a role document with
- * `"role_kind": 1.0` still persists `"1"` here and `"1.0"` in interlock. It is
- * left alone deliberately. Taking the spelling would mean threading a container
- * and a key through all six call sites -- two of which (`state.ts`) read a
- * value back out of a payload the port itself wrote, where the spelling is
- * whatever this port chose -- and the field it lands in is `role_kind` /
- * `permission_mode`, which no interlock role document spells as a number.
- * Recorded in `parity/fencing.spawn-precondition.ledger.json` rather than
- * fixed on the way past.
+ * Numbers are NOT left to `String`, and that is D-0095's half of the repair.
+ * `String` differs from Python for a whole-valued float (`str(1.0)` is `"1.0"`,
+ * `String(1)` is `"1"`), for an integer past 2**53 (`String` prints the double's
+ * rounded value where CPython prints the digits the document wrote), for `-0.0`,
+ * for the exponential threshold, and for the non-finite three (`String` gives
+ * `"Infinity"`, Python `"inf"`). All five reach `Fence.roleKind` /
+ * `Fence.permissionMode` from `role_kind` / `permission_mode`, which are wire
+ * fields per D-0201 and are what the restart check compares -- so each one is a
+ * fence that reports "changed" forever for a document interlock renders
+ * stably. The number arm is therefore {@link ../fencing/pyjson.ts | pyNumberText},
+ * the one transcription of CPython's `repr(int)` / `repr(float)` split, taking
+ * the DOCUMENT's spelling where the caller can supply it -- see {@link pyStrOf}
+ * for the form that looks it up, and {@link pyTypeName} for the identical
+ * argument about `type(x).__name__`.
+ *
+ * What the spelling cannot reach, so the claim above stays narrow: a number at
+ * a document's ROOT has no container slot to hang a spelling on, so an integral
+ * float there is `str()`-ed as an int. Every fencing artefact has an object at
+ * its root; the boundary is stated in the header of `src/fencing/pyjson.ts` and
+ * pinned by the differential corpus.
  *
  * Containers are NOT left to `String`. Python has no separate `str` for a
  * `list` or a `dict`: `str(x)` on a container IS `repr(x)`, so
@@ -699,7 +707,7 @@ export function pyTypeNameOf(container: unknown, key: string | number): string {
  * EVERY distinct object to one string, so two different fences would compare
  * equal.
  */
-export function pyStr(value: unknown): string {
+export function pyStr(value: unknown, spelling?: PyNumberSpelling | undefined): string {
   if (value === null || value === undefined) {
     return "None";
   }
@@ -710,9 +718,40 @@ export function pyStr(value: unknown): string {
     return value;
   }
   if (Array.isArray(value) || isPlainObject(value)) {
+    // No spelling is threaded in: `pyRepr`'s container arms read each child's
+    // spelling off the container they were handed, which is the one that holds
+    // the record.
     return pyRepr(value);
   }
+  if (typeof value === "number") {
+    // `str(x)` and `repr(x)` are the same text for a Python number.
+    return pyNumberText(value, spelling);
+  }
   return String(value);
+}
+
+/**
+ * `str(container[key])` with the SOURCE DOCUMENT's number spelling applied.
+ *
+ * The container-and-key companion of {@link pyStr}, alongside
+ * {@link pyTypeNameOf} and {@link ../fencing/pyrepr.ts | pyReprOf}, and used
+ * for the same reason all three exist: the spelling hangs on the container, so
+ * only a caller still holding it can ask a document-derived question.
+ *
+ * Note which container a caller has to pass, because the two available at the
+ * `role_kind` / `permission_mode` sites are not interchangeable: it is the one
+ * the value was READ OUT OF -- the role body -- and not one built around it
+ * afterwards. `permission_mode` is a META key, so it is stripped from the
+ * rendered body before `settingsPayload` sees it; passing the rendered object
+ * would find no record and silently answer as if the document had never spelled
+ * anything.
+ */
+export function pyStrOf(container: unknown, key: string | number): string {
+  const value =
+    typeof container === "object" && container !== null
+      ? (container as Record<string, unknown>)[String(key)]
+      : undefined;
+  return pyStr(value, pyNumberSpelling(container, key));
 }
 
 // Python's `repr()` is the neighbouring primitive and deliberately does NOT

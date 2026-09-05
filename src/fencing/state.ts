@@ -45,6 +45,7 @@ import {
   PyValueError,
   pyDict,
   pyIterate,
+  pyNumberSpelling,
   pyStr,
 } from "./pysemantics.js";
 import {
@@ -237,9 +238,19 @@ export function fenceFromJson(payload: Readonly<Record<string, unknown>>): Fence
     // Argument order is the source's, and it is observable: CPython evaluates
     // the arguments left to right, so a payload missing BOTH `role` and
     // `settings` reports `'role'`, not `'settings'`.
-    const role = pyStr(getItem(payload, "role"));
-    const roleKind = pyStr(getItem(payload, "role_kind"));
-    const permissionMode = pyStr(getItem(payload, "permission_mode"));
+    //
+    // `getItem` stays the lookup -- it is what raises the `KeyError` the order
+    // above is about -- and the spelling rides alongside it: `payload` came
+    // through `pyJsonLoads`, so a hand-edited fence file whose `role_kind` is a
+    // NUMBER round-trips its `1.0` instead of being rewritten as `1` on the
+    // next write (D-0095). The file this port writes always carries strings
+    // here, so this is about what it READS, which is anything on disk.
+    const role = pyStr(getItem(payload, "role"), pyNumberSpelling(payload, "role"));
+    const roleKind = pyStr(getItem(payload, "role_kind"), pyNumberSpelling(payload, "role_kind"));
+    const permissionMode = pyStr(
+      getItem(payload, "permission_mode"),
+      pyNumberSpelling(payload, "permission_mode"),
+    );
     const settings = getItem(payload, "settings");
     return new Fence({
       role,

@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { pyJsonLoads } from "./pyjson.js";
 import { normalizePath } from "./pypath.js";
 import { compilePythonRegex } from "./pyregex.js";
-import { pyRepr } from "./pyrepr.js";
+import { pyRepr, pyReprOf } from "./pyrepr.js";
 import {
   carryNumberSpellings,
   getOwn,
@@ -46,6 +46,7 @@ import {
   pySet,
   pyStr,
   pyStrip,
+  pyStrOf,
   pyTypeName,
   pyTypeNameOf,
   rememberKeyOrder,
@@ -608,8 +609,12 @@ export function checkRenderedSandboxDenyStrings(
         // `pyTypeNameOf(entries, index)` rather than `pyTypeName(entry)`, for
         // the reason the `permissions.deny` refusal gives: the container knows
         // the number spelling, so `1.0` reads `float` rather than `int`.
+        // `pyReprOf`, not `pyRepr(entry)`, for the same reason and off the same
+        // slot: `[1.0]` is `1.0` in interlock's sentence and was `1` here
+        // (D-0095). `entries` is the document's own array, not a `pyIterate`
+        // copy, so the spelling is still on it.
         `sandbox.filesystem.${key}[${index}] would reach the child as ` +
-          `${pyTypeNameOf(entries, index)}, not a string: ${pyRepr(entry)}`,
+          `${pyTypeNameOf(entries, index)}, not a string: ${pyReprOf(entries, index)}`,
       ]);
     }
   }
@@ -693,7 +698,14 @@ export function renderFence(
   // `body.get("permission_mode", "default")`: own key or the default. `in`
   // would find an inherited `permission_mode` that no author wrote.
   const authoredMode = Object.hasOwn(body, "permission_mode") ? body.permission_mode : "default";
-  reasons.push(...checkPermissionMode(authoredMode, globalCfg));
+  // Read once, off the role BODY -- the container the value came out of, and the
+  // only one that carries its spelling. `permission_mode` is a META key, so it
+  // is gone from `rendered` by the time the payload is built, which is why the
+  // spelling travels as a value rather than being looked up again downstream.
+  const authoredModeSpelling = Object.hasOwn(body, "permission_mode")
+    ? pyNumberSpelling(body, "permission_mode")
+    : undefined;
+  reasons.push(...checkPermissionMode(authoredMode, globalCfg, authoredModeSpelling));
   // D-0081. `default` means "ask a person"; a `claude -p` child has none, so
   // every Edit and Write it attempts is refused and the turn ends having
   // changed nothing (#120). The promotion is the whole of the fix, and it is
@@ -779,9 +791,12 @@ export function renderFence(
     ]);
     deny = [];
   }
-  for (const raw of deny as unknown[]) {
+  // `.entries()`, so the index is in hand: `deny` is the document's own array
+  // (not a `pyIterate` copy), so it still carries the number spellings its
+  // refusals name (D-0095).
+  for (const [index, raw] of (deny as unknown[]).entries()) {
     try {
-      rules.push(parsePermissionRule(raw));
+      rules.push(parsePermissionRule(raw, pyNumberSpelling(deny, index)));
     } catch (exc) {
       if (exc instanceof RuleSyntaxError) {
         reasons.push([RefusalReason.RULE_SYNTAX, exc.message]);
@@ -827,9 +842,10 @@ export function renderFence(
         ]);
         continue;
       }
-      for (const entry of entries) {
+      // @see the `permissions.deny` loop above for why the index is carried.
+      for (const [index, entry] of entries.entries()) {
         try {
-          rules.push(parseSandboxEntry(entry, kind));
+          rules.push(parseSandboxEntry(entry, kind, pyNumberSpelling(entries, index)));
         } catch (exc) {
           if (exc instanceof RuleSyntaxError) {
             reasons.push([RefusalReason.RULE_SYNTAX, exc.message]);
@@ -888,15 +904,30 @@ export function renderFence(
   // persists the raw value in `settings.permissionMode` and the `pyStr` of
   // it in `Fence.permissionMode`. Reproduced rather than tidied, because
   // `settings` is the dict a restart diffs.
-  const settings = settingsPayload(rendered, permissionMode);
+  // The spelling belongs to the AUTHORED value; a promotion substitutes a
+  // string literal for it, and a spelling left attached to that would be a
+  // stale record on a value from somewhere else.
+  const permissionModeSpelling = permissionMode === authoredMode ? authoredModeSpelling : undefined;
+  const settings = settingsPayload(rendered, permissionMode, permissionModeSpelling);
   return new Fence({
     role,
     // `str(body.get("role_kind", "worker"))`. `pyStr`, not `String`: an
     // explicit `"role_kind": null` is `"None"` in the source and `"null"`
     // under `String`, and `roleKind` is part of what a restart diff
     // compares -- a mismatch there reads as "the fence changed".
-    roleKind: Object.hasOwn(body, "role_kind") ? pyStr(body.role_kind) : "worker",
-    permissionMode: pyStr(permissionMode),
+    // `pyStrOf(body, ...)`, not `pyStr(body.role_kind)`: a number's `str()` is
+    // the DOCUMENT's, and the spelling for both fields lives on the role body
+    // (D-0095). `"role_kind": 1.0` persisted `"1"` here and `"1.0"` in
+    // interlock, and `"role_kind": 9007199254740993` persisted the rounded
+    // double -- in two fields the restart check compares, so either one was a
+    // fence that reports "changed" forever.
+    roleKind: Object.hasOwn(body, "role_kind") ? pyStrOf(body, "role_kind") : "worker",
+    // NOT `pyStrOf(body, "permission_mode")`: `permissionMode` is the PROMOTED
+    // value on the non-interactive path (D-0081), which is a different value
+    // from the authored one and must not be given the authored one's spelling.
+    // The promotion replaces a document number with a string literal, so the
+    // spelling is carried only while the value is still the authored one.
+    permissionMode: pyStr(permissionMode, permissionModeSpelling),
     rules: deduped,
     settings,
   });
@@ -920,6 +951,11 @@ export function renderFence(
 function checkPermissionMode(
   mode: unknown,
   globalCfg: Readonly<Record<string, unknown>>,
+  // The spelling of the slot `mode` was read out of, when it came from one --
+  // the refusal below names the value, and `1.0` is `1.0` in interlock's
+  // sentence (D-0095). Absent for the promoted mode, which is a literal in
+  // this file and has no document behind it.
+  modeSpelling?: PyNumberSpelling | undefined,
 ): Reason[] {
   // `global_cfg.get("permission_modes") or ["default", "plan", "acceptEdits"]`
   // (renderer.py:311). A truthy non-list is USED AS IS -- Python never checks
@@ -944,7 +980,11 @@ function checkPermissionMode(
     // stable for the all-strings case, which is the only one a real document
     // reaches.
     const sorted = pyIterate(allowed)
-      .map((v) => pyStr(v))
+      // The spelling is read off `allowed`, the document's own list, by the
+      // index the copy preserves -- `pyIterate` returns `[...value]` and drops
+      // the index-keyed record on purpose (D-0212), so the copy cannot answer
+      // for itself. Without it a `permission_modes: [1.0]` is listed as `1`.
+      .map((v, index) => pyStr(v, pyNumberSpelling(allowed, index)))
       .sort();
     return [
       [
@@ -954,7 +994,7 @@ function checkPermissionMode(
         // joiner and the per-item quoting all come from `pyRepr`, not from
         // hand-written punctuation that gets the escaping wrong for a mode
         // containing an apostrophe or a backslash.
-        `permission_mode ${pyRepr(mode)} is not one of ${pyRepr(sorted)}`,
+        `permission_mode ${pyRepr(mode, modeSpelling)} is not one of ${pyRepr(sorted)}`,
       ],
     ];
   }
@@ -1494,6 +1534,13 @@ function settingsPayload(
   // coerces, and the payload is persisted verbatim. Narrowing it here would
   // quietly insert a `str()` the source does not perform.
   permissionMode: unknown,
+  // ...which is exactly why the spelling has to arrive with it. The value is
+  // persisted AS A NUMBER when the document authored one, and this payload is
+  // `settings.local.json`, the fence digest input and half of the restart
+  // comparison. `permission_mode` is a META key, stripped by `stripMeta`, so
+  // there is no slot on `rendered` to look the spelling up from and the caller
+  // is the last holder of it (D-0095).
+  permissionModeSpelling?: PyNumberSpelling | undefined,
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = { permissionMode };
   // Carried key by key rather than with `carryNumberSpellings`, and that is the
@@ -1503,6 +1550,13 @@ function settingsPayload(
   // to author -- a stale spelling on a value from somewhere else, which is the
   // trap `carryNumberSpellings` itself warns about.
   const spellings = new Map<string, PyNumberSpelling>();
+  if (permissionModeSpelling !== undefined) {
+    // Measured before this carry existed: a role document spelling
+    // `"permission_mode": 1.0` (with `global.permission_modes` admitting it)
+    // rendered `"permissionMode": 1` where CPython writes `1.0`, and
+    // `9007199254740993` rendered as the rounded double.
+    spellings.set("permissionMode", permissionModeSpelling);
+  }
   for (const key of ["permissions", "sandbox", "hooks", "env"]) {
     // `key in rendered` on a document-derived object: `Object.hasOwn` keeps
     // an inherited member from being copied into the child's settings, which
