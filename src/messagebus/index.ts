@@ -16,12 +16,22 @@
  * `test/messagebus/import-graph.test.ts` fails the build the day such an edge
  * appears (interlock gate item 6's static assertion, paired with item 11's).
  *
- * Per interlock's F1 there is no non-interactive way to push a message *into* a
- * running worker session, so the transport is **worker-outbound**: the worker
- * connects to `./endpoint.js` as an MCP client and pulls. Delivery decisions --
- * what is due, what resends, what is settled -- derive from SQLite alone
- * ({@link Outbox.due}), never from a session readout, which is what item 6 asks
- * and what the missing import edge makes structural rather than disciplinary.
+ * The transport is **worker-outbound**: the worker connects to `./endpoint.js`
+ * as an MCP client and pulls. Delivery decisions -- what is due, what resends,
+ * what is settled -- derive from SQLite alone ({@link Outbox.due}), never from a
+ * session readout, which is what item 6 asks and what the missing import edge
+ * makes structural rather than disciplinary.
+ *
+ * **That no longer rests on interlock's F1.** F1 said there is no
+ * non-interactive way to push a message *into* a running worker session; a
+ * measurement on 2026-09-05 (`claude 2.1.261`, `-p --input-format stream-json`)
+ * observed a message written to a running turn's stdin acted on at the next
+ * tool-call boundary, so the clause is false for this executor. What survives is
+ * what worker-outbound was actually derived from and what the paragraph above
+ * states: delivery decisions from SQLite alone, no liveness coupling, and resend
+ * by default. A wake over that stdin would be executor-specific and would carry
+ * no payload authority, so it could only advance the next poll -- never settle a
+ * message. See `docs/design/messagebus-wake-hint.md`, propose-only.
  *
  * The barrel names the bus and its envelope only. The endpoint is a process
  * (`node dist/messagebus/endpoint.js`), reached by path the way the deny hook
