@@ -92,7 +92,7 @@ import {
   WorkspaceMaterializationRefused,
   WorkspaceMaterializationUsageError,
 } from "../workspace/materializer.js";
-import { type LapOutcome, LapUsageError, performLap } from "./root.js";
+import { type LapOutcome, LapUsageError, performLap, requireModel } from "./root.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -120,6 +120,15 @@ const CLAUDE_COMMAND_HELP =
   "script); every token must be absolute. Required: a bare name would be " +
   "resolved through PATH, and the fence cannot rest on which directory the " +
   "worker happens to be started from.";
+const MODEL_HELP =
+  "the model the worker runs on, as a plain model id (claude-opus-5, sonnet, " +
+  "us.anthropic.claude-sonnet-4-5-20250929-v1:0). Appended to every spawn of " +
+  "this lap's session as '--model <MODEL>'. Omitted by default, and omitting " +
+  "it is not a neutral choice: the child then runs on whatever the worker CLI " +
+  "defaults to, which this stack does not decide and cannot report. Refused " +
+  "unless it starts with a letter or a digit and uses only letters, digits, " +
+  "'.', '_', ':' and '-' after it -- the value becomes a token in the fenced " +
+  "child's command line, so it must not be spellable as a second argument.";
 const ENDPOINT_RECIPIENT_HELP =
   "the one recipient the worker's endpoint serves. Must be one the outbox has a handler " +
   "registered for (see the list this flag accepts above); a recipient with no handler is " +
@@ -399,6 +408,15 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
             ? null
             : { message: outcome.endpointLeaseFailure.message },
         elapsed_deadline_at_ms: outcome.elapsedDeadlineAtMs,
+        // **A key added under the same `/1`, which is the version story this
+        // module's `PERFORM_SCHEMA` states rather than an exception to it**: an
+        // unread key is one every JSON reader already handles, and `/2` is for
+        // a change a host cannot absorb. It is here because a host that drives
+        // laps is the thing that has to account for what they cost, and until
+        // `D-0099` no surface in this stack could tell it which model a lap ran
+        // on. `null` says the choice was the worker CLI's, which is a different
+        // fact from any model name and is reported as such.
+        model: outcome.model,
       }),
     );
     return;
@@ -424,7 +442,15 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
       `on ${pythonRepr(outcome.intent.topicBranch)} at ${outcome.materialized.baseCommit}, session ` +
       `${outcome.orchestration.sessionId} ${outcome.orchestration.path}, gate ` +
       `${outcome.ingested.gateId} over event ${outcome.ingested.eventId} at seq ` +
-      `${outcome.ingested.eventSeq}\n`,
+      `${outcome.ingested.eventSeq}` +
+      // **The one clause that is present or absent rather than always there**,
+      // and the asymmetry with the JSON document's always-present `model` key is
+      // deliberate. A host has to be able to tell "the operator chose" from "the
+      // CLI chose" without knowing which keys to expect, so the document says
+      // `null`; a person reading a line already knows whether they typed the
+      // flag, and a lap that named no model prints the line it has always
+      // printed, byte for byte (`D-0099`).
+      `${outcome.model === null ? "" : `, model ${pythonRepr(outcome.model)}`}\n`,
   );
   if (outcome.endpointLeaseFailure !== null) {
     // Its own line, on stdout beside the success it qualifies, exactly as the
@@ -469,9 +495,7 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
   const path = String(args["db"]);
   const stateRoot = String(args["state_root"]);
   const claudeCommand = claudeCommandOf(args);
-  const provider = createDefaultSessionProvider(stateRoot, {
-    ...(claudeCommand === undefined ? {} : { claudeCommand }),
-  });
+  const model = optionalText(args, "model");
   const endpointModule = optionalText(args, "endpoint_module");
   const endpointDatabase = optionalText(args, "endpoint_db");
   const node = optionalText(args, "node");
@@ -485,6 +509,37 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
   const json = jsonRequested(args);
 
   try {
+    // **Before the provider is constructed, and that order is the whole of why
+    // this call exists** (`D-0099`). The provider takes the model as
+    // `base_cli_args` and raises `PyValueError` at construction on any flag it
+    // renders itself -- so `--model=-p` met that guard first, and a rule whose
+    // promise is one line and exit 2 produced a stack trace and exit 1, with no
+    // refusal document under `--json`. The rule itself is `root.ts`'s and is
+    // stated once there; `performLap`'s preflight asks it again for its own
+    // callers.
+    requireModel(model);
+    const provider = createDefaultSessionProvider(stateRoot, {
+      ...(claudeCommand === undefined ? {} : { claudeCommand }),
+      // **This is where model selection lives** (`D-0099`), and the seam is the
+      // provider's own: `baseCliArgs` is documented there as the one for
+      // provider-wide choices "(a pinned `--model`, say)", appended to every
+      // spawn before the per-role `cli_args` and after the flags the provider
+      // renders itself. Nothing else in the stack had a place for the choice --
+      // `roles.json` carries no model key and is not going to (`D-0014`: a role
+      // is not an executor), the `cli_args` allowlist is a per-run operator
+      // vector checked by whole-vector equality (`D-0088`), and the admitted
+      // record fixes what a run may do rather than what it costs.
+      //
+      // Two tokens and never one: `--model=<id>` would be a single token whose
+      // interpretation belongs to the child's parser, and the value has been
+      // checked as an id on the assumption that it arrives as its own argument.
+      //
+      // Constructed AFTER the check above and handed to `performLap` below to be
+      // CHECKED again, exactly as `--claude-command` and `--state-root` are
+      // (`D-0067`): this constructor has a guard of its own over `base_cli_args`,
+      // and reaching it first turned an operator's typo into a stack trace.
+      ...(model === undefined ? {} : { baseCliArgs: ["--model", model] }),
+    });
     const connection = openProductionControlPlane(path);
     try {
       const outcome = await performLap(connection, provider, provider, {
@@ -497,6 +552,11 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         // until the admitted intent has been read.
         providerStateRoot: stateRoot,
         ...(claudeCommand === undefined ? {} : { workerCommand: claudeCommand }),
+        // Handed over to be CHECKED, like the two above it (`D-0099`): the
+        // provider is already built over this value, and `preflight` is where
+        // an argument an operator typed is refused before a branch, a worktree
+        // and the one global delivery lease exist.
+        ...(model === undefined ? {} : { model }),
         endpoint: {
           recipient: String(args["endpoint_recipient"]),
           destinationDir: String(args["endpoint_destination_dir"]),
@@ -602,6 +662,11 @@ export function addSubparsers(sub: Subparsers): void {
     metavar: "CLAUDE_COMMAND",
     help: CLAUDE_COMMAND_HELP,
   });
+
+  // which model the worker runs on (`D-0099`). Optional, and its absence is
+  // what every lap before it did: no token is appended and the worker CLI's own
+  // default applies.
+  addOptional(perform, "--model", "model", MODEL_HELP);
 
   // the role document's placeholders
   addRequired(perform, "--interlock-root", "interlock_root", INTERLOCK_ROOT_HELP);

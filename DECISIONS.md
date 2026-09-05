@@ -193,6 +193,7 @@ spaces distinct.
 | D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
 | D-0096 | continuo's database is not a public read surface; `run show` is | accepted |
 | D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present\|deliver\|ack` join the `--json` envelope | accepted |
+| D-0099 | Model selection is a `lap perform --model` flag over the provider's `base_cli_args`, not a `roles.json` key and not an admitted argument | accepted |
 
 ---
 
@@ -15239,3 +15240,166 @@ principle, `D-0092` for the amendment this one follows. cadenza `C-4` / `C-13` a
 `D-0019`..`D-0099` shared band, checked against `origin/main` at `ab24daa`, where `D-0095` is the
 last taken id; `D-0096` is claimed by the parallel lane on #166, so this entry takes `D-0097`.
 Re-checked at merge.
+
+---
+
+## D-0099 -- Model selection is a `lap perform --model` flag over the provider's `base_cli_args`, not a `roles.json` key and not an admitted argument
+
+**Context.** rondo's `docs/operations/lap-1-dogfood.md` finding F-2 drove one real lap end to end and
+asked for "the cheapest model continuo permits". There is no such setting anywhere in the stack, and
+the finding says where it looked: `lap perform` has no `--model` flag; `dist/fencing/roles.json`
+carries no model key for any of the four roles; and cadenza's `executorPolicy.modelTier` is carried
+through rondo's plan into `agent_type_digest`, persisted, and read by nobody -- rondo's own facade
+says `executorPolicy` is "carried and never interpreted". The obvious workaround is closed by
+design: `claudeCommand` is a command prefix in which **every token must be absolute** (`D-0067`), so
+a caller cannot append `--model` to it.
+
+What that costs was measured rather than estimated. The child ran on `claude-opus-5`, at
+`total_cost_usd: 0.0989` and 9,279 cache-creation tokens for a one-word reply -- and the 9,279 is the
+fence's own preamble, so it is a floor under every lap rather than an artefact of that prompt. At one
+lap per request that is the unit cost of the loop, and until this entry it was set by whichever model
+the operator's `claude` CLI happened to default to.
+
+**Measurements.**
+
+1. **The seam already existed and was already named for this.**
+   `ClaudeCliSessionProviderOptions.baseCliArgs` in `src/session/claude_cli_provider.ts` documents
+   itself as *"Arguments appended to every spawn this provider makes, before the per-session
+   `cli_args`. The seam for provider-wide choices (a pinned `--model`, say) that are not per-role
+   configuration."* Nothing reached it: `lap/cli.ts` constructed the provider with `claudeCommand`
+   and nothing else. So the gap was one unwired option and not a missing mechanism.
+
+2. **The ordering the seam sits in is the one that matters.** The start argv is the provider's own
+   flags, then `base_cli_args`, then the per-role `cli_args` -- so a model appended here can never
+   precede, and so never override, the committed `--session-id` or the structured-readout flags. The
+   constructor enforces the same thing from the other side: `base_cli_args` carrying any
+   `PROVIDER_OWNED_FLAGS` entry raises at construction.
+
+3. **`--model` is owned by nobody else.** It is absent from `PROVIDER_OWNED_FLAGS` (the nine flags
+   the provider renders itself) and from `FENCE_OWNED_FLAGS` (`--settings`, `--permission-mode`,
+   `--mcp-config`, `--setting-sources`, `--strict-mcp-config`). There is therefore no existing rule
+   this flag has to be excepted from, and none it silently collides with.
+
+4. **The two other places the choice could have lived each refuse it for a stated reason.**
+   `roles.json` is the role document, and `D-0014` keeps executor vocabulary out of it -- a role is
+   what a worker *is*, not what runs it, and the same four roles are meant to be performable on
+   different models. The `cli_args` allowlist is a **whole-vector equality** check over the arguments
+   an admitted run may pass (`D-0088`), authorising nothing as shipped; routing a model through it
+   would make every model choice a reviewed edit to a document, which is the right weight for an
+   operator argument that alters the fence and the wrong weight for naming a model.
+
+**Decision.**
+
+1. **`lap perform --model MODEL`, optional, and its value becomes the provider's `base_cli_args` as
+   the two tokens `--model <MODEL>`.** Model selection lives at the lap's composition root: it is a
+   per-invocation choice by whoever drives the verb, which is the same layer that already chooses
+   the worker CLI, the state root and the turn budget. Two tokens and never the attached
+   `--model=<id>` form, because an attached token's interpretation belongs to the child's parser and
+   the value has been checked on the assumption that it arrives as its own argument.
+
+2. **Absent by default, and absence is byte-identical to every lap before this entry.** No token is
+   appended, no `base_cli_args` is passed (not even `[]`), and the child runs on whatever the worker
+   CLI defaults to. A caller that does not pass the flag cannot tell this change happened.
+
+3. **The value is refused unless it is a plain model id**, matched against
+   `/^[A-Za-z0-9][A-Za-z0-9._:-]*$/` with a 128-character bound. An allowlist of characters rather
+   than a denylist of dangerous spellings, for `D-0088`'s reason: the option surface on the far side
+   of this token belongs to a CLI this repository does not own. The narrow **first** character is
+   what carries the weight -- a leading `-` is unspellable, so the value cannot reach the child's
+   parser looking like a flag. Path separators, whitespace, `=`, control characters and every
+   non-ASCII byte are refused with it. The class is what ids in circulation actually use
+   (`claude-opus-5`, `sonnet`, `us.anthropic.claude-sonnet-4-5-20250929-v1:0`).
+
+4. **The rule is an entry in `performLap`'s preflight**, so an ill-formed model is refused before the
+   branch, the worktree, the fence and the one global delivery lease exist -- and a corrected retry
+   is still free rather than costing the run identifier (`D-0057`). The value is threaded into
+   `LapRequest` **to be checked and not to be used**, exactly as `providerStateRoot` and
+   `workerCommand` are (`D-0067`): the caller has already built the provider over it.
+
+   **And the verb asks the same rule once more, before it constructs the provider at all.** This was
+   found by review rather than by design and is the one thing about this entry that was wrong on the
+   first pass. The provider's constructor has a guard of its own -- `base_cli_args` carrying any
+   flag it renders itself raises `PyValueError`, deliberately at construction, because for the
+   provider that is a programmer error and not an operator's typo. With the check living only in the
+   preflight, a `--model=-p` met that guard **first**: `PyValueError` is not an operator refusal, the
+   construction was outside the verb's `try`, and a rule whose whole promise is one line and exit 2
+   delivered a stack trace and exit 1, with no refusal document under `--json`. The rule is still
+   stated once, in `root.ts`; only the call is in two places, which is exactly what `requireCompletion`
+   already does and for the same reason -- `performLap` is reachable without the verb, so the
+   preflight's call cannot be dropped in favour of the verb's.
+
+5. **The model is reported, in both spellings.** The `--json` document gains a `model` key -- the id,
+   or `null` when the choice was the worker CLI's -- under the same `continuo.lap.perform/1`, which
+   is that schema's stated version story rather than an exception to it: an added key is one every
+   JSON reader already handles. The human success line gains `, model '<id>'` when one was named and
+   is unchanged when none was. A host that drives laps is the thing that has to account for what they
+   cost, and until now no surface in this stack could tell it which model a lap ran on.
+
+6. **`roles.json` does not gain a model key, and the admitted record does not gain a model field.**
+   Per measurement 4 for the first. For the second: what admission fixes is what a run may *do*, and
+   the model a lap ran on is not a constraint on the run -- it is a property of the invocation, and
+   recording it on the spine would make it look like something a later step could be held to.
+
+**What rondo passes, and what is not implemented here.** The mapping from cadenza's
+`executorPolicy.modelTier` to a model id is rondo's, and belongs beside `mapNeutralRole` in its role
+adapter. This entry implements only continuo's half: rondo reads the tier it has been carrying,
+maps it to an id, and passes that id as `lap perform --model <id>`. continuo does not learn the
+word "tier", and a tier that maps to no id is a rondo-side refusal -- the flag omitted, which is the
+default this entry keeps.
+
+**What this does not claim.** The rule does not say the id names a model the worker CLI knows, and
+it cannot: that roster belongs to the CLI and changes without this build. A well-formed but unknown
+id is refused by the child, late, which is where an unknown one has always been refused. What is
+settled here is the checkable half -- that the token continuo appends is a model id and not a second
+argument.
+
+**Residuals, stated rather than left to be found.**
+
+- The model is **not on the spine**. A later reader of the control plane cannot tell what a finished
+  run cost; the fact reaches a host through the `--json` document at the time of the lap and nowhere
+  else. Recording it would be an event-payload change, and no reader has asked for one.
+- A future `cli_args_allow.json` entry whose vector carries its own `--model` would be appended
+  **after** `base_cli_args` and would win. The document authorises nothing as shipped and every
+  addition is a reviewed edit with a written reason (`D-0088`); this is one of the things such a
+  review has to look for.
+- The capability probe is not taught `--model`. `CAPABILITY_FLAGS` covers the flags the provider
+  renders itself, and a worker CLI too old to have `--model` fails at the child rather than at the
+  probe.
+
+**Falsification.**
+
+- The flag reaches the child's argv exactly once and behind the provider's own flags -- read off
+  `record.json`, the provider's durable record of the vector it spawned, not off the intent to build
+  one. Red under a value threaded through both the provider and the request.
+- Seven values that are not plain model ids -- a flag, two of the provider's own flags, two arguments
+  in one, a path, an attached-value form, and empty -- each exit 2 with a `LapUsageError` document on
+  stderr, stdout empty, and **no worktree and no `workspace_materialized` event**. Red under a rule
+  stated anywhere later than the preflight, and the two provider-owned flags are red under a rule
+  asked anywhere later than the provider's constructor.
+- Omitting the flag leaves the spawned argv equal, element by element, to the same lap's argv with
+  the two tokens excised. Asserted as that comparison and not as "does not contain `--model`", which
+  a `base_cli_args: []` or an empty appended value would both pass.
+
+**Status.** accepted
+
+**Falsifier.** A worker CLI whose model selection stops being a single `--model <id>` argument -- a
+per-turn choice, a config file, a flag that takes a path -- makes point 1's shape wrong, and the
+choice would have to move to wherever that CLI reads it from. Also falsifying: a measurement showing
+that two roles in one lap need different models (which would make point 6's first half wrong and put
+the key in the role document after all), or a reader that needs the model of a *finished* run
+(which would make the first residual a defect and put it on the spine).
+
+**Source.** #175, and rondo `docs/operations/lap-1-dogfood.md` F-2 for the measurement. `D-0067` for
+the every-token-absolute rule on `claudeCommand` this flag deliberately does not weaken, `D-0088` for
+the `cli_args` allowlist and the allowlist-over-denylist reasoning, `D-0014` for why the role document
+holds no executor vocabulary, `D-0057` for what a late refusal costs, `D-0090` for the envelope and
+its version story. Decision id allocated from the `D-0019`..`D-0099` shared band, checked against
+`origin/main` at `0f40012`, where `D-0097` is the last taken id; `D-0098` is claimed by the parallel
+lane on #174, so this entry takes `D-0099`. Re-checked at merge.
+
+**This exhausts the `D-0019`..`D-0099` shared band.** `D-0098` and `D-0099` are its last two ids,
+and both are now claimed. The next cross-belt decision taken at the window has no id to allocate and
+must first widen the band -- an edit to "How to use this file" at the top of this document, naming
+the new range -- rather than reaching into a belt's range, which the same note says means nothing
+about an entry but would still make the allocation unreadable. Flagged here because the exhaustion
+is discoverable only by counting, and the entry that discovers it is the one that cannot proceed.
