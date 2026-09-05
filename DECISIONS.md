@@ -14426,7 +14426,8 @@ parse, which would mean the conditional in the guarantee sentence is not the onl
 
 **Source.** #131, with #130 and `docs/operations/lap-1-dogfood.md` section 9.5 F-8 for the two halves
 this unifies. `D-0082` for the repair this fences and the two claims corrected above.
-`docs/operations/upstream/cli-sandbox-deny-voids-permissions.md` is the report written for filing
-upstream; #131 stays open until that link exists. Decision id allocated from the `D-0019`..`D-0099`
-shared band, checked against `origin/main` at `44f6233`, where `D-0092` is the last taken id, and
-re-checked at rebase.
+`docs/operations/upstream/cli-sandbox-deny-voids-permissions.md` is the report, filed upstream as
+[anthropics/claude-code#92365](https://github.com/anthropics/claude-code/issues/92365); #131 stays
+open until that issue resolves, because the guarantee sentence above holds only while it does.
+Decision id allocated from the `D-0019`..`D-0099` shared band, checked against `origin/main` at
+`44f6233`, where `D-0092` is the last taken id, and re-checked at rebase.

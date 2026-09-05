@@ -1,7 +1,9 @@
 # A non-string entry in `sandbox.filesystem.denyRead` / `denyWrite` silently disables `permissions.deny` and `PreToolUse` hooks
 
-*Written to be filed upstream against the Claude Code CLI. It is self-contained on purpose: a reader
-needs nothing from this repository to replay it.*
+*Filed upstream as
+[anthropics/claude-code#92365](https://github.com/anthropics/claude-code/issues/92365). Kept in tree
+as the record of what was measured and how; it is self-contained on purpose, so a reader needs
+nothing from this repository to replay it. `D-0093` is the decision it belongs to.*
 
 ## Summary
 
