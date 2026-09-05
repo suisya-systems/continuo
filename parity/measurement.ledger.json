@@ -45,19 +45,19 @@
       "behaviour": "The read-only probe is refused as inconclusive whenever any writer holds the database, because a blocked write and a read-only file are told apart only by SQLite's result code and a blocked write yields no verdict on the file's access mode.",
       "matches_source": true,
       "note": "Interlock reaches the same outcome deliberately -- an unproved capability is refused on the same terms as an absent one -- and its own docstring states the operational consequence: a report against a busy control plane may simply not open. The port reproduces this rather than adding a retry, because a retry would be a behaviour change on the safety-critical path.",
-      "where_a_fix_belongs": "upstream, in interlock's measurement/reader.py, or in a change that moves both sides together."
+      "where_a_fix_belongs": "Nowhere available: telling a blocked write from a read-only file needs more than SQLite's result code, and the one alternative considered -- a retry -- was rejected as a behaviour change on the safety-critical path. Any other repair would have to move both sides together, and interlock is frozen (D-0023)."
     },
     {
       "behaviour": "A report snapshot holds a SHARED lock for the whole report, blocking every writer on the control plane for its duration.",
       "matches_source": true,
       "note": "Stated as a cost rather than fixed, in interlock and here: the production database is not in WAL (D-0012 / interlock production-schema.md section 3), and the alternative -- an unlocked report -- is the incoherent one the snapshot exists to remove.",
-      "where_a_fix_belongs": "upstream; it is a consequence of the journal mode, not of this module."
+      "where_a_fix_belongs": "Nowhere in this module or its port: it is a consequence of the production database's journal mode (D-0012), which neither implementation configures, and the alternative -- an unlocked report -- is the incoherence the snapshot exists to remove."
     },
     {
       "behaviour": "Interlock's suite does not pin the snapshot's materialising read: its snapshot case reads before challenging a writer, so a measurement_snapshot that took no SHARED lock until the report's first query would leave the whole suite green.",
       "matches_source": true,
       "note": "Found by a mutation sweep on the port, then confirmed against interlock 65f36c5. The port reproduces the production behaviour exactly (the materialising read is present, as it is upstream) and does NOT silently fix anything; it adds a target-only test so the property stops being unguarded on this side. Disclosed rather than fixed upstream because interlock#74 acceptance criterion 5 requires known limitations to stay disclosed, and because a test added to interlock is a change to the other side of the parity comparison.",
-      "where_a_fix_belongs": "upstream, as the same case added to interlock's tests/measurement/test_reader.py."
+      "where_a_fix_belongs": "interlock's own suite, if it were still being changed. It is not (D-0023), so the repair lives in the target-only case this entry already records."
     }
   ],
   "entries": [

@@ -121,7 +121,7 @@
     {
       "what": "`_literal_path_prefix` opens with `if not parts: return None`, which is unreachable: `''.split('/')` is `['']` in both languages, never the empty list.",
       "matches_source": true,
-      "where_a_fix_belongs": "Upstream, if anywhere. The port keeps the guard rather than tidying it away, because a guard removed for being currently dead is a guard the next reader has to re-derive."
+      "where_a_fix_belongs": "Nowhere; there is nothing to repair. The guard is dead rather than wrong, and the port keeps it rather than tidying it away, because a guard removed for being currently dead is a guard the next reader has to re-derive."
     },
     {
       "what": "A non-string entry in `sandbox.filesystem.additionalDirectories` reaches `os.path.normpath` and raises. The port raises a typed `PyTypeError` at the same point with its own message rather than forging CPython's `expected str, bytes or os.PathLike object` wording.",

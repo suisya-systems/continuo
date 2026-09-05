@@ -119,7 +119,7 @@
       "behaviour": "iso8601Ms refuses an instant past 9999-12-31T23:59:59.999Z with a PeriodRefused, where Python raises OverflowError from datetime's own ceiling.",
       "matches_source": false,
       "note": "A disclosed divergence in the refusal TYPE, not in what is accepted: both stop, at the same instant, and neither renders a header. The source's failure escapes the ControlPlaneRefusal family and arrives as an arithmetic error with no explanation; this port keeps it inside the family the caller is already catching and says what the limit is. No ported case reaches it.",
-      "where_a_fix_belongs": "upstream, if interlock ever wants that boundary inside its refusal hierarchy."
+      "where_a_fix_belongs": "Nowhere; interlock is frozen (D-0023) and this port already carries the narrower refusal, so the divergence in refusal type stands as disclosed rather than as work owed on either side."
     }
   ],
   "entries": [

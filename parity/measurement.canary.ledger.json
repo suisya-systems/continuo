@@ -101,7 +101,7 @@
       "behaviour": "Both v1 inputs -- the writer ledger and the ownership list -- are whatever the adapter hands over, and nothing here can tell a partial read from a complete one. A writer ledger missing half of v1's records reports fewer dual writes and says nothing about it.",
       "matches_source": true,
       "note": "Structural upstream and reproduced. The separable-adapter design is a requirement (this module must not open v1's files during the cutover that moves them), and the confusion it CAN prevent -- an empty read read as 'v1 wrote nothing' -- it prevents by degrading to the absent state and making the empty claim reachable only through attestsEmpty.",
-      "where_a_fix_belongs": "upstream, in the adapter's own provenance."
+      "where_a_fix_belongs": "In the v1 adapter's own provenance, which is not part of this repository: the separable-adapter design requires this module not to open v1's files during the cutover, so there is nothing here to strengthen. Not a repair continuo can make from inside this module."
     },
     {
       "behaviour": "The report states no verdict, so nothing in it says whether the canary may proceed.",
