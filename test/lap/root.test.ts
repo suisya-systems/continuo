@@ -592,6 +592,136 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
 });
 
 // --------------------------------------------------------------------------
+// D-1102: the session a post-walk refusal is about, as a field
+// --------------------------------------------------------------------------
+
+/**
+ * The identity every refusal this function raises carries, and where it comes
+ * from.
+ *
+ * `lap perform --json` puts `LapRefused.sessionId` on the wire as the envelope's
+ * top-level `session_id`, and the CLI reads the FIELD -- so a refusal that
+ * quoted the id in its sentence and left the field unset would ship a document
+ * with no identity in it while every message-matching case above stayed green.
+ * That is the hole these cases stand in front of, and they are here rather than
+ * in `cli.test.ts` because this is the function that decides the value; the CLI
+ * only spells it.
+ *
+ * `awaitTerminalReport` is reached only after the walk returned an
+ * `OrchestrationOutcome`, so the identity it polls on has been read back and
+ * committed. Every refusal below is therefore about a session this lap owns,
+ * which is the condition `D-1102` states.
+ */
+describe("D-1102: a post-walk refusal names the session it is about", () => {
+  test("the provider's refusal to read the transcript carries the session", async () => {
+    const refusal = await expectRefusalAsync(
+      () =>
+        awaitTerminalReport(
+          scriptedReader([new Failure(FailureKind.UNKNOWN_SESSION, "no such session")]),
+          SESSION,
+          {
+            pollIntervalMs: 0,
+            timeoutMs: 10_000,
+            sleep: recordingSleep(),
+            elapsedMs: tickingClock(1),
+          },
+        ),
+      LapRefused,
+      /could not be read/,
+    );
+    expect(refusal.sessionId).toBe(SESSION);
+  });
+
+  test("a turn that said nothing carries the session", async () => {
+    const refusal = await expectRefusalAsync(
+      () =>
+        awaitTerminalReport(
+          scriptedReader([
+            new Ok<LapTerminalReadout>({
+              kind: "no-report",
+              pending: false,
+              reason: "the turn ended with a blank result",
+            }),
+          ]),
+          SESSION,
+          {
+            pollIntervalMs: 0,
+            timeoutMs: 10_000,
+            sleep: recordingSleep(),
+            elapsedMs: tickingClock(1),
+          },
+        ),
+      LapRefused,
+      /without a report to escalate/,
+    );
+    expect(refusal.sessionId).toBe(SESSION);
+  });
+
+  test("the exhausted budget carries the session", async () => {
+    const refusal = await expectRefusalAsync(
+      () =>
+        awaitTerminalReport(scriptedReader([stillRunning(), stillRunning()]), SESSION, {
+          pollIntervalMs: 0,
+          timeoutMs: 500,
+          sleep: recordingSleep(),
+          elapsedMs: tickingClock(500),
+        }),
+      LapRefused,
+      /did not finish its turn/,
+    );
+    expect(refusal.sessionId).toBe(SESSION);
+  });
+
+  test("a report about somebody else names THIS lap's session, not the reader's", async () => {
+    // The one case where two identities are in scope at once, and the field has
+    // to be the right one. `session_id` says which session the refusal is
+    // ABOUT: an operator acting on this document stops, reads or correlates
+    // that session, and the id the reader offered belongs to a session this lap
+    // never started -- so a field taken from `readout.sessionId` would send a
+    // host after another run's worker, which is the harm the refusal itself
+    // exists to prevent, arriving one field along.
+    const refusal = await expectRefusalAsync(
+      () =>
+        awaitTerminalReport(
+          scriptedReader([
+            new Ok<LapTerminalReadout>({
+              kind: "report",
+              sessionId: "some-other-session",
+              generation: 0,
+              report: "a report about somebody else's turn",
+              terminalReason: "completed",
+              subtype: "success",
+              isError: false,
+              returncode: 0,
+            }),
+          ]),
+          SESSION,
+          {
+            pollIntervalMs: 0,
+            timeoutMs: 10_000,
+            sleep: recordingSleep(),
+            elapsedMs: tickingClock(1),
+          },
+        ),
+      LapRefused,
+      /is about some-other-session/,
+    );
+    expect(refusal.sessionId).toBe(SESSION);
+    expect(refusal.sessionId).not.toBe("some-other-session");
+  });
+
+  test("a refusal raised before any session has no identity to name", async () => {
+    // The other half of "present when known". A class that defaulted the field
+    // to something -- the empty string, a placeholder -- would make every
+    // refusal look like one about a session, and the CLI would then have to
+    // decide which values are real. `undefined` is the one spelling of
+    // "unknown", and the envelope drops the key over it.
+    const refusal = new LapRefused("the run was never admitted");
+    expect(refusal.sessionId).toBeUndefined();
+  });
+});
+
+// --------------------------------------------------------------------------
 // D-0088: the cli_args allowlist, asked again at the head of the lap
 // --------------------------------------------------------------------------
 
