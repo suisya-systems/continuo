@@ -87,9 +87,11 @@ a push. That is the whole of section 2.
 - **Pure text generation with no tool-call boundary.** Every observation above is anchored to a
   `tool_result`. A turn that generates prose and calls nothing has no measured boundary, and this
   measurement says nothing about when -- or whether -- a stdin message is seen inside one.
-- **A single very long tool call.** Latency is bounded by the *longest single tool call*, and the
-  longest one measured is 20 seconds. Whether a 40-minute tool call defers the signal for 40 minutes
-  is unmeasured; the shape of the observation suggests it does, but suggestion is not measurement.
+- **A single very long tool call.** In the runs measured, latency is bounded by the *longest single
+  tool call* -- and the longest one measured is 20 seconds. Whether a 40-minute tool call defers the
+  signal for 40 minutes is unmeasured; the shape of the observation suggests it does, but suggestion
+  is not measurement, and "bounded by the longest tool call" is a claim about turns that reach a
+  boundary rather than a general latency bound.
 - **Any other executor.** `codex exec 0.147.0` has no `--input-format` and no streaming-input option:
   its stdin is the initial prompt only, and `--json` is output-side. F1 still holds there. The
   capability is a property of one executor, not of the transport -- which is itself an argument for
@@ -177,12 +179,14 @@ executor's vocabulary already lives, and it is the only place in `src/` allowed 
 ### 4.2 The capability is structural, and S1 keeps five verbs
 
 **Do not add `wake` as a sixth `SessionProvider` verb.** S1 has exactly five (`start`,
-`listSessions`, `readState`, `stop`, `resume`), named by `D-0009` and asserted mechanically in
-`test/session/provider-contract.test.ts`; and it deliberately carries **no delivery verb** at all --
+`listSessions`, `readState`, `stop`, `resume`), named by **interlock's** `D-0009` and asserted mechanically in
+`test/session/provider-contract.test.ts` (continuo's `D-0301` fixes their async shape, not their
+number); and it deliberately carries **no delivery verb** at all --
 `DELIVERY_ABSENCE_IS_DELIBERATE` says in as many words that adding one "would make gate items 6 and
 11 unmeasurable, since what they check is precisely that no such edge exists". A sixth verb would
 also misrepresent Codex, which has no such path, as having the capability, and would reopen a
-provisional cross-provider contract (`D-0021`) for a facility one executor has.
+provisional cross-provider contract (interlock `D-0021`, which is what `PROVISIONAL` and
+`PROMOTION_REQUIRES` in `src/session/provider.ts` mark) for a facility one executor has.
 
 The precedent for what to do instead is already in the tree, twice. `readTerminalReport` is declared
 on the implementation and not on the contract (`D-0056`), and `src/lap/root.ts` reaches it
@@ -356,7 +360,9 @@ to be lossy.
 ### 7.2 The number, and why it is a new one
 
 **Recommended: a maximum of 30 seconds between message polls while a turn is in flight**, as a named
-constant owned by the composition layer that owns the wake.
+constant owned by the composition layer that owns the wake. Read "maximum" as the target the
+mechanisms aim at rather than a guarantee any of them delivers -- section 7.3 is where the two cases
+that miss it are named.
 
 The reasoning is arithmetic, and both bounds are checkable:
 
@@ -388,15 +394,27 @@ restated at its sharpest. Three mechanisms could compel it, and they are not equ
   insufficient as a cadence.
 - **A Claude Code `Stop` hook exiting 2 while rows are due.** Turns polling from a discipline into a
   property of the process: a turn becomes unable to end with undelivered messages. Executor-specific
-  in the same way the wake is, so it belongs beside it in the adapter, not in the domain.
+  in the same way the wake is, so it belongs beside it in the adapter, not in the domain. **It is a
+  turn-boundary safeguard and not a cadence**: `Stop` fires when the assistant tries to end its
+  response, so it enforces layer 2 and cannot enforce layer 1's 30 seconds.
 - **The completion condition.** A run does not reach done unless the ack exists, so a recipient that
   never polls never finishes rather than silently missing work. This is the ack-gated shape
   `minimal-operating-loop.md` already argues is "stronger than a polling watcher"; it bounds
   correctness, never latency.
 
-**Recommendation: layer 2 by the completion condition, layer 1 by the hook, and the 30-second number
-as the hook's cadence when a hook is in use.** Recorded here rather than decided, because it reaches
-into the role documents and the fence, and D5 in section 12 is where the gate takes it.
+**The only actually periodic mechanism is layer 1**, and it is the composition layer's own timer --
+the process holds the pipe, so writing a hint every 30 seconds needs nobody's cooperation. What the
+timer bounds is **when a hint is written**, not when a poll happens: the hint still becomes visible
+at the next tool-call boundary. So the 30-second maximum is a real bound for a turn that reaches
+boundaries, and for the two unmeasured cases -- a tool call longer than 30 seconds, and a
+boundary-free turn -- **no mechanism here achieves it**, and the bound degrades to the turn. That
+degradation is survivable for exactly one reason: layer 3 keeps the rows due, and nothing above it
+is load-bearing for correctness.
+
+**Recommendation: layer 1 by the composition layer's timer, layer 2 by the completion condition,
+and the `Stop` hook as the executor-specific way to make layer 2 a property of the process rather
+than a discipline.** Recorded here rather than decided, because it reaches into the role documents
+and the fence, and D5 in section 12 is where the gate takes it.
 
 ---
 
@@ -522,8 +540,10 @@ false for the executor this stack targets. At `claude 2.1.261`, under
 second user message written to stdin 8 s into a turn was replayed on stdout immediately after the
 running tool call's `tool_result` (t=26 s), acknowledged by the assistant at t=28 s, and the turn ran
 on to its own end at t=74 s. Two runs, identical in shape, no error or rejection event. So a message
-can be delivered into a running turn, at the granularity of a tool-call boundary, and delivery latency
-is bounded by the longest single tool call rather than by the turn.
+can be delivered into a running turn, at the granularity of a tool-call boundary. **In a turn that
+reaches such boundaries** -- which is every run measured -- delivery latency is therefore bounded by
+the longest single tool call rather than by the turn. For a turn that reaches none, the measurement
+says nothing; see what is unmeasured, below.
 
 **Decision. Pull over SQLite remains the settlement and the only source of delivery decisions. A
 wake is added as an empty, best-effort, coalescible hint whose only effect is to advance the next
@@ -536,7 +556,8 @@ poll.** Specifically:
 3. **The mechanism is the Claude session provider's.** The stdin pipe, its framing and its write live
    in `ClaudeCliSessionProvider` and are exposed to composition as a narrow structural capability, on
    the precedent of `readTerminalReport` (`D-0056`, `D-0059`). **S1 keeps its five verbs**
-   (`D-0009`): a wake is not a sixth, and a provider without the capability runs cadence-only.
+   (interlock `D-0009`): a wake is not a sixth, and a provider without the capability runs
+   cadence-only.
 4. **"Enqueue committed, then attempt wake" is the composition layer's**, which is rondo in the end
    state (`D-0087`) and `src/lap/` by injection for lap 1. Enqueue and the worker's pipe must be
    co-located: a separate CLI process calling `MessageBus.send` cannot write a pipe it does not hold.
@@ -563,7 +584,7 @@ poll.** Specifically:
   nothing in the measurement argues for it. The capability is one executor's, the SQLite-only property
   is what makes a wrong liveness reading unable to alter delivery, and relaxing item 6's static
   assertion would trade a structural guarantee for a latency improvement that option B already buys.
-- **A sixth `SessionProvider` verb.** Rejected: it reopens a provisional contract (`D-0021`) for a
+- **A sixth `SessionProvider` verb.** Rejected: it reopens a provisional contract (interlock `D-0021`) for a
   Claude-only facility, misrepresents Codex as having it, and makes gate items 6 and 11 unmeasurable
   -- which is what `DELIVERY_ABSENCE_IS_DELIBERATE` already says.
 - **A wake carrying the message id or the due count.** Rejected: either makes a delivery decision
@@ -628,10 +649,10 @@ Five items, each overturnable without disturbing the others.
 | | question | recommendation | if overturned |
 |---|---|---|---|
 | **D1** | Is the draft entry above the settlement of continuo#97? | accept as `D-0090` | the two comment corrections still stand; they are true under A as well as B |
-| **D2** | Structural capability on `ClaudeCliSessionProvider`, or a sixth S1 verb? | structural, per `D-0056`/`D-0059` | a sixth verb reopens `D-0021` and needs `provider-contract.test.ts` changed, which is a separate decision |
+| **D2** | Structural capability on `ClaudeCliSessionProvider`, or a sixth S1 verb? | structural, per `D-0056`/`D-0059` | a sixth verb reopens interlock `D-0021` and needs `provider-contract.test.ts` changed, which is a separate decision |
 | **D3** | Is 30 seconds the message-poll maximum? | yes, with the arithmetic in 7.2 | any other number, provided it is *a* number and is neither `--poll-interval-ms` nor `D-0079`'s |
 | **D4** | Does the start prompt become a record field before the pipe is enabled? | yes -- 9.1 consequence 3 deletes the only durable copy otherwise | measure whether `--input-format stream-json` can coexist with an argv prompt first; if it can, D4 is moot |
-| **D5** | Which mechanism compels the fallback poll? | completion condition for correctness, executor hook for cadence | the role prompt alone is available and is weaker; the entry does not depend on the answer |
+| **D5** | Which mechanism compels the fallback poll? | the composition layer's timer for layer 1, the completion condition for layer 2, a `Stop` hook to make layer 2 a process property | the role prompt alone is available and is weaker; the entry does not depend on the answer |
 
 ---
 
