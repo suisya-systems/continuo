@@ -62,7 +62,7 @@
     "@arethetypeswrong/cli": "0.18.5",
     "@biomejs/biome": "2.5.10",
     "@types/node": "26.3.0",
-    "knip": "6.32.2",
+    "knip": "6.34.0",
     "publint": "0.3.24",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
