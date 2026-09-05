@@ -14751,11 +14751,28 @@ rule** rather than a per-field judgement:
   `length(...) > 0`, and each is written by a caller: `prepareBinding` takes a session id and a
   provider name and validates neither's alphabet.
 
-Through `JSON.stringify`, not an escaping scheme invented here: one call, reversible, it quotes the
-value so its extent is visible, and it escapes exactly the control characters that break the
-framing. Not held to ASCII, for the `--db` reason above. The DOCUMENT needs none of this:
-`asciiJsonLine` already escapes every one of these values, which is why the payload columns are safe
-there and absent here.
+**And the quoting is conditional, which is what keeps this verb's lines the same as every other
+verb's on real data.** A value that cannot break the framing prints exactly as it is; only one that
+could is quoted, through `JSON.stringify` -- one call, reversible, escaping exactly the characters
+the condition selects for. The condition is *anything outside printable ASCII, plus the double quote
+itself*: the first is every character that can end a line or move a terminal cursor, and the second
+is there so a reader never has to wonder whether a quoted-looking value was quoted by the renderer
+or stored that way. An ordinary session uuid, provider name, gate id or recipient therefore renders
+byte for byte as it would have without the rule, so `run show` and `gate show` print one value the
+same way, and a hostile one renders as an escaped, quoted, still-reversible string on one line. The
+unconditional version was written first and rejected on exactly this: it made `run show` the only
+verb in the CLI that quotes identifiers, which is the one-value-under-two-rules problem this same
+paragraph invokes to keep run ids raw.
+
+**The other human renderings in this CLI still carry the exposure, and this entry does not close it
+for them.** `gate list` and `gate show` interpolate gate ids, relay message ids, actor ids and
+answer bodies raw. That is the cross-verb work `docs/cli-output-policy.md` is waiting for, and
+`run_cli.ts`'s header already names it for `--db`; what this entry claims is only that the new verb
+adds no new instance of it. Saying so is the honest half of the paragraph above -- the rule is
+applied where this diff is responsible, not everywhere it belongs.
+
+The DOCUMENT needs none of this: `asciiJsonLine` already escapes every one of these values, which is
+why the payload columns are safe there and absent here.
 
 **One hazard is measured and declined rather than closed: `seq` and the millisecond columns are read
 as `number`.** `docs/sqlite-value-contract.md` section 3 requires `safeIntegers(true)` for a column
@@ -14864,7 +14881,10 @@ anti-vacuity standard, each observed RED under a deliberate mutation that was th
   field of each SHAPE the rule covers -- a lease holder, a session id and a provider name, each
   carrying a newline plus a forged line of this command's own format -- produces exactly the five
   lines the run has and no sixth, with every value quoted and still reversibly readable. Red under
-  the raw interpolation this verb shipped, in both the first draft's form and the second's.
+  the raw interpolation this verb shipped, in both the first draft's form and the second's. The
+  condition itself is pinned from both sides: red when it never fires (this case), and red on the
+  human-rendering case when it always fires, which is what stops the rule quoting values it should
+  leave alone.
 - The four `--json` vacuity cases `D-0090` requires: the same invocation without the flag emits the
   unchanged human rendering and no document (red under `jsonRequested(args) || true`); the refusal
   path reads the flag too (red under a `refuse()` given a constant `false`); the mount carries the

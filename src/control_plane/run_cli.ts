@@ -532,17 +532,41 @@ function stamp(value: number | string | null): string {
  * each is written by a caller -- `prepareBinding` takes a session id and a
  * provider name and validates neither's alphabet.
  *
- * `JSON.stringify` rather than an escaping scheme invented here: it is one
- * call, it is reversible, it escapes exactly the control characters that break
- * the framing, and it puts the value in quotes so an operator can see where it
- * begins and ends. It is deliberately NOT held to ASCII -- see `--db` above.
+ * **Quoting is conditional, and that is what keeps this verb's lines the same
+ * as every other verb's on real data.** A value that cannot break the framing
+ * is printed exactly as it is; only one that could is quoted. The condition is
+ * {@link BREAKS_A_LINE}: anything outside printable ASCII -- which is every
+ * character that can end a line or move a terminal cursor -- plus the double
+ * quote itself, so that a reader never has to wonder whether a quoted-looking
+ * value was quoted by this function or stored that way. An ordinary session
+ * uuid, provider name, gate id or recipient renders byte for byte as it would
+ * have without this function, so `run show` and `gate show` print one value the
+ * same way; a hostile one renders as an escaped, quoted, still-reversible
+ * string on one line.
+ *
+ * `JSON.stringify` for the escaping rather than a scheme invented here: one
+ * call, reversible, and it escapes exactly the characters the condition
+ * selects for. Deliberately NOT held to ASCII on the raw path -- see `--db`
+ * above.
+ *
+ * **The other human renderings in this CLI do not do this yet**, and saying so
+ * is the honest half: `gate list` and `gate show` interpolate gate ids, relay
+ * message ids, actor ids and answer bodies raw, and carry the same exposure.
+ * Closing it there is the cross-verb entry `docs/cli-output-policy.md` is
+ * waiting for, not a change this verb makes on their behalf. What this verb
+ * does not do is add a new instance of it.
  *
  * The document needs none of this: {@link asciiJsonLine} escapes every one of
  * these values already, which is why the two payload columns are safe there and
  * absent here.
  */
+const BREAKS_A_LINE = /[^\x20-\x7e]|"/;
+
 function quoted(value: string | null): string {
-  return value === null ? "-" : JSON.stringify(value);
+  if (value === null) {
+    return "-";
+  }
+  return BREAKS_A_LINE.test(value) ? JSON.stringify(value) : value;
 }
 
 /**

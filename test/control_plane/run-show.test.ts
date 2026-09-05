@@ -564,8 +564,8 @@ describe("continuo run show --json, observed red", () => {
       `run red-human in ${path}: status created created=${T0} updated=${T0} writer_epoch=-`,
     );
     expect(lines.some((line) => line.startsWith("lease run:red-human "))).toBe(true);
-    expect(lines.some((line) => line.startsWith(`session "${SESSION_ID}" `))).toBe(true);
-    expect(lines.some((line) => line.startsWith(`gate "${GATE_ID}" `))).toBe(true);
+    expect(lines.some((line) => line.startsWith(`session ${SESSION_ID} `))).toBe(true);
+    expect(lines.some((line) => line.startsWith(`gate ${GATE_ID} `))).toBe(true);
     expect(lines.filter((line) => line.startsWith("event ")).length).toBe(2);
     expect(lines.filter((line) => line.startsWith("outbox ")).length).toBe(1);
     expect(() => JSON.parse(streams.out()), "the human line must not be a document").toThrow();
