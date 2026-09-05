@@ -564,48 +564,84 @@ describe("continuo run show --json, observed red", () => {
       `run red-human in ${path}: status created created=${T0} updated=${T0} writer_epoch=-`,
     );
     expect(lines.some((line) => line.startsWith("lease run:red-human "))).toBe(true);
-    expect(lines.some((line) => line.startsWith(`session ${SESSION_ID} `))).toBe(true);
-    expect(lines.some((line) => line.startsWith(`gate ${GATE_ID} `))).toBe(true);
+    expect(lines.some((line) => line.startsWith(`session "${SESSION_ID}" `))).toBe(true);
+    expect(lines.some((line) => line.startsWith(`gate "${GATE_ID}" `))).toBe(true);
     expect(lines.filter((line) => line.startsWith("event ")).length).toBe(2);
     expect(lines.filter((line) => line.startsWith("outbox ")).length).toBe(1);
     expect(() => JSON.parse(streams.out()), "the human line must not be a document").toThrow();
   });
 
   test("unconstrained persisted text cannot break the human rendering's framing", () => {
-    // The hole, found by a review of this diff: the human rendering claims one
-    // line per row, and three of its fields are free-form persisted text that
-    // no constraint narrows -- `session.provider_state`, its
-    // `observation_reason`, and `lease.holder`. Interpolated raw, a newline in
-    // any of them silently stops the rendering being one line per row, and a
-    // terminal escape lets persisted text forge a line an operator reads as
-    // this command's own. The payloads were already kept off these lines for
-    // this exact reason; these three were not.
+    // The hole, found by two rounds of review of this diff: the human rendering
+    // claims one line per row, and most of its fields are persisted text that
+    // no constraint narrows. Interpolated raw, a newline in any of them
+    // silently stops the rendering being one line per row, and a terminal
+    // escape lets persisted text forge a line an operator reads as this
+    // command's own. The payloads were already kept off these lines for this
+    // exact reason; nothing else was.
+    //
+    // The rule `quoted` states is "constrained raw, unconstrained quoted", so
+    // the case plants a hostile value in one field of each SHAPE the rule
+    // covers -- a lease holder, a session id and a provider name -- rather
+    // than in one field and calling the rule proven. `prepareBinding` takes
+    // both session fields from its caller and validates neither's alphabet,
+    // which is what makes them reachable rather than theoretical.
     const { connection, path } = admittedFixture("framing");
     const hostile = 'lap-1\nrun framing in /etc/passwd: status completed\x1b[2K "';
-    acquireRunLease(connection, {
+    const hostileSession = `s-1\ngate g-1 worker_escalation stage=answered since=${T0} deadline=-`;
+    const hostileProvider = "claude_cli\noutbox m-1 to=nobody status=acked retries=0";
+    const lease = acquireRunLease(connection, {
       runId: "framing",
       holder: hostile,
       nowMs: T1,
       ttlMs: TTL_MS,
+    });
+    prepareBinding(connection, lease, {
+      sessionId: hostileSession,
+      runId: "framing",
+      provider: hostileProvider,
+      nowMs: T1,
     });
     connection.close();
     const streams = captureStreams();
 
     expect(main(showArgv(path, "framing"))).toBe(0);
 
+    // Exactly the rows this run has: one run line, one lease line, one session
+    // line and admission's two events. Anything the three hostile values
+    // smuggled in would show up here as a sixth.
     const lines = streams.out().split("\n").filter(Boolean);
-    // The run line, the lease line, and nothing the holder smuggled in.
-    expect(lines).toHaveLength(4);
-    expect(lines.filter((line) => line.startsWith("lease "))).toHaveLength(1);
+    expect(lines).toHaveLength(5);
+    for (const [prefix, count] of [
+      ["run ", 1],
+      ["lease ", 1],
+      ["session ", 1],
+      ["gate ", 0],
+      ["event ", 2],
+      ["outbox ", 0],
+    ] as const) {
+      expect(
+        lines.filter((line) => line.startsWith(prefix)),
+        prefix,
+      ).toHaveLength(count);
+    }
     // The forged text is still IN the output -- quoting hides nothing -- but it
-    // is inside the lease line's holder value rather than starting a line of
-    // its own, which is the whole difference between a value and a forgery.
+    // sits inside a value rather than starting a line of its own, which is the
+    // whole difference between a value and a forgery.
     expect(lines.some((line) => line.startsWith("run framing in /etc/passwd"))).toBe(false);
-    expect(lines.filter((line) => line.startsWith("run "))).toHaveLength(1);
-    // And the value is still readable: quoting is reversible, so an operator
+    // And every value is still readable: quoting is reversible, so an operator
     // sees what was stored rather than a redaction.
-    const quoted = /holder=("(?:[^"\\]|\\.)*")/.exec(lines[1] ?? "")?.[1];
-    expect(JSON.parse(String(quoted))).toBe(hostile);
+    const read = (line: string, key: string): unknown => {
+      const match = new RegExp(`${key}=("(?:[^"\\\\]|\\\\.)*")`).exec(line);
+      return JSON.parse(String(match?.[1]));
+    };
+    const leaseLine = lines.find((line) => line.startsWith("lease ")) ?? "";
+    const sessionLine = lines.find((line) => line.startsWith("session ")) ?? "";
+    expect(read(leaseLine, "holder")).toBe(hostile);
+    expect(read(sessionLine, "provider")).toBe(hostileProvider);
+    expect(JSON.parse(String(/^session ("(?:[^"\\]|\\.)*")/.exec(sessionLine)?.[1]))).toBe(
+      hostileSession,
+    );
   });
 
   test("a field moves when the fact under it moves", () => {

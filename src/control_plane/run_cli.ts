@@ -505,23 +505,37 @@ function stamp(value: number | string | null): string {
 /**
  * One field of unconstrained persisted text, quoted, or `-` when absent.
  *
- * **This is the one rendering decision the "one line per row" claim depends
- * on.** Three fields on `run show`'s human lines are free-form text that no
- * constraint narrows: `session.provider_state` and `session.observation_reason`
- * (a provider's own state word and R4's could-not-observe reason -- the DDL asks
- * only that they be non-empty, and `confirmIdentity` persists whatever the
- * backend said) and `lease.holder` (a claimant identity, likewise only
- * non-empty). Interpolated raw, a newline in any of them would silently stop
- * the rendering being one line per row, and a terminal escape would let
- * persisted text forge a line an operator reads as this command's own.
+ * **This is the rendering decision the "one line per row" claim depends on, and
+ * it is applied by one rule rather than field by field.** A value this build
+ * constrains is printed raw; a value it does not is printed through here.
+ * Interpolated raw, a newline in an unconstrained field silently stops the
+ * rendering being one line per row, and a terminal escape lets persisted text
+ * forge a line an operator reads as this command's own.
+ *
+ * **Raw, because something narrows them.** The closed vocabularies the DDL
+ * enforces with a `CHECK ... IN`: `run.status`, `session.binding_phase`,
+ * `session.observation`, `gate.gate_type`, `gate.stage`, `event.subject_kind`
+ * and `outbox.status`. A run identifier, and the lease resource derived from
+ * one, because `D-0051` holds an admitted run id to printable ASCII and
+ * admission is the only writer of the row -- and because `run admit` and
+ * `run close` print run ids raw, so quoting here would print one value under
+ * two rules. `--db` for that same reason, which this module's header already
+ * records as a standing exception belonging to whichever entry settles echoed
+ * external text for every verb at once.
+ *
+ * **Quoted, because nothing does.** Everything else: `lease.holder`,
+ * `session.session_id`, `session.provider`, `session.provider_state`,
+ * `session.observation_reason`, `gate.gate_id`, `event.event_id`,
+ * `event.event_type` (`events.ts` says the column is deliberately open text),
+ * `event.subject_id`, `event.producer`, `outbox.message_id` and
+ * `outbox.recipient`. Each is `NOT NULL` and at most `length(...) > 0`, and
+ * each is written by a caller -- `prepareBinding` takes a session id and a
+ * provider name and validates neither's alphabet.
  *
  * `JSON.stringify` rather than an escaping scheme invented here: it is one
  * call, it is reversible, it escapes exactly the control characters that break
  * the framing, and it puts the value in quotes so an operator can see where it
- * begins and ends. It is deliberately NOT held to ASCII -- the human rendering
- * already echoes `--db` verbatim, and narrowing the alphabet is the open
- * problem `docs/cli-output-policy.md` hands to whichever entry settles it for
- * every verb at once, which this one is not.
+ * begins and ends. It is deliberately NOT held to ASCII -- see `--db` above.
  *
  * The document needs none of this: {@link asciiJsonLine} escapes every one of
  * these values already, which is why the two payload columns are safe there and
@@ -643,7 +657,7 @@ function writeRunView(view: RunView, path: string): number {
   );
   for (const session of view.sessions) {
     runCliSeams.write(
-      `session ${session.sessionId} provider=${session.provider} ` +
+      `session ${quoted(session.sessionId)} provider=${quoted(session.provider)} ` +
         `phase=${session.bindingPhase} observation=${session.observation} ` +
         `state=${quoted(session.providerState)} reason=${quoted(session.observationReason)} ` +
         `bound=${session.boundAtMs} released=${stamp(session.releasedAtMs)}\n`,
@@ -651,21 +665,21 @@ function writeRunView(view: RunView, path: string): number {
   }
   for (const gate of view.gates) {
     runCliSeams.write(
-      `gate ${gate.gateId} ${gate.gateType} stage=${gate.stage} ` +
+      `gate ${quoted(gate.gateId)} ${gate.gateType} stage=${gate.stage} ` +
         `since=${gate.stageEnteredAtMs} deadline=${stamp(gate.deadlineAtMs)}\n`,
     );
   }
   for (const event of view.events) {
     runCliSeams.write(
-      `event ${event.seq} ${event.eventType} ${event.eventId} ` +
-        `subject=${event.subjectKind}/${event.subjectId} producer=${event.producer} ` +
+      `event ${event.seq} ${quoted(event.eventType)} ${quoted(event.eventId)} ` +
+        `subject=${event.subjectKind}/${quoted(event.subjectId)} producer=${quoted(event.producer)} ` +
         `epoch=${stamp(event.producerEpoch)} occurred=${event.occurredAtMs} ` +
         `ingested=${event.ingestedAtMs}\n`,
     );
   }
   for (const row of view.outbox) {
     runCliSeams.write(
-      `outbox ${row.messageId} to=${row.recipient} status=${row.status} ` +
+      `outbox ${quoted(row.messageId)} to=${quoted(row.recipient)} status=${row.status} ` +
         `retries=${row.retryCount} epoch=${stamp(row.writerEpoch)} ` +
         `enqueued=${row.enqueuedAtMs} delivered=${stamp(row.deliveredAtMs)} ` +
         `acked=${stamp(row.ackedAtMs)}\n`,

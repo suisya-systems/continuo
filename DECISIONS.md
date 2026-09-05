@@ -14728,17 +14728,34 @@ on the value that was stored, which is the argument `D-0090` already makes for n
 `pyJsonDumps`. Neither payload appears on the HUMAN rendering: that is one line per row, and a
 payload holding a newline would silently stop it being one.
 
-**And the same rule reaches three more fields, which the first draft of this verb missed.** A review
-of the diff found that `session.provider_state`, `session.observation_reason` and `lease.holder` are
-also free-form persisted text -- the DDL asks only that they be non-empty, and `confirmIdentity`
-stores whatever the provider said -- so interpolating them raw broke the one-line-per-row claim by
-exactly the mechanism the payloads were excluded for, and additionally let persisted text forge a
-line an operator reads as the command's own. They are rendered through `JSON.stringify`: one call,
-reversible, quotes the value so its extent is visible, and escapes exactly the control characters
-that break the framing. Not held to ASCII -- the human rendering already echoes `--db` verbatim, and
-narrowing that alphabet is the open problem `docs/cli-output-policy.md` hands to whichever entry
-settles it for every verb at once. The DOCUMENT needs none of this: `asciiJsonLine` already escapes
-every one of these values, which is why the payload columns are safe there and absent here.
+**And what excludes the payloads turns out to be a rule about the whole rendering, which the first
+draft of this verb got wrong twice.** Two rounds of review found the same defect widening: the
+payloads were kept off the human lines because they are unconstrained persisted text, and so is most
+of what stayed on them. Interpolated raw, a newline in any such field breaks the one-line-per-row
+claim by exactly the mechanism the payloads were excluded for, and a terminal escape lets persisted
+text forge a line an operator reads as the command's own. The rendering therefore applies **one
+rule** rather than a per-field judgement:
+
+- **Raw, because something narrows the value.** The closed vocabularies the DDL enforces with a
+  `CHECK ... IN` -- `run.status`, `session.binding_phase`, `session.observation`, `gate.gate_type`,
+  `gate.stage`, `event.subject_kind`, `outbox.status`. A run identifier and the lease resource
+  derived from one, because `D-0051` holds an admitted run id to printable ASCII and admission is
+  the only writer of the row -- and because `run admit` and `run close` print run ids raw, so
+  quoting here would print one value under two rules. `--db`, for that same reason, which
+  `run_cli.ts`'s header already records as a standing exception belonging to whichever entry settles
+  echoed external text for every verb at once.
+- **Quoted, because nothing does.** Everything else -- `lease.holder`, `session.session_id`,
+  `session.provider`, `session.provider_state`, `session.observation_reason`, `gate.gate_id`,
+  `event.event_id`, `event.event_type` (`events.ts` says the column is deliberately open text),
+  `event.subject_id`, `event.producer`, `outbox.message_id`, `outbox.recipient`. Each is at most
+  `length(...) > 0`, and each is written by a caller: `prepareBinding` takes a session id and a
+  provider name and validates neither's alphabet.
+
+Through `JSON.stringify`, not an escaping scheme invented here: one call, reversible, it quotes the
+value so its extent is visible, and it escapes exactly the control characters that break the
+framing. Not held to ASCII, for the `--db` reason above. The DOCUMENT needs none of this:
+`asciiJsonLine` already escapes every one of these values, which is why the payload columns are safe
+there and absent here.
 
 **One hazard is measured and declined rather than closed: `seq` and the millisecond columns are read
 as `number`.** `docs/sqlite-value-contract.md` section 3 requires `safeIntegers(true)` for a column
@@ -14843,10 +14860,11 @@ anti-vacuity standard, each observed RED under a deliberate mutation that was th
   delegation event's payload and out through the document as one line of pure ASCII that parses
   back byte for byte. This verb is the first place in this CLI where free-form external text reaches
   a document, and `--prompt` is deliberately not held to ASCII.
-- Unconstrained persisted text cannot break the human rendering's framing: a lease holder carrying
-  a newline, a forged `run ... : status completed` line and a terminal escape produces exactly the
-  four lines it should, with the value quoted and still readable -- red under the raw interpolation
-  this verb shipped in its first draft.
+- Unconstrained persisted text cannot break the human rendering's framing: a hostile value in one
+  field of each SHAPE the rule covers -- a lease holder, a session id and a provider name, each
+  carrying a newline plus a forged line of this command's own format -- produces exactly the five
+  lines the run has and no sixth, with every value quoted and still reversibly readable. Red under
+  the raw interpolation this verb shipped, in both the first draft's form and the second's.
 - The four `--json` vacuity cases `D-0090` requires: the same invocation without the flag emits the
   unchanged human rendering and no document (red under `jsonRequested(args) || true`); the refusal
   path reads the flag too (red under a `refuse()` given a constant `false`); the mount carries the
