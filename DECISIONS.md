@@ -189,6 +189,7 @@ spaces distinct.
 | D-0091 | A wake is an empty hint over the Claude worker's stdin; pull over SQLite stays the settlement | accepted |
 | D-0092 | `gate close` joins the `--json` envelope: `D-0090`'s falsifier fired, and its verb reach is amended from three gate verbs to four | accepted |
 | D-0093 | One non-string entry in the sandbox deny list voids `permissions.deny` and the `PreToolUse` hook for the whole run | accepted |
+| D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
 
 ---
 
@@ -14573,6 +14574,51 @@ cases and corrects the residue note that still listed `pyStr`; the headers of
 same change. `suisya-systems/continuo#18` has one item left after this, the `D-0204` `hook.mjs`
 TypeScript revisit, which is untouched here.
 
-Decision id allocated from the `D-0019`..`D-0099` shared band, checked against `origin/main` at
-`ee2a399`, where `D-0093` is the last taken id; `D-0094` is claimed by the parallel lane on #163, so
-this entry takes `D-0095`. Re-checked at rebase.
+**Consequences.**
+
+1. `pyStr` and `pyRepr` gain an optional second parameter, and two new container-and-key entry
+   points (`pyStrOf`, `pyReprOf`) join `pyTypeNameOf`. The obligation `D-0212` states for a
+   container REBUILD now has a sibling: a call site that renders a document number as TEXT has to
+   pass the slot, or be a site where a guard has already made the value a string. Both are
+   classified above rather than left to the next reader.
+2. One divergence is narrowed rather than closed, and it is disclosed in
+   `parity/fencing.renderer.ledger.json`: `permission_mode ... is not one of [...]` lists the
+   allowed modes as `str()` of each item, because this port sorts the STRINGS where CPython sorts
+   the values. For an all-numeric `permission_modes` that is `['1.0']` here and `[1.0]` there. The
+   number is now spelled right and the QUOTES are what differ, and they come from the sort
+   adaptation -- reproducing `sorted()`'s `TypeError` on mixed types is a change to refusal
+   semantics and needs its own decision.
+3. `src/fencing/readback.ts` and `src/fencing/cli_args_allow.ts` stay on `JSON.parse`, so a number
+   in one of their messages is still JavaScript's rendering. Recorded, not repaired: neither is
+   compared by bytes and neither has an interlock counterpart.
+4. `suisya-systems/continuo#18` has one item left, the `D-0204` `hook.mjs` TypeScript revisit.
+   `D-0022`'s inherited-defect set is empty once that issue's own checklist is updated.
+
+**Status.** accepted
+
+**Falsifier.** The differential vector is the tripwire and is meant to be re-run: a CPython release
+that changes `float.__repr__`, `int.__repr__` or the text of `str(float("inf"))` would falsify the
+`texts` rows directly, and the check is re-running `scripts/oracle/dump_fnmatch_shlex.py` (the
+current vector is CPython 3.12.3). Sharper and more likely: a NEW call site that renders a document
+number as text -- a refusal message added to the renderer, a field added to the persisted fence --
+falsifies the sweep above, and nothing in the suite will notice, because the sweep is a
+classification and not an enumeration a test walks. That is the same standing exposure `D-0212`
+records for rebuild sites, in the other direction, and it is why the sweep is written down here as
+a list rather than as "every site was checked". Also falsifying: a document shape that reaches a
+byte-compared artefact through a number-to-text path not on the list, which would mean the
+measurement's five rows were not the whole of it -- as the first draft of this repair found when a
+review named a sixth.
+
+**Source.** #18 (the inherited-defect tracking issue; this closes its JSON numeric round-trip item),
+`parity/fencing.renderer.ledger.json`'s `inherited_limitations` entry for the disclosure this
+repairs, and `D-0023` for why an inherited defect is repaired in the belt that touches the code
+rather than deferred. `D-0210`, `D-0211`, `D-0212`, `D-0213` and `D-0214` are the serialiser half
+this completes; `D-0201` for `role_kind` and `permission_mode` being wire fields; `D-0081` for the
+non-interactive promotion the spelling must not follow. The `permissions.allow` site and the
+`sorted(allowed)` disclosure both came from Codex reviews of this diff.
+
+Decision id allocated from the `D-0019`..`D-0099` shared band rather than the `D-02xx` fencing
+range, following `D-0093`, which is also a fencing decision taken from the shared band. Checked
+against `origin/main` at `a293500` (re-checked at rebase; `ee2a399` at first draft), where `D-0093`
+is the last taken id; `D-0094` is claimed by the parallel lane on #163, so this entry takes
+`D-0095`.

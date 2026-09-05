@@ -979,11 +979,22 @@ function checkPermissionMode(
     // already refusing, and sorting the stringified items keeps the message
     // stable for the all-strings case, which is the only one a real document
     // reaches.
+    // The spelling is read off `allowed`, the document's own list, by the index
+    // the copy preserves -- `pyIterate` returns `[...value]` and drops the
+    // index-keyed record on purpose (D-0212), so the copy cannot answer for
+    // itself. Without it a `permission_modes: [1.0]` is listed as `1`.
+    //
+    // WHAT THIS DOES NOT REACH, and it is the one place in the renderer where a
+    // document number still reads differently from interlock: the stringify
+    // above is the ADAPTATION described in the paragraph before it, and CPython
+    // sorts the VALUES. So an all-numeric `permission_modes` reprs `[1.0]` there
+    // and `['1.0']` here -- the number itself is now spelled right and the
+    // QUOTES are what differ, because the list being reprd is a list of strings.
+    // Making it agree means reproducing `sorted()`'s TypeError on mixed types,
+    // which this file deliberately does not, so it is disclosed in
+    // `parity/fencing.renderer.ledger.json` rather than changed under a decision
+    // that is not about refusal semantics (D-0095).
     const sorted = pyIterate(allowed)
-      // The spelling is read off `allowed`, the document's own list, by the
-      // index the copy preserves -- `pyIterate` returns `[...value]` and drops
-      // the index-keyed record on purpose (D-0212), so the copy cannot answer
-      // for itself. Without it a `permission_modes: [1.0]` is listed as `1`.
       .map((v, index) => pyStr(v, pyNumberSpelling(allowed, index)))
       .sort();
     return [
