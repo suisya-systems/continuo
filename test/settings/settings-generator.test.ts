@@ -2580,7 +2580,7 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
       }),
     );
     expect(error.message).toContain(
-      "sandbox.filesystem.denyRead[0] would reach the child as float",
+      "sandbox.filesystem.denyRead[0] would reach the child as float, not a string: 1.0",
     );
   });
 
@@ -2608,7 +2608,7 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
       }),
     );
     expect(error.message).toContain(
-      "sandbox.filesystem.denyWrite[0] would reach the child as float",
+      "sandbox.filesystem.denyWrite[0] would reach the child as float, not a string: 5.0",
     );
   });
 
@@ -2689,7 +2689,7 @@ describe("the seam and the number-spelling carry (target-only, D-0213)", () => {
       }),
     );
     expect(error.message).toContain(
-      "sandbox.filesystem.denyRead[0] would reach the child as float",
+      "sandbox.filesystem.denyRead[0] would reach the child as float, not a string: 5.0",
     );
   });
 

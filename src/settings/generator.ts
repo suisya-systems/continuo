@@ -104,7 +104,7 @@ import {
   osSep,
   osSplitdrive,
 } from "../fencing/pypath.js";
-import { pyRepr } from "../fencing/pyrepr.js";
+import { pyRepr, pyReprOf } from "../fencing/pyrepr.js";
 import {
   carryNumberSpellings,
   getOwn,
@@ -1587,10 +1587,15 @@ export function checkRenderedSandboxDenyStrings(rendered: Record<string, unknown
       }
       offences.push(
         `sandbox.filesystem.${layerKey}[${index}] would reach the child as ` +
-          // `pyTypeNameOf`, not `pyTypeName`: the container carries the number
-          // spelling, so a `1.0` this module preserved reads `float` rather
-          // than `int`. The renderer's twin gives the same reason.
-          `${pyTypeNameOf(entries, index)}, not a string: ${pyRepr(entry)}`,
+          // BOTH halves read off the CONTAINER, never off the value. A
+          // JavaScript number carries no provenance; the spelling lives on the
+          // array. `pyTypeName(entry)` would call a document's `1.0` an `int`,
+          // and `pyRepr(entry)` would print it `1` -- and print a 2**53+
+          // integer rounded, which is not the authored value at all. This
+          // message promises the entry verbatim, and the thirteen rebuild
+          // branches above exist precisely so that promise can be kept this far
+          // down (D-0095). The renderer's twin reads the same pair the same way.
+          `${pyTypeNameOf(entries, index)}, not a string: ${pyReprOf(entries, index)}`,
       );
     }
   }
