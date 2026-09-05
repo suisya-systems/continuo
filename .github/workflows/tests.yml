@@ -39,7 +39,20 @@ jobs:
     # `test/testkit` does not have yet, and testkit is frozen behind its own
     # change. Until that lands, the cap has to leave room for a suite that is
     # still growing by design.
-    timeout-minutes: 40
+    #
+    # 65 on Windows, not 40 (D-1103). The same slide happened again: run
+    # 33781360734 (continuo#114, 2026-09-03) finished `windows-latest, node 24`
+    # in 23m12s -- 1.6x headroom under a 40-minute cap -- and cancelled
+    # `windows-latest, node 22` mid-second-lap when it ran out of wall clock
+    # first, which is `ci-gate` failing on a `cancelled` result again rather
+    # than a log explaining anything. 65 minutes clears 2x over both that
+    # measurement and D-0052's older job-level max (1864s); ubuntu is
+    # untouched: both its cells stay inside the same cap they always ran
+    # comfortably inside (single digit minutes), and the Windows/Linux split
+    # keeps this a one-line expression on one job-level key rather than two
+    # jobs or a `matrix.include` block, so the seed derivation above (per-cell,
+    # keyed on `matrix.os`/`matrix.node`) stays exactly as it is.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 65 || 40 }}
     strategy:
       # A red cell must not hide the state of the others: which cells failed is
       # the diagnosis, and cancelling them destroys it.
