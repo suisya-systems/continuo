@@ -25,7 +25,7 @@ structural-capability move section 4 makes twice.
 
 | Subject | Revision / version read |
 |---|---|
-| continuo | `13c7b1a` (`origin/main`), the tip that carries `D-0088` |
+| continuo | `2d4d2a4` (`origin/main`), the tip that carries `D-0089` |
 | Claude Code | `2.1.261`, the version the 2026-09-05 measurement was taken at |
 | `codex exec` | `codex-cli 0.147.0`, from continuo#97's first comment |
 | interlock | frozen at `65f36c5`; read for what the port inherited, never for a decision (`D-0036`) |
@@ -561,10 +561,11 @@ not need it relaxed.
 
 Proposed, not written to [`DECISIONS.md`](../../DECISIONS.md).
 
-**On the number.** The shared control-plane band (`D-0019`..`D-0099`) is free from `D-0089` at
-`13c7b1a`, and a parallel change is minting `D-0089` for the fencing layer -- so this is drafted as
-**`D-0090`** and the number is confirmed against `DECISIONS.md` at the moment the entry is actually
-written. The band is the shared one rather than messagebus's `D-05xx` because the decision binds four
+**On the number.** The shared control-plane band (`D-0019`..`D-0099`) is free from `D-0090` at
+`2d4d2a4`: `D-0089` was taken by the fencing layer's `Edit(...)` family entry while this was being
+written, and the number here was confirmed against `DECISIONS.md` on rebasing onto that tip. It is
+confirmed again at the moment the entry is actually written, because nothing stops another change
+taking it first. The band is the shared one rather than messagebus's `D-05xx` because the decision binds four
 belts at once: messagebus, session, lap and the host. Precedent for the number moving: this
 document's neighbour drafted `D-0087` and landed as `D-0088`.
 
