@@ -955,18 +955,34 @@ describe("a real child under the fence", () => {
       // make the positive case green while the deny is doing nothing. This half
       // fails unless the deny is the thing stopping the read.
       //
-      // The only edit is the spelling of the entries the renderer flattened,
-      // put back the way `roles.json` still authors them and the way every
-      // fence this repository rendered before `D-0082` shipped. `D-0093`'s
-      // post-condition is what stops the renderer producing this file; nothing
-      // stops a hand from writing it, which is the point.
+      // The only edit is the spelling of ONE entry, put back the way
+      // `roles.json` still authors it and the way every fence this repository
+      // rendered before `D-0082` shipped. `D-0093`'s post-condition is what
+      // stops the renderer producing this file; nothing stops a hand from
+      // writing it, which is the point.
+      //
+      // **And it is deliberately not the entry that covers the secret.** Wrap
+      // every entry and the read could go through for the boring reason -- the
+      // rule that names this path is gone -- which would make the case green
+      // whether the pipeline was voided or merely narrowed. Corrupting the
+      // OTHER entry leaves the covering rule intact and spelled exactly as the
+      // passing half spells it, so a read that still succeeds can only be the
+      // whole pipeline going with it. That is also the shape the fence actually
+      // shipped before `D-0082`: one dict beside one string, not a list of
+      // dicts.
       const { workerDir, secret, args, settingsPath } = denyReadTarget();
       const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
       const filesystem = (settings["sandbox"] as Record<string, unknown>)["filesystem"] as Record<
         string,
         unknown
       >;
-      filesystem["denyRead"] = (filesystem["denyRead"] as string[]).map((path) => ({ path }));
+      const denyRead = filesystem["denyRead"] as string[];
+      const covers = (entry: string): boolean => secret.startsWith(entry);
+      // Both must exist, or the edit below is not the one this case describes:
+      // one entry that still names the secret, and one to spoil.
+      expect(denyRead.filter(covers).length).toBe(1);
+      expect(denyRead.filter((entry) => !covers(entry)).length).toBeGreaterThan(0);
+      filesystem["denyRead"] = denyRead.map((path) => (covers(path) ? path : { path }));
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf8");
 
       const stdout = readDeniedPath(workerDir, secret, args);

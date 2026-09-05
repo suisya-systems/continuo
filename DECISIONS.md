@@ -14390,10 +14390,19 @@ call site. `test/fencing/hermetic-child.test.ts` holds:
   **inside** the worktree, starts a real `claude -p` under the rendered worker fence, asks it to
   `cat` that file, and asserts the nonce does not reach stdout and that the refusal names
   `sandbox-deny-read` -- continuo's hook, by name, rather than merely "it did not work". The
-  reproduction half is the vacuity check: the **same** fence, with the written settings file's
-  `denyRead` entries re-spelled `{"path": ...}` by hand, and the **same** read then succeeds and the
-  nonce arrives. A green positive with no reproduction half would have been the exact failure this
-  entry is about, so the pair is one case, not two.
+  reproduction half is the vacuity check: the **same** fence, with **one** of the written settings
+  file's `denyRead` entries re-spelled `{"path": ...}` by hand, and the **same** read then succeeds
+  and the nonce arrives. A green positive with no reproduction half would have been the exact failure
+  this entry is about, so the pair is one case, not two.
+
+  The corrupted entry is deliberately **not** the one that covers the nonce, and that is what makes
+  the half evidence for the sentence above rather than for a weaker one. Spoil every entry and the
+  read could go through for the boring reason -- the rule naming that path is gone -- which is green
+  whether the pipeline was voided or merely narrowed. Leaving the covering rule intact, spelled
+  exactly as the passing half spells it, means a read that still succeeds can only be the whole
+  pipeline going with the one bad neighbour. It is also the shape the fence actually shipped before
+  `D-0082`: one dict beside one string. Run in that form on `2.1.261`, the read goes through -- so
+  "**one** non-string entry" is measured against a real child, not only inferred from the matrix.
 
   A first attempt put the nonce **outside** the worktree and both halves were useless: the CLI's own
   working-directory guard refused the `cat` before the fence was consulted, so the positive passed
