@@ -836,7 +836,8 @@ async function runWalk(options: {
     settings: { prompt: "reply with ok", resumePrompt: "resume" },
     ttlMs,
     resource: RESOURCE,
-    readbackBudgetMs: 400 * READBACK_POLL_INTERVAL_MS,
+    // The source's 400 attempts: the ask at zero plus 399 intervals.
+    readbackBudgetMs: 399 * READBACK_POLL_INTERVAL_MS,
     // IO pacing against a real subprocess; no timestamp is ever read from the
     // host clock (`clock` above supplies every `nowMs`).
     wait: () => new Promise<void>((resolve) => setTimeout(resolve, 10)),

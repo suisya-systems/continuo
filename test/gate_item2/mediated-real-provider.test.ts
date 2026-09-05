@@ -114,7 +114,8 @@ function makeRealOrchestrator(
     sessionUuidFactory: () => sessionId,
     settings: { prompt: "reply with ok", resumePrompt: "resume" },
     ttlMs: TTL_MS,
-    readbackBudgetMs: 200 * READBACK_POLL_INTERVAL_MS,
+    // The source's 200 attempts: the ask at zero plus 199 intervals.
+    readbackBudgetMs: 199 * READBACK_POLL_INTERVAL_MS,
     wait: () => new Promise<void>((resolve) => setTimeout(resolve, 20)),
     ...overrides,
   });

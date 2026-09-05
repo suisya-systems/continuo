@@ -492,7 +492,8 @@ describe("the U32 shape, mediated; orphans; refusal durability", () => {
     provider.nextReadouts = Array.from({ length: 4 }, () => unconfirmed("pending"));
     const a = makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
       wait: takeoverDuringWait,
-      readbackBudgetMs: 3 * READBACK_POLL_INTERVAL_MS,
+      // Three polls, as the source's `readbackAttempts: 3` (see helpers.ts).
+      readbackBudgetMs: 2 * READBACK_POLL_INTERVAL_MS,
     });
     const caught = await expectAsyncRefusal(() => a.start(), LoserTerminated);
 
@@ -536,7 +537,8 @@ describe("the U32 shape, mediated; orphans; refusal durability", () => {
       () =>
         makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
           wait: loseWhilePolling,
-          readbackBudgetMs: 2 * READBACK_POLL_INTERVAL_MS,
+          // Two polls, as the source's `readbackAttempts: 2`.
+          readbackBudgetMs: READBACK_POLL_INTERVAL_MS,
         }).start(),
       LoserTerminated,
     );
