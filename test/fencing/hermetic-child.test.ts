@@ -55,7 +55,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
-import { normalizePath } from "../../src/fencing/pypath.js";
+import { normalizePath, osIsabs } from "../../src/fencing/pypath.js";
 import { PyValueError } from "../../src/fencing/pysemantics.js";
 import {
   checkRenderedSandboxDenyStrings,
@@ -1177,7 +1177,10 @@ describe("the settings generator is a second producer of the same artifact (#163
     expect(denyRead).toHaveLength(2);
     for (const entry of denyRead) {
       expect(typeof entry).toBe("string");
-      expect((entry as string).startsWith("/")).toBe(true);
+      // `osIsabs`, not `startsWith("/")`: on the required Windows cells these
+      // are drive-letter paths, and the POSIX test would call an absolute entry
+      // relative. It is the same predicate the generator itself uses (D-0213).
+      expect(osIsabs(entry as string)).toBe(true);
     }
     expect(denyRead.filter((entry) => denied.startsWith(entry as string))).toHaveLength(1);
   });
