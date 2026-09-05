@@ -748,6 +748,33 @@ function runFencedChild(
   return { workerDir, witness, written: join(workerDir, "written-by-the-child.txt") };
 }
 
+/**
+ * Does one rendered deny entry cover a planted path?
+ *
+ * `osNormpath` + `osNormcase` on BOTH sides, never a raw `startsWith`. A legacy
+ * string deny entry is emitted with the separators its AUTHOR wrote, and the
+ * roles these cases drive author `.../vault/records` with forward slashes -- so
+ * on Windows the rendered entry is a substituted native prefix followed by
+ * those authored slashes, `C:\...\worker/vault/records`, while `join` builds
+ * the planted path with backslashes throughout. A raw prefix test finds nothing
+ * in that, and the case then fails claiming the deny list does not cover a path
+ * it covers perfectly well. Measured under a simulated ntpath by the case at
+ * the end of this file, which is also what keeps this falsifiable on a POSIX
+ * cell.
+ *
+ * `osNormcase` as well as `osNormpath`, for the reason D-0216 gives at
+ * `_is_inside_root`: on Windows a drive-letter case difference is not a
+ * different path, and a runner's temp directory is not guaranteed to agree with
+ * the role's spelling about it.
+ *
+ * Shared by the two reproduction halves -- D-0093's, over a fence, and D-0094's,
+ * over the generator's settings file -- because both ask the same question of
+ * the same kind of entry and both got the same answer wrong.
+ */
+function coversDenied(entry: string, denied: string): boolean {
+  return osNormcase(osNormpath(denied)).startsWith(osNormcase(osNormpath(entry)));
+}
+
 const REAL_CHILD_REASON =
   `the real-child cases need a real, authenticated \`claude\` on PATH and bill an API turn, ` +
   `so they are opt-in: set ${REAL_CHILD_ENV}=1 with the CLI installed. Everything they prove ` +
@@ -985,7 +1012,12 @@ describe("a real child under the fence", () => {
         unknown
       >;
       const denyRead = filesystem["denyRead"] as string[];
-      const covers = (entry: string): boolean => secret.startsWith(entry);
+      // Normalised on both sides, not a raw prefix test: this entry carries the
+      // separators the role document wrote, which are not the ones `join` used
+      // to build `secret`. The always-running Windows cells never reach this
+      // case, so the mismatch would have waited for someone running the
+      // real-child suite on Windows. @see `coversDenied`.
+      const covers = (entry: string): boolean => coversDenied(entry, secret);
       // Both must exist, or the edit below is not the one this case describes:
       // one entry that still names the secret, and one to spoil.
       expect(denyRead.filter(covers).length).toBe(1);
@@ -1034,26 +1066,6 @@ describe("a real child under the fence", () => {
 describe("the settings generator is a second producer of the same artifact (#163, D-0094)", () => {
   /** Planted behind the generated `denyRead`; its arrival on stdout is the observation. */
   const GENERATOR_NONCE = "continuo-i163-nonce-2b91d4";
-
-  /**
-   * Does one rendered deny entry cover the planted path?
-   *
-   * `osNormpath` + `osNormcase` on BOTH sides, never a raw `startsWith`. A
-   * legacy string entry is emitted with the separators its author wrote, and
-   * the role below authors `{worker_dir}/vault/records` -- so on Windows the
-   * rendered entry is `C:\...\worker/vault/records`, a substituted native
-   * prefix followed by the authored forward slashes, while `join` builds the
-   * planted path with backslashes throughout. A raw prefix test finds nothing,
-   * and the case then fails claiming the deny list does not cover a path it
-   * covers perfectly well. Measured under a simulated ntpath in the case below.
-   *
-   * `osNormcase` as well as `osNormpath`, for the reason D-0216 gives at
-   * `_is_inside_root`: on Windows a drive-letter case difference is not a
-   * different path, and the runner's temp directory is not guaranteed to agree
-   * with the role's spelling about it.
-   */
-  const coversDenied = (entry: string, denied: string): boolean =>
-    osNormcase(osNormpath(denied)).startsWith(osNormcase(osNormpath(entry)));
 
   /** The role document the cases below render, with `denyRead` left to the caller. */
   function generatorRole(denyRead: readonly unknown[], witness: string): Record<string, unknown> {
