@@ -192,6 +192,7 @@ spaces distinct.
 | D-0094 | The settings generator refuses a non-string sandbox deny entry instead of writing it for a reader that does not reject it | accepted |
 | D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
 | D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present\|deliver\|ack` join the `--json` envelope | accepted |
+| D-0098 | The post-spawn identity read-back window is a caller's budget, defaulting to thirty seconds | accepted |
 
 ---
 
@@ -14942,3 +14943,86 @@ principle, `D-0092` for the amendment this one follows. cadenza `C-4` / `C-13` a
 `D-0019`..`D-0099` shared band, checked against `origin/main` at `ab24daa`, where `D-0095` is the
 last taken id; `D-0096` is claimed by the parallel lane on #166, so this entry takes `D-0097`.
 Re-checked at merge.
+
+---
+
+## D-0098 -- The post-spawn identity read-back window is a caller's budget, defaulting to thirty seconds
+
+**Context.** `SessionOrchestrator` commits a session identity *before* it spawns, then polls
+`readState` until an event names that identity back (`D-0027`). Two constants bounded the poll and
+neither was reachable from any command line: `readbackAttempts ?? 50`, and a `wait` of 50 ms. Fifty
+attempts fifty milliseconds apart is a **2.5 second** window, and it was chosen against an in-memory
+provider, which answers on the first ask.
+
+**What was measured.** rondo's lap-1 dogfood (rondo `docs/operations/lap-1-dogfood.md`, F-1) ran the
+lap against a real worker for the first time. On WSL2, with the fence's own settings and MCP
+configuration, `claude` 2.1.261 takes **3.55 s** to its first `system`/`init` event -- the event that
+names the session id -- on a cold start, and **9.67 s / 11.27 s / 7.90 s** on three warm ones. Every
+measurement exceeds the window and the fastest exceeds it by 40%. Two laps at fresh identifiers
+failed identically, at 3810 ms and 3837 ms, with the session's own `record.json` showing correct
+argv and a recorded pid, an empty `stderr-000.log`, and a zero-byte `events-000.jsonl`: **a healthy
+child, merely young**. The lap ended at `readback-exhausted` with the binding left at `spawned`,
+which is the correct behaviour of the check applied to a window that was never going to be met. It
+is deterministic, so no lap could complete on a real CLI at all.
+
+**Decision.**
+
+1. **One budget, not two knobs.** `SessionOrchestratorOptions.readbackBudgetMs` replaces
+   `readbackAttempts`, and `lap perform` takes `--identity-readback-timeout-ms` beside the
+   `--turn-timeout-ms` and `--git-timeout-ms` it already has. The number an operator can defend is a
+   wall-clock one -- *this worker needs twelve seconds to say its own name on this machine* -- and it
+   is the same shape as the other two bounds a host already declares.
+
+2. **The poll interval stays internal.** `READBACK_POLL_INTERVAL_MS` is 50 ms and no flag reaches
+   it. It is IO pacing against a live subprocess -- how often it is polite to ask -- and nothing an
+   operator knows about their machine makes 50 ms the wrong question interval. The constructor turns
+   the budget into `max(1, ceil(budgetMs / READBACK_POLL_INTERVAL_MS))` polls: rounded up, because a
+   budget shorter than one interval must still buy the one poll a provider that has *already*
+   answered would satisfy, and refusing it would be a refusal about arithmetic rather than about the
+   child.
+
+3. **The default is 30 000 ms.** It is 2.65x the slowest measurement above and it is not itself a
+   measured figure: the interval between 11.3 s and 30 s is head-room for a slower machine, a colder
+   cache and a longer MCP handshake. It is a *default*, taken because the caller who knows the
+   machine can say better and the caller who does not should not lose a lap to a number nobody
+   chose. Thirty seconds of polling is only ever spent on a walk that is going to refuse anyway; a
+   healthy worker leaves the loop the instant it names itself, so the default costs a successful lap
+   nothing.
+
+4. **The refusal names the budget.** It read *"did not read back within 50 attempts"*, which names a
+   constant no command line could reach -- so an operator who had just raised the window could not
+   tell whether the value they passed was the one that ran out. It now names the milliseconds they
+   typed and, after them, the attempts and the interval the class derived.
+
+5. **A budget below 1 ms is a caller's defect.** The orchestrator raises `RangeError`, as it did for
+   `readbackAttempts`. `performLap` refuses the same value as a `LapUsageError` *before* it reads
+   the run intent, for the reason `src/lap/cli.ts` gives about `--turn-timeout-ms`: the parser types
+   the flag as an integer, so `0` and `-1` are values an operator can type, and a typo must cost one
+   stderr line and exit 2 rather than a stack trace -- and must not spend the run identifier, which
+   `D-0057` makes unrepeatable.
+
+**What this does not change.** `defaultIdentityConfirmation` is untouched. The check is deliberately
+conservative -- a child reported as `exited-N` observed an exit, not an identity, and confirming on
+that word would put *the process died* into SQLite as *the identity read back* -- and the defect
+rondo found is the size of the window, not the strictness of the check. Exhausting a larger budget
+still leaves the binding at `spawned`, still writes the fenced `readback-exhausted` gate, and still
+raises. A test asserts exactly this: a readout that names the committed identity and reports the
+child's exit is refused however large the budget is.
+
+**Falsifiers.** A worker whose first event lands beyond 30 s on a machine somebody actually uses --
+which makes the default too small again, and is the reason the number is a default and the flag
+exists. A provider whose `readState` is expensive enough that the polls a budget buys take
+materially longer than the budget names, which would make `ceil(budget / interval)` the wrong
+derivation and argue for a wall-clock deadline read from `nowMs` (rejected here because the
+orchestrator's clock is the caller's injected lease clock, and cases drive it with a fake that does
+not advance -- a deadline against it would either never expire or expire at once). A host that needs
+the pacing itself, which would make point 2 wrong and turn the one budget back into two knobs.
+
+**Source.** #174, and rondo `docs/operations/lap-1-dogfood.md` F-1 for every measurement quoted
+above. `D-0027` for why the read-back must positively name the committed identity, `D-0047` for the
+identity-incident path that ends the poll early, `D-0057` for why a refused lap must not cost the
+run identifier, `D-0060` for the `--turn-timeout-ms` / `--poll-interval-ms` pair this flag is shaped
+after. rondo `D-0019` R-11 for the `LAP_PERFORM` contract that will pass the new flag; nothing in
+rondo is edited here. Decision id allocated from the `D-0019`..`D-0099` shared band, checked against
+`origin/main` at `0f40012`, where `D-0097` is the last taken id; `D-0099` is claimed by the parallel
+lane on #175, so this entry takes `D-0098`. Re-checked at merge.

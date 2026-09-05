@@ -9,6 +9,7 @@ import { LeaseHeld } from "../../src/control_plane/lease.js";
 import { ClaudeCliSessionProvider } from "../../src/session/claude_cli_provider.js";
 import {
   IdentityUnconfirmed,
+  READBACK_POLL_INTERVAL_MS,
   SessionOrchestrator,
   type SessionOrchestratorOptions,
 } from "../../src/supervisor.js";
@@ -113,7 +114,7 @@ function makeRealOrchestrator(
     sessionUuidFactory: () => sessionId,
     settings: { prompt: "reply with ok", resumePrompt: "resume" },
     ttlMs: TTL_MS,
-    readbackAttempts: 200,
+    readbackBudgetMs: 200 * READBACK_POLL_INTERVAL_MS,
     wait: () => new Promise<void>((resolve) => setTimeout(resolve, 20)),
     ...overrides,
   });

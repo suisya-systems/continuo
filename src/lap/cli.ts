@@ -86,7 +86,7 @@ import { createDefaultSessionProvider } from "../index.js";
 // `src/session/provider.js` from what counts as knowing one, and this is the
 // refusal every provider raises before it starts anything.
 import { SpawnRefused } from "../session/provider.js";
-import { OrchestrationRefused } from "../supervisor.js";
+import { DEFAULT_READBACK_BUDGET_MS, OrchestrationRefused } from "../supervisor.js";
 import { GitRefusal } from "../workspace/git.js";
 import {
   WorkspaceMaterializationRefused,
@@ -171,6 +171,12 @@ const TURN_TIMEOUT_MS_HELP =
   "stopped, because a lap that gave up must not leave a fenced child running " +
   "with nobody polling it.";
 const GIT_TIMEOUT_MS_HELP = "wall-clock bound on each git command materialisation runs.";
+const IDENTITY_READBACK_TIMEOUT_MS_HELP =
+  "milliseconds the spawned worker is given to emit an event naming the session " +
+  "id committed for it, before the lap gives up with the binding left at " +
+  `'spawned'. Defaults to ${String(DEFAULT_READBACK_BUDGET_MS)}. It buys the worker ` +
+  "time and does not weaken the check: what counts as a read-back is the same " +
+  "either way. Raise it on a machine where the worker CLI starts slowly.";
 const GATE_OPTION_HELP =
   "one answer the gate offers the human. Repeat the flag to give several, in " +
   "order; omit it for a free-form answer.";
@@ -478,6 +484,7 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
   const hookScript = optionalText(args, "hook_script");
   const python = optionalText(args, "python");
   const gitTimeoutMs = optionalInt(args, "git_timeout_ms");
+  const identityReadbackTimeoutMs = optionalInt(args, "identity_readback_timeout_ms");
   const deadlineAtMs = optionalInt(args, "gate_deadline_at_ms");
   // Read once, at the top, and carried to the two places that write bytes. The
   // value cannot change while the lap runs, and reading it inside `report` or
@@ -517,6 +524,12 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
           timeoutMs: optionalInt(args, "turn_timeout_ms") ?? DEFAULT_TURN_TIMEOUT_MS,
         },
         ...(gitTimeoutMs === undefined ? {} : { gitTimeoutMs }),
+        // Omitted when the operator did not type one, so the default is the
+        // orchestrator's single statement of it rather than a copy here that
+        // could drift from it (the pattern `--git-timeout-ms` already follows,
+        // and the reason `--turn-timeout-ms`'s local default is the exception:
+        // that one is read by this module's own poll loop).
+        ...(identityReadbackTimeoutMs === undefined ? {} : { identityReadbackTimeoutMs }),
         gateOptions: gateOptionsOf(args),
         ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
       });
@@ -613,6 +626,12 @@ export function addSubparsers(sub: Subparsers): void {
   addOptionalInt(perform, "--poll-interval-ms", "poll_interval_ms", POLL_INTERVAL_MS_HELP);
   addOptionalInt(perform, "--turn-timeout-ms", "turn_timeout_ms", TURN_TIMEOUT_MS_HELP);
   addOptionalInt(perform, "--git-timeout-ms", "git_timeout_ms", GIT_TIMEOUT_MS_HELP);
+  addOptionalInt(
+    perform,
+    "--identity-readback-timeout-ms",
+    "identity_readback_timeout_ms",
+    IDENTITY_READBACK_TIMEOUT_MS_HELP,
+  );
 
   // the gate this verb opens
   perform.addArgument({

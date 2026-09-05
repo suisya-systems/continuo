@@ -3,12 +3,14 @@ import { describe, expect, onTestFinished, test } from "vitest";
 
 import { acquire, LeaseHeld, StaleWriterRefused } from "../../src/control_plane/lease.js";
 import * as sessionBinding from "../../src/control_plane/session_binding.js";
-import { Failure, FailureKind, type Ok } from "../../src/session/provider.js";
+import { Failure, FailureKind, Ok } from "../../src/session/provider.js";
 import {
+  DEFAULT_READBACK_BUDGET_MS,
   IdentityUnconfirmed,
   LoserTerminated,
   OrchestrationRefused,
   ProviderStartFailed,
+  READBACK_POLL_INTERVAL_MS,
   SessionOrchestrator,
 } from "../../src/supervisor.js";
 import { caseRoot } from "../testkit/cases.js";
@@ -21,6 +23,7 @@ import {
   makeControlPlane,
   makeOrchestrator,
   makeUuids,
+  observed,
   RESOURCE,
   RUN_ID,
   refusals,
@@ -488,7 +491,7 @@ describe("the U32 shape, mediated; orphans; refusal durability", () => {
     provider.nextReadouts = Array.from({ length: 4 }, () => unconfirmed("pending"));
     const a = makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
       wait: takeoverDuringWait,
-      readbackAttempts: 3,
+      readbackBudgetMs: 3 * READBACK_POLL_INTERVAL_MS,
     });
     const caught = await expectAsyncRefusal(() => a.start(), LoserTerminated);
 
@@ -532,7 +535,7 @@ describe("the U32 shape, mediated; orphans; refusal durability", () => {
       () =>
         makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
           wait: loseWhilePolling,
-          readbackAttempts: 2,
+          readbackBudgetMs: 2 * READBACK_POLL_INTERVAL_MS,
         }).start(),
       LoserTerminated,
     );
@@ -722,8 +725,8 @@ describe("an identity incident refuses the same way whoever detects it (target-o
       IdentityUnconfirmed,
     );
 
-    // Terminal, not polled to exhaustion: one read-back settled it, where
-    // `readbackAttempts` is 3.
+    // Terminal, not polled to exhaustion: one read-back settled it, where the
+    // harness's budget buys three.
     expect(provider.readStateCalls).toBe(1);
     expect((refusal.lastAnswer as Failure).kind).toBe(FailureKind.IDENTITY_INCIDENT);
     expect(gateMoments(cp)).toContain("identity-incident-readback");
@@ -831,5 +834,139 @@ describe("an identity incident refuses the same way whoever detects it (target-o
     );
     expect(provider.stopCalls).toContain(caught.sessionId);
     expect(refusals(cp).length).toBeGreaterThan(0);
+  });
+});
+
+// --------------------------------------------------------------------------
+// D-0098: the read-back window is a budget the caller declares
+// --------------------------------------------------------------------------
+
+describe("D-0098: the post-spawn read-back window is a caller's budget", () => {
+  test("the budget buys the polls it pays for, and the refusal names it", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // A child that is healthy and merely young: it never names itself inside
+    // the window. This is the shape rondo's lap-1 dogfood met on a real
+    // `claude` (issue #174, F-1) -- empty stderr, a zero-byte events file, and
+    // a binding left at `spawned`.
+    // `unconfirmed`'s first argument is the readout's OWN session id, so a
+    // readout naming "pending" is a child that has not yet said its name --
+    // the spelling every case in this file uses for it.
+    provider.nextReadouts = [unconfirmed("pending")];
+
+    const refusal = await expectAsyncRefusal(
+      () =>
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+          readbackBudgetMs: 7 * READBACK_POLL_INTERVAL_MS,
+        }).start(),
+      IdentityUnconfirmed,
+    );
+
+    // Seven intervals of budget, seven asks. Counted rather than timed: the
+    // pacing is this harness's (`wait: null`), so what the budget can be held
+    // to here is the number of questions it bought.
+    expect(provider.readStateCalls).toBe(7);
+    // **The operator's own number, in the sentence they read.** The refusal
+    // this replaces said "within 50 attempts", which names a constant no
+    // command line could reach -- so an operator who had just raised the
+    // budget could not tell whether the value they passed was the one that ran
+    // out. Both halves are asserted because each answers a different question:
+    // the milliseconds are what they typed, the attempts and the interval are
+    // what the class did with it.
+    expect(refusal.message).toContain(`within the ${String(7 * READBACK_POLL_INTERVAL_MS)} ms`);
+    expect(refusal.message).toContain(`7 attempts at ${String(READBACK_POLL_INTERVAL_MS)} ms`);
+    // Unchanged by the budget: nothing is confirmed on trust when it runs out.
+    const rows = activeRows(cp);
+    expect(rows).toHaveLength(1);
+    expect([rows[0]?.[1], rows[0]?.[2]]).toEqual(["spawned", "unobserved"]);
+    expect(gateMoments(cp)).toContain("readback-exhausted");
+  });
+
+  test("a budget shorter than one interval still buys the one poll", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.nextReadouts = [unconfirmed("nothing yet")];
+
+    await expectAsyncRefusal(
+      () =>
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+          readbackBudgetMs: 1,
+        }).start(),
+      IdentityUnconfirmed,
+    );
+
+    // Rounding down would make a one-millisecond budget refuse a provider that
+    // had ALREADY answered, which is a refusal about arithmetic rather than
+    // about the child.
+    expect(provider.readStateCalls).toBe(1);
+  });
+
+  test("the default window is thirty seconds, not the two and a half that never fitted", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.nextReadouts = [unconfirmed("nothing yet")];
+
+    // Built here rather than through `makeOrchestrator`, which supplies a
+    // budget of its own: what this case is about is the value a caller who has
+    // NOT been taught the option gets, which is every caller the day this
+    // lands, and it can only be observed by omitting the field.
+    const orchestrator = new SessionOrchestrator(cp, provider, {
+      runId: RUN_ID,
+      holder: "sup-a",
+      workspace,
+      role: "worker",
+      nowMs: clock.nowMs,
+      sessionUuidFactory: uuids,
+      ttlMs: TTL_MS,
+      wait: null,
+      providerName: "scripted",
+    });
+    const refusal = await expectAsyncRefusal(() => orchestrator.start(), IdentityUnconfirmed);
+
+    expect(DEFAULT_READBACK_BUDGET_MS).toBe(30_000);
+    expect(provider.readStateCalls).toBe(DEFAULT_READBACK_BUDGET_MS / READBACK_POLL_INTERVAL_MS);
+    expect(refusal.message).toContain(`within the ${String(DEFAULT_READBACK_BUDGET_MS)} ms`);
+    // The measurement this default has to clear: 11.3 s was the slowest warm
+    // start rondo measured, and the old window was 2.5 s. A default that fits
+    // one measurement and not the next is the defect in a smaller size, so the
+    // case names the floor rather than only the number chosen.
+    expect(DEFAULT_READBACK_BUDGET_MS).toBeGreaterThan(11_300);
+  });
+
+  test("a budget below a millisecond is a caller's defect, not a refusal", () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    for (const budget of [0, -1, Number.NaN]) {
+      expect(
+        () =>
+          makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+            readbackBudgetMs: budget,
+          }),
+        String(budget),
+      ).toThrow(RangeError);
+    }
+  });
+
+  test("the budget buys time, not leniency", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    // The one readout `defaultIdentityConfirmation` is deliberately written to
+    // reject, and it is the hard case rather than the easy one: the readout
+    // NAMES the committed identity and the provider OBSERVED it, so only the
+    // provider's state -- the child's own exit -- withholds confirmation. A
+    // budget is a window, so a larger one must not turn "the process died"
+    // into "the identity read back", which is exactly what a fix that loosened
+    // the check instead of widening the window would do while passing every
+    // case above.
+    provider.onReadState = (sessionId) => new Ok(observed(sessionId, "exited-1"));
+
+    const refusal = await expectAsyncRefusal(
+      () =>
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a", {
+          readbackBudgetMs: 4 * READBACK_POLL_INTERVAL_MS,
+        }).start(),
+      IdentityUnconfirmed,
+    );
+
+    expect(provider.readStateCalls).toBe(4);
+    expect(refusal.message).toContain("rather than confirmed on trust");
+    const rows = activeRows(cp);
+    expect(rows).toHaveLength(1);
+    expect([rows[0]?.[1], rows[0]?.[2]]).toEqual(["spawned", "unobserved"]);
   });
 });

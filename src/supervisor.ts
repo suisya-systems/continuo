@@ -79,6 +79,41 @@ export const SEAMS: readonly string[] = Object.freeze([
   SEAM_AFTER_READBACK_COMMIT,
 ]);
 
+/**
+ * Milliseconds between two post-spawn `readState` polls, under the default
+ * pacing.
+ *
+ * Deliberately NOT a caller's number. It is IO pacing against a live
+ * subprocess -- how often it is polite to ask -- and nothing an operator knows
+ * about their machine makes 50 ms the wrong question interval. What an
+ * operator does know is how long their worker takes to say its own name, and
+ * that is {@link SessionOrchestratorOptions.readbackBudgetMs}. Exported so a
+ * case can state a budget in the same unit the loop counts in, not so a
+ * composition root can re-pace the loop.
+ */
+export const READBACK_POLL_INTERVAL_MS = 50;
+
+/**
+ * The post-spawn identity read-back window when the caller declares none:
+ * thirty seconds (`D-0098`).
+ *
+ * The previous default was 50 attempts at {@link READBACK_POLL_INTERVAL_MS},
+ * a 2.5 second window, and it was never met by a real worker. Measured on
+ * WSL2 with the fence's own settings and MCP configuration, `claude` 2.1.261
+ * takes 3.55 s to its first `system`/`init` event on a cold start and
+ * 7.9-11.3 s on warm ones, so every lap on a real CLI ended at
+ * `readback-exhausted` with the binding left at `spawned` -- against a child
+ * that was healthy and merely young (issue #174, rondo's
+ * `docs/operations/lap-1-dogfood.md` F-1).
+ *
+ * Thirty seconds is 2.65x the slowest of those measurements. The interval
+ * between the measured worst case and the default is head-room for a slower
+ * machine, a colder cache and a longer MCP handshake; it is not a figure any
+ * measurement produced, and it is a default rather than a rule because the
+ * caller who knows the machine can say better.
+ */
+export const DEFAULT_READBACK_BUDGET_MS = 30_000;
+
 /** Sentinel distinguishing "not given" (paced default) from an explicit `null`. */
 const DEFAULT_WAIT = Symbol("default-wait");
 
@@ -253,7 +288,28 @@ export interface SessionOrchestratorOptions {
   readonly ttlMs?: number;
   readonly resource?: string | undefined;
   readonly identityConfirmed?: (readout: SessionReadout) => boolean;
-  readonly readbackAttempts?: number;
+  /**
+   * How long the committed identity is given to read back after the spawn,
+   * in milliseconds. Defaults to {@link DEFAULT_READBACK_BUDGET_MS}.
+   *
+   * **One budget, not an attempt count and an interval** (`D-0098`). The
+   * number an operator can defend is a wall-clock one -- "this worker needs
+   * twelve seconds to say its own name on this machine" -- and the poll
+   * interval is IO pacing this class owns
+   * ({@link READBACK_POLL_INTERVAL_MS}). The loop polls
+   * `ceil(readbackBudgetMs / READBACK_POLL_INTERVAL_MS)` times, at least once.
+   *
+   * The budget is the window under the default pacing. A caller that replaces
+   * {@link SessionOrchestratorOptions.wait} has replaced the pacing too, and
+   * the budget then buys it that many polls rather than that many
+   * milliseconds -- which is what a case wants, because a case's `wait` is a
+   * script rather than a delay.
+   *
+   * It does not loosen the check. `identityConfirmed` decides what counts as
+   * a read-back and is untouched by this: exhausting the budget still leaves
+   * the binding at `spawned` and raises.
+   */
+  readonly readbackBudgetMs?: number;
   readonly wait?: Wait;
   readonly attemptIdFactory?: (() => string | null) | undefined;
   readonly seam?: ((name: string) => void) | undefined;
@@ -300,6 +356,7 @@ export class SessionOrchestrator {
   readonly #ttlMs: number;
   readonly #resource: string;
   readonly #identityConfirmed: (readout: SessionReadout) => boolean;
+  readonly #readbackBudgetMs: number;
   readonly #readbackAttempts: number;
   readonly #wait: Wait;
   readonly #attemptIdFactory: (() => string | null) | undefined;
@@ -312,8 +369,9 @@ export class SessionOrchestrator {
     provider: SessionProvider,
     options: SessionOrchestratorOptions,
   ) {
-    if ((options.readbackAttempts ?? 50) < 1) {
-      throw new RangeError("readbackAttempts must be at least 1");
+    const readbackBudgetMs = options.readbackBudgetMs ?? DEFAULT_READBACK_BUDGET_MS;
+    if (!Number.isFinite(readbackBudgetMs) || readbackBudgetMs < 1) {
+      throw new RangeError("readbackBudgetMs must be at least 1");
     }
     this.#connection = connection;
     this.#provider = provider;
@@ -328,7 +386,11 @@ export class SessionOrchestrator {
     this.#ttlMs = options.ttlMs ?? 30_000;
     this.#resource = options.resource ?? `session-run:${options.runId}`;
     this.#identityConfirmed = options.identityConfirmed ?? defaultIdentityConfirmation;
-    this.#readbackAttempts = options.readbackAttempts ?? 50;
+    this.#readbackBudgetMs = readbackBudgetMs;
+    // Rounded UP, and never below one: a budget shorter than one interval
+    // still buys the one poll the walk cannot skip, because a provider that
+    // has already answered would otherwise be refused without being asked.
+    this.#readbackAttempts = Math.max(1, Math.ceil(readbackBudgetMs / READBACK_POLL_INTERVAL_MS));
     const wait = Object.hasOwn(options, "wait") ? options.wait : DEFAULT_WAIT;
     if (wait === DEFAULT_WAIT) {
       // A real provider answers start() the instant spawn returns, long
@@ -338,7 +400,8 @@ export class SessionOrchestrator {
       // timestamp and never a measured admission figure (U34). Pass
       // wait: null for a deterministic in-memory provider, or your own
       // callable for a different policy.
-      this.#wait = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
+      this.#wait = () =>
+        new Promise<void>((resolve) => setTimeout(resolve, READBACK_POLL_INTERVAL_MS));
     } else {
       this.#wait = wait as Wait;
     }
@@ -654,7 +717,11 @@ export class SessionOrchestrator {
   /**
    * Poll `readState` until the committed identity reads back.
    *
-   * Never confirms on trust: exhausting the attempts raises, the binding
+   * Bounded by {@link SessionOrchestratorOptions.readbackBudgetMs}, which the
+   * constructor has already turned into a whole number of polls at
+   * {@link READBACK_POLL_INTERVAL_MS}.
+   *
+   * Never confirms on trust: exhausting the budget raises, the binding
    * stays `spawned`, and the last answer rides on the exception. An identity
    * incident ends the loop where it is found instead of being polled to
    * exhaustion -- it is a decided outcome, and a session the provider has
@@ -695,8 +762,9 @@ export class SessionOrchestrator {
       lastAnswer,
       why:
         `the identity committed for session ${JSON.stringify(sessionId)} did not read ` +
-        `back within ${this.#readbackAttempts} attempts; the binding is ` +
-        "left at 'spawned' rather than confirmed on trust",
+        `back within the ${this.#readbackBudgetMs} ms identity read-back budget ` +
+        `(${this.#readbackAttempts} attempts at ${READBACK_POLL_INTERVAL_MS} ms); the ` +
+        "binding is left at 'spawned' rather than confirmed on trust",
     });
   }
 

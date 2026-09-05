@@ -70,6 +70,7 @@ import { createControlPlane, openControlPlane } from "../../src/control_plane/sc
 import { ClaudeCliSessionProvider } from "../../src/session/claude_cli_provider.js";
 import { uuid5 } from "../../src/session/uuid5.js";
 import {
+  READBACK_POLL_INTERVAL_MS,
   SEAM_AFTER_ADMISSION_BEFORE_SPAWN,
   SEAM_AFTER_READBACK_COMMIT,
   SEAM_AFTER_SPAWN_BEFORE_READBACK_COMMIT,
@@ -835,7 +836,7 @@ async function runWalk(options: {
     settings: { prompt: "reply with ok", resumePrompt: "resume" },
     ttlMs,
     resource: RESOURCE,
-    readbackAttempts: 400,
+    readbackBudgetMs: 400 * READBACK_POLL_INTERVAL_MS,
     // IO pacing against a real subprocess; no timestamp is ever read from the
     // host clock (`clock` above supplies every `nowMs`).
     wait: () => new Promise<void>((resolve) => setTimeout(resolve, 10)),

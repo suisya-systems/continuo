@@ -15,7 +15,11 @@ import {
   SessionReadout,
   type StartRequest,
 } from "../../src/session/provider.js";
-import { SessionOrchestrator, type SessionOrchestratorOptions } from "../../src/supervisor.js";
+import {
+  READBACK_POLL_INTERVAL_MS,
+  SessionOrchestrator,
+  type SessionOrchestratorOptions,
+} from "../../src/supervisor.js";
 import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 
 /**
@@ -291,7 +295,9 @@ export function makeOrchestrator(
     nowMs: clock.nowMs,
     sessionUuidFactory: uuids,
     ttlMs: TTL_MS,
-    readbackAttempts: 3,
+    // Three polls, spelled as the budget that buys them: this harness's
+    // provider answers from a script, so the count is what a case reasons about.
+    readbackBudgetMs: 3 * READBACK_POLL_INTERVAL_MS,
     wait: null, // the scripted provider answers synchronously
     providerName: "scripted",
     ...overrides,
