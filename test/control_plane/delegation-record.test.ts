@@ -542,6 +542,33 @@ describe("a written record is never edited", () => {
     expect(readDelegationRecord(connection, "run-1").envelope).not.toBe(forged);
   });
 
+  test("a rowid conflict cannot delete a record either", () => {
+    // The second replace path, found by review after the first was closed. An
+    // ordinary table carries an implicit rowid ALONGSIDE its TEXT primary key,
+    // which is a second conflict target: `INSERT OR REPLACE` naming an existing
+    // row's rowid with a different run_id deletes that row through the rowid
+    // rather than through run_id, so the guard above -- which keys on run_id --
+    // never sees it, and with recursive_triggers off the DELETE trigger does
+    // not fire. The table is WITHOUT ROWID, which removes the target instead of
+    // adding a second guard, so the statement below cannot even be prepared.
+    const { connection } = cpFixture("no-rowid");
+    admitRun(connection, { intent: intent(), delegationRecord: aDelegationRecord(), nowMs: T0 });
+
+    expect(() =>
+      connection
+        .prepare(
+          `INSERT OR REPLACE INTO delegation_record (
+             rowid, run_id, record_schema, envelope, envelope_digest,
+             digest_algorithm, canonicalization, recorded_at_ms
+           ) VALUES (1, 'run-2', 's/1', '{}', :digest, 'sha256', 'verbatim-utf8', :now)`,
+        )
+        .run({ digest: "0".repeat(64), now: T0 }),
+    ).toThrow(/rowid/i);
+
+    expect(rows(connection, "delegation_record")).toHaveLength(1);
+    expect(readDelegationRecord(connection, "run-1").recordSchema).toBe("testkit.delegation/1");
+  });
+
   test("the replace guard defers to the row's own CHECKs rather than masking them", () => {
     // The WHEN clause exists so a row the table would refuse anyway is refused
     // by the constraint that is actually wrong with it. Without it, a malformed

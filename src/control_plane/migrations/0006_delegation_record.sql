@@ -107,7 +107,19 @@ CREATE TABLE delegation_record (
     CHECK (canonicalization IN ('verbatim-utf8')),
 
     CHECK (typeof(recorded_at_ms) = 'integer')
-);
+)
+-- WITHOUT ROWID, and it is an immutability decision rather than a storage one.
+-- An ordinary table has an implicit rowid alongside its TEXT primary key, which
+-- is a SECOND conflict target: `INSERT OR REPLACE` naming an existing row's
+-- rowid with a different run_id deletes that row through the rowid conflict, so
+-- the BEFORE INSERT guard below -- which keys on run_id -- never sees it, and
+-- with `recursive_triggers` off the BEFORE DELETE trigger does not fire either.
+-- Measured: inserting run 'b' at run 'a's rowid removed 'a's record silently,
+-- leaving an admitted run with no authorisation record. WITHOUT ROWID removes
+-- the second target instead of adding a second guard, so there is one key and
+-- one thing to defend. Raised by review of this change, after the run_id guard
+-- had already been added for the first replace path.
+WITHOUT ROWID;
 
 -- The digest is what a host stores instead of a copy of the record: rondo's
 -- three digests become one reference, and resolving it is a lookup here. It is
@@ -116,9 +128,10 @@ CREATE TABLE delegation_record (
 -- case of a contract issued for a repeated job.
 CREATE INDEX delegation_record_by_digest ON delegation_record(envelope_digest);
 
--- A record, once written, is never overwritten -- and THIS trigger is what makes
--- that true, not the two below it. The BEFORE DELETE trigger refuses an explicit
--- DELETE and the BEFORE UPDATE trigger refuses an explicit UPDATE, but
+-- A record, once written, is never overwritten -- and this trigger plus the
+-- table's WITHOUT ROWID are what make that true, not the two triggers below.
+-- The BEFORE DELETE trigger refuses an explicit DELETE and the BEFORE UPDATE
+-- trigger refuses an explicit UPDATE, but
 -- `INSERT OR REPLACE` resolves a primary-key conflict with an IMPLICIT delete
 -- that fires no trigger unless `recursive_triggers` is ON -- and that pragma is
 -- per-connection, so an ordinary `new Database(path)` gets SQLite's default of

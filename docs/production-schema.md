@@ -234,7 +234,7 @@ event spine unusable — `#64`'s whole point is that several producers write CI 
 |---|---|---|---|
 | `run.status` | in-place, forward-only over the §4.3 vocabulary | **Secretary** | run lease epoch |
 | `run` (creation) | append | Secretary | — |
-| `delegation_record` | append, immutable | the admission command, in the transaction that creates the run | `run_id` primary key; no-UPDATE / no-DELETE / no-REPLACE triggers (§4.4) |
+| `delegation_record` | append, immutable | the admission command, in the transaction that creates the run | `run_id` primary key, `WITHOUT ROWID`; no-UPDATE / no-DELETE / no-REPLACE triggers (§4.4) |
 | `session` binding phase | in-place, forward-only | **Supervisor** | session lease epoch |
 | `lease` | in-place (CAS) | the acquiring claimant | epoch monotonicity trigger |
 | `outbox` (enqueue) | append | any producer | `message_id` primary key; `delivery_resource` bound by every producer, `NOT NULL` with no default (§5.8); `writer_epoch` left null by the two unfenced producers |
@@ -394,7 +394,7 @@ CREATE TABLE delegation_record (
     digest_algorithm  TEXT    NOT NULL,
     canonicalization  TEXT    NOT NULL,
     recorded_at_ms    INTEGER NOT NULL
-);
+) WITHOUT ROWID;
 ```
 
 Four properties, and each is a decision rather than a shape:
@@ -410,15 +410,17 @@ Four properties, and each is a decision rather than a shape:
 3. **`run_id` is both the primary key and a foreign key**, so one record per run is the table's own
    shape, and a record for a run that does not exist is unrepresentable. That reference is also what
    forces the INSERT order inside admission's transaction under `PRAGMA foreign_keys = ON`.
-4. **The row is immutable, and it takes three triggers.** `delegation_record_rows_are_immutable` and
+4. **The row is immutable, and it takes three triggers and `WITHOUT ROWID`.** `delegation_record_rows_are_immutable` and
    `delegation_record_rows_are_never_deleted` are the pair `event` and `schema_migration` use, and
    the pair is not sufficient: `INSERT OR REPLACE` resolves a primary-key conflict with an implicit
    delete that fires no `BEFORE DELETE` trigger unless `recursive_triggers` is ON, and that pragma is
    per-connection and off by default. `delegation_record_is_never_replaced` is a `BEFORE INSERT`
    trigger, which fires ahead of conflict resolution and therefore holds on any connection, including
    one this package never handed out -- the same repair, and the same argument,
-   `src/canary/routing_ledger.sql` makes for its own ledger. A record states what was applied at a
-   moment that has passed; a row that can be edited afterwards is a record of what somebody last
+   `src/canary/routing_ledger.sql` makes for its own ledger. `WITHOUT ROWID` closes the second
+   conflict target: an ordinary table carries an implicit `rowid` beside its `TEXT` primary key, and
+   a replace naming an existing row's `rowid` deletes it without the `run_id` guard seeing it.
+   A record states what was applied at a moment that has passed; a row that can be edited afterwards is a record of what somebody last
    wanted it to say.
 
 `run show` reports the check rather than performing it as a gate: its `delegation_record` payload

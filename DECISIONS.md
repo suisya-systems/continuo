@@ -16470,14 +16470,20 @@ continuo overruling cadenza's plan.
    that does not exist is unrepresentable and the INSERT order inside the transaction is forced by
    the schema rather than remembered by the code.
 
-8. **The row is immutable, and that takes three triggers rather than two.** No-`UPDATE` and
+8. **The row is immutable, and that takes three triggers and `WITHOUT ROWID`.** No-`UPDATE` and
    no-`DELETE` are the pair the event spine and the migration ledger use, and they are not
-   sufficient here or there: `INSERT OR REPLACE` resolves a primary-key conflict with an implicit
-   delete that fires no trigger unless `recursive_triggers` is ON, which is a per-connection pragma
-   this build does not set. The third trigger refuses an insert onto an existing `run_id` and fires
-   ahead of conflict resolution, so the guarantee is a property of the store rather than of whoever
-   opened it -- exactly the argument `src/canary/routing_ledger.sql` already makes for its own
-   ledger. A correction is a new run under a new record. The
+   sufficient here or there: `INSERT OR REPLACE` resolves a conflict with an implicit delete that
+   fires no trigger unless `recursive_triggers` is ON, which is a per-connection pragma this build
+   does not set. There are **two** conflict targets, and closing one is not closing the other. The
+   third trigger refuses an insert onto an existing `run_id` and fires ahead of conflict resolution,
+   so that path is a property of the store rather than of whoever opened it -- the argument
+   `src/canary/routing_ledger.sql` already makes for its own ledger. The second target is the
+   implicit `rowid` an ordinary table carries alongside a `TEXT` primary key: a replace naming an
+   existing row's `rowid` with a different `run_id` deletes that row without the `run_id` guard ever
+   seeing it, which was measured. `WITHOUT ROWID` removes that target rather than adding a fourth
+   guard, so the table has one key and one thing to defend. Both paths were found by review of this
+   change, one after the other, which is itself the argument for stating this in a decision: two
+   people reading "immutable, with the usual pair of triggers" would both have believed it. A correction is a new run under a new record. The
    reader recomputes the digest from the stored bytes and refuses a mismatch
    (`DelegationRecordTampered`) rather than returning the stored digest, which is the only thing that
    makes storing the digest more than decoration.
@@ -16609,7 +16615,8 @@ when the property is removed rather than when something near it moves:
   from an envelope expression and refuses a decode of any of them. Verified by mutation with the
   evasion review used.
 - Rewrite a record with `INSERT OR REPLACE`: *INSERT OR REPLACE cannot rewrite a record, whatever
-  recursive_triggers says* goes red. This is the route the two immutability triggers do **not**
+  recursive_triggers says* goes red, and *a rowid conflict cannot delete a record either* goes red if
+  the table stops being `WITHOUT ROWID`. This is the route the two immutability triggers do **not**
   cover, found by review of this change: SQLite resolves a primary-key conflict with an implicit
   DELETE that fires no `BEFORE DELETE` trigger unless `recursive_triggers` is ON, and that pragma is
   per-connection and off by default. The repair is a third, `BEFORE INSERT` trigger, which fires
