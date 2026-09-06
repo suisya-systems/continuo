@@ -761,17 +761,27 @@ rondo #8's -- section 10.1). Resources are `outbox-delivery:run:r-A` and `outbox
    one does -- but a long-lived plane pays a growing cost on a path that is currently constant, and an
    entry that did not name it would be promising a change with no cost.
 
-   **The retirement rule is safe, and it is safe for a reason worth stating.** A scope's watermark may
-   be dropped only when no writer can ever offer a token under that resource again; drop one early and
-   the stale writer it was holding off is silently re-admitted, which is the single failure
-   `destination.ts:749-752` writes the file atomically to avoid. For a **run** resource the condition
-   is decidable: `run.run_id` is a `PRIMARY KEY` (`0001_initial.sql:74`), so a run id is never reissued,
-   and a terminal run's lap will not acquire again -- therefore a key for a terminal run is dead and
-   may be compacted. The global key is never retired. This is a **bounded, deferrable** cost, so P-18
-   requires the entry to state the growth and the rule, and bands the compaction pass itself as
-   follow-up work rather than a precondition; what it must not do is leave the premise unrecorded,
-   because a later reader who compacts on age instead of on run terminality would re-admit a stale
-   writer and have no line to have read.
+   **A retirement rule needs a premise this design does not have, and saying so is the useful part.**
+   A scope's watermark may be dropped only when no writer can ever offer a token under that resource
+   name again; drop one early and the stale writer it was holding off is silently re-admitted, which is
+   the single failure `destination.ts:749-752` writes the file atomically to avoid. The obvious premise
+   -- `run.run_id` is a `PRIMARY KEY` (`0001_initial.sql:74`), so a run id is never reissued -- **does
+   not hold, and it is worth being exact about why**: a primary key constrains one table in one
+   database, while the fence file lives in an operator-supplied directory that outlives any particular
+   database. Restore a backup, replace the database, re-seed a fixture against the same destination
+   root, and a *new* run may legitimately carry an id whose watermark was already compacted away; the
+   resource name is identical, and a low token is then accepted as fresh. The fence is deliberately
+   the one piece of state that survives the process, so it must not be pruned on a fact that is only
+   true within one incarnation of the database.
+
+   **So P-18 states the growth and explicitly does not authorise the compaction.** What safe
+   compaction would require is a discriminator the resource name does not currently carry -- a
+   database or control-plane incarnation id inside the scope key, or an independently enforced
+   no-reuse guarantee across restores -- and that is a design of its own, with a fence-format change
+   in it, not a follow-up chore. Recording the failed premise is the substance here: a later reader
+   who reaches for the primary key, or for age, would re-admit a stale writer and have nothing on the
+   page to stop them. Until such a design exists the file grows, at roughly fifty bytes a run, and
+   correctness is never the thing at risk.
 5. **Enqueue.** A's gate relay is written by `enqueueRelay` with `run_id = r-A` and
    `delivery_resource = deliveryResourceForRun('r-A')`, `writer_epoch` still `NULL` -- the durable
    queue still outlives its worker (`outbox.ts:1240-1250`), because the resource is derived from the
@@ -893,12 +903,36 @@ Assertions after release -- **negative evidence is the substance, positive evide
 - a run-bound relay enqueued after both laps exit is drained by `gate deliver` under **that run's**
   resource, and a runless row by the same verb under the global one (section 6).
 
-Observed-red controls, so each assertion is shown to be able to fail: restoring the global resource
-must break the second marker; removing resource equality from `_MARK_DELIVERED` must produce a
-cross-run stamp; removing the recipient term must adopt the off-recipient row; removing the ack's
-resource equality must let the cross-partition ack succeed; pinning `gate deliver` to the global
-resource must strand the post-lap relay; ids generated per run must defeat any hard-coded expected
-output.
+**Observed-red controls, and the layering has to be taken seriously here or half of them are vacuous.**
+`AGENTS.md:108-112` requires every new or modified check to be shown catching what it claims to catch.
+The complication this design creates for itself is that it is **deliberately redundant**: section 4
+puts resource equality in four statements that each already sit behind a scoped selection, and section
+4 explicitly keeps `MessageBus.poll`'s TypeScript recipient filter beside the new SQL term. Redundancy
+and observed-red are in tension, and the tension is not rhetorical -- **a defence that is masked by
+another defence cannot be falsified through the top of the stack**:
+
+- removing resource equality from `_MARK_DELIVERED` produces **no** cross-run stamp in the two-child
+  test, because `_DUE_QUERY` never returned the foreign row and `_COUNT_ATTEMPT` would refuse it
+  first. The mutant stays green, and a green mutant is evidence of nothing;
+- removing the SQL recipient term adopts **no** off-recipient row either, because the retained
+  TypeScript filter (`bus.ts:259-264`) skips it before adoption is reached.
+
+So the controls split by layer, and the entry must say which layer each one lives at:
+
+| Control | Layer | Why there |
+|---|---|---|
+| restoring the global resource breaks the second acquisition | end-to-end | the failure is the whole point of the change and no other defence hides it |
+| pinning `gate deliver` to the global resource strands the post-lap relay | end-to-end | nothing else drains that row |
+| the cross-partition ack succeeds without the ack's resource equality | end-to-end | already **direct** by construction -- section 4.2's assertion hands the id past the poll, which is why it is the one hazard partitioning the poll does not close |
+| resource equality in `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` | **statement-level, in-process** | each is masked by the selection in front of it; the control must call the method directly on an `Outbox` bound to resource B, with a live epoch, against a row belonging to A, and require **zero rows changed** |
+| the SQL recipient term on `due` | **statement-level, in-process** | masked by the TypeScript filter that section 4 deliberately keeps; the control must exercise the query below the filter, or assert on the rendered SQL |
+| ids generated per run defeat a hard-coded expectation | end-to-end | a property of the fixture, not of a predicate |
+
+This is a real cost of the redundancy and not a testing detail: **every predicate this design adds
+behind another one needs its own direct test, or the entry is asking for four checks that have never
+been seen red.** The statement-level controls belong beside the existing outbox tests, not inside the
+mandatory real-child case, which keeps that case's wall-clock budget (section 9.4) for the thing only
+it can prove -- overlap.
 
 ### 9.4 The budget, which is a live constraint and not a formality
 
@@ -1032,9 +1066,11 @@ and S1 has no concurrency contract of its own to hang it on (`claude_cli_provide
 - **The additive `barrier` fake mode is not enough to hold a lap at the right instant** -- if the lap
   reaches the child later than the acquisition it is meant to overlap, the marker proves the wrong
   overlap and section 9.3 needs a different hold point.
-- **Run ids turn out to be reissued somewhere** -- a restore, a test fixture, an import that reuses an
-  id under a fresh database -- which would make P-18's retirement rule unsafe and force compaction to
-  be abandoned rather than merely deferred.
+- **The fence file's growth turns out to matter sooner than "roughly fifty bytes a run" suggests** --
+  a destination root shared by far more runs than this document imagines, or a plane whose token
+  advances are frequent enough that the whole-file rewrite shows up in delivery latency -- which would
+  turn P-18 from a recorded cost into a precondition, and make the incarnation-discriminator design a
+  blocker for `D-1104` rather than a successor to it.
 - **A runless gate relay turns out to need a run-scoped drainer after all** -- if some future gate
   without a run is nonetheless answered inside a lap -- which would make section 4.0's global mapping
   the wrong default and put the relay back in the post-lap window section 6 exists to close.
@@ -1065,20 +1101,20 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-2** | Add `outbox.delivery_resource` holding the **exact lease resource string**, constructed by `deliveryResourceForRun(runId) = "outbox-delivery:run:" + runId` or the literal `"outbox-delivery"`. One exported constructor, never parsed back into a run id (`run_id` is the join). **Which of the two a row gets is decided by producer class, not by `run_id`**: the `run_id`-derived rule is the **unfenced** producers' (and the migration's backfill), while a fenced producer takes its own instance's resource whatever its `run_id` is -- P-4 and section 4.0 govern, and reading this line as a `run_id` rule would pair a per-run epoch with the global resource and rebuild section 2's ambiguity inside the fix. | pre-review, amended |
 | **P-3** | The lap acquires, renews, renders, checks and releases **its run's** resource. `holdDeliveryLease` gains a resource parameter (`src/lap/endpoint_lease.ts:177-192`); `D-0073`'s semantics hold unchanged within each resource. **This is the holder-identity half, and P-2 without it does not lift the serialisation** (see P-13). | pre-review, amended |
 | **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer under the two rules of section 4.2 -- the **fenced** producer writes its own `Outbox` instance's resource, the **unfenced** producers derive it from the row's durable `run_id`. The invariant is `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`, and a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review, amended |
-| **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. | pre-review |
+| **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. **Each of the four carries a statement-level observed-red control of its own**, because every one is masked by the selection in front of it and cannot be falsified through the end-to-end case (`AGENTS.md:108-112`; section 9.3). The same applies to the SQL recipient term on `due`, which the retained TypeScript filter masks. | pre-review, amended |
 | **P-6** | Recipient becomes a SQL term on `due` **only**, as a routing defence. The pre-review also asked for it on one-row adoption; that is **refuted by measurement** -- `adoptIfUnowned` receives no recipient (`outbox.ts:1861-1863`), the query is character-identical to the all-recipient sweep by design (`:308-320`), and the lookup is already a primary-key equality, so the term has no source, breaks a deliberate identity and defends nothing (section 4). It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
 | **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable. **`NULL` does not mean "predates the column"** -- the four `effectKind`-composing writers keep writing attributed rows with a null column for ever, so the definition is the disjunction: a row's writer resource is `writer_resource` when non-null and the `kind` suffix otherwise, and every row carries exactly one of the two (section 7.2). Those four writers are deliberately left unchanged. Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix otherwise, **and `0005` backfills the pre-migration outbox rows** -- exactly identifiable, since the outbox path is the only `action` writer that does not compose its kind (section 7.2) -- so no history row is left with neither form of attribution. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
 | **P-8** | Split `UNOWNED_OUTBOX_QUERY` into a **caller-scoped** recovery form and a **database-wide** invariant form that joins on the row's own `delivery_resource` and takes no `:resource`. Re-anchor `_UNOWNED_ONE_QUERY`'s character-identity to the recovery form and say in the source which it mirrors. `INVARIANT_NO_UNOWNED_OUTBOX` and `src/index.ts`'s export are part of this change. | measured here |
 | **P-9** | Use the next forward migration (`0005`); never edit a historical one; backfill existing rows to the exact literal `"outbox-delivery"`; replace the due index with a measured `(delivery_resource, recipient, enqueued_at_ms)` partial form and keep positive **and** degraded EXPLAIN evidence. Say explicitly in the entry that `sqlite-value-contract.md` is a value contract and not a schema freeze. **Prefer the 12-step rebuild over `ADD COLUMN ... NOT NULL DEFAULT`** (section 5.2); the gate may take the default instead with a schema test pinning its legacy-only meaning. | pre-review, amended |
 | **P-10** | Name the drainer for every row a lap does not drain, and make it resource-parameterised. `deliverRelays` / `gate deliver` stop naming `DELIVERY_LEASE_RESOURCE` (`src/gate/operator.ts:769-774`) and instead acquire **the resource of the rows they are asked to drain** -- the run's for a run-bound relay, the global literal for legacy and runless rows. A fixed global `gate deliver` would strand every post-lap gate relay, because `enqueueRelay` copies `gate.runId` (`gates.ts:612`) and `gate present` / `gate answer` normally run after `lap perform` has exited. `LeaseHeld` while the lap is live is the correct answer and is kept. **This carries a CLI addition -- `gate deliver --run-id`, optional, defaulting to the global resource** -- because the verb today takes no gate, run or resource argument at all (`src/gate/cli.ts:951-969`). | measured here, amended after Codex review |
-| **P-11** | Gate implementation on a mandatory continuo target-only real-child case: two built `lap perform` processes on one production plane, two built endpoints started from the **materialiser's own rendered `mcp.json`**, a file barrier both must cross, and negative cross-delivery assertions with observed-red controls. Repository fake child only; no credentials, no network; a **stated wall-clock budget** with a bounded barrier that fails loudly (`D-1103`). The hold must be in the **child**, not between the endpoints -- otherwise the laps need not overlap -- so this carries **one additive `FAKE_MODE` (`barrier`)** on the fake's existing mode switch (`fake-claude.mjs:267`), default `"ok"` untouched. **Every assertion needing two live leases is taken while both children are still blocked**, because releasing one lets its lap exit and stop its lease (`root.ts:1261-1274`); section 9.3 fixes that ordering as part of the specification. It does **not** extend the fake to speak MCP or start a grandchild (section 9.2). | pre-review, amended |
+| **P-11** | Gate implementation on a mandatory continuo target-only real-child case: two built `lap perform` processes on one production plane, two built endpoints started from the **materialiser's own rendered `mcp.json`**, a file barrier both must cross, and negative cross-delivery assertions with observed-red controls. Repository fake child only; no credentials, no network; a **stated wall-clock budget** with a bounded barrier that fails loudly (`D-1103`). The hold must be in the **child**, not between the endpoints -- otherwise the laps need not overlap -- so this carries **one additive `FAKE_MODE` (`barrier`)** on the fake's existing mode switch (`fake-claude.mjs:267`), default `"ok"` untouched. **The statement-level observed-red controls do not live in this case** -- they are in-process tests beside the outbox suite (P-5), because a masked predicate cannot be falsified through two child processes and the wall-clock budget is for what only this case can prove. **Every assertion needing two live leases is taken while both children are still blocked**, because releasing one lets its lap exit and stop its lease (`root.ts:1261-1274`); section 9.3 fixes that ordering as part of the specification. It does **not** extend the fake to speak MCP or start a grandchild (section 9.2). | pre-review, amended |
 | **P-12** | Discharge `minimal-operating-loop.md:1037-1045`'s obligation to show parallel laps keep one provider instance per run. Do **not** claim the provider's same-instance residual is fixed; re-band it to a future continuo change that first proposes concurrent verbs on one S1 instance or a shared provider, and correct that passage's stale citation (`:959-994` should be `:1156-1190`). | pre-review, amended |
 | **P-13** | State that `D-1104` takes **both** halves -- the enabling change and the holder identity -- because `rondo D-0012`'s falsifier says the enabling change alone is not enough (`rondo/DECISIONS.md:1057-1064`). continuo #167 owns partitioning, fencing and the two-run proof; rondo #8 owns allocation, the capacity bound and suspend accounting. This change does not widen rondo's single-flight index and does not authorise a second rondo admission. | measured here |
 | **P-14** | Record F-13's measurement in the entry: the delivery lease is held for the lap only (~20.9 s of a measured 125.4 s lifetime), the remaining 83% is rondo's lock across an unbounded human wait, and `D-1104` therefore removes contention on the smaller term. `D-1104` is not "parallel laps now work". | measured here |
 | **P-15** | `D-0068` and `D-0071`'s read-then-signal residual stay open and are not credited to this change (`DECISIONS.md:11771`, `:12168-12211`). | pre-review, amended |
 | **P-16** | Scope ack authority by resource on **both** ack surfaces. `MessageBus.ack` (`bus.ts:466-479`) settles on recipient equality alone, `Outbox.recordAck` updates by message id and status, and the endpoint's `ack` tool takes a caller-supplied id (`endpoint.ts:330`). With two endpoints on one recipient that is no longer an authority check. Add `message.deliveryResource === this._resource` beside the recipient test, in the same caller-bug family and **still unfenced**, so late and duplicate acks keep settling nothing. **The second surface is `ackRelay`, which does not go through the bus** (`operator.ts:896-906`) and builds `ackOutbox` on the hard-coded constant (`:843-849`); it takes `deliveryResourceForRun` of **its own gate's run**, already loaded on the path (`gateDetail`, `:928`; `gates.ts:963`, `:612`), so `gate ack` gains no argument and the equality becomes a cross-check of two independently stored facts. **On that surface the admissible set is two values** -- the derived run resource **or** the global literal -- because a migrated in-flight relay is backfilled to the literal while its gate still names a run, and a strict equality would leave exactly those gates unable to advance. The bus surface keeps the strict equality. Section 4.2. | measured here, after Codex review |
 | **P-17** | Implementation starts only after the gate accepts or amends these lines and creates `D-1104`. This document allocates no entry and is not accepted authority. | pre-review |
-| **P-18** | Record the fence file's new growth as a named, bounded cost: per-run resources give per-run keys in the shared destination's `fence.json` (`destination.ts:736-753`), one per run for ever, whole-file read and rewrite per advance. Correctness is unaffected. State the retirement rule **and its premise** -- a key may be dropped only for a terminal run, safe only because `run.run_id` is a `PRIMARY KEY` and never reissued (`0001_initial.sql:74`) -- and band the compaction pass as follow-up. Retiring on age instead of terminality would re-admit a stale writer. | measured here, after Codex review |
+| **P-18** | Record the fence file's new growth as a named, unbounded-but-cheap cost: per-run resources give per-run keys in the shared destination's `fence.json` (`destination.ts:736-753`), one per run for ever, whole-file read and rewrite per advance. Correctness is unaffected. **Do not authorise compaction**, and record why the obvious premise fails: `run.run_id` being a `PRIMARY KEY` (`0001_initial.sql:74`) constrains one database, while the fence outlives any database in an operator-supplied directory, so a restore or a re-seed can reissue a compacted id and have a low token accepted as fresh. Safe compaction needs an incarnation discriminator in the scope key or an enforced cross-restore no-reuse guarantee -- a separate design with a fence-format change, not a follow-up chore. | measured here, after Codex review |
 
 ---
 
@@ -1115,8 +1151,9 @@ Return or reject `D-1104` unless every answer is yes.
     `minimal-operating-loop.md` citation corrected?
 13. Does allocation, the capacity bound and suspend accounting remain rondo #8's, with F-13's
     measurement recorded so the ledger is designed against the human term (P-14)?
-14. Is the fence file's per-run growth stated as a cost, with a retirement rule whose premise --
-    run ids are never reissued -- is written down beside it (P-18)?
+14. Is the fence file's per-run growth stated as a cost, **and is compaction explicitly withheld**,
+    with the reason the primary-key premise fails across a restore recorded so nobody reaches for it
+    later (P-18)?
 15. Does implementation wait for the gate-created `D-1104`?
 
 ---
@@ -1190,6 +1227,14 @@ the lines.
 | M10 | P-7's "`NULL` means predates the column" is false the day the migration lands, because the non-outbox writers keep producing null-column rows | **Confirmed.** The four composing writers (supervisor, watcher, session_binding, run_lifecycle via `lease.ts`) are not changed by this entry, so a definition in terms of time is immediately untrue; the definition the readers implement is a disjunction over the two attribution forms. | Section 7.2 gains the disjunction and the reason the four writers are deliberately left alone; **P-7 amended** |
 | M11 | P-16's check on `MessageBus.ack` does not reach `gate ack`: `ackRelay` bypasses the bus and builds `ackOutbox` on the global constant, with no source for a run resource | **Confirmed, and one step worse than stated**: once the constant means the global resource, a literal equality on that path would refuse every run-bound relay ack -- the ordinary case. Measurement also supplies the missing source the finding asked for: `ackRelay` already loads the gate (`gateDetail`, `operator.ts:928`) and the gate carries the `runId` `enqueueRelay` copied onto the row. | Section 4.2 gains the second surface and the derived resource, with the reason a `gate ack --run-id` is worse than deriving it; **P-16 amended**, section 6's ack bullet corrected |
 
+**Round 7** raised two Majors, and one of them fired a falsifier this document had written for itself
+one round earlier -- which is the falsification section working rather than failing.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| M16 | Half of section 9.3's observed-red controls cannot go red: with the due query and `_COUNT_ATTEMPT` still scoped, removing `_MARK_DELIVERED`'s resource equality cross-stamps nothing, and with `MessageBus.poll`'s TypeScript filter retained, removing the SQL recipient term adopts nothing | **Confirmed, and it is a cost of this design's own redundancy.** Section 4 deliberately puts four equalities behind scoped selections and deliberately keeps the TypeScript filter; a defence masked by another defence is unfalsifiable from the top of the stack, so the controls as written would be green mutants offered as evidence (`AGENTS.md:108-112`). | Section 9.3 splits the controls by layer in a table, and moves the masked ones to statement-level in-process tests beside the outbox suite; **P-5 amended** to require one per predicate, **P-11** to say they are not in the real-child case |
+| M17 | The retirement rule's premise is invalid: a `PRIMARY KEY` prevents duplicate ids in one table, not reuse across a restore, a database replacement or a re-seed against the same destination directory | **Confirmed, and this is round 6's falsifier firing** -- it was written as "run ids turn out to be reissued somewhere -- a restore, a test fixture, an import". The fence is deliberately the state that outlives the process, so pruning it on a fact true only inside one database incarnation is exactly backwards. | Section 8 step 4 **retracts the rule** rather than patching it, and records why the premise fails; **P-18 amended** to withhold compaction and name what a safe version would need (an incarnation discriminator in the scope key, or an enforced cross-restore no-reuse guarantee); checklist question 14 and the falsifier re-aimed |
+
 **Round 6** raised one Blocker and one Major, both of them consequences of repairs made in rounds 4-5
 rather than of the original draft -- the first is two of this document's own rules meeting.
 
@@ -1206,7 +1251,7 @@ row this document had carried forward from the pre-review rather than one it wro
 | M12 | Section 4.0 claims a gate's `run_id` is always present; `openGate` defaults it to `null` and the schema permits it, so the producer rule is undefined for a runless gate relay | **Confirmed.** `gates.ts:445`, `:460`; `0001_initial.sql:1267` carries no `NOT NULL`. The one caller in the tree does pass a run (`report_ingress.ts:371-390`), so the case is admissible but unexercised -- which is how it survived four rounds. | Section 4.0's table corrected and the null mapped to the global literal, with the drainer consequence stated so no relay is unwritable or unreachable |
 | M13 | P-6's recipient term on one-row adoption is incompatible with section 4's inventory, with `_UNOWNED_ONE_QUERY`'s character-identity, and with `adoptIfUnowned`'s signature | **Confirmed, and it resolves against P-6.** `adoptIfUnowned(messageId, {nowMs, epoch})` receives no recipient (`outbox.ts:1861-1863`); the query is deliberately character-identical to the all-recipient sweep (`:308-320`); and the lookup is a primary-key equality (`:322-324`), so the term has no source, breaks an identity the source explains, and defends nothing. | Section 4 gains the refutation; **P-6 amended to `due` only**, with the reason recorded so the fuller form is not re-proposed |
 
-**The fifteen fall into four groups, and the order they arrived in is itself the finding.** Rounds
+**The seventeen fall into four groups, and the order they arrived in is itself the finding.** Rounds
 1-2 (B1-B6) were the same mistake six times: the first draft partitioned *selection* carefully and
 under-specified the places authority is established without a selection in front of it -- the post-lap
 drainer, the ack, the fenced insert -- and then under-specified the *interfaces* those repairs need:
@@ -1230,4 +1275,7 @@ document is put to a **human gate that votes on section 12, not on section 4**, 
 that says less than the section behind it is not a presentational defect -- it is the defect, because
 the line is what gets accepted. Latest: once enough repairs are in, the remaining defects are
 between them, so a repair is not finished when it is stated -- it is finished when it has been read
-against every other rule the same row has to satisfy.
+against every other rule the same row has to satisfy. Round 7 is the sharpest instance of that in both
+directions at once: the redundancy this design chose for safety is the same property that makes half
+its evidence vacuous, and the premise it reached for to bound a cost was one its own falsification
+section had already named as doubtful.
