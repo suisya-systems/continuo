@@ -234,7 +234,7 @@ event spine unusable — `#64`'s whole point is that several producers write CI 
 |---|---|---|---|
 | `run.status` | in-place, forward-only over the §4.3 vocabulary | **Secretary** | run lease epoch |
 | `run` (creation) | append | Secretary | — |
-| `delegation_record` | append, immutable | the admission command, in the transaction that creates the run | `run_id` primary key; no-UPDATE / no-DELETE triggers (§4.4) |
+| `delegation_record` | append, immutable | the admission command, in the transaction that creates the run | `run_id` primary key; no-UPDATE / no-DELETE / no-REPLACE triggers (§4.4) |
 | `session` binding phase | in-place, forward-only | **Supervisor** | session lease epoch |
 | `lease` | in-place (CAS) | the acquiring claimant | epoch monotonicity trigger |
 | `outbox` (enqueue) | append | any producer | `message_id` primary key; `delivery_resource` bound by every producer, `NOT NULL` with no default (§5.8); `writer_epoch` left null by the two unfenced producers |
@@ -410,10 +410,16 @@ Four properties, and each is a decision rather than a shape:
 3. **`run_id` is both the primary key and a foreign key**, so one record per run is the table's own
    shape, and a record for a run that does not exist is unrepresentable. That reference is also what
    forces the INSERT order inside admission's transaction under `PRAGMA foreign_keys = ON`.
-4. **The row is immutable**, in the form `event` and `schema_migration` use: paired
-   `delegation_record_rows_are_immutable` and `delegation_record_rows_are_never_deleted` triggers. A
-   record states what was applied at a moment that has passed; a row that can be edited afterwards is
-   a record of what somebody last wanted it to say.
+4. **The row is immutable, and it takes three triggers.** `delegation_record_rows_are_immutable` and
+   `delegation_record_rows_are_never_deleted` are the pair `event` and `schema_migration` use, and
+   the pair is not sufficient: `INSERT OR REPLACE` resolves a primary-key conflict with an implicit
+   delete that fires no `BEFORE DELETE` trigger unless `recursive_triggers` is ON, and that pragma is
+   per-connection and off by default. `delegation_record_is_never_replaced` is a `BEFORE INSERT`
+   trigger, which fires ahead of conflict resolution and therefore holds on any connection, including
+   one this package never handed out -- the same repair, and the same argument,
+   `src/canary/routing_ledger.sql` makes for its own ledger. A record states what was applied at a
+   moment that has passed; a row that can be edited afterwards is a record of what somebody last
+   wanted it to say.
 
 **The step does not backfill.** Runs admitted before it have no row here and never will. That is the
 unrecoverable past, and it stays visible rather than being filled with an invented value — §12's

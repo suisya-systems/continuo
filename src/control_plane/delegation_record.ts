@@ -73,14 +73,23 @@ export const DIGEST_ALGORITHM = "sha256";
 export const CANONICALIZATION = "verbatim-utf8";
 
 /**
- * The largest envelope this build accepts, in UTF-16 code units of text, which
- * is the unit SQLite's `length()` counts and therefore the unit the DDL's own
- * bound is written in.
+ * The largest envelope this build accepts, in UTF-16 code units.
  *
  * A stated limit rather than whatever the driver happens to do, so that an
  * over-large record is refused with a sentence naming the bound instead of
  * failing somewhere with a constraint message. The record is a resolved
  * contract and its provenance, not a corpus.
+ *
+ * **The unit is not the DDL's, and the direction of the difference is what
+ * makes that safe.** `0006_delegation_record.sql` writes the same number
+ * against SQLite's `length()`, which counts characters, while `String.length`
+ * here counts UTF-16 code units -- so an astral character costs two here and
+ * one there, and this check is always at least as strict as the column's. The
+ * dangerous direction is the other one: a value this constructor admitted and
+ * the `CHECK` then refused would surface as a constraint error inside the
+ * admitting transaction rather than as a refusal before anything is opened.
+ * That cannot happen. Noted rather than unified because counting code points
+ * over a megabyte of text to buy nothing is the worse trade.
  */
 export const MAX_ENVELOPE_LENGTH = 1_048_576;
 
@@ -187,7 +196,7 @@ export class DelegationRecord {
     }
     if (envelope.length > MAX_ENVELOPE_LENGTH) {
       throw new DelegationRecordUsageError(
-        `envelope is ${envelope.length} characters and the limit is ` +
+        `envelope is ${envelope.length} UTF-16 code units and the limit is ` +
           `${MAX_ENVELOPE_LENGTH}; the record states the values one run was ` +
           "admitted under, and a document past this bound is something else " +
           "arriving through this door",

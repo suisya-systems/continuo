@@ -2,6 +2,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { cliArgsRefusal } from "../fencing/cli_args_allow.js";
 import { roleNames } from "../fencing/renderer.js";
+import { isSqliteError } from "../sqlite/errors.js";
 import { DelegationRecord } from "./delegation_record.js";
 import { appendEvent } from "./events.js";
 import { LapRunIntent, PAYLOAD_KEYS } from "./lap_run_intent.js";
@@ -259,6 +260,33 @@ export class CliArgsNotAuthorised extends ControlPlaneRefusal {
   }
 }
 
+/**
+ * The delegation record is well-formed by this build's rules and still not
+ * storable by the table's.
+ *
+ * The two rule sets are close but not identical, and they are allowed to be:
+ * `DelegationRecord` checks the form so that a malformed document is refused
+ * before a transaction opens, while `delegation_record`'s own `CHECK`s are what
+ * hold for a connection this package never handed out. Where they diverge, the
+ * column wins and an operator has to be told which one refused. The known
+ * divergence is nesting depth -- V8's `JSON.parse` has no limit and SQLite's
+ * `json_valid` refuses past `SQLITE_MAX_DEPTH` -- but this refusal is written
+ * over the whole class rather than that one case, because a `CHECK` added to
+ * this table later would otherwise escape as an untyped driver error the day it
+ * first fires.
+ *
+ * In the {@link ControlPlaneRefusal} family: the envelope is a file an operator
+ * chose, so a record the table will not take is an answer about their input, not
+ * a defect in continuo. Nothing is written -- the whole block rolls back.
+ */
+export class DelegationRecordNotStorable extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "DelegationRecordNotStorable";
+    Object.setPrototypeOf(this, DelegationRecordNotStorable.prototype);
+  }
+}
+
 // --------------------------------------------------------------------------
 // admission
 // --------------------------------------------------------------------------
@@ -479,7 +507,7 @@ export function admitRun(
     // digest over the bytes as they arrived, and how that digest is to be
     // reproduced -- and every one of them is read off the record's own frozen
     // fields rather than computed a second time here.
-    tx.prepare<{
+    const insertRecord = tx.prepare<{
       run_id: string;
       record_schema: string;
       envelope: string;
@@ -498,15 +526,30 @@ export function admitRun(
             :digest_algorithm, :canonicalization, :recorded_at_ms
         )
         `,
-    ).run({
-      run_id: runId,
-      record_schema: delegationRecord.recordSchema,
-      envelope: delegationRecord.envelope,
-      envelope_digest: delegationRecord.envelopeDigest,
-      digest_algorithm: delegationRecord.digestAlgorithm,
-      canonicalization: delegationRecord.canonicalization,
-      recorded_at_ms: nowMs,
-    });
+    );
+    try {
+      insertRecord.run({
+        run_id: runId,
+        record_schema: delegationRecord.recordSchema,
+        envelope: delegationRecord.envelope,
+        envelope_digest: delegationRecord.envelopeDigest,
+        digest_algorithm: delegationRecord.digestAlgorithm,
+        canonicalization: delegationRecord.canonicalization,
+        recorded_at_ms: nowMs,
+      });
+    } catch (error) {
+      // Only a constraint failure, and only from this statement. Anything else
+      // -- a busy database, a corrupt file -- is not a statement about the
+      // record and is left to travel as itself.
+      if (isSqliteError(error) && error.code.startsWith("SQLITE_CONSTRAINT")) {
+        throw new DelegationRecordNotStorable(
+          `the delegation record for run ${runId} was refused by the ` +
+            `delegation_record table: ${error.message}; nothing was admitted`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
 
     const created = appendOrRefuse(tx, {
       eventType: RUN_CREATED_EVENT_TYPE,

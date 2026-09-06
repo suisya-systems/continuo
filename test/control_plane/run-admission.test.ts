@@ -289,6 +289,7 @@ function databaseBehindHead(root: string, count: number): string {
     "0002_policy_seed.sql",
     "0003_outbox_cancelled_status.sql",
     "0004_run_writer_epoch.sql",
+    "0005_outbox_delivery_resource.sql",
   ];
   for (const name of names.slice(0, count)) {
     writeStep(prefix, name, readFileSync(join(MIGRATIONS_DIR, name), "utf8"));

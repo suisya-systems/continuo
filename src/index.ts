@@ -139,6 +139,20 @@ export {
   configureConnection,
   openControlPlaneConnection,
 } from "./control_plane/connection.js";
+// `D-1105`'s delegation record. Exported for the same reason the intent above
+// is: `admitRun` takes one, the package exports only `.` (D-0002), and a
+// consumer that cannot name the type cannot call the function. The constants
+// travel with it because a host that stores a digest has to be able to say
+// which algorithm and which normalisation it was taken under without hard-coding
+// this build's answer.
+export {
+  CANONICALIZATION,
+  DelegationRecord,
+  type DelegationRecordFields,
+  DelegationRecordUsageError,
+  DIGEST_ALGORITHM,
+  MAX_ENVELOPE_LENGTH,
+} from "./control_plane/delegation_record.js";
 /**
  * The delivery resource names, and the one constructor that builds them
  * (`D-1104`).
@@ -158,20 +172,6 @@ export {
   deliveryResourceForRun,
   isDeliveryResource,
 } from "./control_plane/delivery_resource.js";
-// `D-1105`'s delegation record. Exported for the same reason the intent above
-// is: `admitRun` takes one, the package exports only `.` (D-0002), and a
-// consumer that cannot name the type cannot call the function. The constants
-// travel with it because a host that stores a digest has to be able to say
-// which algorithm and which normalisation it was taken under without hard-coding
-// this build's answer.
-export {
-  CANONICALIZATION,
-  DelegationRecord,
-  type DelegationRecordFields,
-  DelegationRecordUsageError,
-  DIGEST_ALGORITHM,
-  MAX_ENVELOPE_LENGTH,
-} from "./control_plane/delegation_record.js";
 export {
   ATTEMPT_LOG_NAME,
   DeliveryReceipt,
@@ -461,6 +461,7 @@ export {
   type AdmittedRun,
   admitRun,
   CliArgsNotAuthorised,
+  DelegationRecordNotStorable,
   DelegationRecordTampered,
   DelegationRecordUnrecorded,
   RUN_ADMISSION_PRODUCER,

@@ -141,6 +141,34 @@ describe("the run and its delegation record commit together or not at all", () =
     expect(rows(connection, "delegation_record")).toEqual([]);
   });
 
+  test("a record insert that fails inside admitRun leaves no run row", () => {
+    // The case the falsification bullet needs and did not have. The two cases
+    // above pin the transaction BOUNDARY -- an outer throw, and a hand-rolled
+    // pair of statements -- but neither drives `admitRun` itself into a failure
+    // after it has written the run row. Without this, moving the record INSERT
+    // out of the block so it runs after the commit leaves the whole suite
+    // green, which was measured during review of this change.
+    //
+    // The failure is provoked by a trigger installed on the fixture rather than
+    // by a mock, so what fails is the real statement inside the real block.
+    const { connection } = cpFixture("insert-fails-inside");
+    connection
+      .prepare(
+        `CREATE TRIGGER test_refuse_delegation_record
+         BEFORE INSERT ON delegation_record
+         BEGIN SELECT RAISE(ABORT, 'the test refused this record'); END`,
+      )
+      .run();
+
+    expect(() =>
+      admitRun(connection, { intent: intent(), delegationRecord: aDelegationRecord(), nowMs: T0 }),
+    ).toThrow(/the test refused this record/);
+
+    expect(rows(connection, "run")).toEqual([]);
+    expect(rows(connection, "event")).toEqual([]);
+    expect(rows(connection, "delegation_record")).toEqual([]);
+  });
+
   test("the run row cannot outlive its record", () => {
     // The other direction of the reference, and the one an ordering mistake
     // would hide. A run whose record could be removed from under it is a run
@@ -360,10 +388,44 @@ describe("continuo stores the envelope and does not read it", () => {
     // site is how interpretation arrives -- somebody needs one field, parses it
     // where they need it, and the layering is gone before anybody reviews a
     // decision about it.
-    const decoders = sourceFiles(resolve(MIGRATIONS_DIR, "..", "..")).filter((file) =>
-      /JSON\.parse\([^)]*envelope/i.test(readFileSync(file, "utf8")),
-    );
-    expect(decoders.map((file) => basename(file))).toEqual(["delegation_record.ts"]);
+    // Keyed on the BINDING rather than on one spelling of the call. The first
+    // shape of this scan matched `JSON.parse(<argument spelled 'envelope'>)`,
+    // and review defeated it in one line: a module that binds the column to a
+    // local and parses the local passes it. So the scan now follows the value
+    // -- every identifier bound from an expression naming the envelope is
+    // collected, and no module outside `delegation_record.ts` may hand one of
+    // them to a decoder.
+    //
+    // The parse is the right thing to key on, and that is not a shortcut: the
+    // envelope is TEXT. There is no way to read a key of it without decoding it
+    // first, so a module that never decodes it cannot be interpreting it.
+    //
+    // Comments are stripped before matching, because "envelope" is an overloaded
+    // word here -- `json_output.ts`'s one-line document is called an envelope
+    // too, and three modules discuss it in prose while parsing unrelated JSON.
+    const readers = sourceFiles(resolve(MIGRATIONS_DIR, "..", "..")).filter((file) => {
+      const code = readFileSync(file, "utf8")
+        .replaceAll(/\/\*[\s\S]*?\*\//g, " ")
+        .replaceAll(/\/\/[^\n]*/g, " ");
+      const bound = ["envelope"];
+      for (const match of code.matchAll(
+        /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*([^;]*)/g,
+      )) {
+        const [, name, initializer] = match;
+        // `prepare(` is skipped: a SELECT naming the column is a string that
+        // mentions the envelope, not a value derived from one.
+        if (
+          name !== undefined &&
+          initializer !== undefined &&
+          /\benvelope\b/i.test(initializer) &&
+          !/\bprepare\(/.test(initializer)
+        ) {
+          bound.push(name);
+        }
+      }
+      return bound.some((name) => new RegExp(`JSON\\.parse\\(\\s*${name}\\b`).test(code));
+    });
+    expect(readers.map((file) => basename(file))).toEqual(["delegation_record.ts"]);
   });
 
   test("a format name this build has never seen is stored, not refused", () => {
@@ -422,6 +484,61 @@ describe("a written record is never edited", () => {
     expect(() => connection.prepare("DELETE FROM delegation_record").run()).toThrow(
       /only account of what a run was permitted to do/,
     );
+  });
+
+  test("INSERT OR REPLACE cannot rewrite a record, whatever recursive_triggers says", () => {
+    // The route the two triggers above do NOT cover, found by review of this
+    // change and repaired the way `src/canary/routing_ledger.sql` repairs it.
+    // `INSERT OR REPLACE` resolves a primary-key conflict with an implicit
+    // DELETE that fires no BEFORE DELETE trigger unless `recursive_triggers` is
+    // ON, and that pragma is per-connection and off by default -- so without a
+    // BEFORE INSERT guard one ordinary statement rewrites the envelope, the
+    // digest and the timestamp together, and every reader then reports the
+    // substituted record as intact because it hashes to its own new digest.
+    //
+    // The pragma is asserted off first, so the case is testing the trigger and
+    // not a connection setting that happens to be closing the hole.
+    const { connection } = cpFixture("no-replace");
+    admitRun(connection, { intent: intent(), delegationRecord: aDelegationRecord(), nowMs: T0 });
+    expect(connection.pragma("recursive_triggers", { simple: true })).toBe(0);
+
+    const forged = '{"granted": ["everything"]}';
+    expect(() =>
+      connection
+        .prepare(
+          `INSERT OR REPLACE INTO delegation_record (
+             run_id, record_schema, envelope, envelope_digest,
+             digest_algorithm, canonicalization, recorded_at_ms
+           ) VALUES ('run-1', 's/1', :envelope, :digest, 'sha256', 'verbatim-utf8', :now)`,
+        )
+        .run({
+          envelope: forged,
+          digest: createHash("sha256").update(Buffer.from(forged, "utf-8")).digest("hex"),
+          now: T0,
+        }),
+    ).toThrow(/never replaced/);
+
+    expect(readDelegationRecord(connection, "run-1").envelope).not.toBe(forged);
+  });
+
+  test("the replace guard defers to the row's own CHECKs rather than masking them", () => {
+    // The WHEN clause exists so a row the table would refuse anyway is refused
+    // by the constraint that is actually wrong with it. Without it, a malformed
+    // replacement of an existing record would report "never replaced" and send
+    // an operator looking for the wrong thing.
+    const { connection } = cpFixture("replace-defers");
+    admitRun(connection, { intent: intent(), delegationRecord: aDelegationRecord(), nowMs: T0 });
+
+    expect(() =>
+      connection
+        .prepare(
+          `INSERT OR REPLACE INTO delegation_record (
+             run_id, record_schema, envelope, envelope_digest,
+             digest_algorithm, canonicalization, recorded_at_ms
+           ) VALUES ('run-1', 's/1', 'not json', :digest, 'sha256', 'verbatim-utf8', :now)`,
+        )
+        .run({ digest: "0".repeat(64), now: T0 }),
+    ).toThrow(/CHECK constraint failed/i);
   });
 
   test("bytes that no longer hash to the stored digest are refused on the way out", () => {

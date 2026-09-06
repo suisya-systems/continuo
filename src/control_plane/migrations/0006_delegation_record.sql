@@ -116,6 +116,42 @@ CREATE TABLE delegation_record (
 -- case of a contract issued for a repeated job.
 CREATE INDEX delegation_record_by_digest ON delegation_record(envelope_digest);
 
+-- A record, once written, is never overwritten -- and THIS trigger is what makes
+-- that true, not the two below it. The BEFORE DELETE trigger refuses an explicit
+-- DELETE and the BEFORE UPDATE trigger refuses an explicit UPDATE, but
+-- `INSERT OR REPLACE` resolves a primary-key conflict with an IMPLICIT delete
+-- that fires no trigger unless `recursive_triggers` is ON -- and that pragma is
+-- per-connection, so an ordinary `new Database(path)` gets SQLite's default of
+-- OFF and rewrites the record in one ordinary statement. `connection.ts` does
+-- not set it. A BEFORE INSERT trigger fires ahead of conflict resolution, so it
+-- refuses the replacement whatever the pragma says, and on every connection
+-- including ones this package never handed out. The repair is the canary
+-- ledger's, verbatim in shape: see `run_owner_is_never_replaced` in
+-- `src/canary/routing_ledger.sql`, which documents the same mechanism.
+--
+-- The WHEN clause defers to the row's own CHECKs, for the reason that file
+-- gives: a row this table would refuse anyway is left for the CHECK to refuse,
+-- so this guard never masks a validation failure with a "you may not replace
+-- this" refusal. IT RESTATES those CHECKs rather than citing them, because a
+-- trigger cannot ask a table what its constraints are.
+CREATE TRIGGER delegation_record_is_never_replaced
+BEFORE INSERT ON delegation_record
+WHEN typeof(NEW.run_id) = 'text' AND length(NEW.run_id) > 0
+ AND typeof(NEW.record_schema) = 'text' AND length(NEW.record_schema) > 0
+ AND typeof(NEW.envelope) = 'text' AND length(NEW.envelope) > 0
+ AND json_valid(NEW.envelope)
+ AND length(NEW.envelope) <= 1048576
+ AND typeof(NEW.envelope_digest) = 'text' AND length(NEW.envelope_digest) = 64
+ AND NEW.envelope_digest = lower(NEW.envelope_digest)
+ AND NEW.digest_algorithm IN ('sha256')
+ AND NEW.canonicalization IN ('verbatim-utf8')
+ AND typeof(NEW.recorded_at_ms) = 'integer'
+ AND EXISTS (SELECT 1 FROM delegation_record WHERE run_id = NEW.run_id)
+BEGIN
+    SELECT RAISE(ABORT,
+        'a delegation record is written once; it is never replaced');
+END;
+
 -- Immutability, in the strong form the spine and the migration ledger already
 -- use. The record's whole purpose is to say what was applied at a moment that
 -- has passed; a row that can be edited afterwards is a record of what somebody

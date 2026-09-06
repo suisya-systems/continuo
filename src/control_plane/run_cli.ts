@@ -393,11 +393,18 @@ function intentOf(args: Namespace): LapRunIntent {
  * missing or unreadable file becomes a one-line refusal rather than a stack
  * trace with a path in it.
  *
- * **Decoded strictly.** `readFileSync(path, "utf8")` substitutes U+FFFD for a
- * malformed byte, and a record whose bytes were silently altered on the way in
- * is the one thing this document must never be: the digest would then be over
- * what continuo made of the file rather than over what the producer wrote.
- * A fatal decoder refuses instead.
+ * **Decoded strictly, and `ignoreBOM` is the load-bearing half.**
+ * `readFileSync(path, "utf8")` substitutes U+FFFD for a malformed byte, and a
+ * record whose bytes were silently altered on the way in is the one thing this
+ * document must never be: the digest would then be over what continuo made of
+ * the file rather than over what the producer wrote. A fatal decoder refuses
+ * instead. `ignoreBOM: true` is passed for the *same* reason and is easy to
+ * read backwards -- WHATWG's default is to DELETE a leading U+FEFF, so without
+ * it a file written with a byte-order mark is stored and digested three bytes
+ * shorter than the producer wrote it, silently. With it the mark survives into
+ * the envelope and `DelegationRecord`'s parse refuses the document by name.
+ * Raised by review of this change; the same spelling is already used at
+ * `attention/dedup.ts` and `attention/config.ts`.
  *
  * **The format name is a separate flag and is not read out of the document.**
  * A self-describing wrapper would be the obvious alternative, and it is
@@ -411,7 +418,9 @@ function delegationRecordOf(args: Namespace): DelegationRecord {
   const path = String(args["delegation_record"]);
   let envelope: string;
   try {
-    envelope = new TextDecoder("utf-8", { fatal: true }).decode(runCliSeams.readFile(path));
+    envelope = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      runCliSeams.readFile(path),
+    );
   } catch (error) {
     throw new ControlPlaneRefusal(
       `${path} could not be read as a delegation record: ${describeReadError(error)}`,

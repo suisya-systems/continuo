@@ -16460,8 +16460,14 @@ continuo overruling cadenza's plan.
    that does not exist is unrepresentable and the INSERT order inside the transaction is forced by
    the schema rather than remembered by the code.
 
-7. **The row is immutable, in the strong form the event spine and the migration ledger already use**
-   -- paired no-`UPDATE` and no-`DELETE` triggers. A correction is a new run under a new record. The
+7. **The row is immutable, and that takes three triggers rather than two.** No-`UPDATE` and
+   no-`DELETE` are the pair the event spine and the migration ledger use, and they are not
+   sufficient here or there: `INSERT OR REPLACE` resolves a primary-key conflict with an implicit
+   delete that fires no trigger unless `recursive_triggers` is ON, which is a per-connection pragma
+   this build does not set. The third trigger refuses an insert onto an existing `run_id` and fires
+   ahead of conflict resolution, so the guarantee is a property of the store rather than of whoever
+   opened it -- exactly the argument `src/canary/routing_ledger.sql` already makes for its own
+   ledger. A correction is a new run under a new record. The
    reader recomputes the digest from the stored bytes and refuses a mismatch
    (`DelegationRecordTampered`) rather than returning the stored digest, which is the only thing that
    makes storing the digest more than decoration.
@@ -16559,9 +16565,15 @@ same decision. The window's ruling, recorded here as the shape to follow:
 **Falsification.** Each is a case in `test/control_plane/delegation-record.test.ts` that goes RED
 when the property is removed rather than when something near it moves:
 
-- Remove the record insert from admission's transaction block, or commit it separately: *an outer
-  transaction that fails afterwards leaves neither* and *a failure writing the record rolls the run
-  row back* go red.
+- Remove the record insert altogether: *admission writes both, and the record is about the run it
+  was admitted with* goes red.
+- Move the insert out of the transaction block so it commits separately: *a record insert that fails
+  inside admitRun leaves no run row* goes red. That case exists because of this bullet: review of
+  this change applied the mutation and found the suite green, since the two boundary cases either
+  wrap `admitRun` in an outer transaction of their own or write the statements by hand. The case
+  installs a trigger that refuses the record insert and calls `admitRun` on a plain connection, which
+  is the only shape that observes the real block failing at its real second statement. Verified by
+  mutation, both directions.
 - Make `delegationRecord` optional on `admitRun`: *admission refuses without a record, before
   anything is opened or written* goes red.
 - Drop the foreign key or the immutability triggers: *a delegation record for a run that does not
@@ -16571,7 +16583,19 @@ when the property is removed rather than when something near it moves:
   in, verbatim* goes red.
 - Read any key of the envelope in `src/`: *nothing in the control plane reads a key out of a
   delegation envelope* goes red, and so does *admission behaves identically whatever the envelope
-  says* if the read changes any observable outcome.
+  says* if the read changes any observable outcome. That scan follows the **binding** rather than one
+  spelling of the call -- its first form matched `JSON.parse(<argument spelled "envelope">)` and
+  review defeated it in one line with a two-step read, so it now collects every identifier bound
+  from an envelope expression and refuses a decode of any of them. Verified by mutation with the
+  evasion review used.
+- Rewrite a record with `INSERT OR REPLACE`: *INSERT OR REPLACE cannot rewrite a record, whatever
+  recursive_triggers says* goes red. This is the route the two immutability triggers do **not**
+  cover, found by review of this change: SQLite resolves a primary-key conflict with an implicit
+  DELETE that fires no `BEFORE DELETE` trigger unless `recursive_triggers` is ON, and that pragma is
+  per-connection and off by default. The repair is a third, `BEFORE INSERT` trigger, which fires
+  ahead of conflict resolution and therefore holds on connections continuo never handed out. It is
+  the canary ledger's repair (`src/canary/routing_ledger.sql`'s `run_owner_is_never_replaced`),
+  reused rather than re-derived, WHEN clause and all.
 - Return the stored digest instead of recomputing it: *bytes that no longer hash to the stored digest
   are refused on the way out* goes red.
 - Collapse `DelegationRecordUnrecorded` into `UnknownRunRefused`: *a run admitted before the record
