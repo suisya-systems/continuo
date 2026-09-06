@@ -1114,17 +1114,25 @@ process constructs its own provider at `src/lap/cli.ts:597`
 so **the premise of this paragraph survives the parallel case unchanged**: one provider instance per
 run, and no two verbs on one instance. The residual therefore stays unreachable.
 
-**A different provider hazard does become reachable, and it is not this one.** `--state-root` is
-"Never defaulted: two providers sharing one directory adopt each other's children"
-(`src/lap/cli.ts:136-139`, and the class says the same at
-`src/session/claude_cli_provider.ts:1119-1121`). Until `D-1104` the global delivery lease made two
-concurrent `lap perform` processes impossible, so a shared state root could not be reached whatever
-the operator typed; now it can, and nothing in `D-1104` refuses it -- `requireUsableStateRoot`
-(`src/lap/root.ts:693`) checks usability, not exclusivity. That is a distinct residual from `#queue`,
-it is continuo's, and it is a *new* one rather than a re-banded one: the change that removed its
-guard did not replace it. What `D-1104` changes is only the *evidence obligation* -- the
-parallel case is now discharged rather than merely not-yet-asked -- and it repairs **nothing** in the
-provider; it must not be credited with closing this. Narrowed, the residual becomes live only when
+**A different provider hazard became reachable, and it is closed by `D-1105` rather than by this
+paragraph.** `--state-root` is "Never defaulted: two providers sharing one directory adopt each
+other's children" (`STATE_ROOT_HELP` in `src/lap/cli.ts`, and the class says the same in
+`ClaudeCliSessionProvider`'s constructor docstring). Until `D-1104` the global delivery lease made
+two concurrent `lap perform` processes impossible, so a shared state root could not be reached
+whatever the operator typed; `D-1104` removed that guard and added nothing in its place, which is
+the residual this paragraph carried. `D-1105` closes it: `--state-root` is now a **parent**, and
+what the provider is built over is `<parent>/<run id>` (`lapStateRoot`, the sibling of `D-0061`'s
+`lapArtifactDir`), so two laps handed one parent are handed two directories and no occupancy
+mechanism -- no lease, no marker file -- had to be invented to notice that they were. The evidence
+is `test/lap/parallel-laps.test.ts`, which now gives both laps the SAME `--state-root` and asserts
+the parent's children are exactly the two run ids. `requireUsableStateRoot` still checks usability
+and not exclusivity, and no longer has to: it is asked about the derived directory, and the
+derivation is what makes it unshared. It was always a distinct residual from `#queue` and a *new*
+one rather than a re-banded one, and the credit for closing it goes where the repair is: `D-1104`
+repairs **nothing** in the provider and must not be read as having closed this; what it changed was
+the *evidence obligation*, and `D-1105` is what discharges it.
+
+**The `#queue` residual is the one that stays open**, narrowed as above: it becomes live only when
 something proposes **concurrent verbs on one S1 instance, or one provider instance shared across
 runs**. Neither is proposed anywhere today, and S1 has no concurrency contract of its own to hang one
 on (`src/session/claude_cli_provider.ts:1187-1189`).

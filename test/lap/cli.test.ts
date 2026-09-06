@@ -103,7 +103,10 @@ interface Lap {
   readonly databasePath: string;
   readonly workspace: string;
   readonly artifactDir: string;
+  /** The `--state-root` flag's value: a PARENT, since `D-1105`. */
   readonly stateRoot: string;
+  /** What the provider actually writes under: `<stateRoot>/<run id>`. */
+  readonly providerStateRoot: string;
   /** The dropbox the endpoint is configured to write into (`continuo#122`). */
   readonly destinationDir: string;
   readonly out: string[];
@@ -237,6 +240,7 @@ function lap(
     workspace,
     artifactDir: join(artifactRoot, runId),
     stateRoot,
+    providerStateRoot: join(stateRoot, runId),
     destinationDir,
     out,
     err,
@@ -358,7 +362,7 @@ describe("the acceptance: a lap from CLI verbs alone", () => {
     // And the child was actually launched with it. `record.json` is the
     // provider's durable record of the argv it spawned, so this is the child's
     // own command line rather than a restatement of the plan.
-    const record = JSON.parse(readFileSync(recordPath(f.stateRoot), "utf8")) as {
+    const record = JSON.parse(readFileSync(recordPath(f.providerStateRoot), "utf8")) as {
       argv: string[];
       workspace: string;
     };
@@ -370,6 +374,30 @@ describe("the acceptance: a lap from CLI verbs alone", () => {
     // The child's cwd is the worktree git made, not a directory the provider
     // created for it.
     expect(record.workspace).toBe(f.workspace);
+  });
+
+  test("the provider's state root is the run's own directory under the flag", async () => {
+    // `D-1105`. `--state-root` is a parent, exactly as `--artifact-root` is
+    // (`D-0061`), and the run's directory is DERIVED -- which is what makes two
+    // laps given one parent unable to share a state root without anything
+    // having to notice that they were given one.
+    //
+    // A run id with a character a directory name may not carry, so this also
+    // says the derivation goes through the artifact directory's encoding rather
+    // than concatenating the identifier: `run/lap:2` under a naive join is a
+    // path two levels down, in a directory named after neither run.
+    const f = lap("lap-state-root-derived", "run/lap:2");
+    expect(await f.perform(), f.err.join("")).toBe(0);
+
+    // The flag's directory holds exactly one thing, the encoded run id -- so
+    // neither the session directory nor `probe-evidence.txt` was written to the
+    // parent, which is where an undropped derivation would put them.
+    expect(readdirSync(f.stateRoot)).toEqual(["run%2Flap%3A2"]);
+    const derived = join(f.stateRoot, "run%2Flap%3A2");
+    expect(existsSync(join(derived, "probe-evidence.txt"))).toBe(true);
+    // And the session's record is under it: `recordPath` asserts there is
+    // exactly one session there.
+    expect(existsSync(recordPath(derived))).toBe(true);
   });
 });
 
@@ -813,9 +841,14 @@ describe("what the verb refuses, and what it leaves behind", () => {
     // gate, so a state root inside the worktree is a gate opened over words its
     // own subject wrote. The remaining warded paths are all
     // `MaterializationRequest` fields and are branch B's.
+    //
+    // The refusal names the DERIVED directory (`D-1105`), which is the path the
+    // provider was built over: a check that named the parent would be a
+    // statement about a directory nothing writes into.
     const f = lap("lap-state-root-inside");
     expect(await f.perform({ "--state-root": join(f.workspace, "state") })).toBe(2);
     expect(f.err.join("")).toContain("the provider's state root");
+    expect(f.err.join("")).toContain(pythonRepr(join(f.workspace, "state", RUN_ID)));
     expect(existsSync(f.workspace)).toBe(false);
   });
 
@@ -870,6 +903,10 @@ describe("what the verb refuses, and what it leaves behind", () => {
 
     expect(await f.perform({ "--state-root": file })).toBe(2);
     expect(f.err.join("")).toContain("not a writable directory");
+    // The run's own directory, which is the one that could not be created --
+    // the parent here is a regular file, so `<file>/<run id>` is what `mkdir`
+    // refused (`D-1105`).
+    expect(f.err.join("")).toContain(pythonRepr(join(file, RUN_ID)));
     expect(existsSync(f.workspace)).toBe(false);
   });
 
@@ -1433,7 +1470,7 @@ function recordPath(stateRoot: string): string {
 
 /** The provider's durable record of the argv it spawned, and the identity in it. */
 function spawnedRecord(f: Lap): { readonly argv: string[]; readonly uuid: string } {
-  const record = JSON.parse(readFileSync(recordPath(f.stateRoot), "utf8")) as {
+  const record = JSON.parse(readFileSync(recordPath(f.providerStateRoot), "utf8")) as {
     argv: string[];
     claude_session_uuid: string;
   };

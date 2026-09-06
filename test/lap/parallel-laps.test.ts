@@ -70,7 +70,7 @@
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -118,6 +118,9 @@ const REPORT_TEXT = "The fence refuses the push. May I publish?";
 const MARKER_WAIT_MS = 60_000;
 const CHILD_BARRIER_TIMEOUT_S = "90";
 
+/** How much of a captured child file the failure message carries. */
+const EVIDENCE_TAIL_CHARS = 4_000;
+
 /** The whole case, generously: six processes, two worktrees, one release. */
 const CASE_TIMEOUT_MS = 180_000;
 
@@ -127,6 +130,12 @@ interface LapUnderTest {
   readonly repository: string;
   readonly workspace: string;
   readonly artifactDir: string;
+  /**
+   * The directory this lap's provider must end up writing under -- **derived**,
+   * never passed (`D-1105`). Both laps are given one `--state-root` parent, so
+   * this path existing with only this lap's session under it is the whole of
+   * the evidence that the derivation happened.
+   */
   readonly stateRoot: string;
   readonly readyMarker: string;
   readonly claudeCommand: readonly [string, string];
@@ -163,6 +172,7 @@ function world(label: string): {
   readonly root: string;
   readonly databasePath: string;
   readonly destinationDir: string;
+  readonly stateRootParent: string;
   readonly laps: readonly [LapUnderTest, LapUnderTest];
   readonly releaseMarker: string;
 } {
@@ -170,6 +180,12 @@ function world(label: string): {
   const databasePath = join(root, "production.sqlite3");
   const destinationDir = join(root, "destination");
   const releaseMarker = join(root, "release");
+  // **One `--state-root` for both laps, and that is the point of the case**
+  // (`D-1105`). Handing each lap its own would be what a careful caller does
+  // and would prove nothing: the question is whether a caller that does NOT is
+  // still safe, which is the situation `D-1104` created when it removed the
+  // global delivery lease that had made two concurrent laps impossible.
+  const stateRootParent = join(root, "state");
 
   const out: string[] = [];
   patchSeams(dbCliSeams, {
@@ -223,7 +239,7 @@ function world(label: string): {
       repository,
       workspace,
       artifactDir: join(artifactRoot, runId),
-      stateRoot: join(lapRoot, "state"),
+      stateRoot: join(stateRootParent, runId),
       readyMarker: join(root, `ready-${suffix}`),
       claudeCommand: fakeCli(lapRoot),
       resource: deliveryResourceForRun(runId),
@@ -232,7 +248,7 @@ function world(label: string): {
     };
   }) as unknown as readonly [LapUnderTest, LapUnderTest];
 
-  return { root, databasePath, destinationDir, laps, releaseMarker };
+  return { root, databasePath, destinationDir, stateRootParent, laps, releaseMarker };
 }
 
 /** Start one built `lap perform`, with its child held at the barrier. */
@@ -241,6 +257,7 @@ function startLap(
   options: {
     readonly databasePath: string;
     readonly destinationDir: string;
+    readonly stateRootParent: string;
     readonly releaseMarker: string;
   },
 ): void {
@@ -259,8 +276,10 @@ function startLap(
       lap.repository,
       "--artifact-root",
       join(lap.artifactDir, ".."),
+      // The shared PARENT, deliberately: what the provider writes under is
+      // `lap.stateRoot`, and this command line is what has to derive it.
       "--state-root",
-      lap.stateRoot,
+      options.stateRootParent,
       "--endpoint-recipient",
       NOTIFY_RECIPIENT,
       "--endpoint-destination-dir",
@@ -442,6 +461,90 @@ function offRecipientRow(
     .run(messageId, HUMAN_GATED_RECIPIENT, "{}", messageId, nowMs, resource);
 }
 
+/**
+ * The session directories under one state root, by name.
+ *
+ * "A subdirectory holding a `record.json`" is `#discoverRecords`'s own rule
+ * (`src/session/claude_cli_provider.ts`), so this reads the roster the provider
+ * would build rather than a listing of everything on disk -- `probe-evidence.txt`
+ * lives at the root of the state root and is not a session.
+ */
+function sessionsUnder(stateRoot: string): readonly string[] {
+  if (!existsSync(stateRoot)) {
+    return [];
+  }
+  return readdirSync(stateRoot)
+    .filter((entry) => existsSync(join(stateRoot, entry, "record.json")))
+    .sort();
+}
+
+/**
+ * Everything the runner knows about why a lap's child stopped, as text.
+ *
+ * **Written for a failure this test could not explain, and it explained it.**
+ * At `019e3b8a` -- this file's own merge, before it was touched again -- the
+ * Windows cell failed with `[0, 2]`: every step-2 and step-3 assertion passing,
+ * both leases live, both endpoints partitioned, and one lap exiting 2 with "the
+ * child ... is gone without writing a result event", and the same failure
+ * recurred on the next branch to touch this file. The lap's own stderr says
+ * only that the child went; **why it went is in the child's captured stderr and
+ * event stream**, which the provider writes into the session directory as
+ * `stderr-<generation>.log` and `events-<generation>.jsonl` -- files that live
+ * on the runner and are thrown away with it.
+ *
+ * So the evidence is pulled into the assertion message, and the next red cell
+ * settled the question in one run: three children across two Node versions had
+ * a **complete `result` line** in their transcripts and an empty stderr. That
+ * is `D-1106` -- the provider read the transcript and asked whether the child
+ * was still running in that order, so a child that wrote its last line and
+ * exited in between was reported as having written nothing. The ordering is
+ * fixed and `test/session/liveness-read-ordering.test.ts` holds it.
+ *
+ * **This function stays, and not out of sentiment.** `D-1106` closed one way
+ * for a child to be reported gone with no report; the message an operator and
+ * this case see is the same for every other way -- a child that died
+ * mid-stream, a barrier deadline the fake announces on its own stderr, a
+ * transcript that was truncated. The lap will never say which. Nothing else
+ * here reads those two files, and the cost of keeping them is two small reads
+ * when the message is built.
+ *
+ * Reading is best-effort and never throws: this runs while a test is already
+ * failing, and a diagnostic that raises replaces the failure being diagnosed.
+ * Each file is tailed rather than quoted whole, because an event stream is
+ * unbounded and only its end is in question.
+ */
+function childEvidence(lap: LapUnderTest): string {
+  const tail = (path: string): string => {
+    try {
+      const text = readFileSync(path, "utf8");
+      return text.length > EVIDENCE_TAIL_CHARS ? `...${text.slice(-EVIDENCE_TAIL_CHARS)}` : text;
+    } catch (error) {
+      return `<unreadable: ${String(error)}>`;
+    }
+  };
+  if (!existsSync(lap.stateRoot)) {
+    return `${lap.runId}: no state root at ${lap.stateRoot}`;
+  }
+  const lines: string[] = [`${lap.runId}: state root ${lap.stateRoot}`];
+  for (const session of readdirSync(lap.stateRoot)) {
+    const dir = join(lap.stateRoot, session);
+    let entries: readonly string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      // `probe-evidence.txt` and anything else that is a file rather than a
+      // session directory: not an error, just not evidence.
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith("stderr-") || entry.startsWith("events-")) {
+        lines.push(`--- ${session}/${entry} ---`, tail(join(dir, entry)));
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
 describe("two laps on one control plane, at the same instant (target-only)", () => {
   test(
     "both laps hold their own delivery lease, and neither reaches the other's rows",
@@ -600,10 +703,44 @@ describe("two laps on one control plane, at the same instant (target-only)", () 
             }),
         ),
       );
-      expect(codes, `A: ${lapA.stderr.join("")}\nB: ${lapB.stderr.join("")}`).toEqual([0, 0]);
+      // The two laps' own stderr, and -- because the lap only ever says that
+      // its child went, never why -- what the children themselves wrote. See
+      // {@link childEvidence}.
+      expect(
+        codes,
+        `A: ${lapA.stderr.join("")}\nB: ${lapB.stderr.join("")}\n` +
+          `${childEvidence(lapA)}\n${childEvidence(lapB)}`,
+      ).toEqual([0, 0]);
       for (const lap of [lapA, lapB]) {
         expect(lap.stderr.join("") + lap.stdout.join("")).not.toContain("LeaseHeld");
       }
+
+      // **Two laps, one `--state-root`, two state roots** (`D-1105`). Both
+      // command lines above named `w.stateRootParent` and nothing else; what
+      // the two providers wrote under is one derived directory each. Taken
+      // after the exits because that is when every record and the probe
+      // evidence have been written.
+      //
+      // The parent's own children are asserted exactly, and that is the half
+      // that goes red when the derivation is removed: a lap built over the
+      // parent puts its session directory -- named by a session uuid -- and
+      // `probe-evidence.txt` there instead, so the listing is neither run id.
+      expect(readdirSync(w.stateRootParent).sort()).toEqual([lapA.runId, lapB.runId].sort());
+      const sessionsA = sessionsUnder(lapA.stateRoot);
+      const sessionsB = sessionsUnder(lapB.stateRoot);
+      // One session under each, and the two are different sessions: the second
+      // half is what says the rosters are disjoint rather than identical.
+      expect(sessionsA).toHaveLength(1);
+      expect(sessionsB).toHaveLength(1);
+      expect(sessionsA).not.toEqual(sessionsB);
+      // `#discoverRecords` reads exactly this listing, so a lap's roster
+      // carries its own session and no other run's -- which is the hazard
+      // `D-1104` point 21 measured and left open.
+      expect(sessionsA).not.toContain(sessionsB[0]);
+      // The probe wrote into the derived directory too, so nothing about this
+      // lap's state landed in the shared parent.
+      expect(existsSync(join(lapA.stateRoot, "probe-evidence.txt"))).toBe(true);
+      expect(existsSync(join(lapB.stateRoot, "probe-evidence.txt"))).toBe(true);
 
       // Both leases were released by their own laps, and neither withheld
       // anything from the other.

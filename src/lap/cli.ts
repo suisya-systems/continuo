@@ -115,7 +115,14 @@ import {
   WorkspaceMaterializationRefused,
   WorkspaceMaterializationUsageError,
 } from "../workspace/materializer.js";
-import { type LapOutcome, LapRefused, LapUsageError, performLap, requireModel } from "./root.js";
+import {
+  type LapOutcome,
+  LapRefused,
+  LapUsageError,
+  lapStateRoot,
+  performLap,
+  requireModel,
+} from "./root.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -134,9 +141,11 @@ const ARTIFACT_ROOT_HELP =
   "are published under, as <ARTIFACT_ROOT>/<run id>. It must be outside the " +
   "worktree: artifacts inside it would be files the fenced worker can edit.";
 const STATE_ROOT_HELP =
-  "directory the session provider keeps its per-session records and captured " +
-  "output in. Never defaulted: two providers sharing one directory adopt each " +
-  "other's children.";
+  "directory the session provider's per-session records and captured output " +
+  "are kept under, as <STATE_ROOT>/<run id>. A parent, like --artifact-root: " +
+  "the per-run directory is derived rather than named, so two laps given this " +
+  "same parent cannot share one state root. Never defaulted: two providers " +
+  "sharing one directory adopt each other's children.";
 const CLAUDE_COMMAND_HELP =
   "the worker CLI to run, as one token, and it must be an ABSOLUTE path. " +
   "Repeat the flag to give a command prefix in order (an interpreter and a " +
@@ -568,7 +577,8 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
  */
 export async function cmdLapPerform(args: Namespace): Promise<number> {
   const path = String(args["db"]);
-  const stateRoot = String(args["state_root"]);
+  const runId = String(args["run_id"]);
+  const stateRootParent = String(args["state_root"]);
   const claudeCommand = claudeCommandOf(args);
   const model = optionalText(args, "model");
   const endpointModule = optionalText(args, "endpoint_module");
@@ -594,6 +604,17 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
     // stated once there; `performLap`'s preflight asks it again for its own
     // callers.
     requireModel(model);
+    // **The per-run state root, derived here because this is the last place
+    // before the provider is built over it** (`D-1105`). `--state-root` is a
+    // parent, exactly as `--artifact-root` is (`D-0061`), and what the provider
+    // is handed is `<parent>/<run id>` -- so two laps launched with one parent
+    // are given two directories without either of them claiming one. The run id
+    // is a required argument and is read at the top of this function, so the
+    // derivation needs nothing the admitted intent carries and can happen
+    // before the control plane is even opened. `lapStateRoot` refuses a run id
+    // that cannot be a directory name, which is why it is inside the `try`:
+    // that refusal is an operator's to read, not a stack trace.
+    const stateRoot = lapStateRoot(stateRootParent, runId);
     const provider = createDefaultSessionProvider(stateRoot, {
       ...(claudeCommand === undefined ? {} : { claudeCommand }),
       // **This is where model selection lives** (`D-0099`), and the seam is the
@@ -619,13 +640,23 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
     const connection = openProductionControlPlane(path);
     try {
       const outcome = await performLap(connection, provider, provider, {
-        runId: String(args["run_id"]),
+        runId,
         repository: String(args["repository"]),
         artifactRoot: String(args["artifact_root"]),
         // Handed over to be CHECKED against the workspace, not used
         // (`D-0067`). The provider is already built over this path, which is
         // exactly why the check cannot live here: the workspace is not known
         // until the admitted intent has been read.
+        //
+        // The DERIVED directory and never the parent (`D-1105`): containment
+        // and writability are asked about the directory the provider actually
+        // writes into. Handing over the parent would make both checks
+        // statements about a directory nothing uses -- `requireUsableStateRoot`
+        // would prove the PARENT creatable and writable, which is a different
+        // claim: a regular file already sitting at `<parent>/<run id>` passes
+        // it, and the failure then arrives from the provider's own `mkdir`
+        // after the branch and the worktree exist, which is exactly the late
+        // refusal that check was added to prevent.
         providerStateRoot: stateRoot,
         ...(claudeCommand === undefined ? {} : { workerCommand: claudeCommand }),
         // Handed over to be CHECKED, like the two above it (`D-0099`): the
