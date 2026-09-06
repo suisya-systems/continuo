@@ -208,6 +208,7 @@ spaces distinct.
 | D-1102 | A `lap perform --json` refusal names its session in a top-level `session_id`, present when the lap holds a confirmed identity and absent when it does not | accepted |
 | D-1103 | The Windows `double-green` cells get a 65-minute cap, not 40, for headroom over the measured slowest lap | accepted |
 | D-1104 | The outbox row records WHICH lease minted its `writer_epoch`, and a lap holds its own run's delivery resource | accepted |
+| D-1106 | The liveness observation is taken before the transcript read it is composed with | accepted |
 
 ---
 
@@ -16175,3 +16176,86 @@ Query plans in point 12 measured on this tree at implementation time over 400 ro
 the observed-red evidence in point 14 recorded per mutant in the pull request body. Decision id
 `D-1104`, drawn from the `D-11xx` shared cross-belt band opened by `D-1101` (Issue #179), taken after
 re-checking against `origin/main` that `D-1103` was the highest id in use.
+
+
+## D-1106 -- The liveness observation is taken before the transcript read it is composed with
+
+**Context.** `ClaudeCliSessionProvider` answers two questions about a session by
+composing two observations: what the captured transcript holds, and whether the child is still
+running. `readTerminalReport` composes them into "there is no report and there never will be one"
+and `#readout` into "the child is gone, and this is everything it wrote". Both took them in the
+order **read, then liveness**.
+
+That order is unsound, and the failure it produces is silent. A child that writes its `result` line
+and exits **between** the two makes each half true and their conjunction false: the transcript on
+disk holds a complete, well-formed report, and the verb answers that the turn produced none and
+cannot. The window is small and it is not theoretical -- `#childLiveness` awaits `settleExits()`
+before it answers, which is a macrotask turn spent entirely inside the gap.
+
+**Measured, not inferred.** `test/lap/parallel-laps.test.ts` (`D-1104`) releases two fenced children
+at one instant, which places their last writes exactly where a poll is in flight. The Windows
+`double-green` cells failed on it three times across two Node versions, three separate children and
+three seeds -- and once the case was made to print the children's own captured files, every failure
+carried the same evidence: a complete `{"type":"result","terminal_reason":"completed",...}` line in
+`events-000.jsonl`, an empty `stderr-000.log`, and a lap exiting 2 with "the child ... is gone
+without writing a result event". Three candidate explanations were on the table (the fake's barrier
+deadline, a child dying mid-stream, a result the reader never saw); the evidence admits only the
+third.
+
+**Decision.**
+
+1. **`#childLiveness` is asked before `#parseEvents` in both verbs, and its answer is used exactly
+   where it was used before.** The invariant is one line: *a verdict about what a child will never
+   write may only compose a liveness observation with a read that is no older than it.* Taken in
+   this order the composition is sound in both directions -- a child observed gone can write nothing
+   further, so the read that follows is complete; a child observed alive may write more, so a stale
+   read can only under-report, which is the "not yet" answer the caller polls again for.
+
+2. **A `result` already in the transcript is still answered without reference to liveness**,
+   including when liveness is unknowable (`BACKEND_UNREACHABLE` on a platform with no pid probe).
+   Hoisting the call must not hoist its *use*: reporting "could not observe" over a report the child
+   demonstrably wrote would be a second way to lose the same evidence.
+
+3. **Re-reading after the exit was considered and rejected as the primary repair.** It works -- a
+   gone child cannot write again, so a second read is terminal and cannot loop -- but it leaves the
+   unsound order in place and adds a second read to be got wrong later. Asking first removes the
+   window rather than compensating for it, and it is one moved line per site.
+
+4. **The cost is one liveness probe per readout on a path that previously skipped it.** For a child
+   this process spawned that is `settleExits()` plus an exit-status read; for an adopted pid it is
+   the pid probe. Both are cheap next to the transcript read they precede, and the poll loop's
+   interval is orders of magnitude larger.
+
+5. **`test/lap/parallel-laps.test.ts` is not touched.** It was correct: it detected a real defect,
+   and the concurrency it stages is what makes the detection reliable. Adjusting its barrier to stop
+   the failure would have hidden a production bug behind a green cell -- the specific mistake this
+   entry exists to have not made.
+
+**Evidence.** `test/session/liveness-read-ordering.test.ts`, target-only. It reproduces the race
+**without a race**: `#childLiveness` asks `sessionRuntime`, which is a seam, so a case answers "gone"
+*and* appends the child's last line at that instant -- the CI interleaving exactly, with none of its
+timing, deterministic on every platform and spawning nothing. Both verbs are red without decision 1
+and green with it, and two controls hold the verdicts that must not move: a child gone having
+written nothing terminal is still an execution failure, and a live child with nothing terminal yet is
+still a definite nothing.
+
+**Falsification.** A transcript read that observes a `result` a liveness answer taken before it did
+not permit would falsify the invariant. A caller that needs "gone" and the read to be taken at the
+same instant -- rather than merely in this order -- would show the invariant too weak. A measurable
+regression in poll cost from the probe in point 4 would make it the wrong repair rather than the
+right one; it is asserted from the shape of the two calls and not from a benchmark.
+
+**Status.** accepted
+
+**Falsifier.** A platform where `#childLiveness` answers a child gone *before* its writes are
+visible to a subsequent read would break the "gone means complete" half. Nothing in this tree does
+that -- the child writes into an inherited descriptor with synchronous writes, so its bytes precede
+its exit -- but a provider that captured output through a pipe this process drains would reintroduce
+the window on the reader's side, where this ordering could not close it.
+
+**Source.** Issue #193, found from `#191`'s CI. `D-1104` (the concurrent case whose evidence this
+is), `D-0056` decision 2 (the execution failure the verb refuses rather than absorbs, kept intact by
+the control), `D-0301` part 4 (the macrotask turn `settleExits` exists for, which is the gap this
+entry closes). Decision id `D-1106` in the `D-11xx` shared cross-belt band opened by `D-1101`:
+`D-1105` is claimed by the open pull request #191 (the run-derived state root) and is deliberately
+not reused here, so this file will carry `D-1106` before `D-1105` if that branch lands second.

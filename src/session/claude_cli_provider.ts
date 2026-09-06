@@ -2361,6 +2361,24 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         expected: record.claude_session_uuid,
       });
     }
+    // **Asked BEFORE the read it will be composed with, and the order is the
+    // whole of `D-1106`.** Every branch below that concludes "gone, and this is
+    // everything it ever wrote" composes two observations: what the transcript
+    // held, and whether the child was still running. Taken in the other order
+    // they are each true and their conjunction is false -- a child that writes
+    // its `result` and exits *between* the read and the liveness question
+    // leaves a file that has the result and a verdict that says there is none.
+    // Asked first, the answer is sound in both directions: a child observed
+    // gone can write nothing more, so the read that follows is complete; a
+    // child observed alive may write more, and the stale read can only under-
+    // report, which is the answer this method is allowed to give and the caller
+    // polls again for.
+    //
+    // It is consulted only where it was consulted before -- a `result` already
+    // in the transcript is answered without reference to liveness, including
+    // when liveness is unknowable -- so the fast path and the verdicts are
+    // unchanged. What changed is which read the verdict is entitled to.
+    const liveness = await this.#childLiveness(session);
     const parsed = this.#parseEvents(session);
     if (isUninterpretable(parsed)) {
       // The captured-output *file* could not be read. That is a failure of the
@@ -2445,7 +2463,6 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       });
     }
 
-    const liveness = await this.#childLiveness(session);
     if (liveness instanceof Failure) {
       // Unknowable liveness is likewise an observation-channel failure: the
       // session is reported as itself, explicitly unobservable, with the
@@ -2965,6 +2982,15 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           expected: record.claude_session_uuid,
         });
       }
+      // Before the read, for the reason `#readout` states at its own call and
+      // `D-1106` records: "the child wrote nothing terminal" and "the child is
+      // gone" are two observations, and a verdict built from them is only sound
+      // when the liveness answer is at least as old as the read. The other
+      // order lets a child that writes its `result` and exits in between be
+      // reported as an execution failure over a transcript that contains the
+      // report. Asked here, the value is used exactly where it was used
+      // before -- inside the no-result branch, and nowhere else.
+      const liveness = await this.#childLiveness(session);
       const parsed = this.#parseEvents(session);
       if (isUninterpretable(parsed)) {
         return new Failure(parsed.failureKind, parsed.detail, parsed.providerDetail);
@@ -2996,8 +3022,8 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       if (resultEvent === null) {
         // No terminal line. Whether that is "not yet" or "not ever" is the
         // difference between polling again and giving up, so it is decided
-        // here rather than left to a caller that cannot see the child.
-        const liveness = await this.#childLiveness(session);
+        // here rather than left to a caller that cannot see the child -- from
+        // the liveness observation taken above the read.
         if (liveness instanceof Failure) {
           // Unknowable liveness is an observation-channel failure, reported as
           // one -- the same reading `#readout` gives it.
