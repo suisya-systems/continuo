@@ -645,6 +645,35 @@ Two consequences the gate should see:
   exists -- but the invariant's text has to name it, or the belt reports the design working as a
   violation.
 
+**And one consequence the gate should see because it is a gap and not a property.** The rule above says
+"drained", and for a run-bound relay that is the whole lifecycle: `gate deliver` delivers it and
+`ackRelay` settles it. For a **global, non-relay** row it is not. Such a row -- runless event fan-out
+(`events.ts:428-452`), or a legacy `MessageBus.send` with no run -- has today a single natural worker,
+because the one global lease belongs to whichever endpoint holds it, and that endpoint polls the row,
+delivers it, and the consumer acks it through the MCP tool. Partition the resource and that worker
+stops existing: a per-run endpoint's poll is scoped to its run and never returns the row at all, while
+`gate deliver` can deliver it but has no ack -- `ackRelay` refuses any id absent from `gate_relay`
+(`operator.ts:890-894`), and P-16's strict equality on the bus keeps a per-run endpoint from settling a
+global row. The row would sit `delivered` and due for replay for ever.
+
+**So P-10's promise -- a named drainer for every row a lap does not drain -- is not yet true, and the
+missing half is the terminal ack rather than the delivery.** Two answers are admissible and the entry
+should choose one at the gate rather than leave it:
+
+| | What it is | Cost |
+|---|---|---|
+| **(a) A global worker keeps existing** | the global resource keeps one holder of its own, running the same poll-deliver-ack loop it runs today; per-run laps no longer contend with it because they hold different resources | honest and structurally minimal -- the global resource keeps the lifecycle it already has -- but it is an **operational** change: today that holder is incidentally the lap's endpoint, and making it a process of its own is deployment work this entry would be introducing |
+| **(b) The operator's verb gains the ack** | a non-relay counterpart to `ackRelay`, settling a global row by id under the global resource | no new process, and it matches the rule's "by the same verb" clause -- but it puts a settlement that is normally the *consumer's* into the operator's hands, and an operator acking on a consumer's behalf is a decision with no content, which is the shape section 6 rejects elsewhere |
+
+**Recommended: (a)**, with the measurement that makes it cheap -- no production path in this tree
+registers a subscription today (`subscribe` is exported at `events.ts:933` and has no non-test caller),
+and `MessageBus.send` with a null `runId` is likewise not on a production path, so the global worker
+has **no rows to drain in the current deployment** and can be introduced as a named role with an empty
+queue rather than as urgent plumbing. That is also the argument for not deferring it: the cost of
+naming it now is nearly zero, and the cost of discovering it later is a row class that replays for
+ever. P-19 carries it, and checklist question 5 is widened from "drained" to "drained **and settled**",
+because the original wording is what let this pass four rounds.
+
 **Recommendation: make `gate deliver` resource-parameterised (P-10) rather than keeping it global. The
 global-only reading strands the ordinary post-lap relay path, and no other verb is positioned to drain
 it.**
@@ -728,12 +757,35 @@ therefore backfill those rows -- and it can do so **exactly**, because a bare ki
 | **`src/control_plane/outbox.ts:531-543`, `:2389`** | fenced insert / raw refusal | **bare `handler.actionKind`** |
 
 Every other writer composes the kind; **the outbox path is the only one that does not**. So
-`writer_epoch IS NOT NULL AND writer_resource IS NULL AND instr(kind, '@') = 0` selects exactly the
-outbox-path rows, and those rows were written under the one delivery resource there has ever been.
-Backfilling them to the literal `'outbox-delivery'` records what is known, on section 5.3's rule, and
-is not the fabrication `0004` refused. After the backfill every history row `WRITE_HISTORY_QUERY`
-admits carries either a non-null `writer_resource` or a composed kind, and neither reader has a hole
-left.
+`writer_epoch IS NOT NULL AND writer_resource IS NULL AND instr(kind, '@') = 0` selects the outbox-path
+rows, and those rows were written under the one delivery resource there has ever been. Backfilling them
+to the literal `'outbox-delivery'` records what is known, on section 5.3's rule, and is not the
+fabrication `0004` refused.
+
+**That predicate is exact for a database this tree produced, and the difference between that and
+"exact" is worth being precise about.** `HandlerRegistry.register` requires only a **non-empty**
+`actionKind` (`outbox.ts:1121-1131`); it does not require `effectKind` composition and does not refuse
+an `@`. The two handlers in the tree are `notify` and `human_gated` (`handlers.ts:139`, `:215`), so
+every row this codebase has ever written satisfies the predicate -- but a database written through the
+public API with a kind like `mail@v2` would be skipped by the backfill *and*, worse, read by the
+fallback as though `v2` were its lease resource. No purely syntactic discriminator fixes this: the
+`action_id` prefixes are no better, since `lease.ts:1583` takes a caller-supplied `attemptId` and will
+write whatever it is given. So the entry states three things instead of one claim of exactness:
+
+1. **the backfill's scope is what was measured** -- databases produced by this tree, where the only
+   outbox action kinds are the two bare ones above;
+2. **the readers degrade safely rather than mis-attribute**: an uncomposed kind reads as
+   *unattributed*, never as a resource named by whatever follows a stray `@`. This is a strengthening
+   of P-7's fallback and the reason `resourceOfKind` must not simply be pointed at every legacy row;
+3. **the format is closed going forward**: `register` refuses an `actionKind` containing `@`, which is
+   the rule `effectKind` already enforces for effects, in the same words and for the same stated reason
+   -- "it is the separator this kind is composed with, and an effect that used it would make the
+   resource unrecoverable from the row" (`lease.ts:1414-1418`). That the composer refuses the character
+   while the registry accepts it is an inconsistency this entry closes rather than inherits.
+
+With those three, every row written after `0005` is unambiguous, every row this tree wrote before it is
+attributed by the backfill, and the one residual class -- an `@`-bearing legacy kind from outside this
+tree -- is visibly unattributed instead of quietly mis-attributed.
 
 ### 7.3 Effect deduplication stays global -- and this needs saying, because the temptation is real
 
@@ -745,10 +797,53 @@ guarantee for the *effect*, which happens at a destination outside the database;
 would let two runs each perform the same effect once and call it exactly-once twice.
 
 Confirmed safe on today's keys: relay dedup keys are `gate/<gateId>/<toStage>` (`gates.ts:612`) and
-fan-out keys are `event/<eventId>/<consumerId>` (`events.ts:428`), both globally unique. The residual
-is worth naming rather than assuming away: a producer that ever derives a dedup key from
+fan-out keys are `event/<eventId>/<consumerId>` (`events.ts:428-452`), both globally unique. The
+residual is worth naming rather than assuming away: a producer that ever derives a dedup key from
 run-independent inputs would let one run's effect suppress another's, and no per-run resource would
 catch it, because the resource is deliberately not in the key.
+
+### 7.4 Keeping the key global keeps exactly-once -- it no longer keeps *serialisation*, and that is a new race
+
+This is the sharpest consequence of the change that is not about resources at all, and it belongs in
+the entry because the property that used to make it unreachable is exactly the property being removed.
+
+Today the global lease means one writer at a time reaches `attempt`, so no two writers can ever hold
+the same pending `action` row in flight. Under P-2 and P-3 they can. Two laps processing **different
+messages that share one dedup key** proceed like this:
+
+1. A's `_ensurePendingAction` inserts the row; B's insert hits `action_one_effect_per_key`, and the
+   recovery read returns the row with `status = 'pending'`, so `alreadyApplied` is **false**
+   (`outbox.ts:1986-2003`);
+2. both therefore call the destination -- the effect is attempted twice;
+3. A's `_RECORD_RESULT` matches on `action_id` and `status = 'pending'` and applies;
+4. B's changes **zero rows**, because the status conjunct now fails (`outbox.ts:550-558`, `:1613-1627`).
+
+Step 4 is where it goes wrong, and the fault is a **misclassification, not a lost guarantee**. Zero
+rows is read as one thing only: "epoch ... stopped being a live lease on ... while the effect was in
+flight" (`:1634-1639`). B's lease is live; nothing was stolen. B records a durable refusal that is
+false, raises `StaleWriterRefused`, and leaves its message undelivered and due -- so the pair replays,
+for ever, on every pass.
+
+**The repair is to distinguish the two reasons a fenced update changes nothing, which the code
+currently conflates.** On zero rows, re-read the action: if its status is `'applied'`, this writer lost
+a race to another **live** writer and the effect it was recording has already been recorded -- that is
+a *duplicate*, and the right outcome is the deduplicated one, with the row marked delivered. Only if
+the row is still pending is the fence the explanation, and only then is `StaleWriterRefused` the truth.
+This adds no lock and no serialisation; it repairs a message that is now sometimes a lie.
+
+**What it does not repair, and must be said plainly:** in step 2 the destination really is called
+twice. Exactly-once at the destination continues to rest on the declared
+`exactly_once_mechanism` -- which is what the existing code already relies on for the crash-replay
+window it documents in the same place (`:1628-1633`). The change is that the window is now reachable
+**without a crash**, on two live writers. An entry that kept the global index and did not say this
+would be claiming a guarantee it had quietly narrowed.
+
+**How reachable is it?** Not through any producer in this tree: relay and fan-out keys are globally
+unique, as above. It is reachable through the public API, since `MessageBus.send` takes a
+caller-supplied `dedupKey` (`bus.ts:209-218`) and two runs may pass the same one. So P-19 requires the
+classification repair and a cross-resource duplicate test in the same change, and does **not** require
+an action-level claim or lock -- the index is doing what it was designed to do, and the defect is in
+how its outcome is read.
 
 ---
 
@@ -1137,7 +1232,7 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer under the two rules of section 4.2 -- the **fenced** producer writes its own `Outbox` instance's resource, the **unfenced** producers derive it from the row's durable `run_id`. The invariant is `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`, and a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review, amended |
 | **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. **Each carries a statement-level observed-red control of its own** (`AGENTS.md:108-112`; section 9.3): the three refusing predicates because each is masked by the selection in front of it, and `_ENQUEUE` because it stamps rather than refuses, so its control asserts the **inserted row's** resource instead of a zero-changes outcome. The SQL recipient term on `due` is likewise masked, by the TypeScript filter this design keeps. | pre-review, amended |
 | **P-6** | Recipient becomes a SQL term on `due` **only**, as a routing defence, **and it carries an interface change**: `due(nowMs)` has no recipient to bind (`outbox.ts:1343-1345`), so it gains an optional `{ recipient }` passed by `MessageBus.poll` alone, leaving every existing caller's meaning intact. The `delivery_resource` term needs no signature change but **does** narrow what the fault-injection belt sees, so `spike_driver.ts:1699-1706`'s docstring -- "the driver scopes what the API does not" -- is corrected in the same change rather than left asserting the opposite of the code. The pre-review also asked for it on one-row adoption; that is **refuted by measurement** -- `adoptIfUnowned` receives no recipient (`outbox.ts:1861-1863`), the query is character-identical to the all-recipient sweep by design (`:308-320`), and the lookup is already a primary-key equality, so the term has no source, breaks a deliberate identity and defends nothing (section 4). It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
-| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable. **`NULL` does not mean "predates the column"** -- the four `effectKind`-composing writers keep writing attributed rows with a null column for ever, so the definition is the disjunction: a row's writer resource is `writer_resource` when non-null and the `kind` suffix otherwise, and every row carries exactly one of the two (section 7.2). Those four writers are deliberately left unchanged. Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix otherwise, **and `0005` backfills the pre-migration outbox rows** -- exactly identifiable, since the outbox path is the only `action` writer that does not compose its kind (section 7.2) -- so no history row is left with neither form of attribution. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
+| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable. **`NULL` does not mean "predates the column"** -- the four `effectKind`-composing writers keep writing attributed rows with a null column for ever, so the definition is the disjunction: a row's writer resource is `writer_resource` when non-null and the `kind` suffix otherwise, and every row carries exactly one of the two (section 7.2). Those four writers are deliberately left unchanged. Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix otherwise, **and `0005` backfills the pre-migration outbox rows** -- identifiable for databases **this tree produced**, since the outbox path is the only `action` writer here that does not compose its kind (section 7.2). It is not exact over admissible data, because `register` requires only a non-empty `actionKind` (`outbox.ts:1121-1131`), so the entry adds two things beside the backfill: the readers treat an uncomposed kind as **unattributed** rather than reading whatever follows a stray `@` as a resource, and `register` refuses an `actionKind` containing `@` -- the rule `effectKind` already enforces for effects and for the same stated reason (`lease.ts:1414-1418`), an inconsistency this entry closes rather than inherits. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
 | **P-8** | Split `UNOWNED_OUTBOX_QUERY` into a **caller-scoped** recovery form and a **database-wide** invariant form that joins on the row's own `delivery_resource` and takes no `:resource`. Re-anchor `_UNOWNED_ONE_QUERY`'s character-identity to the recovery form and say in the source which it mirrors. `INVARIANT_NO_UNOWNED_OUTBOX` and `src/index.ts`'s export are part of this change. | measured here |
 | **P-9** | Use the next forward migration (`0005`); never edit a historical one; backfill existing rows to the exact literal `"outbox-delivery"`; replace the due index with a measured `(delivery_resource, recipient, enqueued_at_ms)` partial form and keep positive **and** degraded EXPLAIN evidence. Say explicitly in the entry that `sqlite-value-contract.md` is a value contract and not a schema freeze. **Prefer the 12-step rebuild over `ADD COLUMN ... NOT NULL DEFAULT`** (section 5.2); the gate may take the default instead with a schema test pinning its legacy-only meaning. | pre-review, amended |
 | **P-10** | Name the drainer for every row a lap does not drain, and make it resource-parameterised. `deliverRelays` / `gate deliver` stop naming `DELIVERY_LEASE_RESOURCE` (`src/gate/operator.ts:769-774`) and instead acquire **the resource of the rows they are asked to drain** -- the run's for a run-bound relay, the global literal for legacy and runless rows. A fixed global `gate deliver` would strand every post-lap gate relay, because `enqueueRelay` copies `gate.runId` (`gates.ts:612`) and `gate present` / `gate answer` normally run after `lap perform` has exited. `LeaseHeld` while the lap is live is the correct answer and is kept. **This carries a CLI addition -- `gate deliver --run-id`, optional, defaulting to the global resource** -- because the verb today takes no gate, run or resource argument at all (`src/gate/cli.ts:951-969`). | measured here, amended after Codex review |
@@ -1149,6 +1244,8 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-16** | Scope ack authority by resource on **both** ack surfaces. `MessageBus.ack` (`bus.ts:466-479`) settles on recipient equality alone, `Outbox.recordAck` updates by message id and status, and the endpoint's `ack` tool takes a caller-supplied id (`endpoint.ts:330`). With two endpoints on one recipient that is no longer an authority check. Add `message.deliveryResource === this._resource` beside the recipient test, in the same caller-bug family and **still unfenced**, so late and duplicate acks keep settling nothing. **The second surface is `ackRelay`, which does not go through the bus** (`operator.ts:896-906`) and builds `ackOutbox` on the hard-coded constant (`:843-849`); it takes `deliveryResourceForRun` of **its own gate's run**, already loaded on the path (`gateDetail`, `:928`; `gates.ts:963`, `:612`), so `gate ack` gains no argument and the equality becomes a cross-check of two independently stored facts. **On that surface the admissible set is two values** -- the derived run resource **or** the global literal -- because a migrated in-flight relay is backfilled to the literal while its gate still names a run, and a strict equality would leave exactly those gates unable to advance. The bus surface keeps the strict equality. Section 4.2. | measured here, after Codex review |
 | **P-17** | Implementation starts only after the gate accepts or amends these lines and creates `D-1104`. This document allocates no entry and is not accepted authority. | pre-review |
 | **P-18** | Record the fence file's new growth as a named, unbounded-but-cheap cost: per-run resources give per-run keys in the shared destination's `fence.json` (`destination.ts:736-753`), one per run for ever, whole-file read and rewrite per advance. Correctness is unaffected. **Do not authorise compaction**, and record why the obvious premise fails: `run.run_id` being a `PRIMARY KEY` (`0001_initial.sql:74`) constrains one database, while the fence outlives any database in an operator-supplied directory, so a restore or a re-seed can reissue a compacted id and have a low token accepted as fresh. Safe compaction needs an incarnation discriminator in the scope key or an enforced cross-restore no-reuse guarantee -- a separate design with a fence-format change, not a follow-up chore. | measured here, after Codex review |
+| **P-19** | Name the **global resource's own worker**, because the partition removes the one that exists incidentally today: a global non-relay row (runless fan-out, a runless `MessageBus.send`) is polled and acked today by whichever endpoint holds the single lease, and after P-3 no per-run endpoint polls it while `gate deliver` has no ack for it -- `ackRelay` refuses a non-relay id (`operator.ts:890-894`). Recommended answer **(a)**: the global resource keeps one holder running the ordinary poll-deliver-ack loop, which is cheap to introduce now because no production path in this tree enqueues such a row (`subscribe` has no non-test caller, `events.ts:933`). Alternative (b), a non-relay operator ack, is recorded with its cost. Section 6. | measured here, after Codex review |
+| **P-20** | Repair the **misclassification** that parallelism makes reachable: with the dedup index global and two live writers, both may see one pending `action` and call the destination, after which the loser's `_RECORD_RESULT` changes zero rows and is reported as `StaleWriterRefused` -- "epoch stopped being a live lease" -- though its lease is live, leaving a false refusal row and a message that replays for ever. On zero rows, re-read the action: `applied` means a **duplicate** (deduplicated outcome, row marked delivered), still `pending` means the fence, and only then is the refusal true. No lock and no action-level claim: the index is doing its job. State plainly that the destination is now called twice **without a crash**, so exactly-once still rests on the declared mechanism, and require a cross-resource duplicate test. Reachable through `MessageBus.send`'s caller-supplied `dedupKey` (`bus.ts:209-218`), not through any in-tree producer. Section 7.4. | measured here, after Codex review |
 
 ---
 
@@ -1163,9 +1260,9 @@ Return or reject `D-1104` unless every answer is yes.
 3. Does the lap take **its run's** resource, so the entry contains the holder-identity half and not
    only the schema half (P-3, P-13)?
 4. Are legacy rows preserved under the global resource rather than relabelled as run history?
-5. Is there a **named drainer for every row a lap does not drain** -- including run-bound gate relays
-   enqueued after their lap exits -- and does the belt's unowned invariant still state what the
-   post-lap window means (P-10, P-8)?
+5. Is there a named owner for every row a lap does not drain -- run-bound relays enqueued after their
+   lap exits, **and global non-relay rows through to their ack, not merely their delivery** -- and does
+   the belt's unowned invariant still state what the post-lap window means (P-10, P-19, P-8)?
 6. Is **ack authority** scoped by resource and not by recipient alone on **both** ack surfaces --
    the bus and `ackRelay` -- given that the acked id is caller-supplied rather than reached through
    the endpoint's own poll, and does the operator's verb derive the resource rather than be told it
@@ -1185,10 +1282,13 @@ Return or reject `D-1104` unless every answer is yes.
     `minimal-operating-loop.md` citation corrected?
 13. Does allocation, the capacity bound and suspend accounting remain rondo #8's, with F-13's
     measurement recorded so the ledger is designed against the human term (P-14)?
-14. Is the fence file's per-run growth stated as a cost, **and is compaction explicitly withheld**,
+14. Is the concurrent-duplicate outcome classified as a **duplicate** rather than a stale writer, and
+    does the entry say plainly that the destination may now be called twice without a crash, so
+    exactly-once rests on the declared mechanism (P-20)?
+15. Is the fence file's per-run growth stated as a cost, **and is compaction explicitly withheld**,
     with the reason the primary-key premise fails across a restore recorded so nobody reaches for it
     later (P-18)?
-15. Does implementation wait for the gate-created `D-1104`?
+16. Does implementation wait for the gate-created `D-1104`?
 
 ---
 
@@ -1261,6 +1361,16 @@ the lines.
 | M10 | P-7's "`NULL` means predates the column" is false the day the migration lands, because the non-outbox writers keep producing null-column rows | **Confirmed.** The four composing writers (supervisor, watcher, session_binding, run_lifecycle via `lease.ts`) are not changed by this entry, so a definition in terms of time is immediately untrue; the definition the readers implement is a disjunction over the two attribution forms. | Section 7.2 gains the disjunction and the reason the four writers are deliberately left alone; **P-7 amended** |
 | M11 | P-16's check on `MessageBus.ack` does not reach `gate ack`: `ackRelay` bypasses the bus and builds `ackOutbox` on the global constant, with no source for a run resource | **Confirmed, and one step worse than stated**: once the constant means the global resource, a literal equality on that path would refuse every run-bound relay ack -- the ordinary case. Measurement also supplies the missing source the finding asked for: `ackRelay` already loads the gate (`gateDetail`, `operator.ts:928`) and the gate carries the `runId` `enqueueRelay` copied onto the row. | Section 4.2 gains the second surface and the derived resource, with the reason a `gate ack --run-id` is worse than deriving it; **P-16 amended**, section 6's ack bullet corrected |
 
+**Round 9** raised two Blockers and a Major, and it is the first round whose findings are about the
+design's *substance* rather than its statements since round 2 -- both Blockers name behaviour that
+would be wrong in production rather than a line that reads wrong at the gate.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| B20 | A global non-relay row has no ack route after the partition: `gate deliver` can deliver it, `ackRelay` refuses any id absent from `gate_relay`, and no per-run endpoint may settle a global row -- so it stays `delivered` and replays for ever | **Confirmed**, and the framing that matters is that the partition **removes a worker that exists incidentally today**: the single global lease means whichever endpoint holds it polls, delivers and has its consumer ack every such row. P-10's "a drainer for every row" was true of delivery and false of settlement. Sizing measurement: no production path in this tree enqueues one (`subscribe` has no non-test caller, `events.ts:933`), so the fix is cheap now and expensive to discover later. | Section 6 gains the gap, two admissible answers and a recommendation -- **(a)** the global resource keeps a worker of its own; **new P-19**; checklist question 5 widened from "drained" to "drained **and settled**" |
+| B21 | A global dedup key no longer implies global serialisation: two live writers can both see one pending action, both call the destination, and the loser's `_RECORD_RESULT` changes zero rows and is reported as a stale writer though its lease is live | **Confirmed at the statement.** `_RECORD_RESULT` matches `action_id` **and** `status = 'pending'` (`outbox.ts:550-558`), and zero rows has exactly one message attached to it -- "epoch stopped being a live lease" (`:1634-1639`). The global lease is what made this unreachable, which is precisely what is being removed. | **New section 7.4.** The repair is to distinguish the two reasons a fenced update changes nothing -- `applied` is a **duplicate**, `pending` is the fence -- with no lock and no action-level claim; and to say plainly that the destination may now be called twice **without a crash**, so exactly-once still rests on the declared mechanism. **New P-20**, checklist question 14 |
+| M22 | `instr(kind, '@') = 0` does not identify outbox rows over admissible data: `register` requires only a non-empty `actionKind`, so a kind like `mail@v2` is skipped by the backfill and read by the fallback as though `v2` were a resource | **Confirmed**, and this is the second falsifier of this document's own to fire ("a bare `action.kind` turns out not to identify an outbox-path row"). No syntactic discriminator is exact -- `action_id` prefixes are no better, since `lease.ts:1583` writes a caller-supplied `attemptId`. | Section 7.2 replaces the exactness claim with a measured scope, a **safe degradation** (an uncomposed kind reads as unattributed, never as a mis-parsed resource), and a format rule closing it going forward -- `register` refuses `@`, as `effectKind` already does; **P-7 amended** |
+
 **Round 8** raised one Blocker and one Major. Both are interface findings, and both concern surfaces
 this document had already reasoned about correctly at the SQL level and then not followed into the
 API.
@@ -1294,7 +1404,7 @@ row this document had carried forward from the pre-review rather than one it wro
 | M12 | Section 4.0 claims a gate's `run_id` is always present; `openGate` defaults it to `null` and the schema permits it, so the producer rule is undefined for a runless gate relay | **Confirmed.** `gates.ts:445`, `:460`; `0001_initial.sql:1267` carries no `NOT NULL`. The one caller in the tree does pass a run (`report_ingress.ts:371-390`), so the case is admissible but unexercised -- which is how it survived four rounds. | Section 4.0's table corrected and the null mapped to the global literal, with the drainer consequence stated so no relay is unwritable or unreachable |
 | M13 | P-6's recipient term on one-row adoption is incompatible with section 4's inventory, with `_UNOWNED_ONE_QUERY`'s character-identity, and with `adoptIfUnowned`'s signature | **Confirmed, and it resolves against P-6.** `adoptIfUnowned(messageId, {nowMs, epoch})` receives no recipient (`outbox.ts:1861-1863`); the query is deliberately character-identical to the all-recipient sweep (`:308-320`); and the lookup is a primary-key equality (`:322-324`), so the term has no source, breaks an identity the source explains, and defends nothing. | Section 4 gains the refutation; **P-6 amended to `due` only**, with the reason recorded so the fuller form is not re-proposed |
 
-**The nineteen fall into four groups, and the order they arrived in is itself the finding.** Rounds
+**The twenty-two fall into five groups, and the order they arrived in is itself the finding.** Rounds
 1-2 (B1-B6) were the same mistake six times: the first draft partitioned *selection* carefully and
 under-specified the places authority is established without a selection in front of it -- the post-lap
 drainer, the ack, the fenced insert -- and then under-specified the *interfaces* those repairs need:
@@ -1325,3 +1435,11 @@ section had already named as doubtful. Round 8 then made the point once more in 
 1-2 established: the SQL was right and the signature that has to carry it was never checked, which is
 the same "narrowest surface that has to name it" failure arriving at the eighth round in a place
 nobody had looked.
+
+Round 9 then broke the pattern in the other direction, and it is the group most worth the gate's
+attention: after six rounds of statements, interfaces and evidence, two findings landed on the
+**mechanism** -- a class of row whose worker the partition silently removes, and a race that global
+serialisation had been hiding rather than the index preventing. Both share a shape the earlier rounds
+did not: they are properties this design *removes by accident*, not properties it fails to add. That is
+the thing to look for in the rounds after this one, and the reason section 12's falsifiers are worth
+more than another pass over the wording.
