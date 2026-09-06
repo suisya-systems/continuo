@@ -16077,25 +16077,59 @@ a live row transferred silently between runs.
     instance shared across runs -- a continuo change, not a rondo one. `minimal-operating-loop.md`'s
     stale citation for that residual is corrected in the same change.
 
-21. **`--state-root` exclusivity becomes a live residual, and this entry names it rather than fixing
-    it.** Found during implementation, not in the design. Two session providers sharing one state
-    root adopt each other's children -- recorded in two places already
-    (`src/lap/cli.ts`'s `STATE_ROOT_HELP`, and `ClaudeCliSessionProvider`'s own docstring: "Required
-    and never defaulted, exactly as for the stub: two providers silently sharing a directory would
-    adopt each other's children"). Until this entry that hazard was **unreachable whatever an
-    operator typed**, because the one global delivery lease made two concurrent `lap perform`
-    processes impossible. This entry removes that guard and adds nothing in its place:
-    `requireUsableStateRoot` checks that a state root is usable, not that it is unshared, and nothing
-    ties a state root to a run. The proof case gives each lap its own, which is what a caller should
-    do and is not the same as a refusal.
+21. **A shared `--state-root` stops being unreachable, and what that exposes is an operator readout
+    and not a destructive path -- measured, after a first draft of this point overstated it.** Found
+    during implementation, not in the design. Two places already record the hazard as "two providers
+    silently sharing a directory would adopt each other's children" (`src/lap/cli.ts`'s
+    `STATE_ROOT_HELP`, and `ClaudeCliSessionProvider`'s own docstring), and until this entry it was
+    **unreachable whatever an operator typed**, because the one global delivery lease made two
+    concurrent `lap perform` processes impossible. This entry removes that guard and adds nothing in
+    its place: `requireUsableStateRoot` checks that a state root is usable, not that it is unshared,
+    and nothing ties a state root to a run.
 
-    It is named and not repaired because the repair is a decision this entry has no mandate for:
-    what identifies a claim on a state root (a lease? a marker file? derivation from the run id, as
-    the artifact directory already is under `D-0061`?) is a design question, and whether allocating
-    state roots is continuo's or rondo #8's is exactly the boundary `P-13` fixes. **The honest status
-    is that per-run delivery resources make two laps safe at the control plane and leave one
-    operator-supplied argument able to make them unsafe outside it.** Anything that begins launching
-    laps concurrently must give each its own `--state-root` until a refusal exists.
+    **What is actually reachable, measured rather than inferred from the docstrings.**
+    `#discoverRecords` (`claude_cli_provider.ts:2870`) scans `readdirSync(stateRoot)` and puts every
+    subdirectory holding a `record.json` on the roster, so the docstrings' description is accurate.
+    But it has exactly two consumers, and neither turns that into damage on any path this tree has:
+
+    - **`listSessions` (`:1536`) has no production caller at all.** `grep -rn listSessions src/`
+      outside the three provider modules returns nothing: it is a verb for an operator or a harness,
+      so a lap that saw a foreign session on its roster would do nothing with it.
+    - **`#holderOfUuid` (`:2834`, consumed at `:1479`) decides by directory name**, and a session
+      directory is named by its session id (`:2663`), which each lap generates fresh -- so a
+      cross-run clash is a uuid clash, and when it does fire it **refuses the spawn**, which is the
+      conservative direction.
+    - **Teardown stops by id behind an ownership test**: `const stopped = mine && (await
+      stopSession(provider, sessionId))` (`src/lap/root.ts:1581`). There is no sweep over the roster,
+      so no path stops or releases another run's session.
+    - **The one file at the root of the state root cannot be torn.** `probe-evidence.txt`
+      (`:1337`) is written through `writeAtomic` -- a `.part` file and a rename (`:1345`) -- and two
+      laps sharing a root write the same bytes anyway, since the content is the same command's
+      `--version` and `--help`. Failing to write it degrades the record and not the probe, as that
+      method's own docstring says.
+
+    So the accurate statement of the residual is: **a shared state root now lets one run's sessions
+    appear on another's operator-facing roster, and nothing in this tree escalates that further.**
+    The first draft of this point read as though destructive cross-run adoption had become
+    reachable. It had not, and an entry that overstates its own consequence is worse than one that
+    understates it, so the measurement is recorded here instead.
+
+    **This is not a reason to leave it alone, and the reason why is the shape of the finding rather
+    than its size.** What protects the destructive cases today is that no production code calls
+    `listSessions` and that session ids do not collide -- which is another *accidental* guard, of
+    exactly the kind that just failed. The global delivery lease was never designed to keep state
+    roots apart either; it did so as a side effect, and this entry is what removed it. A residual
+    whose safety rests on "nothing currently does the dangerous thing" is one a later change can make
+    live without touching anything this entry can point at.
+
+    It is named and not repaired **here** because the repair is a decision this entry had no mandate
+    for: what identifies a claim on a state root (a lease? a marker file? derivation from the run id,
+    as the artifact directory already is under `D-0061`, `src/lap/root.ts:1322`?) is a design
+    question. It has since been put to the gate and answered -- force a run-derived directory rather
+    than build a mechanism to detect sharing -- and that lands as its own change with its own
+    evidence, after this one. Until it does, **anything launching laps concurrently must give each
+    its own `--state-root`**; the proof case does exactly that, which is what a caller should do and
+    is not the same as a refusal.
 
 **Falsification.** Two concurrent laps observed writing each other's outbox rows, or one adopting the
 other's live row, would falsify the partition. A green mutant for any predicate this entry adds --
@@ -16118,9 +16152,12 @@ incarnation-discriminator design a blocker rather than a successor. `rondo`'s le
 and measuring the lap term as binding would make point 15's conclusion the wrong way round. A relay
 whose gate `run_id` disagrees with the row's own `delivery_resource` for a reason that is neither
 inheritance nor corruption would give point 9 a third case to decide rather than a corruption to
-refuse. Two concurrent laps observed adopting each other's session children through a shared
-`--state-root` would turn point 21 from a named residual into a defect this entry should not have
-shipped without a refusal.
+refuse. A production path -- or a later change adding one -- that
+stops, releases or reads a session it found on the roster rather than one it started would turn point
+21's measured range from "an operator readout" into the destructive case its first draft claimed, and
+would make shipping this entry without a run-derived state root the wrong call. The two facts holding
+that range are that `listSessions` has no production caller and that teardown tests `mine` first;
+either ceasing to be true falsifies point 21 as written.
 
 **Source.** Issue #167. `docs/design/parallel-laps-delivery-lease.md`, landed propose-only in #187,
 whose `P-1`..`P-20` the operator ratified and whose section 6 option (b) the operator chose; that
