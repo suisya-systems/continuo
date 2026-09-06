@@ -421,6 +421,10 @@ Four properties, and each is a decision rather than a shape:
    moment that has passed; a row that can be edited afterwards is a record of what somebody last
    wanted it to say.
 
+`run show` reports the check rather than performing it as a gate: its `delegation_record` payload
+carries `digest_verified`, recomputed over the stored bytes, while `readDelegationRecord` -- which
+hands the record to code -- refuses a mismatch outright.
+
 **The step does not backfill.** Runs admitted before it have no row here and never will. That is the
 unrecoverable past, and it stays visible rather than being filled with an invented value — §12's
 standing rule about a value invented to satisfy a `NOT NULL` applies to it exactly.

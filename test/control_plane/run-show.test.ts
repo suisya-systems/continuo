@@ -320,6 +320,8 @@ describe("continuo run show --json", () => {
         digest_algorithm: "sha256",
         canonicalization: "verbatim-utf8",
         recorded_at_ms: T0,
+        // Recomputed by the verb over the stored bytes, not echoed off the row.
+        digest_verified: true,
       },
       sessions: [],
       gates: [],

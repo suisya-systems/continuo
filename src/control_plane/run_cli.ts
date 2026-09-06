@@ -117,6 +117,7 @@ import { DelegationRecord } from "./delegation_record.js";
 import { LapRunIntent } from "./lap_run_intent.js";
 import { LeaseRefusal } from "./lease.js";
 import { openProductionControlPlane } from "./migrator.js";
+import { pythonRepr } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import {
   admitRun,
@@ -422,8 +423,17 @@ function delegationRecordOf(args: Namespace): DelegationRecord {
       runCliSeams.readFile(path),
     );
   } catch (error) {
+    // Both values quoted rather than interpolated raw, and this is the one
+    // place in this verb where that matters. `--db` is echoed verbatim by an
+    // explicit, documented carry (see this module's own note), and the rule the
+    // note ends on is that a change does not ADD an instance of it. This path
+    // is a new one: the argument is a filesystem path an operator typed and the
+    // text is a decoder's, so either may carry a newline that forges a second
+    // line of output or a character a cp932 console cannot encode. `pythonRepr`
+    // escapes both. Raised by review of this change.
     throw new ControlPlaneRefusal(
-      `${path} could not be read as a delegation record: ${describeReadError(error)}`,
+      `${pythonRepr(path)} could not be read as a delegation record: ` +
+        `${pythonRepr(describeReadError(error))}`,
       { cause: error },
     );
   }
@@ -721,6 +731,11 @@ function showPayload(view: RunView): { readonly [key: string]: JsonValue } {
             digest_algorithm: view.delegationRecord.digestAlgorithm,
             canonicalization: view.delegationRecord.canonicalization,
             recorded_at_ms: view.delegationRecord.recordedAtMs,
+            // Recomputed here, not echoed off the row: whether the stored
+            // digest still covers the stored bytes. Reported rather than
+            // refused, because drawing a pane must not be a thing that can
+            // fail -- see `RunDelegationRecordView.digestVerified`.
+            digest_verified: view.delegationRecord.digestVerified,
           },
     sessions: view.sessions.map((session) => ({
       session_id: session.sessionId,
@@ -798,7 +813,8 @@ function writeRunView(view: RunView, path: string): number {
           `digest=${view.delegationRecord.envelopeDigest} ` +
           `algorithm=${view.delegationRecord.digestAlgorithm} ` +
           `canonicalization=${view.delegationRecord.canonicalization} ` +
-          `recorded=${view.delegationRecord.recordedAtMs}\n`,
+          `recorded=${view.delegationRecord.recordedAtMs} ` +
+          `digest_verified=${view.delegationRecord.digestVerified}\n`,
   );
   for (const session of view.sessions) {
     runCliSeams.write(

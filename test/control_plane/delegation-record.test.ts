@@ -44,6 +44,7 @@ import {
   readDelegationRecord,
   readLapRunIntent,
 } from "../../src/control_plane/run_admission.js";
+import { runView } from "../../src/control_plane/run_view.js";
 import { transaction } from "../../src/control_plane/txn.js";
 import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { aDelegationRecord } from "../testkit/delegation.js";
@@ -568,6 +569,46 @@ describe("a written record is never edited", () => {
       DelegationRecordTampered,
       /hashes to/,
     );
+  });
+
+  test("run show reports a tampered record as unverified instead of refusing the whole run", () => {
+    // The read surface's half of the tamper check, and the reason it is a field
+    // rather than a refusal: `run show` is what a console draws a run from, and
+    // a run whose record was altered is the run an operator most needs to see
+    // the rest of. Raised by review of this change -- the verifying reader had
+    // no shipped caller, so the digest column was checked only by code nothing
+    // ran.
+    // The three triggers refuse every in-place edit, so a tampered row is
+    // planted the only way one can be: written once, under a digest that does
+    // not cover it.
+    const other = cpFixture("show-tampered");
+    other.connection
+      .prepare(
+        `INSERT INTO run (run_id, status, created_at_ms, updated_at_ms)
+         VALUES ('run-1', 'created', :now, :now)`,
+      )
+      .run({ now: T0 });
+    other.connection
+      .prepare(
+        `INSERT INTO delegation_record (
+           run_id, record_schema, envelope, envelope_digest,
+           digest_algorithm, canonicalization, recorded_at_ms
+         ) VALUES ('run-1', 's/1', '{"granted": ["everything"]}', :digest, 'sha256',
+                   'verbatim-utf8', :now)`,
+      )
+      .run({ digest: "0".repeat(64), now: T0 });
+
+    const view = runView(other.connection, "run-1");
+    expect(view.delegationRecord?.digestVerified).toBe(false);
+    // The rest of the run is still readable, which is the whole point.
+    expect(view.run.runId).toBe("run-1");
+  });
+
+  test("run show reports an intact record as verified", () => {
+    const { connection } = cpFixture("show-intact");
+    admitRun(connection, { intent: intent(), delegationRecord: aDelegationRecord(), nowMs: T0 });
+
+    expect(runView(connection, "run-1").delegationRecord?.digestVerified).toBe(true);
   });
 
   test("a run admitted before the record existed is named as such, not as unknown", () => {

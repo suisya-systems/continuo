@@ -60,6 +60,7 @@
  */
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import { DIGEST_ALGORITHM, envelopeDigestOf } from "./delegation_record.js";
 import { readLease } from "./lease.js";
 import { type RunRecord, readRun, runLeaseResource, UnknownRunRefused } from "./run_lifecycle.js";
 
@@ -152,6 +153,25 @@ export interface RunDelegationRecordView {
   readonly digestAlgorithm: string;
   readonly canonicalization: string;
   readonly recordedAtMs: number;
+  /**
+   * Whether `envelopeDigest` still covers `envelope`, recomputed here.
+   *
+   * **A field rather than a refusal, and the difference is what this verb is
+   * for.** `readDelegationRecord` refuses a record whose bytes no longer hash
+   * to its digest, because it hands the record to code that is about to act on
+   * it. This verb draws a pane, and `D-0096` point 5 is explicit that a
+   * console's read must not be a thing that can fail: a run whose record was
+   * altered is exactly the run an operator most needs to see the rest of, and
+   * refusing the whole document would hide the lease, the gates and the spine
+   * behind one bad row. So the fact is reported instead of thrown, and it is
+   * reported as `false` rather than omitted, because an absent key is the one
+   * absence a JSON reader cannot tell from one it forgot to read.
+   *
+   * It is continuo checking its own bookkeeping, not reading the envelope: the
+   * only input is the stored text and the stored digest, through the same
+   * function that computed it (`envelopeDigestOf`).
+   */
+  readonly digestVerified: boolean;
 }
 
 /**
@@ -273,6 +293,27 @@ const SELECT_DELEGATION_RECORD = `
      WHERE run_id = :run_id
 `;
 
+/** One `delegation_record` row, with its digest checked rather than echoed. */
+function delegationRecordView(row: Record<string, unknown>): RunDelegationRecordView {
+  const envelope = String(row.envelope);
+  const envelopeDigest = String(row.envelope_digest);
+  const digestAlgorithm = String(row.digest_algorithm);
+  return Object.freeze({
+    recordSchema: String(row.record_schema),
+    envelope,
+    envelopeDigest,
+    digestAlgorithm,
+    canonicalization: String(row.canonicalization),
+    recordedAtMs: Number(row.recorded_at_ms),
+    // Guarded on the algorithm the row itself names: this build can only
+    // reproduce the one it knows, and reporting `true` for a row digested under
+    // something else would be an assurance nothing checked. A row under an
+    // unknown algorithm reads as unverified, which is the honest answer.
+    digestVerified:
+      digestAlgorithm === DIGEST_ALGORITHM && envelopeDigestOf(envelope) === envelopeDigest,
+  });
+}
+
 /** An INTEGER column that may be NULL, as a number that may be `null`. */
 function optionalNumber(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
@@ -382,17 +423,7 @@ export function runView(connection: SqliteDatabase, runId: string): RunView {
             acquiredAtMs: lease.acquiredAtMs,
             expiresAtMs: lease.expiresAtMs,
           }),
-    delegationRecord:
-      delegationRow === undefined
-        ? null
-        : Object.freeze({
-            recordSchema: String(delegationRow.record_schema),
-            envelope: String(delegationRow.envelope),
-            envelopeDigest: String(delegationRow.envelope_digest),
-            digestAlgorithm: String(delegationRow.digest_algorithm),
-            canonicalization: String(delegationRow.canonicalization),
-            recordedAtMs: Number(delegationRow.recorded_at_ms),
-          }),
+    delegationRecord: delegationRow === undefined ? null : delegationRecordView(delegationRow),
     sessions: Object.freeze(sessions),
     gates: Object.freeze(gates),
     events: Object.freeze(events),

@@ -94,6 +94,22 @@ export const CANONICALIZATION = "verbatim-utf8";
 export const MAX_ENVELOPE_LENGTH = 1_048_576;
 
 /**
+ * The digest of `envelope`, under {@link DIGEST_ALGORITHM} and
+ * {@link CANONICALIZATION}: `sha256` over its UTF-8 bytes, exactly as they are.
+ *
+ * Exported because two places need the same answer and a second implementation
+ * of it is a second answer. {@link DelegationRecord} computes it at
+ * construction; `run_view.ts` recomputes it over the stored column so the read
+ * surface can say whether the digest still covers the bytes beside it. If those
+ * two ever disagreed about what "the digest" means, the check would be
+ * comparing a record against a different rule than the one it was written
+ * under.
+ */
+export function envelopeDigestOf(envelope: string): string {
+  return createHash(DIGEST_ALGORITHM).update(Buffer.from(envelope, "utf-8")).digest("hex");
+}
+
+/**
  * A field of the record is malformed. Nothing was opened, and nothing written.
  *
  * Outside the `ControlPlaneRefusal` family, placed exactly where
@@ -233,9 +249,7 @@ export class DelegationRecord {
     }
 
     this.envelope = envelope;
-    this.envelopeDigest = createHash(DIGEST_ALGORITHM)
-      .update(Buffer.from(envelope, "utf-8"))
-      .digest("hex");
+    this.envelopeDigest = envelopeDigestOf(envelope);
     this.digestAlgorithm = DIGEST_ALGORITHM;
     this.canonicalization = CANONICALIZATION;
 

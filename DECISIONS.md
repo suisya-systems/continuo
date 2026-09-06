@@ -16501,6 +16501,16 @@ continuo overruling cadenza's plan.
     echoing the document back on every admission would put a second copy of it in stdout, and one
     copy in one place is the point.
 
+12. **The read surface reports the integrity check; only the reader refuses on it.** `run show`'s
+    `delegation_record` carries `digest_verified`, recomputed over the stored bytes through the same
+    function that computed the digest at admission. It is a field rather than a refusal because
+    `D-0096` point 5 makes a console's read a thing that must not fail: a run whose record was
+    altered is the run an operator most needs to see the rest of, and refusing the document would
+    hide the lease, the gates and the spine behind one bad row. `readDelegationRecord` still refuses,
+    because it hands the record to code that is about to act on it. Both go through
+    `envelopeDigestOf`, so there is one statement of what the digest is. Raised by review of this
+    change: without it the digest column was checked only by a reader no shipped verb called.
+
 **What this entry requires of cadenza (input to a later task, not done here).**
 
 - **A serialisation surface for the resolved contract**, with a wire schema and a `schema_version`
@@ -16597,7 +16607,10 @@ when the property is removed rather than when something near it moves:
   the canary ledger's repair (`src/canary/routing_ledger.sql`'s `run_owner_is_never_replaced`),
   reused rather than re-derived, WHEN clause and all.
 - Return the stored digest instead of recomputing it: *bytes that no longer hash to the stored digest
-  are refused on the way out* goes red.
+  are refused on the way out* and *run show reports a tampered record as unverified instead of
+  refusing the whole run* go red. The second is the read surface's half, added after review pointed
+  out that the verifying reader had no shipped caller -- the digest column was checked only by code
+  nothing ran.
 - Collapse `DelegationRecordUnrecorded` into `UnknownRunRefused`: *a run admitted before the record
   existed is named as such, not as unknown* goes red.
 
