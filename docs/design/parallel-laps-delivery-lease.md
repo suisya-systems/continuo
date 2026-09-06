@@ -512,8 +512,26 @@ So the drainer cannot be "the verb that holds the global resource". It has to be
 holds the resource of the rows it is draining**:
 
 - `deliverRelays` (`src/gate/operator.ts:763-780`) stops naming `DELIVERY_LEASE_RESOURCE` and takes
-  the resource for the pass -- derived from the gate's or the run's id for a run-bound relay, and the
-  global literal for legacy and runless rows.
+  the resource for the pass -- derived from the run's id for a run-bound relay, and the global literal
+  for legacy and runless rows.
+
+**The verb has no way to say which, and that is a CLI change this design must name rather than
+assume.** Measured: `gate deliver` takes `--db`, `--destination-dir`, `--holder`, `--now-ms` and
+`--json` and nothing else (`src/gate/cli.ts:951-969`); there is no gate id, no run id and no resource
+argument, and `cmdGateDeliver` passes only a holder through (`:614-620`). A resource-parameterised
+`deliverRelays` with no way to choose a resource is unimplementable. Three interfaces are available,
+and the recommendation is the first:
+
+| Option | Shape | Assessment |
+|---|---|---|
+| **`--run-id` (recommended)** | one pass, one resource, chosen by the operator; omitted means the global resource | Smallest change, and it matches what `D-0097` already made this verb: an operator draining a known gate's relays after a known lap. The refusal when that run's lap is live stays exact and nameable. |
+| `--resource` | the operator spells the lease resource | Rejected: it re-exposes the string the endpoint refuses to let an operator choose (`endpoint.ts:571-577`), which is the mistake `D-0076` records for `--recipient`. |
+| enumerate distinct resources and drain each | no new argument | Rejected for lap 1: the pass would acquire an unbounded set of leases, each of which may be refused, and one `LeaseHeld` in the middle leaves a partially-drained pass whose report cannot say what it skipped. It is also a scan of `outbox` to build the set. |
+
+So P-10 carries a CLI addition: **`gate deliver --run-id`, optional, defaulting to the global
+resource.** The `--holder` help text (`src/gate/cli.ts:158-160`) and the module docstring's "one
+delivery resource, one writer" (`:74-75`, `:194-196`) are re-worded in the same change, because they
+state the property this entry supersedes.
 - `LeaseHeld` while the lap is still live is retained and is the correct answer: for as long as a run's
   lap runs, that run's delivery authority is the lap's. `src/gate/cli.ts:44` already documents that
   refusal, and it keeps its meaning, narrowed from "a lap" to "*this run's* lap".
@@ -565,6 +583,27 @@ and the same honesty `0004` chose for `run.writer_epoch`.
 so a misspelled property reaches a nullable column silently. The compatibility column must therefore
 be typed `string | null` and bound explicitly; `outbox.delivery_resource` must never be optional at
 all.
+
+**The column alone repairs nothing, because the readers do not read it -- and they are already broken
+for outbox rows today.** Both audit readers derive the resource from `action.kind`:
+
+- `WRITE_HISTORY_QUERY` filters with `substr(kind, -(length(:resource) + 1)) = '@' || :resource`
+  (`lease.ts:158-167`). A bare kind has no `@`, so a resource-filtered history over outbox actions is
+  **empty**, not wrong-but-useful.
+- `appliedEpochRegressions` computes `new Set(history.map((row) => resourceOfKind(row.kind)))`
+  (`lease.ts` at its definition), and `resourceOfKind` **throws** `LeaseUsageError` on a kind that was
+  not composed by `effectKind` (`:1424-1440`). Outbox action kinds are bare `notify` and
+  `human_gated` (`handlers.ts:139`, `:215`), so the regression reader raises on them today.
+
+That is a pre-existing gap between the spike's `effectKind` convention and the path outbox actually
+took, and it is measured here rather than inherited: **it is why `action.writer_resource` is worth
+adding at all**, and it is also why adding the column without migrating the readers would leave
+section 7.1's problem exactly where it is while looking repaired.
+
+So P-7 covers the readers as well as the column: both select, filter and partition on
+`writer_resource` when it is non-null, and fall back to the `kind`-suffix derivation only for rows
+that predate it. The fallback is what keeps `lease.ts`'s spike-schema callers working; the primary
+path is what makes the outbox's own history readable for the first time.
 
 ### 7.3 Effect deduplication stays global -- and this needs saying, because the temptation is real
 
@@ -658,19 +697,41 @@ The precedents are real:
 or `endpoint`**. It does not read the rendered `mcp.json` and does not launch the endpoint. The
 pre-review's draft proposes "a dedicated fake-child mode [that] reads its actual MCP config, starts
 the configured endpoint as a real stdio grandchild" as though it were nearly in place; it is a new
-capability in the fake used by 65 session cases, and changing that fake puts the whole session belt in
-the blast radius of this change.
+capability in the fake used by 65 session cases, and changing that fake that far puts the whole
+session belt in the blast radius of this change.
+
+**What *is* there, and is the reason a smaller change suffices:** the fake already has a mode switch
+and env-driven knobs -- `FAKE_MODE` defaulting to `"ok"` (`:267`), `FAKE_SLEEP` (`:268`), and the
+modes `refuse-in-use`, `silent`, `shielded-grandchild`, `events-then-hang`, `garbage-then-hang`
+(`:270-400`).
 
 ### 9.3 The shape recommended instead
 
-Keep the fake child as it is. Put the **built endpoint** in the test process's own hands, one per lap,
-started from **the env the materialiser actually wrote** -- read back out of each lap's rendered
-`mcp.json` rather than composed by the test. That reuses `endpoint-relay.test.ts`'s proven machinery,
-proves the materialiser's output is what two concurrent endpoints run under (which a
-test-composed env would not), and needs no change to the session belt's fake.
+Two changes, and the split between them is the point.
 
-The barrier then lives between the two endpoint clients, which is where the interesting overlap is:
-the delivery lease is the thing under test, and it is the endpoint that writes under it.
+**The endpoints stay with the test process.** Put the **built endpoint** in the test's own hands, one
+per lap, started from **the env the materialiser actually wrote** -- read back out of each lap's
+rendered `mcp.json` rather than composed by the test. That reuses `endpoint-relay.test.ts`'s proven
+machinery and proves the materialiser's output is what two concurrent endpoints run under, which a
+test-composed env would not.
+
+**The overlap is the lap's, so the hold has to be the child's.** The endpoints are the test's, so a
+barrier between *them* would not prove the two **laps** overlapped -- lap A could complete before lap
+B started and every endpoint assertion would still pass. The lap's duration is its child's duration,
+so the child is the only place a hold can go, and neither existing mode gives one: `"ok"` completes
+and permits serial execution, and the `-then-hang` modes never let the lap exit 0.
+
+So the design asks for **one additive `FAKE_MODE`** -- say `barrier` -- which writes a ready marker,
+polls for a release file under a bounded deadline, and then behaves exactly as `"ok"`. It is not the
+draft's MCP-speaking fake: it adds no protocol knowledge, reads no `mcp.json`, and starts no
+grandchild. It is safe against the session belt for the same reason the other five modes are: the
+switch defaults to `"ok"` (`fake-claude.mjs:267`) and no existing case sets the new value. **The
+bounded deadline is mandatory** -- a marker that never arrives must fail the case loudly rather than
+hang it, for `D-1103`'s reason in 9.4 -- and the parent writes the release file only after **both**
+ready markers exist. A missing marker is a failure, never permission to run the first serially.
+
+The barrier is files, not signals: `test/lap/cli.test.ts` already runs on the Windows serial pass, and
+POSIX signals are not portable there.
 
 Assertions after release -- **negative evidence is the substance, positive evidence is the setup**:
 
@@ -824,6 +885,12 @@ and S1 has no concurrency contract of its own to hang it on (`claude_cli_provide
   would make section 6's drainer a larger change to the gate CLI than it is presented as.
 - **A fourth way an outbox message id reaches an endpoint** exists besides `poll` and the operator's
   hand, which would mean section 4.2's ack repair is necessary but still not sufficient.
+- **The additive `barrier` fake mode is not enough to hold a lap at the right instant** -- if the lap
+  reaches the child later than the acquisition it is meant to overlap, the marker proves the wrong
+  overlap and section 9.3 needs a different hold point.
+- **`gate deliver --run-id` turns out not to determine the resource uniquely** -- a relay whose run is
+  not the gate's, say -- which would push the drainer toward the enumeration option section 6
+  rejects.
 - **rondo's ledger arrives first and measures the lap term as binding**, contradicting F-13's shape and
   making section 10.3's conclusion the wrong way round.
 
@@ -844,11 +911,11 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer under the two rules of section 4.2 -- the **fenced** producer writes its own `Outbox` instance's resource, the **unfenced** producers derive it from the row's durable `run_id`. The invariant is `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`, and a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review, amended |
 | **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. | pre-review |
 | **P-6** | Recipient becomes a SQL term on `due` and on one-row adoption, as a routing defence. It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
-| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable; `null` means only "predates the column". Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
+| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable; `null` means only "predates the column". Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix only for older rows. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
 | **P-8** | Split `UNOWNED_OUTBOX_QUERY` into a **caller-scoped** recovery form and a **database-wide** invariant form that joins on the row's own `delivery_resource` and takes no `:resource`. Re-anchor `_UNOWNED_ONE_QUERY`'s character-identity to the recovery form and say in the source which it mirrors. `INVARIANT_NO_UNOWNED_OUTBOX` and `src/index.ts`'s export are part of this change. | measured here |
 | **P-9** | Use the next forward migration (`0005`); never edit a historical one; backfill existing rows to the exact literal `"outbox-delivery"`; replace the due index with a measured `(delivery_resource, recipient, enqueued_at_ms)` partial form and keep positive **and** degraded EXPLAIN evidence. Say explicitly in the entry that `sqlite-value-contract.md` is a value contract and not a schema freeze. **Prefer the 12-step rebuild over `ADD COLUMN ... NOT NULL DEFAULT`** (section 5.2); the gate may take the default instead with a schema test pinning its legacy-only meaning. | pre-review, amended |
-| **P-10** | Name the drainer for every row a lap does not drain, and make it resource-parameterised. `deliverRelays` / `gate deliver` stop naming `DELIVERY_LEASE_RESOURCE` (`src/gate/operator.ts:769-774`) and instead acquire **the resource of the rows they are asked to drain** -- the run's for a run-bound relay, the global literal for legacy and runless rows. A fixed global `gate deliver` would strand every post-lap gate relay, because `enqueueRelay` copies `gate.runId` (`gates.ts:612`) and `gate present` / `gate answer` normally run after `lap perform` has exited. `LeaseHeld` while the lap is live is the correct answer and is kept. | measured here, amended after Codex review |
-| **P-11** | Gate implementation on a mandatory continuo target-only real-child case: two built `lap perform` processes on one production plane, two built endpoints started from the **materialiser's own rendered `mcp.json`**, a file barrier both must cross, and negative cross-delivery assertions with observed-red controls. Repository fake child only; no credentials, no network; a **stated wall-clock budget** with a bounded barrier that fails loudly (`D-1103`). Do not extend `fake-claude.mjs` to speak MCP (section 9.2). | pre-review, amended |
+| **P-10** | Name the drainer for every row a lap does not drain, and make it resource-parameterised. `deliverRelays` / `gate deliver` stop naming `DELIVERY_LEASE_RESOURCE` (`src/gate/operator.ts:769-774`) and instead acquire **the resource of the rows they are asked to drain** -- the run's for a run-bound relay, the global literal for legacy and runless rows. A fixed global `gate deliver` would strand every post-lap gate relay, because `enqueueRelay` copies `gate.runId` (`gates.ts:612`) and `gate present` / `gate answer` normally run after `lap perform` has exited. `LeaseHeld` while the lap is live is the correct answer and is kept. **This carries a CLI addition -- `gate deliver --run-id`, optional, defaulting to the global resource** -- because the verb today takes no gate, run or resource argument at all (`src/gate/cli.ts:951-969`). | measured here, amended after Codex review |
+| **P-11** | Gate implementation on a mandatory continuo target-only real-child case: two built `lap perform` processes on one production plane, two built endpoints started from the **materialiser's own rendered `mcp.json`**, a file barrier both must cross, and negative cross-delivery assertions with observed-red controls. Repository fake child only; no credentials, no network; a **stated wall-clock budget** with a bounded barrier that fails loudly (`D-1103`). The hold must be in the **child**, not between the endpoints -- otherwise the laps need not overlap -- so this carries **one additive `FAKE_MODE` (`barrier`)** on the fake's existing mode switch (`fake-claude.mjs:267`), default `"ok"` untouched. It does **not** extend the fake to speak MCP or start a grandchild (section 9.2). | pre-review, amended |
 | **P-12** | Discharge `minimal-operating-loop.md:1037-1045`'s obligation to show parallel laps keep one provider instance per run. Do **not** claim the provider's same-instance residual is fixed; re-band it to a future continuo change that first proposes concurrent verbs on one S1 instance or a shared provider, and correct that passage's stale citation (`:959-994` should be `:1156-1190`). | pre-review, amended |
 | **P-13** | State that `D-1104` takes **both** halves -- the enabling change and the holder identity -- because `rondo D-0012`'s falsifier says the enabling change alone is not enough (`rondo/DECISIONS.md:1057-1064`). continuo #167 owns partitioning, fencing and the two-run proof; rondo #8 owns allocation, the capacity bound and suspend accounting. This change does not widen rondo's single-flight index and does not authorise a second rondo admission. | measured here |
 | **P-14** | Record F-13's measurement in the entry: the delivery lease is held for the lap only (~20.9 s of a measured 125.4 s lifetime), the remaining 83% is rondo's lock across an unbounded human wait, and `D-1104` therefore removes contention on the smaller term. `D-1104` is not "parallel laps now work". | measured here |
@@ -876,12 +943,13 @@ Return or reject `D-1104` unless every answer is yes.
    caller-supplied rather than reached through the endpoint's own poll (P-16)?
 7. Does the fenced producer take its resource from **its own lease** rather than from `run_id`, so
    that no row names two epoch sequences (P-4, section 4.0)?
-8. Is future action-epoch attribution queryable by resource, while effect deduplication stays global
-   (P-7)?
+8. Is future action-epoch attribution queryable by resource **and actually read that way by
+   `write_history` and `appliedEpochRegressions`**, while effect deduplication stays global (P-7)?
 9. Is recovery limited to its own resource, and does the database-wide invariant keep its
    database-wide meaning?
-10. Does the real-child case prove **overlap** by barrier and **absence** of cross-delivery -- poll
-    and ack both -- with observed-red controls for each assertion?
+10. Does the real-child case prove **overlap** by a barrier held in the lap's own child -- not merely
+    between endpoints -- and **absence** of cross-delivery on poll and ack both, with observed-red
+    controls for each assertion?
 11. Is it mandatory in every `double-green` cell, free of credentials and network, and inside a stated
     wall-clock budget that `D-1103`'s cap can carry?
 12. Are the provider-local residual and `D-0068` explicitly left open, and is the stale
@@ -933,8 +1001,19 @@ were confirmed against the tree and are answered above rather than noted as limi
 | B2 | Recipient equality no longer establishes ack authority once two endpoints share `external-notify`, and the acked id is caller-supplied | **Confirmed.** `bus.ts:466-479` tests recipient only; `recordAck` updates by id and status; the MCP `ack` tool passes the caller's id through (`endpoint.ts:330`); relay ids are deterministic (`gates.ts:606-620`). Partitioning `poll` does not close it. | **New section 4.2**; **new P-16**; new assertion and observed-red control in section 9.3 |
 | M3 | Deriving `delivery_resource` from `run_id` on the **fenced** enqueue path writes the global resource beside a per-run epoch, recreating the ambiguity the design removes | **Confirmed**, and it was an internal contradiction in the first draft's P-4: `Outbox.enqueue` stamps the epoch (`outbox.ts:432-444`) while its `runId` defaults to `null` (`:1283-1285`). | **New section 4.0**: the rule is stated on the epoch, not the run, with the invariant `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`; **P-4 amended** |
 
-All three are cases of the same thing: the first draft partitioned *selection* carefully and then
+**Round 2** raised three further findings, again all confirmed and answered; none repeated a round-1
+finding, which is the shape of a converging review rather than a contested one.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| B4 | The mandatory proof is not implementable while `fake-claude.mjs` is unchanged: a barrier between two test-owned endpoints does not prove the two **laps** overlapped, and neither `"ok"` nor a `-then-hang` mode gives hold-then-exit-0 | **Confirmed.** The endpoints are the test's, so the lap's own duration is unconstrained; the fake's modes are `ok` / `refuse-in-use` / `silent` / `shielded-grandchild` / `events-then-hang` / `garbage-then-hang` (`fake-claude.mjs:267-400`) and none holds and then succeeds. | Section 9.3 rewritten to split endpoint ownership from the hold; **P-11 amended** to carry one additive `FAKE_MODE` (`barrier`) with a bounded deadline |
+| B5 | A resource-parameterised `gate deliver` has no way to choose a resource | **Confirmed.** The verb takes `--db`, `--destination-dir`, `--holder`, `--now-ms`, `--json` and nothing else (`src/gate/cli.ts:951-969`). P-10 was unimplementable as written. | Section 6 gains the interface comparison; **P-10 amended** to carry `gate deliver --run-id`, with `--resource` and resource-enumeration rejected and the reasons given |
+| B6 | `action.writer_resource` alone does not repair section 7.1, because both audit readers still derive the resource from `action.kind` | **Confirmed, and it is worse than "not yet migrated"**: `WRITE_HISTORY_QUERY`'s suffix filter (`lease.ts:158-167`) returns **empty** for a bare kind, and `appliedEpochRegressions` **throws** through `resourceOfKind` (`:1424-1440`) on the outbox's bare `notify`. The readers are already broken for outbox rows today. | Section 7.2 gains the measurement; **P-7 amended** to migrate both readers with a legacy fallback |
+
+All six are cases of the same thing: the first draft partitioned *selection* carefully and then
 under-specified the three places authority is established without a selection in front of it -- the
-post-lap drainer, the ack, and the fenced insert. That is worth recording as the shape of mistake this
-design is prone to, and it is why section 4's inventory is now stated as closed and checkable rather
-than as a list.
+post-lap drainer, the ack, and the fenced insert -- and then under-specified the *interfaces* the
+repairs need: a way for the drainer to name a resource, a way for the child to be held, a reader that
+actually reads the new column. That is worth recording as the shape of mistake this design is prone
+to: a partition is only as good as the narrowest surface that has to name it, and each of those
+surfaces is a change this entry has to carry rather than assume.
