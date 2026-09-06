@@ -201,6 +201,12 @@ function world(label: string): {
 
   expect(main(["db", "create", "--db", databasePath, "--now-ms", String(T0)])).toBe(0);
 
+  // `run admit` requires a delegation record (`D-1107`) and takes it as a file.
+  // These cases are about two laps sharing one control plane, not about the
+  // record, so one file serves both admissions.
+  const delegationRecordPath = join(root, "delegation-record.json");
+  writeFileSync(delegationRecordPath, '{"fixture": "a record continuo never reads"}', "utf8");
+
   const laps = (["a", "b"] as const).map((suffix): LapUnderTest => {
     const runId = `run-parallel-${suffix}`;
     const lapRoot = join(root, suffix);
@@ -229,6 +235,10 @@ function world(label: string): {
         TOPIC_BRANCH,
         "--prompt",
         "do the work",
+        "--delegation-record",
+        delegationRecordPath,
+        "--delegation-record-schema",
+        "testkit.delegation/1",
         "--now-ms",
         String(T0),
       ]),

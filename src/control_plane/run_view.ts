@@ -60,6 +60,7 @@
  */
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import { DIGEST_ALGORITHM, envelopeDigestOf } from "./delegation_record.js";
 import { readLease } from "./lease.js";
 import { type RunRecord, readRun, runLeaseResource, UnknownRunRefused } from "./run_lifecycle.js";
 
@@ -137,6 +138,43 @@ export interface RunOutboxView {
 }
 
 /**
+ * This run's delegation record, or `null` for a run admitted before it existed.
+ *
+ * The envelope is carried as the verbatim column text and is **not** parsed
+ * here, exactly as the event and outbox payloads are not. Re-encoding it would
+ * make what a console renders depend on this build's JSON writer rather than on
+ * the bytes the producer wrote, and those bytes are what the digest beside them
+ * covers.
+ */
+export interface RunDelegationRecordView {
+  readonly recordSchema: string;
+  readonly envelope: string;
+  readonly envelopeDigest: string;
+  readonly digestAlgorithm: string;
+  readonly canonicalization: string;
+  readonly recordedAtMs: number;
+  /**
+   * Whether `envelopeDigest` still covers `envelope`, recomputed here.
+   *
+   * **A field rather than a refusal, and the difference is what this verb is
+   * for.** `readDelegationRecord` refuses a record whose bytes no longer hash
+   * to its digest, because it hands the record to code that is about to act on
+   * it. This verb draws a pane, and `D-0096` point 5 is explicit that a
+   * console's read must not be a thing that can fail: a run whose record was
+   * altered is exactly the run an operator most needs to see the rest of, and
+   * refusing the whole document would hide the lease, the gates and the spine
+   * behind one bad row. So the fact is reported instead of thrown, and it is
+   * reported as `false` rather than omitted, because an absent key is the one
+   * absence a JSON reader cannot tell from one it forgot to read.
+   *
+   * It is continuo checking its own bookkeeping, not reading the envelope: the
+   * only input is the stored text and the stored digest, through the same
+   * function that computed it (`envelopeDigestOf`).
+   */
+  readonly digestVerified: boolean;
+}
+
+/**
  * One run and everything a console draws beside it.
  *
  * The four lists are always present and are empty when nothing matched; the
@@ -148,6 +186,7 @@ export interface RunOutboxView {
 export interface RunView {
   readonly run: RunRecord;
   readonly lease: RunLeaseView | null;
+  readonly delegationRecord: RunDelegationRecordView | null;
   readonly sessions: readonly RunSessionView[];
   readonly gates: readonly RunGateView[];
   readonly events: readonly RunEventView[];
@@ -238,6 +277,43 @@ const SELECT_OUTBOX = `
      ORDER BY enqueued_at_ms, message_id
 `;
 
+/**
+ * This run's delegation record, by primary key.
+ *
+ * One row or none: `run_id` is the table's primary key, so there is no ordering
+ * to choose and no LIMIT to justify. `null` means the run predates
+ * `0006_delegation_record.sql`, which is a fact about the database and is
+ * rendered as such rather than as an empty object -- a console must be able to
+ * tell "admitted before the record existed" from "admitted under an empty one".
+ */
+const SELECT_DELEGATION_RECORD = `
+    SELECT record_schema, envelope, envelope_digest, digest_algorithm,
+           canonicalization, recorded_at_ms
+      FROM delegation_record
+     WHERE run_id = :run_id
+`;
+
+/** One `delegation_record` row, with its digest checked rather than echoed. */
+function delegationRecordView(row: Record<string, unknown>): RunDelegationRecordView {
+  const envelope = String(row.envelope);
+  const envelopeDigest = String(row.envelope_digest);
+  const digestAlgorithm = String(row.digest_algorithm);
+  return Object.freeze({
+    recordSchema: String(row.record_schema),
+    envelope,
+    envelopeDigest,
+    digestAlgorithm,
+    canonicalization: String(row.canonicalization),
+    recordedAtMs: Number(row.recorded_at_ms),
+    // Guarded on the algorithm the row itself names: this build can only
+    // reproduce the one it knows, and reporting `true` for a row digested under
+    // something else would be an assurance nothing checked. A row under an
+    // unknown algorithm reads as unverified, which is the honest answer.
+    digestVerified:
+      digestAlgorithm === DIGEST_ALGORITHM && envelopeDigestOf(envelope) === envelopeDigest,
+  });
+}
+
 /** An INTEGER column that may be NULL, as a number that may be `null`. */
 function optionalNumber(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
@@ -316,6 +392,10 @@ export function runView(connection: SqliteDatabase, runId: string): RunView {
     ingestedAtMs: Number(row.ingested_at_ms),
   }));
 
+  const delegationRow = connection.prepare(SELECT_DELEGATION_RECORD).get(parameters) as
+    | Record<string, unknown>
+    | undefined;
+
   const outbox = (
     connection.prepare(SELECT_OUTBOX).all(parameters) as readonly Record<string, unknown>[]
   ).map((row) => ({
@@ -343,6 +423,7 @@ export function runView(connection: SqliteDatabase, runId: string): RunView {
             acquiredAtMs: lease.acquiredAtMs,
             expiresAtMs: lease.expiresAtMs,
           }),
+    delegationRecord: delegationRow === undefined ? null : delegationRecordView(delegationRow),
     sessions: Object.freeze(sessions),
     gates: Object.freeze(gates),
     events: Object.freeze(events),

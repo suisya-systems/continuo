@@ -210,6 +210,7 @@ spaces distinct.
 | D-1104 | The outbox row records WHICH lease minted its `writer_epoch`, and a lap holds its own run's delivery resource | accepted |
 | D-1105 | `lap perform --state-root` is a parent, and the lap's state root is derived from the run id | accepted |
 | D-1106 | The liveness observation is taken before the transcript read it is composed with | accepted |
+| D-1107 | The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely | accepted |
 
 ---
 
@@ -16370,3 +16371,371 @@ fixed at the operator gate before implementation -- derive rather than detect --
 records a ratified choice rather than proposing one. Decision id `D-1105`, the next in the `D-11xx`
 shared cross-belt band opened by `D-1101` (Issue #179), taken after checking `origin/main` that
 `D-1104` was the highest id in use.
+
+---
+
+## D-1107 -- The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely
+
+**Context.** Only the fingerprints of a delegation were being kept, and the values they point at
+existed nowhere. rondo's `iteration` row carries `agent_type_digest`, `config_digest` and
+`contract_digest`; cadenza's G2 belt persists nothing at all and has no wire schema and no
+`schema_version` for a contract document (`cadenza docs/design/g2-delegation-contract.md`,
+"Deliberately out of scope"); and continuo recorded what a run was *asked* to do (`D-0055`'s
+`LapRunIntent`, on the spine as `run_delegation_recorded`) but nothing about what it was *allowed*
+to do. A digest proves two things are the same; it does not say what either of them is. So for
+every run this organization has already merged, "what was this run permitted to do" has no answer
+anywhere and never will. That is not a gap in reporting: it is an audit and an incident review that
+cannot be performed at all.
+
+Ownership was genuinely unsettled rather than merely undecided. Three documents claimed three
+different owners -- `minimal-operating-loop.md` 6.3 put the record in continuo, cadenza's `S-7` put
+it in rondo's store, cadenza#22 put it in continuo -- and `D-0096` said in as many words that it was
+not deciding. The operator settled it, and this entry records the settlement together with the
+implementation.
+
+`minimal-operating-loop.md` 6.3 is **not** cited as support, and that is deliberate: 6.3 is about the
+lap's execution intent, calls it lap-scoped, and says it is *superseded by* G2 rather than promoted
+into it. This entry is about the other record -- the authorisation -- and it overrides 6.3's
+placement of authority modelling on the far side of the boundary. `D-0055` decision 5 is untouched
+and stays true of the intent: no `Authority`, `Principal` or `DelegationContract` name has been
+added to `LapRunIntent`, no permission list, no scope field. `D-0055`'s own falsifier -- that G2
+might arrive and want the intent *promoted* rather than superseded -- has not fired: the
+authorisation arrived as a separate record, which is what supersession looks like.
+
+cadenza's scoping condition is met rather than overridden, and the difference matters. G2 left
+serialisation out of scope on an explicitly conditional basis: *"it is decided only if the contract
+cannot be exercised as an in-memory value. It can, so the decision waits."* Persistence is now
+required, so the contract can no longer be exercised as an in-memory value. The condition cadenza
+set for deciding has been satisfied by events, so what follows is cadenza's own trigger firing, not
+continuo overruling cadenza's plan.
+
+**Decision.**
+
+1. **The record lives in continuo, and the reason is atomicity, not convenience.** It must be
+   written inside the same transaction that makes the run admissible, or there is a moment in which
+   a run exists and what it was permitted to do does not. continuo holds the only `INSERT INTO run`
+   in the system (`D-0051`), so continuo is structurally the only place where the two writes can be
+   one write. rondo is on the far side of a subprocess boundary and cannot join that transaction at
+   all; cadenza owns no control-plane code and holds no database.
+
+2. **continuo does not interpret the record, and this is a structural commitment rather than a
+   simplification.** The envelope is opaque text. The schema constrains its *form* -- non-empty,
+   `json_valid`, at most 1 MiB -- and nothing about its *meaning*: no column is extracted from
+   inside it, no index covers anything it contains, no `CHECK` reads a key, and no code path in
+   `src/` branches on one. **The moment the control plane interprets the contents, cadenza's
+   semantics leak into the control layer, and the layering that keeps cadenza pure collapses from
+   the opposite side.** The record's format name is stored and printed back and is never recognised:
+   continuo keeps no list of the format names it knows and refuses none, because a control plane
+   that recognised format names would be one acquiring opinions about the contents, one version
+   string at a time.
+
+3. **The bytes are stored verbatim, and the digest covers exactly them.** `envelope_digest` is
+   `sha256` over the UTF-8 bytes as they arrived; `digest_algorithm` and `canonicalization` are
+   columns rather than assumptions, because a digest whose algorithm and normalisation are unstated
+   cannot be reproduced by anyone who did not write it. `canonicalization` is `verbatim-utf8`, which
+   is the honest name for *not normalised*. Re-encoding the document through this build's JSON
+   writer would make the stored record depend on the writer rather than on the value that was
+   applied -- `run_view.ts` already refuses to re-encode a payload for that reason -- and would make
+   the digest incomparable with the one the producer computed over its own bytes. The consequence is
+   stated rather than hidden: two producers that mean the same grant but format it differently
+   produce two records with two digests, and continuo is not the layer that may declare them equal.
+   Canonicalisation belongs to whoever owns the meaning.
+
+4. **What is stored is the values that were applied, never the materials to recompute them.**
+   Recomputation was rejected outright: it replaces the recording problem with the problem of
+   reproducing an old implementation and its dependencies, which is strictly harder and fails
+   silently. The record is the resolved contract in full, the agent-type record applied, the
+   configuration after defaults, and the catalog snapshot the grant was issued against -- as values.
+
+5. **An envelope carrying a raw unpaired surrogate is refused.** Such a string has no UTF-8
+   encoding, and both halves of storage replace it with U+FFFD the same way -- the digest and the
+   column alike -- so the record would be altered on the way in and still verify, which is the one
+   failure this design must not have. The refusal is on the record's constructor rather than only at
+   the CLI, because `admitRun` is exported (`D-0002`) and a caller building the text in memory can
+   produce what the CLI's fatal decoder cannot. An *escaped* surrogate in the document text is
+   ordinary ASCII and is not refused; the rule is about the bytes stored, not about the parsed value.
+   Raised by review of this change; cadenza refuses the same shape at issue time for the same reason
+   (`SurrogateInStringError`, cadenza `D-0013`).
+
+6. **Secrets are recorded by identifier and version, never by value.** continuo cannot enforce this,
+   because enforcing it would require reading the envelope, so it is an obligation on the producer
+   and is stated here as one. It is also why the record is not a general-purpose blob store: the size
+   bound is a stated limit, and a document past it is something else arriving through this door.
+
+7. **A new table, `delegation_record`, keyed by `run_id`, and not the `task` table.** `task` is a
+   known hole in `docs/production-schema.md` §12 -- a name with no DDL. Putting the record there was
+   rejected: a table being empty is not a claim on what belongs in it, and if `task` ever binds
+   retries or several runs, a mutable task row cannot hold what each *individual* run was authorised
+   to do. `task` stays a hole and is introduced when its own lifecycle is needed. The relation to
+   the run is the primary key, which is also a foreign key onto `run(run_id)`, so a record for a run
+   that does not exist is unrepresentable and the INSERT order inside the transaction is forced by
+   the schema rather than remembered by the code.
+
+8. **The row is immutable, and that takes three triggers and `WITHOUT ROWID`.** No-`UPDATE` and
+   no-`DELETE` are the pair the event spine and the migration ledger use, and they are not
+   sufficient here or there: `INSERT OR REPLACE` resolves a conflict with an implicit delete that
+   fires no trigger unless `recursive_triggers` is ON, which is a per-connection pragma this build
+   does not set. There are **two** conflict targets, and closing one is not closing the other. The
+   third trigger refuses an insert onto an existing `run_id` and fires ahead of conflict resolution,
+   so that path is a property of the store rather than of whoever opened it -- the argument
+   `src/canary/routing_ledger.sql` already makes for its own ledger. The second target is the
+   implicit `rowid` an ordinary table carries alongside a `TEXT` primary key: a replace naming an
+   existing row's `rowid` with a different `run_id` deletes that row without the `run_id` guard ever
+   seeing it, which was measured. `WITHOUT ROWID` removes that target rather than adding a fourth
+   guard, so the table has one key and one thing to defend. Both paths were found by review of this
+   change, one after the other, which is itself the argument for stating this in a decision: two
+   people reading "immutable, with the usual pair of triggers" would both have believed it. A correction is a new run under a new record. The
+   reader recomputes the digest from the stored bytes and refuses a mismatch
+   (`DelegationRecordTampered`) rather than returning the stored digest, which is the only thing that
+   makes storing the digest more than decoration.
+
+9. **`run admit` takes the record as a file and its format name as a separate flag**
+   (`--delegation-record PATH`, `--delegation-record-schema NAME`), both required. A file because
+   the record is measured in kilobytes and because a value passed through `argv` reaches the process
+   table with it; decoded with a fatal UTF-8 decoder, because a record whose bytes were silently
+   altered on the way in is the one thing this document must never be. A *separate flag* rather than
+   a self-describing wrapper, because extracting an inner document from a wrapper means either
+   re-serialising it -- so the stored bytes become this build's renderer's -- or slicing the source
+   text, which is parsing the envelope by another name.
+
+10. **Both flags and the `admitRun` parameter are required, with no absent case and no default.** An
+   optional record is a supported way to admit a run whose authorisation nothing recorded, which is
+   the defect being closed, and it is the shape that comes back the first time somebody is in a
+   hurry.
+
+11. **The past is not backfilled.** Runs admitted before `0006_delegation_record.sql` carry no
+    record and never will. `readDelegationRecord` names that case as its own refusal
+    (`DelegationRecordUnrecorded`) rather than collapsing it into "no such run", because the true
+    answer -- this run predates the record, and what it was permitted to do is not recoverable -- is
+    the finding this entry exists to stop accumulating, and an operator sent looking for a typo
+    instead would never see it.
+
+12. **`run show` gains a `delegation_record` key and `run admit` gains a `delegation_record` object,
+    and neither schema id moves.** `continuo.run.show/1` and `continuo.run.admit/1` stay at `/1`
+    under the rule `json_output.ts` states: a verb that grows a field does not change its id, because
+    a document with an unread key is one every JSON reader already handles. `show` carries the
+    envelope verbatim and `admit` carries only the digest and the two values that reproduce it --
+    echoing the document back on every admission would put a second copy of it in stdout, and one
+    copy in one place is the point.
+
+13. **The read surface reports the integrity check; only the reader refuses on it.** `run show`'s
+    `delegation_record` carries `digest_verified`, recomputed over the stored bytes through the same
+    function that computed the digest at admission. It is a field rather than a refusal because
+    `D-0096` point 5 makes a console's read a thing that must not fail: a run whose record was
+    altered is the run an operator most needs to see the rest of, and refusing the document would
+    hide the lease, the gates and the spine behind one bad row. `readDelegationRecord` still refuses,
+    because it hands the record to code that is about to act on it. Both go through
+    `envelopeDigestOf`, so there is one statement of what the digest is. Raised by review of this
+    change: without it the digest column was checked only by a reader no shipped verb called.
+
+14. **The digest covers the envelope and nothing else, and `record_schema` sitting outside it is the
+    part worth stating.** Point 3 says `envelope_digest` is `sha256` over the envelope's bytes, which
+    is exact; what it does not say is how far the *detection* in point 13 reaches, and the honest
+    answer is: that column only. `record_schema`, `digest_algorithm`, `canonicalization` and
+    `recorded_at_ms` are outside the digest, so a writer holding the file that edits one of them
+    leaves a row that still verifies -- `readDelegationRecord` returns it and `run show` reports
+    `digest_verified: true`. Measured rather than reasoned: `record_schema` was rewritten from one
+    format name to another and `recorded_at_ms` was moved, both outside SQLite, and both read back
+    clean. This is recorded because `record_schema` is not a label. It is the declaration of *which
+    format the envelope is to be read as*, and the cadenza/rondo asymmetry below puts rondo on the
+    side that may interpret the envelope -- so a rondo that reads `record_schema` to choose a parser
+    is using the column exactly as intended, and a `record_schema` that changed underneath points a
+    reader at the wrong grammar for bytes that are themselves intact. Nothing in the record says so.
+    Widening the digest to cover the whole row was considered and rejected: a writer that can edit
+    one column can recompute a digest over the edited row just as easily, so it would detect careless
+    edits only while looking like it detected more, which is the failure mode point 15 is about.
+
+15. **This is a record, not a seal, and the difference is stated because points 8 and 13 read like a
+    tamper-detection claim.** Everything in this entry -- the digest, the three triggers,
+    `WITHOUT ROWID` -- exists so that a run's authorisation is *written down in the transaction that
+    admitted it* and is never quietly rewritten by this build afterwards. None of it defends against
+    somebody with write access to the database file who intends to forge. Such a writer edits the
+    envelope and `envelope_digest` together, and the result verifies on both read surfaces. That is
+    not a defect awaiting repair: with no key and no anchor outside the file, no arrangement of
+    columns distinguishes a self-consistent forgery from the truth, and **no repair is undertaken
+    here.** What the mechanisms do buy is real and is what they are for: atomicity with admission,
+    detection of corruption and of half-writes, and a hard stop on this build ever editing a record
+    in place. What they do not buy is an assurance against a holder of the file. A reader who takes
+    `digest_verified: true` as "nobody has altered this" has read it as a seal; it says the bytes
+    hash to the digest recorded beside them, which is a smaller and more useful thing.
+
+**What this entry requires of cadenza (input to a later task, not done here).**
+
+- **A serialisation surface for the resolved contract**, with a wire schema and a `schema_version`
+  for the contract *document*. G2 §6's digest payload already fixes the wire spellings
+  (`vocabulary_version`, `project_id`, `config_digest`, `issuer`, `grantee`, `granted`, `askable`,
+  `supersedes`) and is the obvious basis; what is missing is a document that carries them, a version
+  on that document, and a function that emits it.
+- **The same for the agent-type record and for the configuration after defaults are applied**, and
+  for the catalog snapshot the grant was issued against. If the catalog snapshot is partial, it must
+  carry enough of its own referents and rules that it still means something on its own.
+- **Provenance**: the cadenza version that produced the envelope, inside the envelope.
+- **Its own canonicalisation, named in the envelope.** cadenza owns the meaning, so cadenza owns any
+  claim that two differently-formatted documents are the same grant. `canonicalJsonBytes` (cadenza
+  `D-0013`) is the existing path.
+- **The secret rule of point 5**, honoured at the point the envelope is built: identifiers and
+  versions, never values.
+- **No persistence.** cadenza gains the mouth, not the memory. The storage envelope, its wire schema
+  and the versioning of both are continuo's.
+
+**What this entry requires of rondo (input to a later task, not done here).**
+
+- **The three digests become one reference.** `iteration.agent_type_digest`, `.config_digest` and
+  `.contract_digest` are replaced by a reference to continuo's record -- the run id it is keyed by,
+  and `envelope_digest` as the value to check it against. Keeping both is what re-creates the split
+  this entry closes: two homes for one value, and they can disagree.
+- **rondo resolves the record through a verb, never by opening continuo's database** (`D-0096`,
+  rondo `D-0015` rule 1). `run show --json` carries it.
+- **rondo may interpret the envelope; continuo may not.** rondo is the host and owns the display and
+  the reasoning about it. The asymmetry is the layering, not an inconsistency.
+
+**Where the counterpart stubs go, and what they say.** This decision binds three repositories, and
+`minimal-operating-loop.md` §8 records that neither repository's `DECISIONS.md` can hold such a
+thing: a paired decision has to be taken twice, at two gates, with no artifact saying they are the
+same decision. The window's ruling, recorded here as the shape to follow:
+
+- **The canonical entry is in the repository that owns the object being decided.** That is this
+  entry, in continuo, because the record and its DDL are continuo's.
+- **cadenza and rondo each carry a short counterpart stub in their own `DECISIONS.md`**, written by
+  the later tasks. A stub carries: the decision id `continuo D-1107`; the content hash of this
+  entry's text; a one-paragraph statement of what that repository is undertaking (cadenza: the
+  serialisation surface and no persistence; rondo: the digests become one reference, resolved
+  through a verb); and that repository's own approval. It does not restate the argument.
+- **Both values are read off this entry as merged, not as drafted.** The id moved twice during
+  review -- `D-1105`, then `D-1106`, then `D-1107` -- as two concurrent branches landed ahead of
+  this one, and the renumbering changed this text, so the content hash moved with it. A stub written
+  from a draft would cite an id nothing carries and a hash of text that was never merged, which is
+  exactly the "two ledgers pointing at different decisions" failure the stub scheme exists to
+  prevent. The later tasks take both values from `origin/main`.
+- Two alternatives were rejected. **A joint ADR whose canonical copy sits in one party's
+  repository** gives that party agenda-setting power over a decision it does not solely own.
+  **The same text as two full ADRs** produces two decisions that drift apart the first time either
+  is amended.
+
+**Consequences.**
+
+- Every run admitted from this build forward has a recoverable account of what it was permitted to
+  do, fixed before the run was executable.
+- `admitRun`'s signature changes, and every caller must supply a record. That is the intended blast
+  radius: the compiler is what stops a caller quietly admitting a run without one.
+- `run admit` refuses without the two new flags. Existing operator scripts and
+  `docs/operations/lap-1-dogfood.md`'s transcript need the flags added.
+- The database grows by the size of one contract per run. The 1 MiB bound is what keeps that
+  statement true.
+- Nothing about the lap's behaviour changes. No code reads the record to decide anything, which is
+  point 2 restated as an observation: the record is written, stored and read back, and the lap runs
+  exactly as it did.
+
+**Falsification.** Each is a case in `test/control_plane/delegation-record.test.ts` that goes RED
+when the property is removed rather than when something near it moves:
+
+- Remove the record insert altogether: *admission writes both, and the record is about the run it
+  was admitted with* goes red.
+- Move the insert out of the transaction block so it commits separately: *a record insert that fails
+  inside admitRun leaves no run row* goes red. That case exists because of this bullet: review of
+  this change applied the mutation and found the suite green, since the two boundary cases either
+  wrap `admitRun` in an outer transaction of their own or write the statements by hand. The case
+  installs a trigger that refuses the record insert and calls `admitRun` on a plain connection, which
+  is the only shape that observes the real block failing at its real second statement. Verified by
+  mutation, both directions.
+- Make `delegationRecord` optional on `admitRun`: *admission refuses without a record, before
+  anything is opened or written* goes red.
+- Drop the foreign key or the immutability triggers: *a delegation record for a run that does not
+  exist is unrepresentable*, *the run row cannot outlive its record*, *an UPDATE is refused by the
+  table itself* and *a DELETE is refused by the table itself* go red.
+- Re-serialise the envelope anywhere on the way in or out: *the stored bytes are the bytes handed
+  in, verbatim* goes red.
+- Read any key of the envelope in `src/`: *nothing in the control plane reads a key out of a
+  delegation envelope* goes red, and so does *admission behaves identically whatever the envelope
+  says* if the read changes any observable outcome. That scan follows the **binding** rather than one
+  spelling of the call -- its first form matched `JSON.parse(<argument spelled "envelope">)` and
+  review defeated it in one line with a two-step read, so it now collects every identifier bound
+  from an envelope expression and refuses a decode of any of them. Verified by mutation with the
+  evasion review used.
+- Rewrite a record with `INSERT OR REPLACE`: *INSERT OR REPLACE cannot rewrite a record, whatever
+  recursive_triggers says* goes red, and *a rowid conflict cannot delete a record either* goes red if
+  the table stops being `WITHOUT ROWID`. This is the route the two immutability triggers do **not**
+  cover, found by review of this change: SQLite resolves a primary-key conflict with an implicit
+  DELETE that fires no `BEFORE DELETE` trigger unless `recursive_triggers` is ON, and that pragma is
+  per-connection and off by default. The repair is a third, `BEFORE INSERT` trigger, which fires
+  ahead of conflict resolution and therefore holds on connections continuo never handed out. It is
+  the canary ledger's repair (`src/canary/routing_ledger.sql`'s `run_owner_is_never_replaced`),
+  reused rather than re-derived, WHEN clause and all.
+- Return the stored digest instead of recomputing it: *bytes that no longer hash to the stored digest
+  are refused on the way out* and *run show reports a tampered record as unverified instead of
+  refusing the whole run* go red. The second is the read surface's half, added after review pointed
+  out that the verifying reader had no shipped caller -- the digest column was checked only by code
+  nothing ran.
+- Stop guarding either reader on the algorithm the row names: *both read surfaces refuse to check a
+  digest under an algorithm this build cannot reproduce* goes red. The two surfaces had split --
+  `run_view.ts` checked `digest_algorithm` before reporting `digest_verified`, while
+  `readDelegationRecord` did not select the column at all, so a row past the column's `CHECK` naming
+  a foreign algorithm, but carrying a correct `sha256` digest, read as **intact** through the strict
+  reader and **unverified** through the console's. The strict surface was the lenient one. Found by
+  measurement of the digest's scope (point 14), and the case pins both surfaces on one row so they
+  cannot drift apart again. Verified by mutation.
+- Accept a raw unpaired surrogate: *a raw unpaired surrogate is refused, and an escaped one is not*
+  goes red, and so does *an escaped surrogate and astral text survive the database byte for byte* if
+  the rule is widened to refuse the escaped form too.
+- Collapse `DelegationRecordUnrecorded` into `UnknownRunRefused`: *a run admitted before the record
+  existed is named as such, not as unknown* goes red.
+
+**Rejected alternative: widen `LapRunIntent`.** Adding the contract to the existing
+`run_delegation_recorded` payload would have needed no new table. It is rejected twice over.
+`D-0055` decision 5 forbids exactly this and gives the reason -- the intent is a work statement, and
+growing it into the carrier of a permission means every reader has to know which of the two it was
+handed. And `readLapRunIntent`'s key-set check is closed-world, so an added key makes every payload
+already on the spine unreadable: reporting on and closing every existing run would break.
+
+**Rejected alternative: a second event on the spine.** The record could have been a third
+`appendEvent` in the same block, which would have made it visible to a spine-draining consumer for
+free. Rejected because the bookkeeping beside the envelope -- the format name, the digest, the
+algorithm, the normalisation -- would then live inside a payload, so every reader of it would have
+to parse the payload to reach them, and "the control plane parses the delegation payload" is the
+habit point 2 is trying to end. A typed table keeps continuo's own metadata in columns and the
+envelope opaque beside them.
+
+**Rejected alternative: content-addressed storage keyed by digest.** A `delegation_record` keyed by
+`envelope_digest` with a join table would de-duplicate identical contracts across runs. Rejected as
+a solution to a problem nobody has: a contract is bound to its grantee (cadenza G2 §6, "two
+contracts differing only in grantee are two contracts"), so identical envelopes across runs are the
+exception rather than the rule, and the join table would add a second relation to maintain for it.
+
+**Rejected alternative: store the materials and recompute.** Rejected in the brief and restated
+here because it is the alternative that keeps looking reasonable: it converts a recording problem
+into the problem of reproducing an old implementation with its dependencies, and it fails silently
+-- a recomputation that quietly produces a different answer is worse than no answer at all.
+
+**Status.** accepted
+
+**Falsifier.** The claim that continuo can hold this record without interpreting it. If a real need
+arises for the control plane to *decide* something from the contents -- to refuse an admission on
+what the contract says, to route on a capability, to expire a grant -- then the boundary drawn in
+point 2 is in the wrong place, and either that decision belongs on the producer's side of the wire
+or the record belongs in a layer that is allowed to read it. The observable signal is the first
+patch that wants to `JSON.parse` an envelope outside `delegation_record.ts`; the source scan in
+*nothing in the control plane reads a key out of a delegation envelope* is what makes that patch
+visible rather than quiet.
+
+A second, narrower falsifier: `verbatim-utf8` assumes producers are byte-stable across releases. If
+cadenza's emitter starts producing different bytes for the same grant between versions, the digests
+stop being comparable across time and the normalisation decision has to move to a canonical form --
+which is a change to `canonicalization`, a new value in its `CHECK`, and a migration.
+
+**Source.** Operator ruling on ownership, task `continuo-delegation-record`, 2026-09-06, settling the
+three-way claim between `minimal-operating-loop.md` 6.3, cadenza `S-7` and cadenza#22 that `D-0096`
+recorded as open. Builds on `D-0051` (the single admission transaction and the single `INSERT INTO
+run`), `D-0055` (the lap intent, which this entry deliberately does not widen), `D-0090` and
+`D-0096` (the `--json` envelope and the rule that the database is not a public read surface),
+`D-0046` rule 4 and `docs/production-schema.md` §4.2 (the writer table this adds a row to). Cross-
+repository: cadenza `docs/design/g2-delegation-contract.md` §§1, 4, 6 and `D-0026`; rondo
+`src/store/sqlite.ts`'s `iteration` DDL and `D-0015` rule 1. `minimal-operating-loop.md` §8's "gap
+in the machinery" is the defect the counterpart-stub scheme above closes. Decision id `D-1107`,
+drawn from the `D-11xx` shared cross-belt band opened by `D-1101` (Issue #179). The id was taken
+three times before it stuck: this entry was drafted as `D-1105` after `D-1104` was reserved for a
+concurrent task, but `D-1105` went to #191 (the run-derived state root) and `D-1106` to #194 (the
+liveness observation's ordering), both of which merged first. It is renumbered here rather than
+anywhere else because the rule this organization settled the same week is that a sequential resource
+taken by two concurrent tasks is not avoided by announcing intentions -- read-then-take has no
+atomicity, so the collision is allowed to happen, made visible, and resolved by whoever lands
+second. This entry landed third.

@@ -102,6 +102,8 @@
  * printing the same value under two rules.
  */
 
+import { readFileSync } from "node:fs";
+
 import {
   addJsonArgument,
   type JsonValue,
@@ -111,9 +113,11 @@ import {
 } from "../cli/json_output.js";
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
+import { DelegationRecord } from "./delegation_record.js";
 import { LapRunIntent } from "./lap_run_intent.js";
 import { LeaseRefusal } from "./lease.js";
 import { openProductionControlPlane } from "./migrator.js";
+import { pythonJsonString } from "./python_json.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import {
   admitRun,
@@ -160,10 +164,25 @@ const CLI_ARG_HELP =
   "argument at all is refused until it is edited. Widening is an edit to that " +
   "document, reviewed and with a written reason, not a per-run decision.";
 
+const DELEGATION_RECORD_HELP =
+  "path to a file holding this run's delegation record: the values the run is " +
+  "permitted to act under, as one JSON object. It is read as UTF-8, stored " +
+  "verbatim, digested with sha256 over exactly those bytes, and never " +
+  "interpreted -- continuo checks that it is a JSON object within the size " +
+  "bound and reads no key of it. Record identifiers and versions for anything " +
+  "secret, never the secret's value.";
+const DELEGATION_RECORD_SCHEMA_HELP =
+  "the name of the format --delegation-record is written in, supplied by " +
+  "whoever produced it. Stored beside the record and printed back; continuo " +
+  "keeps no list of the names it knows and refuses none, because the format " +
+  "belongs to the producer.";
+
 const ADMIT_DESCRIPTION =
   "Admit a run: insert its row at status 'created', append the run_created " +
-  "event that records it, and append the run_delegation_recorded event that " +
-  "fixes what this lap was asked to do -- all in one transaction. Refuses a " +
+  "event that records it, write the delegation record that fixes what this " +
+  "run is permitted to act under, and append the run_delegation_recorded " +
+  "event that fixes what this lap was asked to do -- all in one transaction. " +
+  "Refuses a " +
   "run-id already on the table rather than re-admitting it, and exits 2 with " +
   "the reason when it refuses.";
 
@@ -225,7 +244,7 @@ const CLOSE_SCHEMA = "continuo.run.close/1";
 const SHOW_SCHEMA = "continuo.run.show/1";
 
 /**
- * The three effects this module has on the world, as a replaceable record.
+ * The four effects this module has on the world, as a replaceable record.
  *
  * The same shape and the same reason as `cli.ts`'s `dbCliSeams`: ESM bindings
  * cannot be rebound from outside the module that holds them, so the clock and
@@ -253,6 +272,14 @@ export const runCliSeams = {
   writeError: (text: string): void => {
     process.stderr.write(text);
   },
+  /**
+   * The one file this subtree reads: `--delegation-record`.
+   *
+   * Bytes rather than text, because the decode is the caller's and is fatal on
+   * a malformed sequence -- a seam returning a string would have already made
+   * the substitution this verb exists to refuse.
+   */
+  readFile: (path: string): Buffer => readFileSync(path),
 };
 
 /**
@@ -357,6 +384,82 @@ function intentOf(args: Namespace): LapRunIntent {
 }
 
 /**
+ * The delegation record, read off disk and validated by its own constructor.
+ *
+ * **A file rather than an inline argument**, because the record is a resolved
+ * contract with its provenance and is measured in kilobytes, and because a
+ * value that reaches a process through `argv` reaches the process table with
+ * it. `--v1-shadow-run-ids` is the precedent for the shape (`measurement/
+ * cli.ts`): the read and the parse are the only things inside the `try`, so a
+ * missing or unreadable file becomes a one-line refusal rather than a stack
+ * trace with a path in it.
+ *
+ * **Decoded strictly, and `ignoreBOM` is the load-bearing half.**
+ * `readFileSync(path, "utf8")` substitutes U+FFFD for a malformed byte, and a
+ * record whose bytes were silently altered on the way in is the one thing this
+ * document must never be: the digest would then be over what continuo made of
+ * the file rather than over what the producer wrote. A fatal decoder refuses
+ * instead. `ignoreBOM: true` is passed for the *same* reason and is easy to
+ * read backwards -- WHATWG's default is to DELETE a leading U+FEFF, so without
+ * it a file written with a byte-order mark is stored and digested three bytes
+ * shorter than the producer wrote it, silently. With it the mark survives into
+ * the envelope and `DelegationRecord`'s parse refuses the document by name.
+ * Raised by review of this change; the same spelling is already used at
+ * `attention/dedup.ts` and `attention/config.ts`.
+ *
+ * **The format name is a separate flag and is not read out of the document.**
+ * A self-describing wrapper would be the obvious alternative, and it is
+ * rejected in `D-1107`: extracting an inner document from a wrapper means
+ * either re-serialising it -- so the stored bytes become this build's
+ * renderer's rather than the producer's -- or slicing the source text, which is
+ * parsing the envelope by another name. The record continuo stores is the file,
+ * whole.
+ */
+function delegationRecordOf(args: Namespace): DelegationRecord {
+  const path = String(args["delegation_record"]);
+  let envelope: string;
+  try {
+    envelope = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      runCliSeams.readFile(path),
+    );
+  } catch (error) {
+    // Both values rendered ASCII-only rather than interpolated raw, and this is
+    // the one place in this verb where that matters. `--db` is echoed verbatim
+    // by an explicit, documented carry (see this module's own note), and the
+    // rule the note ends on is that a change does not ADD an instance of it.
+    // This path is a new one: the argument is a filesystem path an operator
+    // typed and the text is a decoder's, so either may carry a newline that
+    // forges a second line of output or a character a cp932 console cannot
+    // encode -- and this organization has repositories under paths with
+    // Japanese in them, so that is the ordinary case rather than the hostile
+    // one.
+    //
+    // `pythonJsonString` and not `pythonRepr`: `repr()` escapes control
+    // characters but leaves printable non-ASCII intact, which closes the
+    // forgery half and leaves the encoding half open. `json.dumps`'s
+    // `ensure_ascii` escapes every code point past U+007E to `\uXXXX`, so the
+    // refusal is printable on any console and still says what the path was.
+    // Raised by review of this change, twice: the first repair used
+    // `pythonRepr` and only the second closed it.
+    throw new ControlPlaneRefusal(
+      `${pythonJsonString(path)} could not be read as a delegation record: ` +
+        `${pythonJsonString(describeReadError(error))}`,
+      { cause: error },
+    );
+  }
+  return new DelegationRecord({
+    recordSchema: String(args["delegation_record_schema"]),
+    envelope,
+  });
+}
+
+/** A read or decode failure, reduced to one ASCII clause for a one-line refusal. */
+function describeReadError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/[\r\n]+/g, " ").trim();
+}
+
+/**
  * `continuo run admit`.
  *
  * The handle is closed in a `finally` whatever the outcome, including a
@@ -374,9 +477,12 @@ export function cmdRunAdmit(args: Namespace): number {
   const json = jsonRequested(args);
 
   try {
+    // Read and validated before the database is opened, for the same reason the
+    // intent is: an unreadable file or a malformed record costs no handle.
+    const delegationRecord = delegationRecordOf(args);
     const connection = openProductionControlPlane(path);
     try {
-      const admitted = admitRun(connection, { intent, nowMs });
+      const admitted = admitRun(connection, { intent, delegationRecord, nowMs });
       // Both events, named and numbered. The line is what an operator has to
       // read to know the work statement landed with the run rather than after
       // it -- reporting only the first would make the transaction's whole point
@@ -412,10 +518,20 @@ export function cmdRunAdmit(args: Namespace): number {
                   seq: admitted.delegationEventSeq,
                 },
               },
+              // The digest, not the record. A host stores this instead of a
+              // copy, and the copy it would otherwise keep is the second home
+              // for one value that `D-1107` exists to prevent.
+              delegation_record: {
+                record_schema: delegationRecord.recordSchema,
+                envelope_digest: admitted.delegationRecordDigest,
+                digest_algorithm: delegationRecord.digestAlgorithm,
+                canonicalization: delegationRecord.canonicalization,
+              },
             })
           : `admitted ${admitted.runId} in ${path}: status ${admitted.status}, ` +
               `${admitted.eventId} at seq ${admitted.eventSeq}, ` +
-              `${admitted.delegationEventId} at seq ${admitted.delegationEventSeq}\n`,
+              `${admitted.delegationEventId} at seq ${admitted.delegationEventSeq}, ` +
+              `delegation record ${admitted.delegationRecordDigest}\n`,
       );
     } finally {
       connection.close();
@@ -570,7 +686,7 @@ function quoted(value: string | null): string {
 }
 
 /**
- * `run show`'s payload: the run, and the five things a console draws beside it.
+ * `run show`'s payload: the run, and the six things a console draws beside it.
  *
  * Built key by key rather than by spreading the record, for the two reasons
  * `gate/cli.ts`'s `showPayload` gives and which apply here with more force:
@@ -579,7 +695,7 @@ function quoted(value: string | null): string {
  * addition to a pinned host contract.
  *
  * **The keys are the tables**, so a host reading this document and a person
- * reading `docs/production-schema.md` are looking at the same five nouns.
+ * reading `docs/production-schema.md` are looking at the same six nouns.
  * `lease` is `null` when the run has never been leased -- an absent lease is a
  * fact about the run, and `{}` would be a lease with no holder. The four lists
  * are always present and empty when nothing matched, because an absent key is
@@ -610,6 +726,26 @@ function showPayload(view: RunView): { readonly [key: string]: JsonValue } {
             epoch: view.lease.epoch,
             acquired_at_ms: view.lease.acquiredAtMs,
             expires_at_ms: view.lease.expiresAtMs,
+          },
+    // `null` for a run admitted before `0006_delegation_record.sql`, and the
+    // null is load-bearing: it says the record does not exist, where an empty
+    // object would say the run was admitted under an empty one. `envelope` is
+    // the verbatim column text for the same reason the two payloads above are.
+    delegation_record:
+      view.delegationRecord === null
+        ? null
+        : {
+            record_schema: view.delegationRecord.recordSchema,
+            envelope: view.delegationRecord.envelope,
+            envelope_digest: view.delegationRecord.envelopeDigest,
+            digest_algorithm: view.delegationRecord.digestAlgorithm,
+            canonicalization: view.delegationRecord.canonicalization,
+            recorded_at_ms: view.delegationRecord.recordedAtMs,
+            // Recomputed here, not echoed off the row: whether the stored
+            // digest still covers the stored bytes. Reported rather than
+            // refused, because drawing a pane must not be a thing that can
+            // fail -- see `RunDelegationRecordView.digestVerified`.
+            digest_verified: view.delegationRecord.digestVerified,
           },
     sessions: view.sessions.map((session) => ({
       session_id: session.sessionId,
@@ -659,8 +795,9 @@ function showPayload(view: RunView): { readonly [key: string]: JsonValue } {
 /**
  * The human rendering of `run show`: one line for the run, one per row after it.
  *
- * **Neither payload is on a human line, and that is not an oversight.** An
- * event or outbox payload is free-form text that may hold a newline, and a
+ * **No payload and no envelope is on a human line, and that is not an
+ * oversight.** An event payload, an outbox payload or a delegation envelope is
+ * free-form text that may hold a newline, and a
  * line-per-row rendering that interpolated one would silently stop being one
  * line per row. An operator reading a payload asks for the document; the
  * rendering here is the shape of the run, which is what a person scanning a
@@ -678,6 +815,16 @@ function writeRunView(view: RunView, path: string): number {
       : `lease ${view.lease.resource} holder=${quoted(view.lease.holder)} ` +
           `epoch=${view.lease.epoch} acquired=${view.lease.acquiredAtMs} ` +
           `expires=${view.lease.expiresAtMs}\n`,
+  );
+  runCliSeams.write(
+    view.delegationRecord === null
+      ? "delegation_record -\n"
+      : `delegation_record schema=${quoted(view.delegationRecord.recordSchema)} ` +
+          `digest=${view.delegationRecord.envelopeDigest} ` +
+          `algorithm=${view.delegationRecord.digestAlgorithm} ` +
+          `canonicalization=${view.delegationRecord.canonicalization} ` +
+          `recorded=${view.delegationRecord.recordedAtMs} ` +
+          `digest_verified=${view.delegationRecord.digestVerified}\n`,
   );
   for (const session of view.sessions) {
     runCliSeams.write(
@@ -790,6 +937,23 @@ export function addSubparsers(sub: Subparsers): void {
       help,
     });
   }
+  // The delegation record, in the two flags it takes. Both required: a run
+  // admitted without one is exactly the state `D-1107` closes, and an optional
+  // flag is a supported way back into it.
+  admit.addArgument({
+    optionStrings: ["--delegation-record"],
+    dest: "delegation_record",
+    required: true,
+    metavar: "DELEGATION_RECORD",
+    help: DELEGATION_RECORD_HELP,
+  });
+  admit.addArgument({
+    optionStrings: ["--delegation-record-schema"],
+    dest: "delegation_record_schema",
+    required: true,
+    metavar: "DELEGATION_RECORD_SCHEMA",
+    help: DELEGATION_RECORD_SCHEMA_HELP,
+  });
   admit.addArgument({
     optionStrings: ["--cli-arg"],
     dest: "cli_args",

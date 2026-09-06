@@ -67,6 +67,7 @@ import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import { MCP_CONFIG_FILENAME, MCP_SERVER_NAME } from "../../src/workspace/materializer.js";
 import { observed, ScriptedProvider } from "../gate_item2/helpers.js";
 import { caseRoot } from "../testkit/cases.js";
+import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusal, expectRefusalAsync } from "../testkit/errors.js";
 
 const T0 = 1_700_000_000_000;
@@ -507,6 +508,7 @@ function fixture(label: string, nowMs: () => number = () => T0): Fixture {
   });
 
   admitRun(connection, {
+    delegationRecord: aDelegationRecord(),
     intent: new LapRunIntent({
       runId: RUN_ID,
       leaseClaimantId: HOLDER,

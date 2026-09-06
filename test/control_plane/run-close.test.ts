@@ -77,6 +77,7 @@ import {
   TERMINAL_RUN_STATUSES,
 } from "../../src/control_plane/run_lifecycle.js";
 import { caseRoot, databasePath, suiteTemplate } from "../testkit/cases.js";
+import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -105,6 +106,7 @@ function admittedFixture(runId: string = RUN_ID): {
     connection.close();
   });
   admitRun(connection, {
+    delegationRecord: aDelegationRecord(),
     intent: new LapRunIntent({
       runId,
       leaseClaimantId: "secretary-1",
