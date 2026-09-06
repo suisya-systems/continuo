@@ -7,8 +7,22 @@ rows and no others. `D-0074` names exactly two candidate changes -- **a scope co
 purpose. This document measures the tree against both, recommends one, and states what a real-child
 proof of it has to show.
 
-**Status: propose-only.** No code, schema, test or decision record accompanies it. It files no
-`DECISIONS.md` entry. The entry it proposes is referred to **by name only**, as
+**Status: ratified and implemented. `D-1104` exists.** The paragraph below is the status this
+document was written under and is kept rather than rewritten, because the argument it makes only
+reads correctly from where it stood. What has since happened: the operator ratified `P-1`..`P-20`
+and chose section 6's option (b), and `D-1104` in `DECISIONS.md` is that decision. **Where the two
+disagree, the entry governs** -- it is the ratified text and this one is the proposal. Three places
+where implementation measured something this document did not, each recorded in the entry with the
+measurement behind it: section 5.4's index **replacement** would regress `ORPHANED_OUTBOX_SQL`, a
+third reader not enumerated here, so `outbox_undelivered` is kept and the step adds two indexes
+rather than replacing one; the column had to be carried into `spike_schema.sql` as well, because
+`Outbox` is one class over two schemas; and `_ADOPT`'s resource equality turned out to be masked one
+layer deeper than section 9.3 supposed -- by `_UNOWNED_ONE_QUERY`'s own term -- so its method-level
+control was **observed green** and the statement had to be exported for a direct one. Section 11's
+falsifiers were checked against the implementation and none fired.
+
+**Status as written (propose-only).** No code, schema, test or decision record accompanies it. It
+files no `DECISIONS.md` entry. The entry it proposes is referred to **by name only**, as
 **`D-1104`**, and only continuo's human gate may create it (`D-0031`, `D-0036`). Section 12's
 `P-1`..`P-17` are the lines put to that gate; they are proposals, not decisions taken. Implementation
 starts after the gate, not after this document.

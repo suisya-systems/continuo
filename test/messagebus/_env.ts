@@ -1,11 +1,13 @@
 import { join } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { onTestFinished } from "vitest";
-
+import {
+  DELIVERY_LEASE_RESOURCE,
+  deliveryResourceForRun,
+} from "../../src/control_plane/delivery_resource.js";
 import { KeyedDropbox } from "../../src/control_plane/destination.js";
 import { NOTIFY_RECIPIENT, spikeRegistry } from "../../src/control_plane/handlers.js";
 import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
-import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { type DeliveredEnvelope, MessageBus } from "../../src/messagebus/index.js";
 import { createTempDir } from "../helpers/tmp.js";
 
@@ -59,28 +61,50 @@ import { createTempDir } from "../helpers/tmp.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
 export const T0 = 1_700_000_000_000;
-/**
- * The delivery lease resource, taken from the product rather than spelled here.
- *
- * It used to be the literal `"messagebus-of-run-1"` -- a name shaped like one
- * lease *per run*, which is precisely the illusion D-0053 rule 4 forbids: the
- * outbox row carries no resource column and neither the due pass nor the
- * recovery pass is scoped to one, so a per-run name would advertise a
- * partitioning the schema does not have, and this suite would have been the
- * document a later reader consulted for it.
- *
- * Imported rather than re-spelled so the fixture and the endpoint cannot drift:
- * `main()` now admits exactly this string and refuses any other
- * (`src/messagebus/endpoint.ts`, {@link DELIVERY_LEASE_RESOURCE}), so a suite
- * carrying its own copy would keep passing on the day the product's name
- * changed and would leave the subprocess cases failing for a reason no
- * assertion here explained.
- */
-export const RESOURCE = DELIVERY_LEASE_RESOURCE;
 export const HOLDER = "bus-writer";
 export const EPOCH = 1;
 export const TTL_MS = 300_000;
 export const RUN_ID = "run-1";
+
+/**
+ * The delivery lease resource this suite's world runs under: the one governing
+ * {@link RUN_ID}'s rows, built rather than spelled.
+ *
+ * It used to be {@link DELIVERY_LEASE_RESOURCE}, the single global name, and
+ * the reason was `D-0053` rule 4: the outbox row carried no resource column
+ * and neither the due pass nor the recovery pass was scoped to one, so a
+ * per-run name would have advertised a partitioning the schema did not have.
+ * `D-1104` gave the schema that column (`outbox.delivery_resource`, migration
+ * `0005`), scoped `_DUE_QUERY` and the recovery pass to it, and made
+ * `performLap` acquire `deliveryResourceForRun(intent.runId)` -- so a run-shaped
+ * name is now the honest one for a world that has exactly one run in it, and
+ * every row the fixtures below produce (a fenced `send` under `RUN_ID`, a gate
+ * relay for a gate on `RUN_ID`, an event fan-out for `RUN_ID`) carries it.
+ *
+ * The global literal has not gone away and is not deprecated: it is the
+ * partition for rows belonging to no run, and it is still what the endpoint
+ * admits. It is imported beside this so the per-resource cases can name it
+ * without respelling it -- see {@link GLOBAL_RESOURCE}.
+ *
+ * Built with the product's own constructor rather than re-spelled so the
+ * fixture and the endpoint cannot drift: `main()` admits exactly the shapes
+ * `isDeliveryResource` admits (`src/messagebus/endpoint.ts`), so a suite
+ * carrying its own copy of the spelling would keep passing on the day the
+ * product's name changed and would leave the subprocess cases failing for a
+ * reason no assertion here explained.
+ */
+export const RESOURCE = deliveryResourceForRun(RUN_ID);
+
+/**
+ * The global delivery resource, re-exported for the cases that need a *second*
+ * live partition in one database.
+ *
+ * A row under this name is a row belonging to no run -- a legacy row migration
+ * `0005` inherited, a runless relay, a runless fan-out -- and the point of
+ * having it here is that `poll` and `ack` on {@link RESOURCE} must not reach
+ * it.
+ */
+export const GLOBAL_RESOURCE = DELIVERY_LEASE_RESOURCE;
 
 /**
  * The recipient the spike registry serves, re-exported so files that must not
@@ -94,17 +118,62 @@ export class BusEnv {
   readonly dropbox: KeyedDropbox;
   readonly connection: SqliteDatabase;
   readonly dbPath: string;
+  /**
+   * The registry {@link bus} serves, kept so {@link busOn} can hand a second
+   * bus the *same* handlers: a case about two delivery partitions must differ
+   * in the partition and in nothing else.
+   */
+  readonly registry: ReturnType<typeof spikeRegistry>;
 
   constructor(fields: {
     readonly bus: MessageBus;
     readonly dropbox: KeyedDropbox;
     readonly connection: SqliteDatabase;
     readonly dbPath: string;
+    readonly registry: ReturnType<typeof spikeRegistry>;
   }) {
     this.bus = fields.bus;
     this.dropbox = fields.dropbox;
     this.connection = fields.connection;
     this.dbPath = fields.dbPath;
+    this.registry = fields.registry;
+  }
+
+  /**
+   * A second bus on *resource*, with its own live lease in the same database.
+   *
+   * The whole point of `D-1104` is that two delivery leases are now live at
+   * once against one control plane, and a suite that can only build one bus
+   * cannot observe the partitioning at all -- neither that `poll` stays inside
+   * its own resource nor that `ack` refuses to leave it. The lease row is a raw
+   * insert for the same reason the fixture's first one is (see the module
+   * docstring): the `lease` table is not the subject here, and `acquire` mints
+   * an epoch this caller would then have to read back.
+   *
+   * `epoch` defaults to {@link EPOCH} deliberately: equal epochs across two
+   * resources is the configuration `writer_epoch` alone cannot tell apart, and
+   * is therefore the one worth building.
+   */
+  busOn(
+    resource: string,
+    options: { readonly nowMs?: number; readonly ttlMs?: number; readonly epoch?: number } = {},
+  ): MessageBus {
+    const { nowMs = T0, ttlMs = TTL_MS, epoch = EPOCH } = options;
+    this.connection
+      .prepare(
+        "INSERT INTO lease (resource, holder, epoch, acquired_at_ms, expires_at_ms)" +
+          " VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(resource, HOLDER, epoch, nowMs, nowMs + ttlMs);
+    return new MessageBus(this.connection, { resource, holder: HOLDER, registry: this.registry });
+  }
+
+  /** One outbox row's `delivery_resource`: which partition owns it. */
+  deliveryResourceOf(messageId: string): string | null {
+    const row = this.connection
+      .prepare("SELECT delivery_resource FROM outbox WHERE message_id = ?")
+      .get(messageId) as { delivery_resource: string } | undefined;
+    return row === undefined ? null : row.delivery_resource;
   }
 
   /** The destination's own count for the spike handler's effect key. */
@@ -221,7 +290,7 @@ export function makeBusEnv(root: string, tag: string, options: BusEnvOptions = {
     checkpoint === undefined
       ? new MessageBus(connection, { resource: RESOURCE, holder: HOLDER, registry })
       : new MessageBus(connection, { resource: RESOURCE, holder: HOLDER, registry, checkpoint });
-  return new BusEnv({ bus, dropbox, connection, dbPath });
+  return new BusEnv({ bus, dropbox, connection, dbPath, registry });
 }
 
 /**

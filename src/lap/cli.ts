@@ -631,7 +631,7 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         // Handed over to be CHECKED, like the two above it (`D-0099`): the
         // provider is already built over this value, and `preflight` is where
         // an argument an operator typed is refused before a branch, a worktree
-        // and the one global delivery lease exist.
+        // and this run's delivery lease exist.
         ...(model === undefined ? {} : { model }),
         endpoint: {
           recipient: String(args["endpoint_recipient"]),

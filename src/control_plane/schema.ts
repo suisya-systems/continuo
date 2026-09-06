@@ -76,7 +76,7 @@ export const SPIKE_SCHEMA_PATH: string = fileURLToPath(
 export const SPIKE_MARKING = "THIS IS A SPIKE SCHEMA. NO MIGRATION PATH IS PROMISED FROM IT.";
 
 /** `PRAGMA user_version`. Bumped whenever `spike_schema.sql` changes shape. */
-export const SCHEMA_REVISION = 2;
+export const SCHEMA_REVISION = 3;
 
 /**
  * The six tables of the slice, in the order Issue `#12` names them. Every one

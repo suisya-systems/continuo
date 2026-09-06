@@ -72,7 +72,8 @@
  * **What `D-0097` did NOT change, which is the part to keep true.** No verb here
  * gained an actor, lost one, or records one differently. `present` writes no
  * transition and takes no `--actor-id`; `deliver`'s `--holder` is a claimant on
- * the one delivery resource and not an identity on a row; `ack`'s advance is
+ * the delivery resource `--run-id` selects and not an identity on a row;
+ * `ack`'s advance is
  * recorded under `secretary` with the caller's `--actor-id`, as it always was.
  * That is exactly what makes these three safe for a console when `answer` and
  * `close` -- which hardcode `actorKind: "human"` -- stay the surface's
@@ -124,6 +125,7 @@ import type {
 } from "./operator.js";
 import {
   ackRelay,
+  ackUnrelayed,
   answerGate,
   closeOpenGate,
   deliverRelays,
@@ -133,6 +135,7 @@ import {
   openGates,
   presentGate,
   reconcile,
+  type UnrelayedAckRecorded,
 } from "./operator.js";
 
 // ASCII only: these reach --help on a cp932 console.
@@ -155,9 +158,17 @@ const BODY_HELP =
   "was answered. Free-form, and not held to ASCII: it is stored rather than " +
   "printed back.";
 const HOLDER_HELP =
-  "the claimant the one delivery lease is taken under for this pass. A lap or " +
-  "an endpoint holding it refuses this verb, which is the intended " +
-  "serialisation: one delivery resource, one writer.";
+  "the claimant this pass takes the delivery lease under. A lap or an " +
+  "endpoint holding THAT resource refuses this verb, which is the intended " +
+  "serialisation: one delivery resource, one writer at a time. Which " +
+  "resource is decided by --run-id.";
+
+const RUN_ID_HELP =
+  "the run whose relays to drain. Omitted means the global delivery " +
+  "resource, which is where rows belonging to no run live: runless gates, " +
+  "event fan-out, and every row migration 0005 inherited. A gate's relays " +
+  "carry the gate's run, so draining them after the lap has exited needs " +
+  "this argument (D-1104).";
 const DESTINATION_DIR_HELP =
   "the dropbox directory the relay's effect is written into, and the one the " +
   "operator reads. Created if it does not exist, and reused if it does: the " +
@@ -191,10 +202,17 @@ const PRESENT_DESCRIPTION =
   "the ack rather than on the send. Idempotent: a second run returns the " +
   "message id already in force.";
 const DELIVER_DESCRIPTION =
-  "Deliver every relay currently due, under the one delivery lease. This is " +
-  "the operator's delivery worker for the window after a lap has ended, when " +
-  "no endpoint is alive to poll. Refuses while a lap or an endpoint holds the " +
-  "lease.";
+  "Deliver every relay currently due on one delivery resource. This is the " +
+  "operator's delivery worker for the window after a lap has ended, when no " +
+  "endpoint is alive to poll. Refuses while a lap or an endpoint holds that " +
+  "resource's lease.";
+
+const ACK_UNRELAYED_DESCRIPTION =
+  "Settle one message that no gate enqueued, on the global delivery " +
+  "resource. The counterpart of ack for rows a run's endpoint does not poll: " +
+  "runless event fan-out and runless sends. Refuses a gate relay (use ack, " +
+  "which also takes the step the ack justifies) and refuses a row on a run's " +
+  "own resource.";
 const ACK_DESCRIPTION =
   "Record the ack for one relay and take the step it justifies: the gate " +
   "advances to the relayed stage, and a forwarded relay's ack also closes the " +
@@ -246,6 +264,7 @@ const SHOW_SCHEMA = "continuo.gate.show/1";
 const PRESENT_SCHEMA = "continuo.gate.present/1";
 const DELIVER_SCHEMA = "continuo.gate.deliver/1";
 const ACK_SCHEMA = "continuo.gate.ack/1";
+const ACK_UNRELAYED_SCHEMA = "continuo.gate.ack-unrelayed/1";
 const ANSWER_SCHEMA = "continuo.gate.answer/1";
 const CLOSE_SCHEMA = "continuo.gate.close/1";
 
@@ -611,9 +630,14 @@ export function cmdGateDeliver(args: Namespace): number {
   return withControlPlane(
     path,
     (connection) => {
+      const runId = args["run_id"];
       const report = deliverRelays(connection, {
         holder: String(args["holder"]),
         destinationDir: String(args["destination_dir"]),
+        // Absent means the global resource, and `deliverRelays` is the one
+        // place that mapping is spelled -- passing `null` through rather than
+        // resolving it here keeps the CLI from holding a second copy of it.
+        runId: typeof runId === "string" && runId !== "" ? runId : null,
         nowMs,
         ttlMs: DELIVERY_LEASE_TTL_MS,
         // The one verb that re-reads the clock, and the fence is why: an attempt
@@ -669,6 +693,51 @@ function ackPayload(outcome: AckRecorded): { readonly [key: string]: JsonValue }
     advanced: outcome.advanced,
     closed: outcome.closed,
   };
+}
+
+/**
+ * `gate ack-unrelayed`'s payload. No gate keys, because there is no gate --
+ * see `UnrelayedAckRecorded` on why nulls would be worse than absence.
+ */
+function ackUnrelayedPayload(outcome: UnrelayedAckRecorded): {
+  readonly [key: string]: JsonValue;
+} {
+  return {
+    message_id: outcome.messageId,
+    recipient: outcome.recipient,
+    acked: outcome.acked,
+    cancelled: outcome.cancelled,
+    epoch: outcome.epoch,
+  };
+}
+
+export function cmdGateAckUnrelayed(args: Namespace): number {
+  const path = String(args["db"]);
+  const nowMs = nowMsOf(args);
+  const report = jsonReportOf(args, ACK_UNRELAYED_SCHEMA, path);
+  return withControlPlane(
+    path,
+    (connection) => {
+      const outcome = ackUnrelayed(connection, {
+        messageId: String(args["message_id"]),
+        actorId: String(args["actor_id"]),
+        holder: String(args["holder"]),
+        nowMs,
+        ttlMs: DELIVERY_LEASE_TTL_MS,
+      });
+      if (report !== null) {
+        gateCliSeams.write(successLine(report.schema, report.db, ackUnrelayedPayload(outcome)));
+        return 0;
+      }
+      gateCliSeams.write(
+        `${outcome.messageId}: acked=${String(outcome.acked)} ` +
+          `cancelled=${String(outcome.cancelled)} ` +
+          `recipient=${outcome.recipient} epoch=${outcome.epoch}\n`,
+      );
+      return 0;
+    },
+    report,
+  );
 }
 
 export function cmdGateAck(args: Namespace): number {
@@ -964,6 +1033,13 @@ export function addSubparsers(sub: Subparsers): void {
     metavar: "HOLDER",
     help: HOLDER_HELP,
   });
+  deliver.addArgument({
+    optionStrings: ["--run-id"],
+    dest: "run_id",
+    required: false,
+    metavar: "RUN_ID",
+    help: RUN_ID_HELP,
+  });
   addNowMsArgument(deliver);
   addJsonArgument(deliver);
   deliver.setDefaults({ func: cmdGateDeliver });
@@ -981,6 +1057,27 @@ export function addSubparsers(sub: Subparsers): void {
   addNowMsArgument(ack);
   addJsonArgument(ack);
   ack.setDefaults({ func: cmdGateAck });
+
+  const ackUnrelayedParser = sub.addParser("ack-unrelayed", ACK_UNRELAYED_DESCRIPTION);
+  addDbArgument(ackUnrelayedParser);
+  ackUnrelayedParser.addArgument({
+    optionStrings: ["--message-id"],
+    dest: "message_id",
+    required: true,
+    metavar: "MESSAGE_ID",
+    help: MESSAGE_ID_HELP,
+  });
+  addActorIdArgument(ackUnrelayedParser);
+  ackUnrelayedParser.addArgument({
+    optionStrings: ["--holder"],
+    dest: "holder",
+    required: true,
+    metavar: "HOLDER",
+    help: HOLDER_HELP,
+  });
+  addNowMsArgument(ackUnrelayedParser);
+  addJsonArgument(ackUnrelayedParser);
+  ackUnrelayedParser.setDefaults({ func: cmdGateAckUnrelayed });
 
   const answer = sub.addParser("answer", ANSWER_DESCRIPTION);
   addDbArgument(answer);

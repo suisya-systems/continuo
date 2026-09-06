@@ -4,14 +4,15 @@ import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, onTestFinished, test } from "vitest";
-
-import { createProductionControlPlane, MIGRATIONS_DIR } from "../../src/control_plane/migrator.js";
-import { createControlPlane } from "../../src/control_plane/schema.js";
 import {
   DELIVERY_LEASE_RESOURCE,
-  Endpoint,
-  EndpointConfig,
-} from "../../src/messagebus/endpoint.js";
+  DELIVERY_LEASE_RUN_PREFIX,
+  deliveryResourceForRun,
+  isDeliveryResource,
+} from "../../src/control_plane/delivery_resource.js";
+import { createProductionControlPlane, MIGRATIONS_DIR } from "../../src/control_plane/migrator.js";
+import { createControlPlane } from "../../src/control_plane/schema.js";
+import { Endpoint, EndpointConfig } from "../../src/messagebus/endpoint.js";
 import { createTempDir } from "../helpers/tmp.js";
 import { writeStep } from "../testkit/cases.js";
 import { type BusEnv, EPOCH, HOLDER, makeBusEnv, RECIPIENT, RESOURCE, RUN_ID } from "./_env.js";
@@ -363,6 +364,31 @@ describe("the worker-outbound MCP endpoint", () => {
     expect(call(endpoint, "poll")["messages"]).toEqual([]);
   });
 
+  test("a polled envelope carries its delivery resource on the wire", () => {
+    // Target-only (`D-1104`). The wire gained a `delivery_resource` key, and
+    // the reason it is worth an assertion is that the ack authority depends on
+    // it: `MessageBus.ack` refuses an id whose row belongs to another delivery
+    // resource, and the id an endpoint acks is caller-supplied. A worker that
+    // cannot see which partition presented a message has no way to notice it
+    // is acking into the wrong one, and the refusal it gets back would name a
+    // resource it never saw.
+    //
+    // Asserted against the fixture's own resource rather than a literal, and
+    // against the row in the database as well: a wire that echoed a constant
+    // would satisfy a literal comparison on the day the row said something
+    // else.
+    const { env } = rtEnv("ep-wire-resource");
+    const endpoint = new Endpoint(env.bus, config());
+    send(env);
+    const messages = call(endpoint, "poll")["messages"] as {
+      message_id: string;
+      delivery_resource: string;
+    }[];
+    expect(messages.map((m) => m.message_id)).toEqual(["task-1"]);
+    expect(messages[0]?.delivery_resource).toBe(RESOURCE);
+    expect(messages[0]?.delivery_resource).toBe(env.deliveryResourceOf("task-1"));
+  });
+
   test("the drop-first-poll fault loses the response, not the message", () => {
     // The wire-drop, observed from both sides of the boundary.
     //
@@ -592,60 +618,90 @@ describe("the worker-outbound MCP endpoint", () => {
     );
   });
 
-  // ------------------------ target-only: the one delivery resource (lap 1)
+  // ------------------ target-only: the delivery resources the endpoint admits
   //
-  // D-0053 rule 4 fixes the outbox's lease resource at ONE GLOBAL DELIVERY
-  // LEASE for lap 1, and until now that was a statement in a docstring while
-  // `INTERLOCK_MESSAGEBUS_RESOURCE` accepted any non-empty string. The two
-  // cases below are the difference between a constraint that is described and
-  // one that holds: the first shows a second resource name refused, the second
-  // shows the admitted name still starting, because a refusal that refuses
-  // everything proves nothing about what it is refusing.
+  // `D-0053` rule 4 fixed the outbox's lease resource at ONE GLOBAL DELIVERY
+  // LEASE, and `D-1104` widened that to a **closed set of shapes**: the global
+  // literal, or `outbox-delivery:run:<run id>`. What did not widen is the part
+  // that mattered -- `INTERLOCK_MESSAGEBUS_RESOURCE` is still not a free
+  // string, and an operator still cannot spell an arbitrary lease resource
+  // into it (the mistake `D-0076` records for `--recipient`).
   //
-  // Why this matters more than a tidy config check: `writer_epoch` records a
-  // number and not a resource, so two endpoints under two resources at equal
-  // epochs are indistinguishable in an outbox row -- and neither `_DUE_QUERY`
-  // nor `Outbox.recover` narrows to a resource, so each holder ranges over the
-  // other's rows while its own fence reports everything is in order.
+  // Both halves are needed, and the refusal is the fragile one. Before
+  // `D-1104` the admission was an equality against one literal, so *every*
+  // other name was refused and a near-miss was refused for free. It is now a
+  // prefix test with a non-blank remainder, and a prefix test is exactly the
+  // shape that says yes to things it should not: the two names below are the
+  // two ways to be nearly right. `outbox-delivery-of-run-1` is the spelling
+  // this suite itself used to carry as its fixture resource, and it differs
+  // from an admitted name by one character; `outbox-delivery:run:` is the
+  // prefix with nothing after it, a name two different runless callers could
+  // both believe was theirs.
+  //
+  // Why this is more than a tidy config check: `writer_epoch` records a number
+  // and not a resource, so before `0005` two endpoints under two resources at
+  // equal epochs were indistinguishable in an outbox row. That is now closed
+  // by `outbox.delivery_resource` rather than by admitting one name -- which is
+  // why admitting a *second* live resource is safe, and why admitting an
+  // unrecognised one still is not.
   //
   // Target-only, like the refused-open cases above: interlock's
   // `tests/messagebus/test_endpoint.py` has no counterpart, because the
   // resource was a free string there too.
 
-  test("a delivery resource other than the admitted one refuses to start", () => {
+  test("a delivery resource outside the admitted shapes refuses to start", () => {
     // Everything is valid except the resource name -- the same one-thing-wrong
     // shape the refused-open cases use, so a green case has nowhere else the
     // exit 2 could have come from. The database is the suite's own production
     // control plane, built and migrated to head by `makeBusEnv`.
     requireBuiltEndpoint();
-    const { env, root } = rtEnv("ep-second-resource");
-    const other = `${DELIVERY_LEASE_RESOURCE}-of-run-1`;
-    expect(other, "the case is about a name the endpoint must not admit").not.toBe(
-      DELIVERY_LEASE_RESOURCE,
-    );
-    expectRefusedStartup(
-      startAgainst(env.dbPath, join(root, "dest-second-resource"), {
-        INTERLOCK_MESSAGEBUS_RESOURCE: other,
-      }),
-      "is not the one delivery lease resource lap 1 admits",
-    );
+    const { env, root } = rtEnv("ep-unadmitted-resource");
+    const nearMisses = [
+      // A per-run name in a spelling `deliveryResourceForRun` does not build.
+      `${DELIVERY_LEASE_RESOURCE}-of-run-1`,
+      // The run prefix with an empty remainder.
+      DELIVERY_LEASE_RUN_PREFIX,
+    ];
+    for (const other of nearMisses) {
+      expect(
+        isDeliveryResource(other),
+        "the case is about a name the endpoint must not admit",
+      ).toBe(false);
+      expectRefusedStartup(
+        startAgainst(env.dbPath, join(root, "dest-unadmitted-resource"), {
+          INTERLOCK_MESSAGEBUS_RESOURCE: other,
+        }),
+        "is not a delivery lease resource this endpoint admits",
+      );
+    }
   });
 
-  test("the admitted delivery resource starts, which is what makes that refusal mean something", () => {
-    // The anti-vacuity half.
+  test("both admitted delivery resources start, which is what makes that refusal mean something", () => {
+    // The anti-vacuity half, now over both shapes.
     //
     // With stdin at `ignore` the child reaches end-of-input immediately and
     // `main()` returns 0, so "started" is observable as a clean exit rather
     // than by keeping a process alive. A refusal that also fired here would be
     // a check on nothing -- and, worse, one that no case above could tell apart
     // from the database refusals, since all four exit 2 with a FATAL line.
+    //
+    // The run-shaped name is the case that INVERTED at `D-1104`: this file used
+    // to assert that a per-run delivery resource was refused at startup, on the
+    // reading of `D-0053` rule 4 that there could only ever be one delivery
+    // lease. Migration `0005` gave the outbox row the resource it was written
+    // under, so a second live delivery lease is now a partition rather than an
+    // ambiguity, and the endpoint a lap launches runs on exactly this name
+    // (`performLap` acquires `deliveryResourceForRun(intent.runId)`). Refusing
+    // it would now refuse the product's own configuration.
     requireBuiltEndpoint();
     const { env, root } = rtEnv("ep-admitted-resource");
-    const result = startAgainst(env.dbPath, join(root, "dest-admitted-resource"), {
-      INTERLOCK_MESSAGEBUS_RESOURCE: DELIVERY_LEASE_RESOURCE,
-    });
-    expect(result.status, `stderr was:\n${result.stderr}`).toBe(0);
-    expect(result.stderr).not.toContain("FATAL:");
+    for (const admitted of [DELIVERY_LEASE_RESOURCE, deliveryResourceForRun(RUN_ID)]) {
+      const result = startAgainst(env.dbPath, join(root, "dest-admitted-resource"), {
+        INTERLOCK_MESSAGEBUS_RESOURCE: admitted,
+      });
+      expect(result.status, `${admitted}: stderr was:\n${result.stderr}`).toBe(0);
+      expect(result.stderr).not.toContain("FATAL:");
+    }
   });
 
   test("the acceptance sequence end to end over stdio", async () => {

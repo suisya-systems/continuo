@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
+import { deliveryResourceForRun } from "../control_plane/delivery_resource.js";
 import { isFullyQualified, type LapRunIntent } from "../control_plane/lap_run_intent.js";
 import { readLease } from "../control_plane/lease.js";
 import { pythonRepr } from "../control_plane/python_repr.js";
@@ -520,11 +521,13 @@ function preflight(request: LapRequest, provider: SessionProvider, intent: LapRu
   // refuses before `requireUsableStateRoot` creates the provider's state root
   // and before the capability probe writes `probe-evidence.txt` into it, so a
   // run this document does not authorise leaves nothing behind on disk. Above
-  // all it refuses before step 1b takes the delivery lease: `outbox-delivery`
-  // is ONE global resource (`D-0053` rule 4), taking it writes a lease row and
-  // consumes an epoch, and a second concurrent lap is refused `LeaseHeld` for
-  // as long as this one holds it. A run that is going to be refused must not
-  // first take a resource away from the lap that could have used it.
+  // all it refuses before step 1b takes the delivery lease: taking it writes a
+  // lease row and consumes an epoch on **this run's** delivery resource, and a
+  // second lap OF THIS RUN is refused `LeaseHeld` for as long as this one holds
+  // it. A run that is going to be refused must not first take a resource away
+  // from the lap that could have used it. Until `D-1104` that resource was one
+  // global name and the refusal reached every other lap; it is now per run, so
+  // what this ordering protects is narrower and the reason for it is unchanged.
   //
   // **Asked again, though admission already answered it.** That is not a
   // duplicate check: the allowlist is a document, the document can be narrowed
@@ -1067,7 +1070,7 @@ export interface LapRequest {
    * the number was a fiction, and the endpoint it configured would have been
    * refused as a stale writer on its first delivery.
    */
-  readonly endpoint: Omit<EndpointBinding, "holder" | "epoch">;
+  readonly endpoint: Omit<EndpointBinding, "holder" | "epoch" | "resource">;
   /**
    * The endpoint lease's timer and interval, injectable for the same reason
    * {@link TurnCompletion}'s `sleep` is: a case that asserts on a renewal needs
@@ -1231,16 +1234,26 @@ export async function performLap(
   //     closes. **After the preflight**, because this is the first durable
   //     write the lap makes and the preflight exists to refuse before one.
   //
-  //     `outbox-delivery` is one global resource (`D-0053` rule 4), so a second
-  //     concurrent lap is refused `LeaseHeld` right here -- before a worktree
-  //     exists, before a fence is published and before any child. That
-  //     serialisation is the lap-1 semantics rather than a limitation of this
-  //     step: one delivery resource means one endpoint permitted to write.
+  //     The resource is **this run's** (`deliveryResourceForRun`, `D-1104`), so
+  //     a second concurrent lap OF THIS RUN is refused `LeaseHeld` right here --
+  //     before a worktree exists, before a fence is published and before any
+  //     child. A lap of another run is not refused, and that is the change:
+  //     `D-0053` rule 4 admitted one global resource and `D-0074` recorded the
+  //     serialisation that followed, which held until the row could say which
+  //     epoch sequence it belonged to. The refusal keeps its meaning, narrowed
+  //     from "a lap" to "this run's lap", and it still means one endpoint
+  //     permitted to write **per run**.
   //
   //     **Unconditional** (`D-0075`): lap 1 requires the endpoint, so "a lap
   //     ran" and "an endpoint lease was held and renewed for it" are one fact
   //     and there is no branch here to get wrong.
   const hold = holdDeliveryLease(connection, {
+    // **This run's** delivery resource, not the global one (`D-1104`). The
+    // holder-identity half of the change: the column on `outbox` is what makes
+    // two resources safe, and this line is what makes two laps take two of
+    // them. `D-1104` without it would leave every lap on one resource, so the
+    // schema would be partitioned and the serialisation would not have moved.
+    resource: deliveryResourceForRun(intent.runId),
     holder: intent.leaseClaimantId,
     // The LIVE clock, and for the reason `D-0066` gives about the orchestrator's:
     // a lease is the one thing in this lap that is about the passage of time,
@@ -1261,8 +1274,10 @@ export async function performLap(
   } finally {
     // **Unconditional, and it runs last on every path.** None of the three
     // predicates that guard the session teardown applies to a timer, and a
-    // lease left held withholds a GLOBAL resource from the next lap for a whole
-    // TTL. The ordering is what makes it correct: the inner call's own
+    // lease left held withholds THIS RUN's delivery resource for a whole TTL --
+    // from that run's next lap, and from the operator's own `gate deliver
+    // --run-id` pass, which is the worker for exactly the window after this lap
+    // exits (`D-1104`). The ordering is what makes it correct: the inner call's own
     // `finally` has already awaited the session stop by the time this runs, so
     // the worker -- and therefore the endpoint it launched -- is gone before
     // renewal stops; and `lap/cli.ts` closes the database only after this
@@ -1314,7 +1329,18 @@ async function performLapHoldingTheEndpointLease(
     // acquisition minted, so the three `INTERLOCK_MESSAGEBUS_` values the
     // worker's endpoint starts under name a lease that is live and being
     // renewed rather than a number somebody typed.
-    endpoint: { ...request.endpoint, holder: intent.leaseClaimantId, epoch: hold.epoch },
+    endpoint: {
+      ...request.endpoint,
+      // All three of the lease identity come from the hold and not from the
+      // caller, and `resource` joins them for the reason the other two are
+      // there (`D-1104`): an operator who could type the resource could type
+      // one this lap does not hold, and an endpoint fenced under a resource
+      // nobody holds is refused at its first delivery, which lap 1 never
+      // reaches.
+      resource: hold.resource,
+      holder: intent.leaseClaimantId,
+      epoch: hold.epoch,
+    },
     fence: request.fence,
     ...(request.gitTimeoutMs === undefined ? {} : { gitTimeoutMs: request.gitTimeoutMs }),
     ...(request.env === undefined ? {} : { env: request.env }),

@@ -99,6 +99,7 @@ export interface DeliveredEnvelopeFields {
   readonly retryCount: number;
   readonly deduplicated: boolean;
   readonly receiptRef: string | null;
+  readonly deliveryResource: string;
 }
 
 /**
@@ -130,6 +131,16 @@ export class DeliveredEnvelope {
   readonly deduplicated: boolean;
   /** The destination's own reference for the effect, when it issued one. */
   readonly receiptRef: string | null;
+  /**
+   * The delivery resource the row belongs to (`D-1104`).
+   *
+   * Carried on the envelope because it is the partition the presentation was
+   * made under, and a worker that sees two endpoints on one recipient has no
+   * other way to tell whose queue it is reading. It is also what makes the
+   * cross-partition ack refusal legible: the id is the caller's, so the
+   * refusal has to name the two resources it is between.
+   */
+  readonly deliveryResource: string;
 
   constructor(fields: DeliveredEnvelopeFields) {
     this.messageId = fields.messageId;
@@ -139,6 +150,7 @@ export class DeliveredEnvelope {
     this.retryCount = fields.retryCount;
     this.deduplicated = fields.deduplicated;
     this.receiptRef = fields.receiptRef;
+    this.deliveryResource = fields.deliveryResource;
     // The source's `@dataclass(frozen=True)`. Freezing is what makes the
     // envelope safe to hand to a caller that keeps it: a mutable presentation
     // record could be edited after the fact and then compared for equality
@@ -177,10 +189,19 @@ export interface PollOptions {
 export class MessageBus {
   private readonly _registry: HandlerRegistry;
   private readonly _outbox: Outbox;
+  /**
+   * The delivery resource this bus writes and settles under (`D-1104`).
+   *
+   * Kept beside the outbox rather than read back off it: `ack` needs it to
+   * decide authority, and a getter reaching into the outbox for a value the
+   * bus was handed at construction is one more place the two could disagree.
+   */
+  private readonly _resource: string;
 
   constructor(connection: SqliteDatabase, options: MessageBusOptions) {
     const { resource, holder, registry, checkpoint } = options;
     this._registry = registry;
+    this._resource = resource;
     // `**({"checkpoint": checkpoint} if checkpoint is not None else {})`: the
     // key is omitted rather than passed as undefined, so the outbox's own
     // default is what applies. Under `exactOptionalPropertyTypes` passing
@@ -259,7 +280,17 @@ export class MessageBus {
   poll(recipient: string, options: PollOptions): readonly DeliveredEnvelope[] {
     const { nowMs, epoch, clock } = options;
     const envelopes: DeliveredEnvelope[] = [];
-    for (const message of this._outbox.due(nowMs)) {
+    // The recipient reaches the SQL as a term as well (`D-1104`): a poll
+    // speaking for one recipient no longer reads another's rows into memory
+    // to discard them, and the resource term the outbox binds for itself is
+    // what makes this poll see only its own run's queue.
+    //
+    // The TypeScript filter below stays, and its redundancy is deliberate.
+    // Removing it on the same pass that introduced the SQL term would make
+    // that term the only thing standing between two runs and each other's
+    // rows -- redundancy in the safe direction is not a defect, and the
+    // statement-level tests are where the SQL term is shown red on its own.
+    for (const message of this._outbox.due(nowMs, { recipient })) {
       if (message.recipient !== recipient) {
         continue;
       }
@@ -438,6 +469,7 @@ export class MessageBus {
           retryCount: outcome.retryCount,
           deduplicated: outcome.deduplicated,
           receiptRef: outcome.receiptRef,
+          deliveryResource: message.deliveryResource,
         }),
       );
     }
@@ -462,6 +494,26 @@ export class MessageBus {
    * refusing, because a late ack changing nothing is this module's contract and
    * a cancelled row is a row that finished -- it is `Outbox.recordAck`'s
    * judgement to make, and this facade keeps passing it through unchanged.
+   *
+   * **Recipient equality is no longer sufficient authority, and that is
+   * `D-1104`'s second half.** It was, while one endpoint existed per
+   * recipient. Under a per-run resource two endpoints serve `external-notify`
+   * at once, and the id an endpoint acks is **caller-supplied** -- the MCP
+   * `ack` tool passes it straight through -- so run B's endpoint could settle
+   * run A's delivered row even though its own poll, correctly partitioned,
+   * never returned it. Nothing downstream would notice: the ack is set once by
+   * the row's own trigger, and the reconcile pass would then advance A's gate
+   * on evidence B produced. Partitioning `poll` is necessary and is not
+   * enough.
+   *
+   * So the row's `delivery_resource` is compared against this bus's own,
+   * beside the recipient test, in the same caller-bug family and **still
+   * unfenced**: no lease clause is added, so late acks, duplicate acks and
+   * acks of cancelled rows keep behaving exactly as `recordAck` decides. The
+   * equality here is **strict** -- a per-run endpoint has no claim on the
+   * global resource and never holds it. The operator's relay path is the one
+   * surface that admits a second value, for a reason that is about migrated
+   * rows rather than about endpoints; see `ackRelay`.
    */
   ack(
     messageId: string,
@@ -473,6 +525,13 @@ export class MessageBus {
       throw new MessageBusUsageError(
         `${pythonRepr(messageId)} is addressed to ${pythonRepr(message.recipient)}; an ack from ` +
           `${pythonRepr(recipient)} does not settle it`,
+      );
+    }
+    if (message.deliveryResource !== this._resource) {
+      throw new MessageBusUsageError(
+        `${pythonRepr(messageId)} belongs to delivery resource ` +
+          `${pythonRepr(message.deliveryResource)}; an ack from a bus on ` +
+          `${pythonRepr(this._resource)} does not settle it`,
       );
     }
     return this._outbox.recordAck(messageId, { nowMs });

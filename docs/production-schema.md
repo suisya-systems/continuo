@@ -72,7 +72,7 @@ re-derived".
 | `run` | **re-derived** | The spike left `status` unconstrained text *because* the writer assignment was open. §4 closes it, so the production table carries a `CHECK` on a closed status set and a forward-only trigger. |
 | `session` | **carried verbatim** | The staged binding (`prepared` → `spawned` → `identity_confirmed`), the one-active-binding-per-run partial unique index, and the observation/`provider_state` equality pair are re-confirmed unchanged. They were derived from gate item 2 under injection (`docs/crash-window-orchestration.md`), not from convenience. |
 | `lease` | **carried verbatim** | Epoch monotonicity, holder-change raising the epoch, resource immutability, no-delete. `docs/lease-fencing.md` is the derivation and it is unaffected by anything here. |
-| `outbox` | **carried verbatim, then extended** | Carried including the deliberate non-uniqueness of `dedup_key`; §9.4 adds gate relay identity in a separate table rather than by tightening this one. Extended once since: `0003_outbox_cancelled_status.sql` adds the terminal `cancelled` status (§5.7), which the spike vocabulary has no counterpart for and which is therefore the one place this table is **not** what the spike says. |
+| `outbox` | **carried verbatim, then extended** | Carried including the deliberate non-uniqueness of `dedup_key`; §9.4 adds gate relay identity in a separate table rather than by tightening this one. Extended twice since. `0003_outbox_cancelled_status.sql` adds the terminal `cancelled` status (§5.7), which the spike vocabulary has no counterpart for and which is therefore the one place this table is **not** what the spike says. `0005_outbox_delivery_resource.sql` (§5.8) adds `delivery_resource` and `delivery_resource_inherited`; the first is carried into `spike_schema.sql` too -- `Outbox` is one class over two schemas and its fenced writes compare that column inside every statement -- and the second deliberately is not, because it records what a *migration* did and the spike has no migrations to inherit rows from. So `0005` widens the divergence by one column rather than by a vocabulary. |
 | `incident` | **carried verbatim** | `Q-0002` is unanswered (§12); nothing here narrows it. |
 | `action` | **carried verbatim** | `exactly_once_mechanism` and the one-effect-per-key partial unique index are the `ACCEPTANCE.md` §2 clause and are unchanged. |
 | `task` | **new** | Named by `D-0001` but absent from the spike (the gate items did not exercise it). Out of scope for G3/G4; §12 records it as a known hole rather than inventing it here. |
@@ -100,12 +100,34 @@ them in the spike are unchanged:
 
 ### 3.1 Shape
 
-The production DDL lives in `src/claude_org_runtime/control_plane/migrations/` as **numbered,
+The production DDL lives in `src/control_plane/migrations/` as **numbered,
 forward-only steps**: `0001_initial.sql`, `0002_....sql`, …. There is no single
 `production_schema.sql` that is edited in place; step `0001` is the initial schema and every later
 change is its own file. A schema whose current state can only be read by running the migrations is
 harder to review, so the build also emits a generated `docs/schema-current.sql` from a freshly
 migrated empty database — generated, never edited, and never the thing that is applied.
+
+Two corrections to the paragraph above, both of which it has needed since it was carried.
+
+**The directory was wrong, and wrong in a way that read as right.** It said
+`src/claude_org_runtime/control_plane/migrations/` -- v1's Python path, carried verbatim into a
+TypeScript tree that has never had a `claude_org_runtime/` directory at all. The five steps that
+exist (`0001_initial.sql` … `0005_outbox_delivery_resource.sql`) are all at
+`src/control_plane/migrations/`, which is what `MIGRATIONS_DIR` in `src/control_plane/migrator.ts`
+resolves and what every test reads. The same stale path survives in section 11's preamble and is
+corrected there in the same way: the sentence is repaired rather than the error hidden, because a
+document whose paths are decorative is a document nobody checks a claim against.
+
+**The generated file is still owed, and this is the sentence saying so rather than a sentence
+quietly retracted.** `docs/schema-current.sql` does not exist in this tree and no step of `npm run
+build` emits it (`package.json` `"build"` runs `tsc` and eight `scripts/copy-*.mjs` /
+`generate-revision.mjs` steps, none of them this one). What *does* exist is the renderer the promise
+needs: `renderCurrentSchema()` in `src/control_plane/migrator.ts` emits the whole schema as sorted
+DDL from a freshly migrated in-memory database -- exactly the definition above -- and
+`test/control_plane/migrator.test.ts` asserts that its from-disk and from-nothing renderings agree.
+So the missing half is the build wiring and the file, not the mechanism. It is recorded here as owed
+because with `0005` the outbox shape is now the product of three separate steps, which is precisely
+the reviewability the generated file was promised for.
 
 ```sql
 CREATE TABLE schema_migration (
@@ -210,9 +232,9 @@ event spine unusable — `#64`'s whole point is that several producers write CI 
 | `run` (creation) | append | Secretary | — |
 | `session` binding phase | in-place, forward-only | **Supervisor** | session lease epoch |
 | `lease` | in-place (CAS) | the acquiring claimant | epoch monotonicity trigger |
-| `outbox` (enqueue) | append | any producer | `message_id` primary key; `writer_epoch` nullable and left null |
-| `outbox` adopt / `retry_count` / `pending → delivered` | in-place, forward-only | **the delivery worker holding the outbox lease** | live outbox lease **and** `writer_epoch` matching it, inside the write |
-| `outbox` `delivered → acked` | in-place, forward-only | **the recipient-bound ack path** | set-once `acked_at_ms` trigger + a status predicate; deliberately unfenced |
+| `outbox` (enqueue) | append | any producer | `message_id` primary key; `delivery_resource` bound by every producer, `NOT NULL` with no default (§5.8); `writer_epoch` left null by the two unfenced producers |
+| `outbox` adopt / `retry_count` / `pending → delivered` | in-place, forward-only | **the delivery worker holding that row's delivery lease** | `delivery_resource` matching the fence's resource **and** a live lease on it **and** `writer_epoch` matching its epoch — all three inside the write (§5.8) |
+| `outbox` `delivered → acked` | in-place, forward-only | **the recipient-bound ack path, on that row's own delivery resource** | set-once `acked_at_ms` trigger + a status predicate; recipient **and** resource equality checked by the caller; deliberately unfenced |
 | `outbox` `pending`\|`delivered → cancelled` | in-place, forward-only | **the gate-closure transaction** | `gate_relay` membership + the forward-only trigger; no delivery fence |
 | `incident` | in-place | **Dispatcher Core** | core lease epoch |
 | `assessment` | append | Dispatcher AI | — |
@@ -272,6 +294,34 @@ forever by the one component that was supposed to deliver it. `D-0054` records t
 alternatives rejected, and what would falsify the choice. The recovery criterion in §5.6 is unchanged
 by this: it forbids an unowned row *after recovery*, which is a statement about a postcondition and
 never was one about the instant of the insert.
+
+**`writer_epoch` alone was never ownership, and one delivery resource is what hid it.** The three
+rows above said "`writer_epoch` matching it, inside the write", and that was sufficient for exactly
+as long as there was one delivery lease to match against: an epoch is allocated by incrementing
+*some* resource's counter, so it identifies a writer only relative to the resource that minted it.
+`continuo D-1104` admits a delivery resource per run, and at that moment the fence clause ("a live
+lease for *my* resource at *my* epoch") and the row clause ("this row carries *the number* my epoch
+is") stop composing: a row another run minted at its own epoch 1 satisfies both. The repair is the
+missing left-hand side of the triple stored on the row -- `outbox.delivery_resource`, §5.8 -- and
+the writer table above now names it in every predicate that used to name only the epoch. The
+enqueue row changes too, in the way a `NOT NULL` column with no default always changes an append:
+binding the resource is no longer optional for a producer, and the two unfenced producers derive it
+from the row's own durable `run_id` while the fenced one takes it from the lease that minted the
+epoch beside it.
+
+**The ack is still unfenced, and recipient equality is no longer sufficient authority.** Both halves
+of that sentence are load-bearing and neither replaces the other. Unfenced is unchanged and is still
+`D-0053`'s argument: an ack is idempotent, and a fence would turn a settlement that changed nothing
+into a refusal. What changed is *who is entitled to ack*, which was never the fence's question. The
+recipient test was sufficient while one endpoint existed per recipient; with two endpoints serving
+one recipient and a **caller-supplied** message id -- the MCP `ack` tool passes the id straight
+through -- run B's endpoint could settle run A's delivered row that B's own correctly-partitioned
+poll never returned, and nothing downstream would notice, because the ack is set once by the row's
+own trigger and the reconcile pass would then advance A's gate on evidence B produced. So both ack
+surfaces now compare the row's `delivery_resource` beside the recipient, in the same caller-bug
+family and with no lease clause added: `MessageBus.ack` compares it **strictly** against its own
+bus's resource, and the operator's `gate ack` admits one further value under recorded provenance
+(§5.8's `delivery_resource_inherited`, and never a clock).
 
 **`gate_transition` is appended through Dispatcher Core even when the actor is a human.** The actor
 is recorded (`actor_kind`, `actor_id`); the *writer* is Core, because the transition's admissibility
@@ -578,7 +628,7 @@ watcher liveness. Its G3/G4 obligations, each a deterministic query with no AI i
 | Pass | Query | On a hit |
 |---|---|---|
 | Undrained events | consumption rows `pending`/`failed` whose head-of-line age exceeds the class tolerance | Raise a `consumer_backlog` incident against the consumer, and re-attempt `failed` rows |
-| Orphaned outbox | outbox rows still `pending` or `delivered` (§5.7 — **not** merely "not `acked`": a `cancelled` row is finished) older than the delivery tolerance | Re-attempt; the retry count is already durable and monotonic |
+| Orphaned outbox | outbox rows still `pending` or `delivered` (§5.7 — **not** merely "not `acked`": a `cancelled` row is finished) older than the delivery tolerance, **across every delivery resource** (§5.8 — this pass asks who is stale for *any* owner, so it carries no resource term and never will) | Re-attempt; the retry count is already durable and monotonic |
 | Watcher silence | §8.4 | Raise a `watcher_silence` incident against the scope |
 | Scope coverage | §8.4 | Raise a `watcher_scope_uncovered` incident |
 | Gate relay gaps | §9.5 | Raise a `relay_gap` incident against the gate |
@@ -637,7 +687,8 @@ Two consequences are load-bearing rather than incidental:
   pass (§5.6) and the stalled-relay query (§9.6) — carry that exact text, because SQLite may use a
   partial index only when the query's `WHERE` contains the index's own predicate as a term. Writing
   it as the complement (`status NOT IN ('acked', 'cancelled')`) would return the same rows and lose
-  the index.
+  the index. `0005` adds two more indexes carrying this same predicate and **keeps** this one, for a
+  measured reason §5.8 records.
 
 The delivery-side counterpart is still owed and is named here rather than assumed: **a delivery
 worker must re-check `gate.closed_at_ms` at send time**, even with cancellation in the schema. The
@@ -645,6 +696,172 @@ cancellation is a fact in the database and the send is an act outside it, so a w
 outbox row before the closure committed is holding a row that is already stale and no constraint can
 reach into its memory. The status is the belt and the send-time re-check is the braces. No component
 in this branch performs it, because the delivery driver does not exist yet.
+
+### 5.8 The outbox delivery resource (`0005_outbox_delivery_resource.sql`)
+
+`0003`'s rebuild is the precedent this step follows and the one it has to argue against, so both
+comparisons are made explicitly below.
+
+**What was missing.** An `outbox` row carried `writer_epoch` and nothing else about its owner. Epoch
+order is meaningful only *within* a lease resource -- `acquire` serialises on the `lease` table's
+primary key and takes over by incrementing **that** resource's epoch -- so with one delivery
+resource the fence clause and the row clause composed into ownership by accident. Admit two, and
+they answer different questions: holder B's fence proves B's own lease is live, B's row clause
+proves the row carries the number 1, and a row A minted at *its* epoch 1 satisfies both. The update
+lands, the fence never lied, and A's row was written by B. Recovery is worse: A's unowned sweep asks
+whether a lease exists on **A's** resource at the row's epoch, so a row B owns at epoch 2 reads as
+unowned and is re-stamped under A's epoch -- a live row transferred silently between runs. The row
+was missing the left-hand side of the fence triple `(resource, holder, epoch)`, and `continuo
+D-1104` stores it.
+
+That last sentence about recovery is why the unowned question splits into two readers rather than
+gaining a parameter. The **assertion** form is database-wide: it takes no resource, joins `lease` on
+the row's *own* `delivery_resource`, and answers "is any row owned by nobody" -- the postcondition
+§5.6's criterion was always about. The **recovery** form a caller runs is scoped, adding
+`delivery_resource = :resource`, because a sweep that adopted rows outside its own partition is the
+silent transfer above wearing recovery's clothes. Two questions, two statements; the same statement
+with a bound-or-null parameter would have been one statement pretending to answer both.
+
+| Column | Shape | What it means |
+|---|---|---|
+| `delivery_resource` | `TEXT NOT NULL`, **no default**; typed and non-empty by `CHECK`; frozen by `outbox_delivery_resource_is_frozen` | The **exact lease resource string** whose epoch sequence governs this row's delivery-side mutations -- not a scope tag and not a partition id, because a shorter tag needs a mapping back to the resource and every mapping is a second place the answer can be wrong |
+| `delivery_resource_inherited` | `INTEGER` nullable, `CHECK (… IS NULL OR … = 1)`; frozen by `outbox_delivery_resource_inherited_is_frozen` | `1` on a row **this migration** inherited, `NULL` on every row written afterwards. Written by the backfill and by nothing else: no product code binds it |
+
+**Why `NOT NULL` with no default, which is why the table was rebuilt.** SQLite admits `ALTER TABLE
+ADD COLUMN … NOT NULL` only with a non-null constant `DEFAULT`, and the default cannot be dropped
+afterwards without the rebuild anyway -- so it would outlive the step, and a producer added later
+that forgot to bind the column would be handed the global resource **silently**. A silently global
+row is a row no per-run lap will ever select, which is the exact failure class this column exists to
+make impossible, arriving by omission instead of by design. `0004`'s rule for choosing between the
+two shapes (rebuild only when an existing `CHECK` changes) points the other way on its own terms and
+is overridden here for that reason and for a second: the due index is being joined by two more, so
+the step re-authors index DDL either way. `0004`'s cost is real and is paid the way its own header
+demands -- every line of the new table is marked in the step file as carried verbatim or as one of
+the four `CHANGED` lines, so a diff shows the whole shape.
+
+**Why the rows *are* backfilled, where `0004` refused to backfill.** The two headers reach opposite
+conclusions from the same principle, and the step says so rather than leaving `0004` to be read as
+precedent against it. `0004` could not invent the epoch an existing `run` row was written under: it
+was genuinely unknown, and inventing one would have manufactured the evidence the column exists to
+carry. Here the opposite holds -- every `outbox` row on disk was written under the one delivery
+resource there has ever been, which the step file records as enforced at four sites, endpoint
+startup included -- so
+`'outbox-delivery'` is **recorded** history and any run scope would be **fabricated** history. The
+copy binds the two literals as constants, not as a `CASE`: there was only ever one resource, so a
+branch here would have one reachable arm pretending the history was richer than it was.
+
+**Why the second, nullable marker column, and why not a clock.** After this step a gate relay
+carrying the global resource under a gate that names a run is impossible by construction
+(`enqueueRelay` derives the resource from `gate.run_id` on every insert), so such a row can only be
+**inherited** or **corrupted** -- and the operator's relay-ack path has to admit the first while
+refusing the second. A clock cannot separate them: `migrateControlPlane` takes `nowMs` as an
+argument and the relay enqueue takes `enqueued_at_ms` independently, under the rule `0001` sets for
+this whole database ("time is the caller's"), written that way precisely so acceptance testing can
+inject skew across boundaries. A migration clock running behind an existing relay's enqueue instant
+would strand a genuinely inherited relay, and a backdated row written afterwards would pass the
+exception -- wrong in both directions. The marker is a fact about what this migration did, not a
+fact about clocks, and the rebuild is rewriting every row regardless, so it is close to free.
+
+#### `action.writer_resource`, and what `NULL` does **not** mean
+
+The same gap, one table over: an outbox `action` row carries `kind = 'notify'` and a `writer_epoch`,
+and nothing says which lease allocated the number. [`lease-fencing.md`](./lease-fencing.md) names
+the spike's way out -- `effect_kind(resource, effect)`, which encodes the resource *in* `action.kind`
+-- and calls it "a workaround, not a design: a real schema carries the resource as a column". This
+is that column: `ALTER TABLE action ADD COLUMN writer_resource TEXT`, nullable, with its `CHECK`
+travelling with its definition, plus `action_writer_resource_is_set_once` -- an unattributed row may
+gain attribution, an attributed one may never lose or re-aim it. `ALTER TABLE` here and a rebuild
+above is `0004`'s rule applied literally: nothing on `action` is replaced or re-keyed, and a
+nullable column has no default to outlive the step.
+
+**`NULL` does not mean "predates the column"** -- that would be false the day the step lands. Four
+`action` writers compose their kind with `effectKind` (supervisor, watcher, session_binding,
+run_lifecycle) and are deliberately unchanged, so they keep writing exactly-attributed rows with
+this column null **for ever**. The definition is therefore a disjunction, and it is the disjunction
+the readers implement: **a row's writer resource is `writer_resource` when non-null, and the suffix
+of `kind` otherwise.** Every row carries its attribution in exactly one of the two forms. The column
+exists for the one producer that cannot use the other -- the outbox path, whose action kinds are the
+bare `notify` and `human_gated`, for which a resource-filtered history was not wrong-but-useful but
+**empty**, a bare kind having no `@` for the suffix test to match.
+
+Both audit readers move in this same step, which is what makes the fallback sufficient rather than
+decorative: the write-history query selects and filters on the disjunction, and the applied-epoch
+regression check partitions through the same accessor. The backfill's scope is exactly
+`writer_epoch IS NOT NULL AND writer_resource IS NULL AND instr(kind, '@') = 0` -- rows written the
+old way have a bare kind *and* a null column, so without the `UPDATE` the gap would stay open while
+looking repaired. The residual is named rather than papered over: a database written through the
+public API with a kind like `mail@v2` would be skipped by the predicate **and** read by the fallback
+as though `v2` were its lease resource, and no syntactic discriminator can fix that, because such a
+row is byte-identical to a legitimate composed kind. What bounds it is a measurement instead -- the
+package is `"private": true` at version `0.0.0` and unpublished, so every existing database was
+produced by this tree, where the only outbox action kinds are the two bare ones -- and going forward
+the format is closed: `HandlerRegistry.register` now refuses an `actionKind` containing `@`, the rule
+`effectKind` already enforces for effects.
+
+#### Three indexes, and why `outbox_undelivered` was measured and kept
+
+```sql
+-- carried from 0003, and NOT replaced
+CREATE INDEX outbox_undelivered      ON outbox(enqueued_at_ms)                                 WHERE status IN ('pending', 'delivered');
+-- new
+CREATE INDEX outbox_due_by_recipient ON outbox(delivery_resource, recipient, enqueued_at_ms)    WHERE status IN ('pending', 'delivered');
+CREATE INDEX outbox_due_by_resource  ON outbox(delivery_resource, enqueued_at_ms)               WHERE status IN ('pending', 'delivered');
+```
+
+Both equalities lead so that `enqueued_at_ms` stays a seekable range term rather than a filter
+applied after a scan of the partition, and all three carry the positive `IN` list for §5.7's reason.
+The two new ones are not one index with a redundant half: the due read has two call shapes -- the
+recipient-bound poll, and every other caller, which supplies none -- and on the second shape the
+three-column index cannot seek `enqueued_at_ms`, because `recipient` sits between the two
+constrained columns and is unconstrained.
+
+The design proposed **replacing** `outbox_undelivered` with the two new indexes, on the ground that
+the due query gains two equality terms in front of its range term. Measured against this tree, the
+replacement regresses a third reader the proposal had not enumerated. `EXPLAIN QUERY PLAN`, taken on
+this tree at this commit with 400 `outbox` rows and no `ANALYZE`, each query being the constant the
+function executes rather than a copy pasted here:
+
+| Query | Plan |
+|---|---|
+| the due read | `SEARCH outbox USING INDEX outbox_due_by_resource (delivery_resource=? AND enqueued_at_ms<?)` |
+| its degraded twin | `SEARCH outbox USING INDEX outbox_due_by_resource (delivery_resource=?)` |
+| the recipient-bound due read | `SEARCH outbox USING INDEX outbox_due_by_recipient (delivery_resource=? AND recipient=? AND enqueued_at_ms<?)` |
+| its degraded twin | `SEARCH outbox USING INDEX outbox_due_by_recipient (delivery_resource=? AND recipient=?)` |
+| the orphaned-outbox pass (§5.6) | `SEARCH outbox USING INDEX outbox_undelivered (enqueued_at_ms<?)` |
+| its degraded twin | `SCAN outbox USING INDEX outbox_undelivered` |
+| the orphan pass **with `outbox_undelivered` dropped** | `SCAN outbox USING INDEX outbox_due_by_resource` |
+| its degraded twin, same drop | `SCAN outbox USING INDEX outbox_due_by_resource` |
+
+The orphan pass is deliberately **database-wide** -- it asks which rows are stale for *any* owner, so
+it can never carry a `delivery_resource` term -- and neither composite index can seek
+`enqueued_at_ms` for it, because their leading column is unconstrained there. That is the same shape
+of finding the design's own round A2 recorded about the recipient-less due call, applied to a reader
+outside the due family.
+
+**The last pair of rows is the part worth writing down.** Dropping the index would not merely cost
+that reader its seek: it would make the shipped query's plan **indistinguishable from its own
+degraded twin**. The anti-vacuity control in `test/control_plane/events.test.ts` is built on exactly
+that difference -- it asserts `SEARCH` on the shipped form and `SCAN` on the algebraically identical
+arithmetic form, and says in its own comment that asserting the second half is what makes the first
+half mean anything. Drop `outbox_undelivered` and both halves read `SCAN`: the control does not go
+red, it goes **vacuous**, which is the failure mode it was written to prevent. An index whose absence
+silently disarms a test is not an index a later reader may retire as duplication.
+
+#### What this step deliberately does not do
+
+- **No `CHECK` on the *shape* of `delivery_resource`.** The database is not told how a delivery
+  resource is spelled. The one constructor is `deliveryResourceForRun()`, and a `LIKE` pattern in the
+  DDL would be a second spelling of it, free to admit what the constructor never builds or refuse
+  what it does.
+- **`action_one_effect_per_key` is not re-keyed.** It stays `UNIQUE (idempotency_key) WHERE status <>
+  'refused'`, with no resource and no run in it. It is the exactly-once guarantee for an **effect at
+  a destination outside this database**; adding the resource would let two runs each perform the same
+  effect once and call it exactly-once twice. `continuo D-1104` records this as a decision, not an
+  oversight.
+- **No retention, no compaction, no cleanup of anything**, in this step or as a consequence of it --
+  which now has a visible cost: the shared destination's fence file grows one key per run for ever,
+  and `continuo D-1104` explicitly declines to authorise compacting it. That is `Q-0006` (§12) still
+  unanswered, not a new hole.
 
 ---
 
@@ -1464,7 +1681,7 @@ The sequence, and what each kill point does:
 | Step | Transaction | Killed here → |
 |---|---|---|
 | 1. Enqueue the relay | `INSERT INTO gate_relay` + `INSERT INTO outbox (status='pending', dedup_key='gate/<gate_id>/<to_stage>')`, one transaction | Nothing sent, nothing claimed. The reconcile pass finds a pending outbox row and the delivery worker retries |
-| 2. Deliver | The outbox delivery worker, unchanged | The message may or may not have landed. The destination deduplicates on `dedup_key`, so a retry is harmless — `destination_idempotency_key` in `ACCEPTANCE.md` §2's enumeration |
+| 2. Deliver | The outbox delivery worker, unchanged in mechanism -- but since §5.8 it is *the worker holding the resource this relay was enqueued under*, derived from the gate's own `run_id`, and a runless gate's relay stays on the global resource | The message may or may not have landed. The destination deduplicates on `dedup_key`, so a retry is harmless — `destination_idempotency_key` in `ACCEPTANCE.md` §2's enumeration |
 | 3. Ack | `outbox.acked_at_ms` set once (existing trigger) | The ack is durable and the stage has not moved yet |
 | 4. Advance | `INSERT INTO gate_transition (kind='advance', message_id=…)` + `UPDATE gate SET stage, stage_seq`, one transaction | The reconcile pass finds an acked relay with no matching advance and completes it (§5.6) |
 
@@ -1474,6 +1691,18 @@ retries accumulate on one outbox row (`retry_count`, already durable and monoton
 producing a second message. This is deliberately *not* done by making `outbox.dedup_key` unique —
 the spike's comment explains why that column is non-unique on purpose, and gate relays get their own
 identity table instead of changing a shared table's semantics.
+
+**Step 3's entitlement is now checked against the gate, not taken from the caller.** The ack is
+still unfenced and still set once by the row's own trigger (§4.2), and the message id reaching it is
+still caller-supplied -- which is the whole reason the operator's relay ack derives the resource it
+expects from `gate.run_id` rather than accepting a `--run-id` flag beside the id. `enqueueRelay`
+copied that same `run_id` onto the outbox row and derived the row's resource from it, so the
+equality is a cross-check between **two independently stored facts**, and a mismatch is a corrupted
+relay rather than a mistyped flag. Exactly one further value is admissible and it is bounded by
+recorded provenance: a row `0005` marked as inherited may carry the global resource under a gate
+that names a run, because the migration backfilled the resource such a row was genuinely written
+under while the derivation reads the same gate's still-present `run_id` -- so a strict equality
+would leave precisely those in-flight relays unable to advance (§5.8).
 
 **What `presented` means.** The review asked whether it is display, notification, or read receipt.
 It is **the human window's durable acknowledgement that the gate has entered the human-visible
@@ -1533,6 +1762,17 @@ SELECT r.gate_id, r.to_stage, o.retry_count, :now_ms - r.enqueued_at_ms AS age_m
                                               -- retired, and §5.7 is where it goes
    AND :now_ms - r.enqueued_at_ms > :delivery_tolerance_ms;
 ```
+
+This query carries **no** `delivery_resource` term and must not gain one. Like the orphaned-outbox
+pass (§5.6, §5.8) it asks whether a relay is stalled for *anybody*, and a per-run detector would
+stop naming exactly the relays whose run is gone -- the alarms-nobody-raises complement of the
+alarms-forever defect §5.7 closed. Two consequences of that are worth separating, because `0005`'s
+own header runs them together: the orphan pass's seek is what keeps `outbox_undelivered` in the
+schema (measured, §5.8), whereas *this* query drives from `gate_relay` and reaches `outbox` through
+its primary key -- `EXPLAIN QUERY PLAN` on this tree reads `SCAN r USING INDEX
+sqlite_autoindex_gate_relay_1` then `SEARCH o USING INDEX sqlite_autoindex_outbox_1
+(message_id=?)`, and names no partial index at all. It carries the positive `IN` list for §5.7's
+correctness reason, not for an index it was measured to use.
 
 Both are deterministic, both run in the reconcile pass, and the Dispatcher AI is nowhere in either —
 `#65` requires that, and `D-0008` requires it more generally: deadline evaluation is the
@@ -1667,11 +1907,15 @@ the Issue that picks it up. So the blocks in this document and in
 every parameterised query in them was prepared, and the load-bearing constraints were exercised
 directly. The table below is that log, kept rather than retired.
 
-The DDL now ships as `src/claude_org_runtime/control_plane/migrations/0001_initial.sql`, extended by
+The DDL now ships as `src/control_plane/migrations/0001_initial.sql`, extended by
 the numbered steps after it, and is applied by the migrator, so this table is no longer the only place the claims live: every row of it
-is reproduced as a named test in `tests/control_plane/test_production_schema.py` — or, for the rows
-about migration mechanics rather than about the shape, in `tests/control_plane/test_migrator.py` —
-each reading the migrations the runtime reads. A claim recorded here that the migration stops satisfying is now a test
+is reproduced as a named test in `test/control_plane/production-schema.test.ts` — or, for the rows
+about migration mechanics rather than about the shape, in `test/control_plane/migrator.test.ts` —
+each reading the migrations the runtime reads. (Those three paths were `src/claude_org_runtime/…`
+and `tests/control_plane/test_*.py` until this commit: v1's Python spellings, carried in and never
+true of continuo. Corrected here for the reason §3.1 gives at greater length, and the test file's
+`describe` blocks are named after **this** document's section numbers, so the correspondence is
+checkable rather than asserted.) A claim recorded here that the migration stops satisfying is now a test
 failure rather than a stale sentence — which is the point of not deleting the log. Where a row was
 added *after* the implementation found the design underspecified, it is marked `D-0041` and was
 verified the same way, against a database built by the migrator itself.
@@ -1723,6 +1967,13 @@ verified the same way, against a database built by the migrator itself.
 | The `outbox_undelivered` predicate is what makes the orphan pass indexable, and its complement is not (step `0003`, §5.6/§5.7) | `EXPLAIN QUERY PLAN` over `status IN ('pending', 'delivered') AND enqueued_at_ms < ?` reads `SEARCH outbox USING INDEX outbox_undelivered (enqueued_at_ms<?)`; the same query written `status <> 'acked'` reads `SCAN outbox` |
 | The `outbox` rebuild carries every row and every reference forward (step `0003`, §3.2) | A database written at `0002` with a `delivered` row at `retry_count=4` and a child row referencing it migrates to head with all columns intact, `PRAGMA foreign_key_check` empty and `PRAGMA integrity_check` `ok` |
 | Turning `PRAGMA foreign_keys` off for the migration is not a hole, because each step is `foreign_key_check`ed inside its own transaction (step `0003`, §3.2) | A step inserting a row with a dangling reference is refused with `migration step … leaves 1 foreign key violation(s)` and the database is left at the previous version |
+| An `outbox` row must name the lease its `writer_epoch` was minted by, and cannot be given one silently (step `0005`, §5.8) | Omitting the column: `NOT NULL constraint failed: outbox.delivery_resource`; binding `''`: `CHECK constraint failed: length(delivery_resource) > 0` |
+| A row keeps the delivery resource it was enqueued under (step `0005`, §5.8) | `UPDATE` to another resource aborts with `an outbox row keeps the delivery resource it was enqueued under`, and the stored value is unchanged |
+| The inherited marker is written by `0005` and by nothing else, and is a marker rather than a counter (step `0005`, §5.8) | A later `UPDATE` aborts with `delivery_resource_inherited is written by migration 0005 and by nothing else`; inserting `2` aborts with `CHECK constraint failed: delivery_resource_inherited IS NULL OR delivery_resource_inherited = 1`; a row inserted at head carries `NULL` |
+| An `action` row's writer resource, once recorded, is never re-aimed, and the column is typed and non-empty (step `0005`, §5.8) | Re-pointing it aborts with `an action row keeps the writer resource its epoch was minted under`; `''` aborts with `CHECK constraint failed: writer_resource IS NULL OR (typeof(writer_resource) = 'text' AND length(writer_resource) > 0)` |
+| The second `outbox` rebuild carries every row and every reference forward **and** inherits them (step `0005`, §5.8) | A database written at `0004` with a `delivered` row at `retry_count=4`, `writer_epoch=7` and a child row referencing it migrates to head with every column intact, `delivery_resource='outbox-delivery'`, `delivery_resource_inherited=1`, `PRAGMA foreign_key_check` empty and `PRAGMA integrity_check` `ok` |
+| The audit backfill attributes the outbox path's rows and touches nothing already attributed (step `0005`, §5.8) | Three `action` rows in, one per arm: `kind='notify'` with an epoch reads `writer_resource='outbox-delivery'`; a kind composed as `deliver_task@run/run-1` reads `NULL`; a bare kind with no epoch reads `NULL` |
+| Each due shape seeks its own new index, and neither replaces `outbox_undelivered` (step `0005`, §5.8) | The four plans and the two drop-experiment plans in §5.8's table, measured at 400 rows with no `ANALYZE` |
 
 Two things this does **not** establish, and they are the reasons it is not a substitute for the
 implementation Issue's tests. It does not exercise the `T + P ≤ L` timing behaviour, which needs the

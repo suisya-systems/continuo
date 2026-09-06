@@ -51,6 +51,19 @@ UPDATE outbox
                   AND epoch = :fence_epoch AND expires_at_ms > :fence_now_ms)
 ```
 
+**What that sample now leaves out, and what it stopped proving.** The sample is the outbox's own
+transition to `delivered`, and since `D-1104` the real statement carries one more conjunct:
+`AND delivery_resource = :fence_resource` (`src/control_plane/outbox.ts:714-727`). The sentence
+above -- the epoch is carried and validated inside the write -- was a complete account of *ownership*
+only while there was one delivery resource. With two live at once the fence proves that **some** lease
+of this writer's is live, and the row clause proves the row carries the number 1; a row another run
+minted at *its* epoch 1 satisfies both, so the two facts compose into nothing, and a recovery sweep
+scoped to one resource reports the other run's live row as unowned and re-stamps it. The membership
+term is what the row clause had been leaning on and never said. It is a sentinel, `fence_resource`
+beside `fence_epoch` (`src/control_plane/lease.ts:868-895`), for the same reason the builders take no
+SQL text at all: a caller obliged to bind its own resource a second time under a second name could
+bind it wrong, and a guard the caller has to remember is not a guard.
+
 `protected_write()` accepts only a `FencedStatement`, which `fenced_update()` / `fenced_insert()`
 alone can issue. The builders take **no SQL text from a caller** (#42): a statement is composed from
 typed column / operator / value objects — `param()`, `value()`, `increment()`, `fence_epoch`, and
@@ -170,13 +183,72 @@ package rather than one shadowing the other.
   `created_at_ms`. The timestamp is the caller's clock — that is the point of the whole module — so
   under injected skew it can disagree with the order the writes actually happened in, and an ordering
   claim read out of a skewed clock would manufacture regressions and hide real ones.
-- **`action` has no resource column**, for the same reason, so nothing in a row says which lease
+- **`action` had no resource column**, for the same reason, so nothing in a row said which lease
   allocated its `writer_epoch`. Two resources' epochs are independent, so comparing them would report
   a valid epoch 2 for one and a valid epoch 1 for another as a violation while hiding a real
   interleaving in the same noise. The spike's way out is `effect_kind(resource, effect)`, which
   encodes the resource in `action.kind`; `write_history()` filters on it and
-  `applied_epoch_regressions()` refuses a history that mixes kinds at all. This is a workaround, not
-  a design — a real schema carries the resource as a column.
+  `applied_epoch_regressions()` refuses a history that mixes kinds at all. This paragraph then said,
+  and the migration that acted on it quotes the sentence back: *this is a workaround, not a design --
+  a real schema carries the resource as a column.*
+
+  **`D-1104` added the column, and did not retire the workaround.** `action.writer_resource TEXT` is
+  added by `migrations/0005_outbox_delivery_resource.sql:350-357`, nullable, and immutable once
+  non-null: `action_writer_resource_is_set_once` (`:359-366`) lets an unattributed row *gain*
+  attribution -- which is what the same step's backfill does, in the same transaction -- and refuses
+  every later change, because attribution says which lease minted the epoch in the same row and
+  nothing may re-aim it afterwards. What `NULL` does **not** mean is "the row predates the column",
+  which would have been false the day `0005` landed. The four writers that compose their kind with
+  `effect_kind` are deliberately unchanged -- `src/supervisor.ts:515`, `:522`, `:579`,
+  `control_plane/watcher.ts:740`, `control_plane/session_binding.ts:157`, `:207`, `:257`, `:294`,
+  `control_plane/run_lifecycle.ts:408` -- and they keep writing exactly-attributed rows with a null
+  column for ever; this module's own refusal insert (`control_plane/lease.ts:1655-1673`) binds no
+  resource either, on the same ground, since the kind its caller composed already carries one. So a row's writer resource is a
+  **disjunction**: the column when it is non-null, the `kind` suffix otherwise, and every row carries
+  its attribution in exactly one of the two forms. `WRITE_HISTORY_QUERY` filters on that disjunction
+  (`control_plane/lease.ts:173-186`), `writer_resource_of()` (`:1910-1916`) is the same disjunction as
+  a function so a caller partitioning a history reads it the way the query selected it, and
+  `applied_epoch_regressions()` partitions through that function instead of through
+  `resource_of_kind()` (`:1942`).
+
+  **The column was worth adding because the workaround was never in force on the path that needed it,
+  and that is a measurement rather than a motive.** The outbox binds `handler.actionKind` unchanged,
+  and both handlers in the tree spell it bare -- `notify` and `human_gated`
+  (`control_plane/handlers.ts:139`, `:215`) -- so before `D-1104` both audit readers were **already
+  broken** for every outbox action row. At `HEAD` `8c706a8` (`git show HEAD:src/control_plane/lease.ts`):
+  the suffix filter at lines 159-167 had no fallback, so a resource-filtered history over outbox
+  actions came back **empty** -- not wrong-but-useful, empty, because a bare kind has no `@` for the
+  test to match -- and `applied_epoch_regressions()` (`:1850`) mapped every row through
+  `resource_of_kind()`, which **throws** `LeaseUsageError` on a kind `effect_kind` did not compose
+  (`:1432-1444`). A regression check over an outbox history therefore raised rather than answering.
+  Both readers were migrated in the same change as the column, and `0005` backfills the pre-migration
+  rows, because a column added without either would have left this gap exactly where it was while
+  looking repaired.
+
+  **The residual `0005` leaves, named rather than assumed away.** The backfill identifies the
+  outbox-path rows by the *absence* of an `@` (`:394-398`). That is exact for a database this tree
+  produced and not over admissible data: `HandlerRegistry.register` required only a non-empty
+  `actionKind`, so a database written through the public API with a kind like `mail@v2` would be
+  skipped by the backfill *and* read by the fallback as though `v2` were its lease resource. No
+  syntactic discriminator separates the two -- such a row is byte-identical to a legitimate
+  `effect_kind("v2", "mail")` row -- so what bounds the residual is a **measurement** and not a
+  test: the package is `"private": true` at version `0.0.0` and unpublished (`package.json:3-4`), so
+  every existing database was produced by this tree, where the only outbox action kinds are the two
+  bare ones. Going forward the format is closed -- `register()` now refuses an `actionKind`
+  containing `@` (`control_plane/outbox.ts:1368-1384`), the rule `effect_kind` already enforced for
+  effects -- so the window shrinks rather than widening. A foreign database carrying an `@`-bearing
+  legacy action kind is out of `0005`'s scope: visibly unattributable, rather than quietly
+  mis-attributed.
+- **The two attribution forms have two disjoint entry points**, which is what keeps the disjunction
+  from becoming two spellings of one answer that can disagree. `protected_write()` still requires
+  `resource_of_kind(write.kind)` to equal the token's resource
+  (`control_plane/lease.ts:1544-1552`), so it still refuses a bare kind outright and every row it
+  writes is attributed the `effect_kind` way with the column left null. The outbox path never goes
+  through it: it prepares its own `FencedStatement`s and binds `writer_resource` from the sentinel
+  (`control_plane/outbox.ts:745`), or, for a refusal written unfenced, from the instance's own
+  resource (`:2729`). Each writer can reach exactly one form, so no row product code writes carries
+  both -- there is no row for the readers' disjunction to find attributed twice and disagreeing with
+  itself.
 - **Releasing only ever shortens**, and is never a DELETE (the schema blocks the DELETE outright,
   since a deleted row would let the next acquisition restart the epoch at 1). The new expiry is
   `MIN(expires_at_ms, MAX(acquired_at_ms + 1, now_ms))`: the inner clamp keeps a clock skewed behind
@@ -200,7 +272,15 @@ package rather than one shadowing the other.
   trigger means editing `spike_schema.sql`, which changes the schema fingerprint and therefore
   **refuses every existing database** (D-0026 promises no migration) — a decision that belongs with
   the schema and with S7, which is being built against it in parallel, rather than being slipped in
-  from here.
+  from here. **`D-1104` paid that cost for a different column**, which is worth recording here rather
+  than leaving this paragraph to read as though the price were still unpayable: `0005` and
+  `spike_schema.sql` both gained `action.writer_resource` with a set-once trigger
+  (`src/control_plane/spike_schema.sql:509-518`, `:577-583`), and `SCHEMA_REVISION` went 2 -> 3
+  (`src/control_plane/schema.ts:79`), which does refuse every existing spike database at
+  `schema.ts:467-474`, exactly as this paragraph says such a step must. The guard this bullet is
+  about did **not** change: `writer_epoch` and `kind` are still unfrozen by both schemas, and a
+  direct `UPDATE` outside this module can still restamp them. What the new trigger freezes is the
+  attribution column, not the evidence it attributes.
 - **SQLite cannot tell a completed side effect from one that never started** (`ACCEPTANCE.md` §2).
   The fence orders writes; it does not close that window. Every protected write names its
   exactly-once mechanism, and where neither mechanism is achievable the action is a human gate

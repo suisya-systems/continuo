@@ -86,6 +86,7 @@ import {
   fencedInsert,
   fencedUpdate,
   fenceEpoch,
+  fenceResource,
   IsNull,
   isNull,
   Lease,
@@ -110,6 +111,7 @@ import {
   Value,
   value,
   writeHistory,
+  writerResourceOf,
 } from "../../src/control_plane/lease.js";
 import { createControlPlane, openControlPlane } from "../../src/control_plane/schema.js";
 import { caseRoot, suiteTemplate } from "../testkit/cases.js";
@@ -869,6 +871,97 @@ describe(
       expect(String(sneakyTable)).toBe(String(statement));
     });
 
+    test("the fences own resource is a sentinel and not a spelling", () => {
+      // The sibling of the epoch stamp, added by `D-1104`, and it is a sentinel
+      // for the same reason.
+      //
+      // With one delivery resource the fence and the row clause composed into
+      // ownership; with two, the fence proves only that SOME lease of this
+      // writer's is live, so the row also has to say which epoch sequence minted
+      // its number. Naming that resource with a caller parameter would be a
+      // guard the caller has to remember to bind -- and bind correctly, twice --
+      // so `fenceResource` renders `:fence_resource`, the same value the fence
+      // itself is proved against, bound once by the module.
+      const stamped = fencedInsert("outbox", {
+        values: {
+          message_id: param("message_id"),
+          recipient: value("secretary"),
+          payload: value("{}"),
+          dedup_key: param("message_id"),
+          status: value("pending"),
+          writer_epoch: fenceEpoch,
+          delivery_resource: fenceResource,
+          enqueued_at_ms: param("now_ms"),
+        },
+      });
+      expect(String(stamped)).toContain(":fence_resource");
+      expect(String(stamped)).not.toContain("'outbox-delivery'");
+      // And as a guard: the equality that has to sit INSIDE the statement,
+      // beside the fence, is composed from the same sentinel.
+      const guarded = fencedUpdate("outbox", {
+        set: { status: value("delivered"), writer_epoch: fenceEpoch },
+        where: and_(eq("message_id", param("message_id")), eq("delivery_resource", fenceResource)),
+      });
+      expect(String(guarded)).toContain("delivery_resource = :fence_resource");
+      expect(
+        String(
+          fencedUpdate("outbox", {
+            set: { status: value("delivered"), writer_epoch: fenceEpoch },
+            where: and_(
+              eq("message_id", param("message_id")),
+              ne("delivery_resource", fenceResource),
+            ),
+          }),
+        ),
+      ).toContain("delivery_resource <> :fence_resource");
+
+      // Nothing else reaches the column. The sentinel is matched by identity, so
+      // a foreign _FenceResource instance is not it -- a second instance is a
+      // second author's object wearing the builder's name.
+      const foreignSentinel = new (fenceResource.constructor as new () => object)();
+      expectRefusal(
+        () =>
+          fencedInsert("outbox", {
+            values: {
+              message_id: param("message_id"),
+              writer_epoch: fenceEpoch,
+              delivery_resource: foreignSentinel,
+            },
+          }),
+        UnfencedStatement,
+      );
+      expectRefusal(
+        () => eq("delivery_resource", foreignSentinel as unknown as Value),
+        UnfencedStatement,
+      );
+      // ...and raw text is refused where it was refused before: the builders take
+      // no SQL from a caller for this column either.
+      const rawText = expectRefusal(
+        () => eq("delivery_resource", ":fence_resource" as unknown as Value),
+        UnfencedStatement,
+      );
+      // The operand gate names both sentinels: a caller told only about
+      // fence_epoch would have no way to learn the other one exists.
+      expect(rawText.message).toContain("fence_epoch or fence_resource itself");
+      expectRefusal(
+        () =>
+          fencedInsert("outbox", {
+            values: {
+              message_id: param("message_id"),
+              writer_epoch: fenceEpoch,
+              delivery_resource: ":fence_resource",
+            },
+          }),
+        UnfencedStatement,
+      );
+      // The parameter name is reserved, and the refusal now names both stamps so
+      // a caller reading it learns which sentinel to reach for.
+      const reserved = expectRefusal(() => param("fence_resource"), LeaseUsageError);
+      expect(reserved.message).toContain(
+        "fence_resource to compare a row against the fence's own resource",
+      );
+    });
+
     test("a node mutated after construction is refused at rendering", () => {
       // `frozen=True` yields to `object.__setattr__`; the rendering does not.
       //
@@ -1000,6 +1093,7 @@ describe(
             dedup_key: value("d-hostile"),
             status: value("pending"),
             writer_epoch: fenceEpoch,
+            delivery_resource: fenceResource,
             enqueued_at_ms: param("now_ms"),
           },
         }),
@@ -1395,6 +1489,57 @@ describe(
       expect(resourceOfKind(otherKind)).toBe("run/r2");
     });
 
+    test("a bare kind is attributed by its own column and stays in the history", () => {
+      // The other half of the disjunction, added by `D-1104`.
+      //
+      // Four action writers compose their kind with `effectKind`, and the suffix
+      // is what `writeHistory(resource=...)` matched them on. The outbox path
+      // cannot: its action kinds are the bare 'notify' and 'human_gated', so
+      // before `0005` its rows were attributed NEITHER way -- the filter dropped
+      // them and `resourceOfKind` threw on them, which is a history missing
+      // exactly the writes this whole module exists to keep evidence of. The
+      // column carries the attribution instead, and the query reads whichever
+      // form a row has.
+      const cp = cpFixture(dbPathFixture());
+      const lease = acquire(cp, { resource: RESOURCE, holder: "alpha", nowMs: T0, ttlMs: TTL });
+      // The row is inserted with SQL rather than through `protectedWrite`,
+      // because that entry point still requires a kind `effectKind` composed
+      // (it compares the kind's suffix against the token's resource) and the
+      // outbox path does not go through it -- `Outbox._PENDING_ACTION` is its
+      // own fenced insert, stamping `writer_resource` from the sentinel. This
+      // is the row shape that path produces.
+      cp.prepare(
+        `
+        INSERT INTO action (action_id, run_id, kind, idempotency_key,
+                            exactly_once_mechanism, status, applied_at_ms,
+                            writer_epoch, writer_resource, created_at_ms)
+        VALUES ('n1', 'r1', 'notify', 'n1', 'transactional_with_record',
+                'applied', :now_ms, :epoch, :resource, :now_ms)
+        `,
+      ).run({ now_ms: T0 + 1, epoch: lease.epoch, resource: RESOURCE });
+      protectedWrite(cp, lease, effect("a1", { nowMs: T0 + 2 }), { nowMs: T0 + 2 });
+
+      // The bare row is in the resource-filtered history, and it is there because
+      // it carries the resource itself -- the kind 'notify' has no suffix to be
+      // matched on, and asking for one is an error rather than a miss.
+      const history = writeHistory(cp, { resource: RESOURCE });
+      expect(history.map((row) => row["action_id"])).toEqual(["n1", "a1"]);
+      expect(history.map((row) => row["writer_resource"])).toEqual([RESOURCE, null]);
+      expectRefusal(() => resourceOfKind("notify"), LeaseUsageError);
+
+      // `writerResourceOf` is the read side of that same disjunction: the column
+      // when it is there, the kind suffix when it is not. A caller partitioning a
+      // history reads it this way rather than inventing a second answer.
+      expect(writerResourceOf(history[0] as Record<string, unknown>)).toBe(RESOURCE);
+      expect(writerResourceOf(history[1] as Record<string, unknown>)).toBe(RESOURCE);
+      // ...so the two forms are ONE history under one lease, and the regression
+      // check does not see two resources where there is one.
+      expect(appliedEpochRegressions(history)).toEqual([]);
+
+      // And the filter is a filter: another resource's name does not collect it.
+      expect(writeHistory(cp, { resource: "run/r2" })).toEqual([]);
+    });
+
     test("every effect under one lease stays in one history", () => {
       // Two effect kinds, one lease: they share an epoch sequence and a history.
       //
@@ -1469,6 +1614,7 @@ describe(
             dedup_key: value("d1"),
             status: value("pending"),
             writer_epoch: fenceEpoch,
+            delivery_resource: fenceResource,
             enqueued_at_ms: param("now_ms"),
           },
         }),

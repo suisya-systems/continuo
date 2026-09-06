@@ -16,9 +16,13 @@
   "target": {
     "test_file": "test/control_plane/production-schema.test.ts",
     "target_only_tests": {
-      "count": 1,
+      "count": 5,
       "ids": [
-        "test/control_plane/production-schema.test.ts::target only > the second connection is configured the way the source configures it"
+        "test/control_plane/production-schema.test.ts::target only > the second connection is configured the way the source configures it",
+        "test/control_plane/production-schema.test.ts::section 5 -- the outbox delivery resource (0005_outbox_delivery_resource.sql) > an outbox row must name the lease its writer epoch was minted by",
+        "test/control_plane/production-schema.test.ts::section 5 -- the outbox delivery resource (0005_outbox_delivery_resource.sql) > an outbox row keeps the delivery resource it was enqueued under",
+        "test/control_plane/production-schema.test.ts::section 5 -- the outbox delivery resource (0005_outbox_delivery_resource.sql) > the inherited marker is written by the migration and by nothing else",
+        "test/control_plane/production-schema.test.ts::section 5 -- the outbox delivery resource (0005_outbox_delivery_resource.sql) > the due indexes lead with the delivery resource and keep the partial predicate"
       ],
       "note": "Target-only. The second connection this file opens to drive interleaved transactions is a test mechanism, and the source configures it deliberately (isolation_level=None, foreign_keys = ON, busy_timeout = 0). This test pins that configuration, so a helper that quietly stopped applying it would fail here rather than making the commit-order case pass for the wrong reason. It translates no source case and is not counted as ported coverage."
     },

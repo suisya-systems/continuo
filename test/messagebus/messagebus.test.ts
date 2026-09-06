@@ -9,6 +9,7 @@ import {
   OutboxUsageError,
   StaleWriterRefused,
 } from "../../src/control_plane/outbox.js";
+import { MessageBusUsageError } from "../../src/messagebus/index.js";
 import { createTempDir } from "../helpers/tmp.js";
 import { expectRefusal } from "../testkit/errors.js";
 import {
@@ -17,8 +18,10 @@ import {
   dropThenResendTranscript,
   EPOCH,
   expectedTranscript,
+  GLOBAL_RESOURCE,
   makeBusEnv,
   RECIPIENT,
+  RESOURCE,
   RUN_ID,
   T0,
 } from "./_env.js";
@@ -787,12 +790,17 @@ describe("a producer's row is adopted at the attempt (target-only, production sc
     const env = busEnv();
     const relayId = aRelay(env);
     env.connection
-      .prepare<[string, string, string, string, string, number]>(
+      .prepare<[string, string, string, string, string, number, string]>(
         "INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key," +
-          " status, retry_count, enqueued_at_ms)" +
-          " VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)",
+          " status, retry_count, enqueued_at_ms, delivery_resource)" +
+          " VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)",
       )
-      .run("relay-other", RUN_ID, "someone-else", "{}", "dk/relay-other", T0);
+      // The same delivery resource this bus holds, which is what keeps the
+      // case about the *recipient* boundary. A row in another partition would
+      // be left alone by `_DUE_QUERY` before the recipient was ever consulted
+      // (migration `0005`, `D-1104`), and the assertions below would then pass
+      // without the authority boundary they are named for existing.
+      .run("relay-other", RUN_ID, "someone-else", "{}", "dk/relay-other", T0, RESOURCE);
 
     env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
 
@@ -819,5 +827,127 @@ describe("a producer's row is adopted at the attempt (target-only, production sc
     expect(env.outboxStatus(relayId)).toBe("pending");
     expect(env.effectCount("gate/gate-1/presented"), "and causes no effect").toBe(0);
     expect(env.refusedActionCount(), "the refusal is durably recorded").toBe(1);
+  });
+});
+
+/**
+ * Two delivery resources, live at once, in one control plane (target-only,
+ * `D-1104`).
+ *
+ * The change these cases exist for is the whole of `D-1104`: the delivery lease
+ * stopped being one global resource and became one per run, so two `lap
+ * perform` processes can poll one control plane concurrently. Everything above
+ * this block runs with one bus and would go on passing if the partition leaked
+ * in either direction.
+ *
+ * The two directions are not equally protected, and that asymmetry is the point.
+ * `poll` chooses its own rows, so `_DUE_QUERY`'s `delivery_resource = :resource`
+ * term settles it: a bus cannot see another partition's work. `ack` does not
+ * choose -- the id is **caller-supplied**, handed straight through by the MCP
+ * `ack` tool -- so nothing about the row it names is derived from this bus at
+ * all. Run B's endpoint acking an id it read out of a log, or out of run A's
+ * transcript, would have settled run A's row before `D-1104` and nothing
+ * downstream would have noticed: the ack is set once, so the true owner's later
+ * ack is a silent no-op and the message is simply never delivered again.
+ *
+ * Target-only: interlock's outbox has one delivery lease and no resource column,
+ * so the source suite could not have expressed either case.
+ */
+describe("two delivery resources in one control plane (target-only, D-1104)", () => {
+  /**
+   * The suite's run-scoped world plus a second live bus on the global resource.
+   *
+   * The global resource is the honest choice for the second partition rather
+   * than a second invented run: it is the one this deployment really does run
+   * beside a lap's own (legacy rows, runless relays, runless fan-out), and it
+   * is the partition the operator's `gate` verbs drain. Both buses share the
+   * fixture's registry and recipient, and both leases sit at {@link EPOCH} --
+   * equal epochs across two resources is precisely the configuration
+   * `writer_epoch` alone cannot tell apart, so it is the one worth building.
+   */
+  function twoPartitions(): {
+    readonly env: BusEnv;
+    readonly globalBus: ReturnType<BusEnv["busOn"]>;
+    readonly globalId: string;
+  } {
+    const env = busEnv();
+    const globalBus = env.busOn(GLOBAL_RESOURCE);
+    send(env, { messageId: "task-1" });
+    const globalId = "global-1";
+    globalBus.send({
+      messageId: globalId,
+      recipient: RECIPIENT,
+      payload: '{"task":"runless"}',
+      dedupKey: `dk-${globalId}`,
+      nowMs: T0,
+      epoch: EPOCH,
+      runId: null,
+    });
+    // The precondition, read out of SQL rather than assumed: a fenced
+    // `enqueue` stamps `delivery_resource` from the *enqueuing bus's* own
+    // lease, not from `run_id`. If both rows landed in one partition every
+    // assertion below would be about nothing.
+    expect(env.deliveryResourceOf("task-1")).toBe(RESOURCE);
+    expect(env.deliveryResourceOf(globalId)).toBe(GLOBAL_RESOURCE);
+    return { env, globalBus, globalId };
+  }
+
+  test("a poll never reaches another delivery resource's rows", () => {
+    // Absence, not filtering. Both rows are due, both are addressed to the
+    // recipient each bus polls for, and the only thing separating them is the
+    // partition -- so a bus that ranged over the whole table would deliver
+    // both, and one that ranged over it and then discarded the stranger would
+    // still have *attempted* it (an effect published, a `writer_epoch`
+    // re-stamped under the wrong lease). The destination's own ledger is
+    // therefore asserted beside the envelope list: it is the only thing that
+    // can tell "never selected" from "selected and dropped on the way out".
+    const { env, globalBus, globalId } = twoPartitions();
+
+    const mine = env.bus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+
+    expect(mine.map((e) => e.messageId)).toEqual(["task-1"]);
+    expect(mine[0]?.deliveryResource).toBe(RESOURCE);
+    expect(env.outboxStatus(globalId), "the other partition's row was not attempted").toBe(
+      "pending",
+    );
+    expect(env.effectCount(`dk-${globalId}`), "and caused no effect").toBe(0);
+
+    // And symmetrically: the global bus sees its own row and not the run's.
+    const theirs = globalBus.poll(RECIPIENT, { nowMs: T0 + 2_000, epoch: EPOCH });
+    expect(theirs.map((e) => e.messageId)).toEqual([globalId]);
+    expect(theirs[0]?.deliveryResource).toBe(GLOBAL_RESOURCE);
+    expect(env.refusedActionCount(), "neither poll refused anything").toBe(0);
+  });
+
+  test("an ack from the wrong delivery resource is refused and settles nothing", () => {
+    // The hazard `poll` cannot close, because the id is the caller's.
+    //
+    // Note what is deliberately *right* here: the recipient matches, so the
+    // recipient guard in `ack` -- the only cross-boundary check this facade had
+    // before `D-1104` -- passes, and the row is genuinely delivered and
+    // genuinely awaiting an ack. The single thing wrong is which bus is doing
+    // the acking.
+    //
+    // The half that matters is the second assertion, not the throw. An ack is
+    // set once: had this one landed, the row would be `acked` forever, the
+    // partition that actually delivered it would get `recorded: false` from its
+    // own ack, and the message would simply never be presented again.
+    const { env, globalBus, globalId } = twoPartitions();
+    const delivered = globalBus.poll(RECIPIENT, { nowMs: T0 + 1_000, epoch: EPOCH });
+    expect(delivered.map((e) => e.messageId)).toEqual([globalId]);
+
+    expectRefusal(
+      () => env.bus.ack(globalId, { nowMs: T0 + 2_000, recipient: RECIPIENT }),
+      MessageBusUsageError,
+      /belongs to delivery resource/,
+    );
+
+    expect(env.outboxStatus(globalId), "a refused ack settles nothing").toBe("delivered");
+    expect(env.ackedRowCount()).toBe(0);
+    // Anti-vacuity: the row was ackable all along, by the bus that owns it.
+    expect(globalBus.ack(globalId, { nowMs: T0 + 3_000, recipient: RECIPIENT }).recorded).toBe(
+      true,
+    );
+    expect(env.outboxStatus(globalId)).toBe("acked");
   });
 });

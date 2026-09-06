@@ -59,7 +59,6 @@ import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 // so this module and the `mcp.json` the materialiser renders cannot drift.
 // Side-effect free: `endpoint.ts` guards its process entry point, and
 // `workspace/materializer.ts` already imports the same constant from it.
-import { DELIVERY_LEASE_RESOURCE } from "../messagebus/endpoint.js";
 
 /**
  * The endpoint's lease was lost, and the worker's endpoint can no longer write.
@@ -156,7 +155,7 @@ const DEFAULT_SCHEDULE = (fn: () => void, ms: number): (() => void) => {
 };
 
 /**
- * Take the one delivery lease and keep it alive, or refuse.
+ * Take this run's delivery lease and keep it alive, or refuse.
  *
  * A thin, deliberate wrapper over {@link acquire}, for the reason
  * `run_lifecycle.ts`'s `acquireRunLease` gives about its own: the acquire side
@@ -170,14 +169,30 @@ const DEFAULT_SCHEDULE = (fn: () => void, ms: number): (() => void) => {
  * an acquisition whose renewal was never armed is the failure this module
  * exists to remove, and it would be invisible for exactly one TTL.
  *
- * @throws {import("../control_plane/lease.js").LeaseHeld} the delivery lease
- *   has a live holder. `outbox-delivery` is one global resource (`D-0053` rule
- *   4), so this is also what refuses a second concurrent lap -- before anything
- *   irreversible, which is why the acquisition is early.
+ * @throws {import("../control_plane/lease.js").LeaseHeld} *resource* has a live
+ *   holder -- **this run's** lap is already running, since `D-1104` made the
+ *   resource per run. It used to be any lap at all: `outbox-delivery` was one
+ *   global resource (`D-0053` rule 4) and this acquisition was what serialised
+ *   two concurrent laps. The refusal keeps its meaning, narrowed from "a lap"
+ *   to "*this run's* lap", and still lands before anything irreversible, which
+ *   is why the acquisition is early. A `gate deliver` pass on the same run's
+ *   resource is refused here too, and is meant to be: for as long as a run's
+ *   lap runs, that run's delivery authority is the lap's.
  */
 export function holdDeliveryLease(
   connection: SqliteDatabase,
   options: {
+    /**
+     * The delivery resource to hold -- this run's, from
+     * `deliveryResourceForRun(runId)` (`D-1104`).
+     *
+     * A parameter and not a constant, and a *required* one: a default would
+     * be the global resource, and a lap that silently took the global
+     * resource would serialise against every other lap while writing rows no
+     * per-run poll selects. The caller has the run id in hand at the one
+     * production call site, so there is nothing for a default to save.
+     */
+    readonly resource: string;
     /** The lease claimant. The admitted run's, so the endpoint writes as it. */
     readonly holder: string;
     /** The lap's live wall clock, read at the acquisition and at every tick. */
@@ -186,7 +201,7 @@ export function holdDeliveryLease(
 ): HeldDeliveryLease {
   const ttlMs = options.ttlMs ?? DELIVERY_LEASE_TTL_MS;
   const lease = acquire(connection, {
-    resource: DELIVERY_LEASE_RESOURCE,
+    resource: options.resource,
     holder: options.holder,
     nowMs: options.nowMs(),
     ttlMs,
@@ -254,6 +269,20 @@ export class HeldDeliveryLease {
     return this.#lease.epoch;
   }
 
+  /**
+   * The delivery resource this hold is on (`D-1104`).
+   *
+   * Read from the token rather than kept beside it, for the reason
+   * {@link epoch} gives about re-reading the row: the token is the
+   * acquisition, a renewal keeps both fields, and a second copy is one more
+   * thing that could disagree. It is what `mcp.json`'s
+   * `INTERLOCK_MESSAGEBUS_RESOURCE` is rendered from, so the endpoint fences
+   * under exactly the resource its launcher holds.
+   */
+  get resource(): string {
+    return this.#lease.resource;
+  }
+
   /** The renewal failure that latched, or `null` while the lease is held. */
   get failure(): Error | null {
     return this.#failure;
@@ -316,7 +345,7 @@ export class HeldDeliveryLease {
       return;
     }
     throw new EndpointLeaseLost(
-      `the endpoint delivery lease ${pythonRepr(DELIVERY_LEASE_RESOURCE)} is no longer held ` +
+      `the endpoint delivery lease ${pythonRepr(this.#lease.resource)} is no longer held ` +
         `by ${pythonRepr(this.#lease.holder)} at epoch ${this.#lease.epoch}, so the worker's ` +
         `endpoint could not write under the epoch its configuration was rendered with: ` +
         this.#failure.message,
@@ -327,10 +356,12 @@ export class HeldDeliveryLease {
   /**
    * Disarm the timer and give the lease up. Idempotent, and **never throws**.
    *
-   * Releasing rather than letting it expire, because `outbox-delivery` is one
-   * global resource: a lease abandoned at the end of a lap withholds it from
-   * the next lap for a whole TTL, for no benefit. `release` only ever shortens
-   * and is a legal no-op on an already-expired row.
+   * Releasing rather than letting it expire: a lease abandoned at the end of a
+   * lap withholds this run's delivery resource for a whole TTL, for no
+   * benefit -- and since `D-1104` it withholds it from the operator's own
+   * `gate deliver --run-id` pass, which is the worker for exactly the window
+   * after this lap exits. `release` only ever shortens and is a legal no-op on
+   * an already-expired row.
    *
    * The refusal is swallowed for the reason `stopSession` swallows its own:
    * this runs in a `finally`, and an exception thrown from there would

@@ -93,6 +93,9 @@ export function fakeCli(root: string): readonly [string, string] {
  * time out ten seconds later against a message about a state never reached.
  */
 export type FakeSwitch =
+  | "FAKE_BARRIER_READY"
+  | "FAKE_BARRIER_RELEASE"
+  | "FAKE_BARRIER_TIMEOUT"
   | "FAKE_EXIT"
   | "FAKE_GARBAGE_BEFORE_RESULT"
   | "FAKE_GRANDCHILD_PID_FILE"
@@ -111,6 +114,7 @@ export type FakeSwitch =
 
 /** The scenarios `FAKE_MODE` selects; anything else is the `ok` path. */
 export type FakeMode =
+  | "barrier"
   | "events-then-hang"
   | "garbage-then-hang"
   | "ok"

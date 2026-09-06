@@ -33,6 +33,10 @@ import process from "node:process";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
+import {
+  DELIVERY_LEASE_RESOURCE,
+  deliveryResourceForRun,
+} from "../../src/control_plane/delivery_resource.js";
 import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { LapRunIntent } from "../../src/control_plane/lap_run_intent.js";
 import {
@@ -57,7 +61,6 @@ import {
   holdDeliveryLease,
 } from "../../src/lap/endpoint_lease.js";
 import { type LapRequest, type LapTerminalReadout, performLap } from "../../src/lap/root.js";
-import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { Failure, FailureKind, Ok, type ProviderResult } from "../../src/session/provider.js";
 import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
@@ -75,6 +78,21 @@ const SESSION_ID = "00000000-0000-0000-0000-000000000001";
 
 /** A second claimant, for the cases about somebody else holding the resource. */
 const OTHER_HOLDER = "operator-2";
+
+/**
+ * The delivery resource this file's run owns, since `D-1104` scoped the
+ * resource per run.
+ *
+ * Every fixture here holds THIS name rather than the global literal, because
+ * that is what `performLap` acquires (`deliveryResourceForRun(intent.runId)`)
+ * and what it renders into the worker's `INTERLOCK_MESSAGEBUS_RESOURCE`. A
+ * fixture that held the global literal instead would be asserting about a
+ * partition no per-run poll selects.
+ */
+const RUN_RESOURCE = deliveryResourceForRun(RUN_ID);
+
+/** A second run's resource, for the cases about what does NOT collide. */
+const OTHER_RUN_RESOURCE = deliveryResourceForRun("run-endpoint-lease-2");
 
 /** Ten TTLs: long enough that no renewal could bridge it. */
 const FAR_FUTURE_MS = T0 + 10 * DELIVERY_LEASE_TTL_MS;
@@ -148,10 +166,10 @@ function plane(label: string): SqliteDatabase {
   return connection;
 }
 
-/** The delivery lease row, as SQL sees it. */
-function deliveryRow(connection: SqliteDatabase): Lease {
-  const row = readLease(connection, DELIVERY_LEASE_RESOURCE);
-  expect(row, "the delivery lease row should exist").toBeDefined();
+/** This run's delivery lease row, as SQL sees it. */
+function deliveryRow(connection: SqliteDatabase, resource: string = RUN_RESOURCE): Lease {
+  const row = readLease(connection, resource);
+  expect(row, `the delivery lease row for ${resource} should exist`).toBeDefined();
   return row as Lease;
 }
 
@@ -162,6 +180,10 @@ function held(
   scheduler: Scheduler,
 ): HeldDeliveryLease {
   return holdDeliveryLease(connection, {
+    // `resource` is required since `D-1104` and there is no default: this file
+    // names the run's own resource so that half one holds exactly what half
+    // two's `performLap` holds.
+    resource: RUN_RESOURCE,
     holder: HOLDER,
     nowMs: () => clock.ms,
     schedule: scheduler.schedule,
@@ -312,10 +334,11 @@ describe("the endpoint's lease is held and renewed by its launcher (D-0072)", ()
   });
 
   test("stop gives the lease back, disarms, and is idempotent", () => {
-    // `outbox-delivery` is one global resource, so a lease abandoned at the end
-    // of a lap withholds it from the next lap for a whole TTL. The second stop
-    // is asserted because it runs from a `finally` that a future edit could
-    // reach twice.
+    // A run's delivery resource is that run's alone, so a lease abandoned at
+    // the end of a lap withholds it from this run's next lap -- and from the
+    // operator's `gate deliver --run-id` pass over it -- for a whole TTL. The
+    // second stop is asserted because it runs from a `finally` that a future
+    // edit could reach twice.
     const connection = plane("delivery-stop");
     const clock = { ms: T0 };
     const scheduler = new Scheduler();
@@ -329,7 +352,7 @@ describe("the endpoint's lease is held and renewed by its launcher (D-0072)", ()
     expect(deliveryRow(connection).expiresAtMs).toBeLessThanOrEqual(clock.ms);
     // The property the release is FOR: the next claimant does not wait a TTL.
     const next = acquire(connection, {
-      resource: DELIVERY_LEASE_RESOURCE,
+      resource: RUN_RESOURCE,
       holder: OTHER_HOLDER,
       nowMs: clock.ms,
       ttlMs: DELIVERY_LEASE_TTL_MS,
@@ -350,7 +373,7 @@ describe("the endpoint's lease is held and renewed by its launcher (D-0072)", ()
 
     clock.ms = FAR_FUTURE_MS;
     const taken = acquire(connection, {
-      resource: DELIVERY_LEASE_RESOURCE,
+      resource: RUN_RESOURCE,
       holder: OTHER_HOLDER,
       nowMs: clock.ms,
       ttlMs: DELIVERY_LEASE_TTL_MS,
@@ -550,7 +573,10 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
 
     const env = endpointEnv(f.artifactRoot);
     const row = deliveryRow(f.connection);
-    expect(env["INTERLOCK_MESSAGEBUS_RESOURCE"]).toBe(DELIVERY_LEASE_RESOURCE);
+    // The run's resource, not the global literal: `performLap` acquires
+    // `deliveryResourceForRun(intent.runId)` and renders the hold's own name,
+    // so the endpoint fences under exactly the resource its launcher holds.
+    expect(env["INTERLOCK_MESSAGEBUS_RESOURCE"]).toBe(RUN_RESOURCE);
     expect(env["INTERLOCK_MESSAGEBUS_HOLDER"]).toBe(HOLDER);
     expect(env["INTERLOCK_MESSAGEBUS_EPOCH"]).toBe(String(row.epoch));
     expect(env["INTERLOCK_MESSAGEBUS_HOLDER"]).toBe(row.holder);
@@ -558,8 +584,11 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
   });
 
   test("the lease is given back when the lap is over", async () => {
-    // The consequence of `outbox-delivery` being one global resource: a lap
-    // that held on until expiry would make the next lap wait a TTL for nothing.
+    // The consequence of the resource being per run rather than global: a lap
+    // that held on until expiry would make a RETRY of this run wait a TTL for
+    // nothing, and would withhold the resource from the operator's own
+    // `gate deliver --run-id` pass -- which is this run's delivery authority
+    // for exactly the window after the lap exits (`D-1104`).
     const f = fixture("lease-returned");
     await performLap(f.connection, f.provider, REPORTING_READER, f.request);
 
@@ -639,15 +668,20 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
     expect(deliveryRow(f.connection).expiresAtMs).toBe(T0 + DELIVERY_LEASE_TTL_MS);
   });
 
-  test("a second lap is refused while the first holds the delivery lease", async () => {
-    // Recorded rather than discovered (`D-0074`): one delivery resource means
-    // one endpoint permitted to write, so two concurrent laps against one
-    // control plane serialise. The refusal lands at the acquisition, which is
-    // before the worktree, the fence and any child -- and `startCalls` is what
-    // says so.
-    const f = fixture("second-lap");
+  test("a second lap OF THIS RUN is refused while the first holds its delivery lease", async () => {
+    // `D-0074`'s serialisation, **narrowed rather than removed**. It used to
+    // read "a second lap": `outbox-delivery` was one global resource
+    // (`D-0053` rule 4) and this acquisition was what stopped any two laps
+    // running at once. Since `D-1104` the resource is per run, so what a live
+    // holder excludes is a second lap OF THE SAME RUN -- one endpoint
+    // permitted to write that run's rows -- and its complement below is now
+    // admitted on purpose.
+    //
+    // The refusal still lands at the acquisition, which is before the
+    // worktree, the fence and any child; `startCalls` is what says so.
+    const f = fixture("second-lap-same-run");
     acquire(f.connection, {
-      resource: DELIVERY_LEASE_RESOURCE,
+      resource: RUN_RESOURCE,
       holder: OTHER_HOLDER,
       nowMs: T0,
       ttlMs: DELIVERY_LEASE_TTL_MS,
@@ -656,10 +690,58 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
     await expectRefusalAsync(
       () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
       LeaseHeld,
-      /outbox-delivery/,
+      // The run resource in full. The bare `outbox-delivery` substring would
+      // also match, and would have matched on the pre-`D-1104` build that
+      // acquired the global name -- so the case would have read as green over
+      // exactly the behaviour this change reverses.
+      RUN_RESOURCE,
     );
 
     expect(f.provider.startCalls).toEqual([]);
+  });
+
+  test("a lap PROCEEDS while another run's delivery lease, or the global one, is held", async () => {
+    // The complement, and the point of the whole change (`D-1104`): under one
+    // global resource each of these two holders refused the lap outright, so
+    // two `lap perform` processes against one control plane serialised and the
+    // operator's own runless `gate deliver` pass excluded a lap that shared no
+    // row with it. Both are now beside this lap rather than in front of it,
+    // and the lap acquires, materialises and starts its child.
+    //
+    // Both holders in ONE case deliberately: what has to be true is that
+    // neither name is the one `performLap` takes, and holding both at once is
+    // the strongest form of that -- a build that still serialised on either
+    // would fail here.
+    const f = fixture("second-lap-other-run");
+    acquire(f.connection, {
+      resource: OTHER_RUN_RESOURCE,
+      holder: OTHER_HOLDER,
+      nowMs: T0,
+      ttlMs: DELIVERY_LEASE_TTL_MS,
+    });
+    acquire(f.connection, {
+      resource: DELIVERY_LEASE_RESOURCE,
+      holder: OTHER_HOLDER,
+      nowMs: T0,
+      ttlMs: DELIVERY_LEASE_TTL_MS,
+    });
+
+    const outcome = await performLap(f.connection, f.provider, REPORTING_READER, f.request);
+
+    expect(outcome.ingested.gateOpened).toBe(true);
+    expect(f.provider.startCalls).toHaveLength(1);
+    // Its own lease is the run's, and it is a first acquisition: the two
+    // neighbours consumed no epoch on it.
+    const row = deliveryRow(f.connection);
+    expect(row.epoch).toBe(1);
+    // And the neighbours are untouched -- still `OTHER_HOLDER`'s, still
+    // standing. A lap that had somehow released or taken over either one would
+    // be exactly the cross-run interference this partition exists to prevent.
+    for (const resource of [OTHER_RUN_RESOURCE, DELIVERY_LEASE_RESOURCE]) {
+      const neighbour = deliveryRow(f.connection, resource);
+      expect(neighbour.holder).toBe(OTHER_HOLDER);
+      expect(neighbour.expiresAtMs).toBe(T0 + DELIVERY_LEASE_TTL_MS);
+    }
   });
 });
 

@@ -14,7 +14,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
-
+import {
+  DELIVERY_RESOURCE_SHAPES,
+  isDeliveryResource,
+} from "../control_plane/delivery_resource.js";
 import { type Destination, KeyedDropbox } from "../control_plane/destination.js";
 import { appendEvent } from "../control_plane/events.js";
 import { spikeRegistry } from "../control_plane/handlers.js";
@@ -39,7 +42,7 @@ import {
   type SpawnPlan,
 } from "../fencing/spawn.js";
 import { writeAllSync } from "../fencing/state.js";
-import { DELIVERY_LEASE_RESOURCE, EndpointConfig } from "../messagebus/endpoint.js";
+import { EndpointConfig } from "../messagebus/endpoint.js";
 import type { SessionOrchestratorOptions } from "../supervisor.js";
 import {
   addWorktree,
@@ -273,6 +276,18 @@ export interface EndpointBinding {
    * is deliberately not one of those names.
    */
   readonly databasePath?: string;
+  /**
+   * `INTERLOCK_MESSAGEBUS_RESOURCE`: the delivery resource the endpoint is
+   * fenced under -- this run's, since `D-1104`.
+   *
+   * The field the comment on the mirror refusal below used to anticipate ("if
+   * the binding ever grows a `resource` field"). It is required rather than
+   * defaulted for the same reason `holdDeliveryLease`'s is: a default would be
+   * the global resource, and an endpoint rendered onto the global resource
+   * while its lap holds a per-run one is an endpoint whose every fenced write
+   * is refused -- silently, at first delivery, which lap 1 never reaches.
+   */
+  readonly resource: string;
   /** `INTERLOCK_MESSAGEBUS_HOLDER`: the lease claimant the endpoint writes under. */
   readonly holder: string;
   /** `INTERLOCK_MESSAGEBUS_EPOCH`: that lease's epoch. */
@@ -816,7 +831,7 @@ function renderMcpConfig(
 } {
   const env: Record<string, string> = {
     INTERLOCK_MESSAGEBUS_DB: databasePath,
-    INTERLOCK_MESSAGEBUS_RESOURCE: DELIVERY_LEASE_RESOURCE,
+    INTERLOCK_MESSAGEBUS_RESOURCE: binding.resource,
     INTERLOCK_MESSAGEBUS_HOLDER: binding.holder,
     INTERLOCK_MESSAGEBUS_EPOCH: String(binding.epoch),
     INTERLOCK_MESSAGEBUS_RECIPIENT: binding.recipient,
@@ -849,14 +864,16 @@ function renderMcpConfig(
         `these are unset or unusable: ${gaps.join(", ")}`,
     );
   }
-  if (config.resource !== DELIVERY_LEASE_RESOURCE) {
-    // Unreachable while the resource is written from the constant above, and
-    // checked anyway: this is the assertion that keeps the two in step if the
-    // binding ever grows a `resource` field, which is the shape the endpoint's
-    // own startup refusal is about.
+  if (!isDeliveryResource(config.resource)) {
+    // The binding grew that `resource` field (`D-1104`), so this assertion is
+    // no longer unreachable: it is the materialiser's mirror of the endpoint's
+    // own startup refusal, and it fires here -- before a worktree, a branch or
+    // a child -- rather than there, as an exit status 2 from a process the lap
+    // has already paid for. The two admissions read the same predicate so they
+    // cannot drift into disagreeing about one name.
     throw new WorkspaceMaterializationUsageError(
       `the MCP configuration names lease resource ${pythonRepr(config.resource)}, ` +
-        `which the endpoint refuses; lap 1 admits only ${pythonRepr(DELIVERY_LEASE_RESOURCE)}`,
+        `which the endpoint refuses; it admits ${DELIVERY_RESOURCE_SHAPES}`,
     );
   }
 
@@ -1168,14 +1185,29 @@ export function materializeWorkspace(
   }
   // Reuse is safe within ONE control plane, and this is where that qualifier is
   // enforced rather than left in a docstring. The dropbox keeps its fencing
-  // watermark per scope, and the scope is the lease resource name
-  // (`outbox-delivery`) -- a constant, with no database in it -- while the
+  // watermark per scope, and the scope is the lease resource name, while the
   // epochs compared against it are a lease sequence local to one control plane.
   // So a dropbox that another database already drove to epoch 5 refuses this
   // run's epoch 1 as stale, and it refuses it at the endpoint's first delivery:
   // after the branch, the worktree, the artifacts and the event. Same-plane
   // reuse -- the case #122 is about -- passes, because a later lease epoch on
   // one resource is always higher than the ones before it.
+  //
+  // **Since `D-1104` the scope is this run's resource and not a constant, and
+  // that changes what this check can still see.** The dropbox keys its fence
+  // file by the caller's lease resource, so per-run resources give per-run
+  // fence keys automatically -- which is what makes two concurrent laps
+  // coherent end to end: had the resource stayed global while the epochs went
+  // per run, run B's epoch 1 would be refused as stale against run A's
+  // honoured epoch 5 and this very pre-flight would refuse the second lap
+  // outright. The cost is that a fresh run scope has no watermark, so the
+  // cross-plane reuse this block refuses is now caught only for a run id that
+  // has been seen in this destination before. `D-1104` records that narrowing
+  // rather than leaving it to be discovered, and records that the fence file
+  // therefore grows one key per run for ever -- compaction is explicitly NOT
+  // authorised, because a restore or a re-seed can reissue a run id whose
+  // watermark was compacted away and a low token would then be accepted as
+  // fresh.
   if (destinationEntry !== undefined) {
     // The read is wrapped because the fence file is somebody else's artifact: a
     // torn or hand-edited one raises out of `JSON.parse`, and the endpoint would
@@ -1184,7 +1216,7 @@ export function materializeWorkspace(
     let honoured: number | null;
     try {
       honoured = new KeyedDropbox(destinationDir, "materialisation-preflight").honouredToken(
-        DELIVERY_LEASE_RESOURCE,
+        request.endpoint.resource,
       );
     } catch (error) {
       throw new WorkspaceMaterializationRefused(
@@ -1197,7 +1229,7 @@ export function materializeWorkspace(
     if (honoured !== null && honoured >= request.endpoint.epoch) {
       throw new WorkspaceMaterializationRefused(
         `the endpoint destination directory ${pythonRepr(destinationDir)} has already honoured ` +
-          `fencing token ${honoured} for ${pythonRepr(DELIVERY_LEASE_RESOURCE)}, which is not ` +
+          `fencing token ${honoured} for ${pythonRepr(request.endpoint.resource)}, which is not ` +
           `below this endpoint's epoch ${request.endpoint.epoch}; the dropbox would refuse every ` +
           "effect this run delivers as stale. A dropbox belongs to one control plane, whose lease " +
           "epochs only ever rise",

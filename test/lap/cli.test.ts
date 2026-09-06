@@ -39,6 +39,7 @@ import { describe, expect, onTestFinished, test } from "vitest";
 import { dispatch, helpStrings } from "../../src/cli/parser.js";
 import { buildParser, main, mainAsync } from "../../src/cli.js";
 import { dbCliSeams } from "../../src/control_plane/cli.js";
+import { deliveryResourceForRun } from "../../src/control_plane/delivery_resource.js";
 import { HUMAN_GATED_RECIPIENT, NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { acquire as acquireLease } from "../../src/control_plane/lease.js";
 import { openProductionControlPlane } from "../../src/control_plane/migrator.js";
@@ -51,7 +52,6 @@ import { RUN_DELEGATION_RECORDED_EVENT_TYPE } from "../../src/control_plane/run_
 import { runCliSeams } from "../../src/control_plane/run_cli.js";
 import { EVENT_ADMITTED } from "../../src/fencing/spawn.js";
 import { lapCliSeams } from "../../src/lap/cli.js";
-import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import {
   FENCE_FILENAME,
@@ -1067,7 +1067,8 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
     // deadline is decided at the ingest and the lease failure at a renewal, and
     // a lap that carries both is the one the human path prints two `note:` lines
     // for.
-    const f = lap("lap-json-notes", "run-json-notes");
+    const runId = "run-json-notes";
+    const f = lap("lap-json-notes", runId);
     const deadline = T0 + 5_000;
     const stealer = inspect(f.databasePath);
     let reads = 0;
@@ -1088,6 +1089,12 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // so the failure lands exactly where `D-0073` says it costs the lease and
       // never the report.
       //
+      // The row named by THIS RUN's delivery resource
+      // (`deliveryResourceForRun(runId)`), which since `D-1104` is what
+      // `performLap` acquires: the bare `outbox-delivery` literal now names
+      // the global partition, where this lap has no row at all, so an UPDATE
+      // against it would change nothing and the lap would finish clean.
+      //
       // Taken over rather than deleted or back-dated. The schema forbids
       // deleting a lease row (a deleted row lets the next acquisition restart
       // the epoch at 1) and CHECKs `expires_at_ms > acquired_at_ms`, so neither
@@ -1101,7 +1108,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
           .prepare(
             "UPDATE lease SET holder = :holder, epoch = epoch + 1 WHERE resource = :resource",
           )
-          .run({ holder: "someone-else", resource: DELIVERY_LEASE_RESOURCE });
+          .run({ holder: "someone-else", resource: deliveryResourceForRun(runId) });
         return randomUUID();
       },
     });
@@ -1131,7 +1138,12 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // serialises as whatever its enumerable fields are, which for an `Error`
       // is nothing at all -- so the object is built by hand from the one field
       // an operator acts on.
-      endpoint_lease_failure: { message: expect.stringContaining(DELIVERY_LEASE_RESOURCE) },
+      // The run's resource in full rather than the bare `outbox-delivery`
+      // prefix: the prefix is a substring of every run resource, so it would
+      // still read as green if the lap went back to holding the global name.
+      endpoint_lease_failure: {
+        message: expect.stringContaining(deliveryResourceForRun(runId)),
+      },
       // The operator's own number, handed back so a host can tell "my deadline
       // was too tight" from "the worker ran long".
       elapsed_deadline_at_ms: deadline,
