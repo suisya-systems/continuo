@@ -379,7 +379,7 @@ Four things already read this vocabulary, which is why it is a constraint rather
 
 ### 4.4 `delegation_record` — what a run was permitted to do
 
-Added by `0005_delegation_record.sql` under `D-1105`. The `run` row records that a run exists, the
+Added by `0006_delegation_record.sql` under `D-1105`. The `run` row records that a run exists, the
 `run_delegation_recorded` event records what it was *asked* to do (`D-0055`), and this records what
 it was *allowed* to do. The three are written in one transaction, and the reason is atomicity rather
 than convenience: a commit between them would leave a run that is admissible and whose permissions

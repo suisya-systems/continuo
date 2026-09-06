@@ -133,6 +133,29 @@ export interface DelegationRecordFields {
 }
 
 /**
+ * A UTF-16 code unit that is half of a surrogate pair with no other half.
+ *
+ * Such a string has no UTF-8 encoding. Both halves of storage silently replace
+ * it with U+FFFD -- `Buffer.from(s, "utf-8")` on the way to the digest, and the
+ * driver's own binding on the way to the column -- and they replace it the
+ * SAME way, so the stored bytes differ from what the caller handed in while the
+ * digest over them still verifies. That is the one failure this record must not
+ * have: a record whose bytes were altered on the way in, reported as intact.
+ *
+ * Refused here rather than repaired, and refused for the library caller rather
+ * than only at the CLI: `run admit`'s fatal decoder cannot produce one, but
+ * `admitRun` is exported (`D-0002`) and a caller that built the text in memory
+ * can. cadenza refuses the same shape at contract-issue time for the same
+ * reason (`SurrogateInStringError`, cadenza `D-0013`).
+ *
+ * Note what is NOT refused: an *escaped* surrogate, `"\ud800"` as six source
+ * characters. Those are ordinary ASCII in the document text, they round-trip
+ * byte for byte, and refusing them would refuse a document JSON permits.
+ * Raised by review of this change.
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
  * What a `record_schema` may be made of: printable ASCII, and nothing else.
  *
  * The same rule `LapRunIntent` holds `run_id` to, and for the same reason: this
@@ -208,6 +231,15 @@ export class DelegationRecord {
     if (typeof envelope !== "string" || envelope === "") {
       throw new DelegationRecordUsageError(
         `envelope must be a non-empty string, got ${pythonRepr(envelope)}`,
+      );
+    }
+    if (LONE_SURROGATE.test(envelope)) {
+      throw new DelegationRecordUsageError(
+        "envelope carries an unpaired UTF-16 surrogate, which has no UTF-8 " +
+          "encoding; storing it would replace it with U+FFFD in both the column " +
+          "and the digest, so the record would be altered on the way in and " +
+          "still verify. An escaped surrogate in the document text is fine; a " +
+          "raw one is not",
       );
     }
     if (envelope.length > MAX_ENVELOPE_LENGTH) {

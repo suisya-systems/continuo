@@ -117,7 +117,7 @@ import { DelegationRecord } from "./delegation_record.js";
 import { LapRunIntent } from "./lap_run_intent.js";
 import { LeaseRefusal } from "./lease.js";
 import { openProductionControlPlane } from "./migrator.js";
-import { pythonRepr } from "./python_repr.js";
+import { pythonJsonString } from "./python_json.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import {
   admitRun,
@@ -423,17 +423,27 @@ function delegationRecordOf(args: Namespace): DelegationRecord {
       runCliSeams.readFile(path),
     );
   } catch (error) {
-    // Both values quoted rather than interpolated raw, and this is the one
-    // place in this verb where that matters. `--db` is echoed verbatim by an
-    // explicit, documented carry (see this module's own note), and the rule the
-    // note ends on is that a change does not ADD an instance of it. This path
-    // is a new one: the argument is a filesystem path an operator typed and the
-    // text is a decoder's, so either may carry a newline that forges a second
-    // line of output or a character a cp932 console cannot encode. `pythonRepr`
-    // escapes both. Raised by review of this change.
+    // Both values rendered ASCII-only rather than interpolated raw, and this is
+    // the one place in this verb where that matters. `--db` is echoed verbatim
+    // by an explicit, documented carry (see this module's own note), and the
+    // rule the note ends on is that a change does not ADD an instance of it.
+    // This path is a new one: the argument is a filesystem path an operator
+    // typed and the text is a decoder's, so either may carry a newline that
+    // forges a second line of output or a character a cp932 console cannot
+    // encode -- and this organization has repositories under paths with
+    // Japanese in them, so that is the ordinary case rather than the hostile
+    // one.
+    //
+    // `pythonJsonString` and not `pythonRepr`: `repr()` escapes control
+    // characters but leaves printable non-ASCII intact, which closes the
+    // forgery half and leaves the encoding half open. `json.dumps`'s
+    // `ensure_ascii` escapes every code point past U+007E to `\uXXXX`, so the
+    // refusal is printable on any console and still says what the path was.
+    // Raised by review of this change, twice: the first repair used
+    // `pythonRepr` and only the second closed it.
     throw new ControlPlaneRefusal(
-      `${pythonRepr(path)} could not be read as a delegation record: ` +
-        `${pythonRepr(describeReadError(error))}`,
+      `${pythonJsonString(path)} could not be read as a delegation record: ` +
+        `${pythonJsonString(describeReadError(error))}`,
       { cause: error },
     );
   }
@@ -717,7 +727,7 @@ function showPayload(view: RunView): { readonly [key: string]: JsonValue } {
             acquired_at_ms: view.lease.acquiredAtMs,
             expires_at_ms: view.lease.expiresAtMs,
           },
-    // `null` for a run admitted before `0005_delegation_record.sql`, and the
+    // `null` for a run admitted before `0006_delegation_record.sql`, and the
     // null is load-bearing: it says the record does not exist, where an empty
     // object would say the run was admitted under an empty one. `envelope` is
     // the verbatim column text for the same reason the two payloads above are.

@@ -282,7 +282,7 @@ const SELECT_OUTBOX = `
  *
  * One row or none: `run_id` is the table's primary key, so there is no ordering
  * to choose and no LIMIT to justify. `null` means the run predates
- * `0005_delegation_record.sql`, which is a fact about the database and is
+ * `0006_delegation_record.sql`, which is a fact about the database and is
  * rendered as such rather than as an empty object -- a console must be able to
  * tell "admitted before the record existed" from "admitted under an empty one".
  */

@@ -801,7 +801,7 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
  * Distinct from {@link RunNotAdmitted}, and the distinction is the point. A run
  * this build admitted always has one -- {@link admitRun} writes it in the same
  * transaction as the row -- so the only rows that reach this refusal are runs
- * admitted **before** `0005_delegation_record.sql` existed. Collapsing the two
+ * admitted **before** `0006_delegation_record.sql` existed. Collapsing the two
  * refusals into one would report those runs as never admitted, which is false
  * and is the wrong thing to send an operator looking for.
  *

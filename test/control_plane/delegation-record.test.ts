@@ -96,6 +96,26 @@ function sourceFiles(root: string): string[] {
   return found;
 }
 
+/** A raw, unpaired UTF-16 surrogate inside an otherwise ordinary document. */
+const RAW_LONE_SURROGATE = `{"x": "\ud800"}`;
+
+/** The same code point written as JSON's six-character escape: ASCII source text. */
+const ESCAPED_SURROGATE = String.raw`{"x": "\ud800"}`;
+
+/**
+ * Real non-ASCII text, an escaped surrogate PAIR, and an escaped LONE surrogate.
+ *
+ * All three are legitimate and all three must survive. The last is the one that
+ * makes the rule precise: `\ud800` written as six ASCII characters is valid
+ * JSON source, and it is the parsed VALUE that holds a lone surrogate, not the
+ * text this record stores. The refusal above is about the text.
+ */
+const ASTRAL_AND_ESCAPED =
+  // Written as escapes so this FILE stays ASCII (the repository's own output
+  // policy, enforced by `test/contract/ascii-output-policy.test.ts`); the
+  // first fragment holds real Japanese at runtime, which is the point.
+  `{"ja": "\u65e5\u672c\u8a9e", ` + String.raw`"pair": "\ud800\udc00", "lone": "\ud800"}`;
+
 function rows(connection: SqliteDatabase, table: string): Record<string, unknown>[] {
   return connection.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
 }
@@ -695,6 +715,45 @@ describe("the record checks form and nothing else", () => {
       DelegationRecordUsageError,
       /must be a non-empty string/,
     );
+  });
+
+  test("a raw unpaired surrogate is refused, and an escaped one is not", () => {
+    // The one shape that would break the verbatim guarantee WITHOUT breaking
+    // the digest check: a lone surrogate has no UTF-8 encoding, so the column
+    // and the digest both receive U+FFFD instead, and consistently -- an
+    // altered record that verifies. Found by review of this change, on the
+    // library path: `run admit`'s fatal decoder cannot produce one, but
+    // `admitRun` is exported and a caller that builds the text in memory can.
+    expectRefusal(
+      () => new DelegationRecord({ recordSchema: "s/1", envelope: RAW_LONE_SURROGATE }),
+      DelegationRecordUsageError,
+      /unpaired UTF-16 surrogate/,
+    );
+
+    // The ESCAPED form is six ASCII characters in the source text. It is a
+    // document JSON permits, it round-trips byte for byte, and refusing it
+    // would refuse something legitimate.
+    const record = new DelegationRecord({ recordSchema: "s/1", envelope: ESCAPED_SURROGATE });
+    expect(record.envelope).toBe(ESCAPED_SURROGATE);
+    expect(record.envelopeDigest).toBe(
+      createHash("sha256").update(Buffer.from(ESCAPED_SURROGATE, "utf-8")).digest("hex"),
+    );
+  });
+
+  test("an escaped surrogate and astral text survive the database byte for byte", () => {
+    const { connection } = cpFixture("escaped-surrogate");
+
+    admitRun(connection, {
+      intent: intent(),
+      delegationRecord: new DelegationRecord({
+        recordSchema: "s/1",
+        envelope: ASTRAL_AND_ESCAPED,
+      }),
+      nowMs: T0,
+    });
+
+    expect(readDelegationRecord(connection, "run-1").envelope).toBe(ASTRAL_AND_ESCAPED);
+    expect(runView(connection, "run-1").delegationRecord?.digestVerified).toBe(true);
   });
 
   test("a record is frozen once constructed", () => {

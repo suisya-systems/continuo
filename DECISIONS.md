@@ -16446,12 +16446,22 @@ continuo overruling cadenza's plan.
    silently. The record is the resolved contract in full, the agent-type record applied, the
    configuration after defaults, and the catalog snapshot the grant was issued against -- as values.
 
-5. **Secrets are recorded by identifier and version, never by value.** continuo cannot enforce this,
+5. **An envelope carrying a raw unpaired surrogate is refused.** Such a string has no UTF-8
+   encoding, and both halves of storage replace it with U+FFFD the same way -- the digest and the
+   column alike -- so the record would be altered on the way in and still verify, which is the one
+   failure this design must not have. The refusal is on the record's constructor rather than only at
+   the CLI, because `admitRun` is exported (`D-0002`) and a caller building the text in memory can
+   produce what the CLI's fatal decoder cannot. An *escaped* surrogate in the document text is
+   ordinary ASCII and is not refused; the rule is about the bytes stored, not about the parsed value.
+   Raised by review of this change; cadenza refuses the same shape at issue time for the same reason
+   (`SurrogateInStringError`, cadenza `D-0013`).
+
+6. **Secrets are recorded by identifier and version, never by value.** continuo cannot enforce this,
    because enforcing it would require reading the envelope, so it is an obligation on the producer
    and is stated here as one. It is also why the record is not a general-purpose blob store: the size
    bound is a stated limit, and a document past it is something else arriving through this door.
 
-6. **A new table, `delegation_record`, keyed by `run_id`, and not the `task` table.** `task` is a
+7. **A new table, `delegation_record`, keyed by `run_id`, and not the `task` table.** `task` is a
    known hole in `docs/production-schema.md` §12 -- a name with no DDL. Putting the record there was
    rejected: a table being empty is not a claim on what belongs in it, and if `task` ever binds
    retries or several runs, a mutable task row cannot hold what each *individual* run was authorised
@@ -16460,7 +16470,7 @@ continuo overruling cadenza's plan.
    that does not exist is unrepresentable and the INSERT order inside the transaction is forced by
    the schema rather than remembered by the code.
 
-7. **The row is immutable, and that takes three triggers rather than two.** No-`UPDATE` and
+8. **The row is immutable, and that takes three triggers rather than two.** No-`UPDATE` and
    no-`DELETE` are the pair the event spine and the migration ledger use, and they are not
    sufficient here or there: `INSERT OR REPLACE` resolves a primary-key conflict with an implicit
    delete that fires no trigger unless `recursive_triggers` is ON, which is a per-connection pragma
@@ -16472,7 +16482,7 @@ continuo overruling cadenza's plan.
    (`DelegationRecordTampered`) rather than returning the stored digest, which is the only thing that
    makes storing the digest more than decoration.
 
-8. **`run admit` takes the record as a file and its format name as a separate flag**
+9. **`run admit` takes the record as a file and its format name as a separate flag**
    (`--delegation-record PATH`, `--delegation-record-schema NAME`), both required. A file because
    the record is measured in kilobytes and because a value passed through `argv` reaches the process
    table with it; decoded with a fatal UTF-8 decoder, because a record whose bytes were silently
@@ -16481,19 +16491,19 @@ continuo overruling cadenza's plan.
    re-serialising it -- so the stored bytes become this build's renderer's -- or slicing the source
    text, which is parsing the envelope by another name.
 
-9. **Both flags and the `admitRun` parameter are required, with no absent case and no default.** An
+10. **Both flags and the `admitRun` parameter are required, with no absent case and no default.** An
    optional record is a supported way to admit a run whose authorisation nothing recorded, which is
    the defect being closed, and it is the shape that comes back the first time somebody is in a
    hurry.
 
-10. **The past is not backfilled.** Runs admitted before `0005_delegation_record.sql` carry no
+11. **The past is not backfilled.** Runs admitted before `0006_delegation_record.sql` carry no
     record and never will. `readDelegationRecord` names that case as its own refusal
     (`DelegationRecordUnrecorded`) rather than collapsing it into "no such run", because the true
     answer -- this run predates the record, and what it was permitted to do is not recoverable -- is
     the finding this entry exists to stop accumulating, and an operator sent looking for a typo
     instead would never see it.
 
-11. **`run show` gains a `delegation_record` key and `run admit` gains a `delegation_record` object,
+12. **`run show` gains a `delegation_record` key and `run admit` gains a `delegation_record` object,
     and neither schema id moves.** `continuo.run.show/1` and `continuo.run.admit/1` stay at `/1`
     under the rule `json_output.ts` states: a verb that grows a field does not change its id, because
     a document with an unread key is one every JSON reader already handles. `show` carries the
@@ -16501,7 +16511,7 @@ continuo overruling cadenza's plan.
     echoing the document back on every admission would put a second copy of it in stdout, and one
     copy in one place is the point.
 
-12. **The read surface reports the integrity check; only the reader refuses on it.** `run show`'s
+13. **The read surface reports the integrity check; only the reader refuses on it.** `run show`'s
     `delegation_record` carries `digest_verified`, recomputed over the stored bytes through the same
     function that computed the digest at admission. It is a field rather than a refusal because
     `D-0096` point 5 makes a console's read a thing that must not fail: a run whose record was
@@ -16611,6 +16621,9 @@ when the property is removed rather than when something near it moves:
   refusing the whole run* go red. The second is the read surface's half, added after review pointed
   out that the verifying reader had no shipped caller -- the digest column was checked only by code
   nothing ran.
+- Accept a raw unpaired surrogate: *a raw unpaired surrogate is refused, and an escaped one is not*
+  goes red, and so does *an escaped surrogate and astral text survive the database byte for byte* if
+  the rule is widened to refuse the escaped form too.
 - Collapse `DelegationRecordUnrecorded` into `UnknownRunRefused`: *a run admitted before the record
   existed is named as such, not as unknown* goes red.
 
