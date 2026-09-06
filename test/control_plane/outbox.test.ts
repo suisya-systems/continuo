@@ -94,8 +94,11 @@ import {
 } from "../../src/control_plane/migrator.js";
 import * as outboxModule from "../../src/control_plane/outbox.js";
 import {
+  _ADOPT,
   _COUNT_ATTEMPT,
+  _DEGRADED_DUE_BY_RECIPIENT_QUERY,
   _DEGRADED_DUE_QUERY,
+  _DUE_BY_RECIPIENT_QUERY,
   _DUE_QUERY,
   _MARK_DELIVERED,
   _PENDING_ACTION,
@@ -2575,8 +2578,18 @@ function explainPlan(cp: SqliteDatabase, sql: string, params?: Record<string, un
  * `due` executed, which is the whole property. `verbose` hands back the
  * statement with its parameters already expanded, which `EXPLAIN QUERY PLAN`
  * accepts unchanged.
+ *
+ * `recipient` selects which of `due`'s two call shapes to trace. Both are
+ * traced rather than only the unfiltered one because since `D-1104` each shape
+ * has an index of its own, and a plan taken on one shape says nothing at all
+ * about the other's.
  */
-function executedDueSql(path: string, dropbox: Destination, nowMs: number): string {
+function executedDueSql(
+  path: string,
+  dropbox: Destination,
+  nowMs: number,
+  recipient?: string,
+): string {
   const seen: string[] = [];
   let tracing = false;
   const traced = new Database(path, {
@@ -2592,7 +2605,11 @@ function executedDueSql(path: string, dropbox: Destination, nowMs: number): stri
   const outbox = makeOutbox(traced, dropbox);
   tracing = true;
   try {
-    outbox.due(nowMs);
+    if (recipient === undefined) {
+      outbox.due(nowMs);
+    } else {
+      outbox.due(nowMs, { recipient });
+    }
   } finally {
     tracing = false;
   }
@@ -2617,20 +2634,29 @@ function executedDueSql(path: string, dropbox: Destination, nowMs: number): stri
  * shape). Getting them right is what keeps a refusal attributable: a case that
  * fed SQLite an illegal companion column would see a CHECK failure and could
  * not tell it from the constraint it meant to test.
+ *
+ * `delivery_resource` is 0005's column and is `NOT NULL` with no default, so a
+ * raw insert has to name it or every case below would fail on a constraint it
+ * was not asking about. The honest value is this fixture's own delivery
+ * resource, the one {@link makeOutbox} writes under -- these rows stand in for
+ * rows the module could have written, and a row stamped with anything else
+ * would be invisible to the very `Outbox` the neighbouring cases drive.
  */
 function insertRawOutbox(cp: SqliteDatabase, messageId: string, status: string): void {
   const deliveredAtMs = status === "delivered" || status === "acked" ? T0 + 1 : null;
   const ackedAtMs = status === "acked" ? T0 + 2 : null;
   cp.prepare(
     "INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key, status," +
-      " retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms, acked_at_ms)" +
-      " VALUES (?, 'run-1', ?, '{}', ?, ?, 0, ?, ?, ?, ?)",
+      " retry_count, writer_epoch, delivery_resource, enqueued_at_ms, delivered_at_ms," +
+      " acked_at_ms)" +
+      " VALUES (?, 'run-1', ?, '{}', ?, ?, 0, ?, ?, ?, ?, ?)",
   ).run(
     messageId,
     NOTIFY_RECIPIENT,
     `dk/${messageId}`,
     status,
     EPOCH,
+    RESOURCE,
     T0,
     deliveredAtMs,
     ackedAtMs,
@@ -2767,7 +2793,7 @@ describe("the status vocabulary is the tables own (target-only, production schem
 });
 
 describe("the due query uses the partial index written to serve it (target-only)", () => {
-  test("the plan of the statement due actually ran names outbox_undelivered", () => {
+  test("the plan of the statement due actually ran seeks on the range term", () => {
     // 0003 ships `CREATE INDEX outbox_undelivered ON outbox(enqueued_at_ms)
     // WHERE status IN ('pending', 'delivered')`, and the whole reason
     // `_DUE_QUERY` spells its predicate as that positive `IN` list rather than
@@ -2778,8 +2804,31 @@ describe("the due query uses the partial index written to serve it (target-only)
     // (`outbox_rows_are_never_deleted`), so a scan here grows without bound
     // for as long as the database lives.
     //
-    // This EXPLAINs the statement the METHOD executed, traced from the driver,
-    // not a copy pasted here. See {@link executedDueSql}.
+    // `D-1104` changed WHICH index serves the statement and, with it, what
+    // this case has to assert. `due` now carries `delivery_resource = :resource`
+    // as its leading term and has a second call shape that also carries
+    // `recipient = :recipient`, so 0005 ships two composite partial indexes
+    // over the same predicate -- `outbox_due_by_resource(delivery_resource,
+    // enqueued_at_ms)` and `outbox_due_by_recipient(delivery_resource,
+    // recipient, enqueued_at_ms)` -- and leaves `outbox_undelivered` in place
+    // untouched. The old assertion pair (`SEARCH` present, `SCAN` absent, the
+    // index named) WOULD NOW PASS ON A REGRESSION: a plan that seeks on the
+    // leading `delivery_resource` column alone and then filters the age of
+    // every row of that resource by hand still reports `SEARCH`, still names a
+    // composite index, and still says no `SCAN` -- which is exactly what the
+    // degraded form below measures. A name plus a verb does not say how many
+    // of the index's columns the seek actually used.
+    //
+    // So the assertion is on the CONSTRAINT LIST SQLite prints inside the
+    // parentheses, and specifically on whether the range term
+    // `enqueued_at_ms<?` is in it. That term is present only when the seek
+    // descends past the equality columns into the ordered tail, which is the
+    // property being claimed: the scan is bounded by time and not merely by
+    // resource. Both of `due`'s call shapes are measured, each against its own
+    // degraded twin, because each shape has its own index.
+    //
+    // This EXPLAINs the statements the METHOD executed, traced from the
+    // driver, not copies pasted here. See {@link executedDueSql}.
     const root = caseRoot("s7");
     const path = productionDbPath(root);
     const cp = productionCpFixture(path);
@@ -2787,23 +2836,44 @@ describe("the due query uses the partial index written to serve it (target-only)
     enqueue(makeOutbox(cp, dropbox));
 
     const plan = explainPlan(cp, executedDueSql(path, dropbox, T0 + 1));
-    expect(plan).toContain("SEARCH");
-    expect(plan).toContain("outbox_undelivered");
+    expect(plan).toContain("SEARCH outbox USING INDEX outbox_due_by_resource");
+    expect(plan).toContain("enqueued_at_ms<?");
     expect(plan).not.toContain("SCAN");
 
-    // The algebraically identical form does not, because the column is inside
-    // an expression and no b-tree can seek on one. Asserting this half is what
-    // makes the half above mean something: without it, a database on which
-    // every plan says SEARCH would also pass.
+    // The algebraically identical form loses the range term, because the
+    // column is inside an expression and no b-tree can seek on one. Asserting
+    // this half is what makes the half above mean something: without it, a
+    // database on which every plan says SEARCH and names an index would also
+    // pass. Note that the degraded plan is NOT a `SCAN` any more and DOES name
+    // the same index -- it seeks on `delivery_resource` and then evaluates the
+    // age arithmetic once per row of that resource -- so the verb and the name
+    // are precisely the two things that no longer separate the forms.
     expect(_DEGRADED_DUE_QUERY).not.toBe(_DUE_QUERY);
-    const degraded = explainPlan(cp, _DEGRADED_DUE_QUERY, { now_ms: T0 + 1 });
-    // SQLite still names outbox_undelivered here -- it reads the partial index
-    // as a narrower covering table, and it satisfies the ORDER BY from it --
-    // but the verb is SCAN, not SEARCH: every unfinished row ever enqueued is
-    // visited and the age arithmetic is evaluated per row. So the assertion is
-    // on the VERB, never on the index name.
-    expect(degraded).not.toContain("SEARCH");
-    expect(degraded).toContain("SCAN");
+    const degraded = explainPlan(cp, _DEGRADED_DUE_QUERY, {
+      resource: RESOURCE,
+      now_ms: T0 + 1,
+    });
+    expect(degraded).toContain("SEARCH outbox USING INDEX outbox_due_by_resource");
+    expect(degraded).not.toContain("enqueued_at_ms<?");
+
+    // ...and the same pair for the shape `MessageBus.poll` runs, which is
+    // served by the other index. The recipient equality is asserted alongside
+    // the range term so that a plan seeking on `delivery_resource` and
+    // `recipient` but stopping short of `enqueued_at_ms` is still a failure
+    // here.
+    const byRecipient = explainPlan(cp, executedDueSql(path, dropbox, T0 + 1, NOTIFY_RECIPIENT));
+    expect(byRecipient).toContain("SEARCH outbox USING INDEX outbox_due_by_recipient");
+    expect(byRecipient).toContain("recipient=? AND enqueued_at_ms<?");
+    expect(byRecipient).not.toContain("SCAN");
+
+    expect(_DEGRADED_DUE_BY_RECIPIENT_QUERY).not.toBe(_DUE_BY_RECIPIENT_QUERY);
+    const degradedByRecipient = explainPlan(cp, _DEGRADED_DUE_BY_RECIPIENT_QUERY, {
+      resource: RESOURCE,
+      recipient: NOTIFY_RECIPIENT,
+      now_ms: T0 + 1,
+    });
+    expect(degradedByRecipient).toContain("SEARCH outbox USING INDEX outbox_due_by_recipient");
+    expect(degradedByRecipient).not.toContain("enqueued_at_ms<?");
   });
 
   test("the two forms the plan test separates return the same rows", () => {
@@ -2819,12 +2889,27 @@ describe("the due query uses the partial index written to serve it (target-only)
     enqueue(outbox, { messageId: "msg-3", dedupKey: "dk-3", at: T0 + 3 });
     closeTheGateOver(cp, "msg-3");
 
-    const params = { now_ms: T0 + 10 };
+    const params = { resource: RESOURCE, now_ms: T0 + 10 };
     const shipped = cp.prepare<typeof params, unknown[]>(_DUE_QUERY).raw().all(params);
     expect(shipped).toEqual(
       cp.prepare<typeof params, unknown[]>(_DEGRADED_DUE_QUERY).raw().all(params),
     );
     expect(shipped).not.toEqual([]);
+
+    // Both shapes, because the plan case above separates two pairs and a
+    // vacuity check on one pair says nothing about the other.
+    const byRecipientParams = { ...params, recipient: NOTIFY_RECIPIENT };
+    const shippedByRecipient = cp
+      .prepare<typeof byRecipientParams, unknown[]>(_DUE_BY_RECIPIENT_QUERY)
+      .raw()
+      .all(byRecipientParams);
+    expect(shippedByRecipient).toEqual(
+      cp
+        .prepare<typeof byRecipientParams, unknown[]>(_DEGRADED_DUE_BY_RECIPIENT_QUERY)
+        .raw()
+        .all(byRecipientParams),
+    );
+    expect(shippedByRecipient).not.toEqual([]);
   });
 });
 
@@ -3369,5 +3454,348 @@ describe("cancelled is terminal on every path (target-only, production schema)",
     expect(after.deliveredAtMs).toBe(T0 + 10);
     expect(after.ackedAtMs).toBeNull();
     expect(dropbox.effectCount(keyFor("dk-1"))).toBe(1);
+  });
+});
+
+/**
+ * The statement-level controls `D-1104` requires, and the reason they are a
+ * separate block rather than assertions inside the real-child proof.
+ *
+ * **This design is deliberately redundant, and redundancy is in tension with
+ * observed-red.** Resource equality sits inside four fenced writes that each
+ * already stand behind a scoped selection, and `MessageBus.poll` keeps its
+ * TypeScript recipient filter beside the new SQL term. So a defence that is
+ * masked by another defence **cannot be falsified through the top of the
+ * stack**: removing the equality from `_MARK_DELIVERED` produces no cross-run
+ * stamp in a two-child test, because the due query never returned the foreign
+ * row and the attempt counter would have refused it first. The mutant stays
+ * green, and a green mutant is evidence of nothing.
+ *
+ * Each predicate therefore gets a control that reaches it directly -- and the
+ * distinction the cases below draw is between **a predicate that refuses** and
+ * **a stamp that writes**, because the two need opposite controls. A refusing
+ * predicate is proved by an attempt that changes nothing; a stamp is proved by
+ * reading back what it wrote. Prescribing the first shape for `_ENQUEUE`
+ * produces a control that cannot run at all: there is no foreign row for an
+ * insert to refuse, a reused message id fails on the primary key, and a fresh
+ * id correctly produces a row either way.
+ *
+ * They live here, beside the outbox suite, and not in the real-child case:
+ * that case's wall-clock budget is for the one thing only it can prove --
+ * overlap.
+ */
+describe("resource equality inside each statement (target-only, D-1104)", () => {
+  /** A second delivery resource, live at its own epoch 1, in one database. */
+  const OTHER_RESOURCE = "outbox-of-run-2";
+  const OTHER_HOLDER = "writer-b";
+
+  /**
+   * A control plane where two resources are live at the same epoch number.
+   *
+   * The same epoch on purpose: it is the whole failure `D-0074` names. Two
+   * independent sequences share one column, both sitting at 1, so the row
+   * predicate `writer_epoch = :fence_epoch` is true for either writer and only
+   * the resource can tell them apart.
+   */
+  function twoResources(label: string): {
+    readonly cp: SqliteDatabase;
+    readonly dropbox: KeyedDropbox;
+    readonly a: Outbox;
+    readonly b: Outbox;
+  } {
+    const root = caseRoot(label);
+    const cp = cpFixture(dbPathFixture(root));
+    cp.prepare(
+      "INSERT INTO lease (resource, holder, epoch, acquired_at_ms, expires_at_ms)" +
+        " VALUES (?, ?, ?, ?, ?)",
+    ).run(OTHER_RESOURCE, OTHER_HOLDER, EPOCH, T0, T0 + TTL_MS);
+    const dropbox = dropboxFixture(root);
+    const a = makeOutbox(cp, dropbox);
+    const b = new Outbox(cp, {
+      resource: OTHER_RESOURCE,
+      holder: OTHER_HOLDER,
+      registry: spikeRegistry(dropbox),
+    });
+    return { cp, dropbox, a, b };
+  }
+
+  /** Run one exported fenced statement under a named `(resource, holder)`. */
+  function runFenced(
+    cp: SqliteDatabase,
+    statement: FencedStatement,
+    fence: { readonly resource: string; readonly holder: string },
+    params: Record<string, unknown>,
+  ): number {
+    return cp.prepare(String.prototype.valueOf.call(statement) as string).run({
+      ...params,
+      fence_resource: fence.resource,
+      fence_holder: fence.holder,
+      fence_epoch: EPOCH,
+      fence_now_ms: T0,
+    }).changes;
+  }
+
+  test("_COUNT_ATTEMPT changes nothing on another resource's row, under a live lease", () => {
+    const { cp, a } = twoResources("s-count");
+    const message = enqueue(a);
+
+    // B's lease is live and B's epoch is 1, which is the number A stamped. The
+    // fence clause is satisfied and the epoch predicate is satisfied; only the
+    // resource conjunct refuses. Remove it and this update lands, incrementing
+    // the retry count on a row A believes it owns.
+    expect(
+      runFenced(
+        cp,
+        _COUNT_ATTEMPT,
+        { resource: OTHER_RESOURCE, holder: OTHER_HOLDER },
+        {
+          message_id: message.messageId,
+        },
+      ),
+    ).toBe(0);
+    expect(a.load(message.messageId).retryCount).toBe(0);
+
+    // Anti-vacuity: the same statement, the same row, the owning resource --
+    // one row changed. Without this half, "changes nothing" would also pass on
+    // a statement that matches nothing at all.
+    expect(
+      runFenced(
+        cp,
+        _COUNT_ATTEMPT,
+        { resource: RESOURCE, holder: HOLDER },
+        {
+          message_id: message.messageId,
+        },
+      ),
+    ).toBe(1);
+    expect(a.load(message.messageId).retryCount).toBe(1);
+    // Nothing about the foreign attempt reached B: the row is still A's.
+    expect(a.load(message.messageId).deliveryResource).toBe(RESOURCE);
+  });
+
+  test("_MARK_DELIVERED changes nothing on another resource's row, under a live lease", () => {
+    const { cp, a, b } = twoResources("s-mark");
+    const message = enqueue(a);
+
+    // The worst of the four to lose, because this statement is the one that
+    // records an effect as delivered -- and the effect itself has already been
+    // performed by the time it runs.
+    expect(
+      runFenced(
+        cp,
+        _MARK_DELIVERED,
+        { resource: OTHER_RESOURCE, holder: OTHER_HOLDER },
+        {
+          message_id: message.messageId,
+          delivered_at_ms: T0 + 1,
+        },
+      ),
+    ).toBe(0);
+    expect(a.load(message.messageId).status).toBe("pending");
+
+    expect(
+      runFenced(
+        cp,
+        _MARK_DELIVERED,
+        { resource: RESOURCE, holder: HOLDER },
+        {
+          message_id: message.messageId,
+          delivered_at_ms: T0 + 1,
+        },
+      ),
+    ).toBe(1);
+    expect(a.load(message.messageId).status).toBe("delivered");
+    expect(b.load(message.messageId).deliveryResource).toBe(RESOURCE);
+  });
+
+  test("_ADOPT changes nothing on another resource's row, however unowned it is", () => {
+    const { cp, a, b } = twoResources("s-adopt");
+    const message = enqueue(a);
+    // Unowned by anybody: the epoch is cleared, so the only thing standing
+    // between B and this row is the resource. `_ADOPT` deliberately carries no
+    // ownership predicate -- resource equality is a MEMBERSHIP test, and it is
+    // the one that stops a live row moving between runs.
+    cp.prepare("UPDATE outbox SET writer_epoch = NULL WHERE message_id = ?").run(message.messageId);
+
+    // **The statement, not the method, and the difference was measured.**
+    // `adoptIfUnowned` consults `_UNOWNED_ONE_QUERY` first, and that query
+    // carries its own resource term -- so a control that went through the
+    // method never reaches `_ADOPT` at all and stays GREEN with the predicate
+    // removed. That mutant was observed green before this case was rewritten,
+    // which is the whole reason `_ADOPT` is exported.
+    expect(
+      runFenced(
+        cp,
+        _ADOPT,
+        { resource: OTHER_RESOURCE, holder: OTHER_HOLDER },
+        {
+          message_id: message.messageId,
+        },
+      ),
+    ).toBe(0);
+    expect(a.load(message.messageId).writerEpoch).toBeNull();
+
+    expect(
+      runFenced(
+        cp,
+        _ADOPT,
+        { resource: RESOURCE, holder: HOLDER },
+        {
+          message_id: message.messageId,
+        },
+      ),
+    ).toBe(1);
+    expect(a.load(message.messageId).writerEpoch).toBe(EPOCH);
+
+    // And the method's own layer still refuses, so the redundancy is real
+    // rather than assumed: B cannot adopt through the public path either.
+    cp.prepare("UPDATE outbox SET writer_epoch = NULL WHERE message_id = ?").run(message.messageId);
+    b.adoptIfUnowned(message.messageId, { nowMs: T0, epoch: EPOCH });
+    expect(a.load(message.messageId).writerEpoch).toBeNull();
+  });
+
+  test("_ENQUEUE stamps the enqueuing instance's own resource, never the run's", () => {
+    const { a, b } = twoResources("s-enqueue");
+    // A stamp, so the control reads back what it wrote. `runId` is left at its
+    // default of null on purpose: this is the case section 4.0 turns on -- a
+    // `run_id`-derived rule would write the global resource here, beside an
+    // epoch B minted, and rebuild the ambiguity the column removes.
+    const own = b.enqueue({
+      messageId: "msg-b",
+      recipient: NOTIFY_RECIPIENT,
+      payload: '{"body":"b"}',
+      dedupKey: "dk-b",
+      nowMs: T0,
+      epoch: EPOCH,
+    });
+    expect(own.runId).toBeNull();
+    expect(own.deliveryResource).toBe(OTHER_RESOURCE);
+    // The invariant, stated as an assertion: the epoch and the resource on one
+    // row name the same sequence.
+    expect(own.writerEpoch).toBe(EPOCH);
+    expect(a.load("msg-b").deliveryResource).toBe(OTHER_RESOURCE);
+  });
+
+  test("due sees only its own resource, and only when it is asked for its own recipient", () => {
+    const { a, b } = twoResources("s-due");
+    enqueue(a, { messageId: "msg-a", dedupKey: "dk-a" });
+    b.enqueue({
+      messageId: "msg-b",
+      recipient: NOTIFY_RECIPIENT,
+      payload: "{}",
+      dedupKey: "dk-b",
+      nowMs: T0,
+      epoch: EPOCH,
+    });
+    b.enqueue({
+      messageId: "msg-b-other",
+      recipient: HUMAN_GATED_RECIPIENT,
+      payload: "{}",
+      dedupKey: "dk-b-other",
+      nowMs: T0,
+      epoch: EPOCH,
+    });
+
+    // Absent, not filtered: `due` is the selection, so a foreign row never
+    // enters the result at all.
+    expect(a.due(T0 + 1).map((message) => message.messageId)).toEqual(["msg-a"]);
+    expect(b.due(T0 + 1).map((message) => message.messageId)).toEqual(["msg-b", "msg-b-other"]);
+
+    // The SQL recipient term, exercised BELOW `MessageBus.poll`'s TypeScript
+    // filter -- which is where it has to be tested, because that filter is
+    // deliberately kept and would mask this term end to end.
+    expect(b.due(T0 + 1, { recipient: NOTIFY_RECIPIENT }).map((m) => m.messageId)).toEqual([
+      "msg-b",
+    ]);
+    expect(a.due(T0 + 1, { recipient: NOTIFY_RECIPIENT }).map((m) => m.messageId)).toEqual([
+      "msg-a",
+    ]);
+  });
+
+  test("recovery is limited to its own resource, and the published invariant is not", () => {
+    const { cp, a, b } = twoResources("s-unowned");
+    const message = enqueue(a);
+    cp.prepare("UPDATE outbox SET writer_epoch = NULL WHERE message_id = ?").run(message.messageId);
+
+    // A's row is unowned. B is not responsible for it and must not see it as
+    // its own recovery's business, or B's sweep adopts it.
+    expect(a.unowned(T0)).toEqual([message.messageId]);
+    expect(b.unowned(T0)).toEqual([]);
+
+    // The exported invariant asks the OTHER question -- "does this database
+    // contain any unowned row at all?" -- and takes no resource, so it cannot
+    // be made to answer about whichever resource an operator happened to bind.
+    const rows = cp.prepare(UNOWNED_OUTBOX_QUERY).all({ now_ms: T0 }) as {
+      message_id: string;
+      delivery_resource: string;
+    }[];
+    expect(rows.map((row) => row.message_id)).toEqual([message.messageId]);
+    expect(rows[0]?.delivery_resource).toBe(RESOURCE);
+  });
+
+  test("two live writers on one dedup key deduplicate; neither is a stale writer", () => {
+    // `D-1104`'s P-20, and the defect parallelism makes reachable. The dedup
+    // index stays GLOBAL by decision -- adding the resource to it would let two
+    // runs each perform one effect and call it exactly-once twice -- so two
+    // live writers on different resources can hold one pending `action`. Both
+    // see it pending, both call the destination, the first records, and the
+    // second's `_RECORD_RESULT` changes zero rows with a perfectly live lease.
+    //
+    // Read as the fence, that outcome is a false durable refusal and a message
+    // left undelivered and due, so the pair replays for ever. Read correctly it
+    // is a duplicate.
+    const { cp, dropbox, a, b } = twoResources("s-duplicate");
+    const shared = "dk-shared";
+    // One dedup key, and therefore ONE idempotency key at the destination, so
+    // the payload has to be the same too: a key already applied under a
+    // different payload is a collision the destination refuses outright, which
+    // is a different case from the one this asserts.
+    const payload = '{"body":"hello"}';
+    b.enqueue({
+      messageId: "msg-b",
+      recipient: NOTIFY_RECIPIENT,
+      payload,
+      dedupKey: shared,
+      nowMs: T0,
+      epoch: EPOCH,
+    });
+    enqueue(a, { messageId: "msg-a", dedupKey: shared, payload });
+
+    // B is interrupted between its effect and its record; A completes wholly
+    // inside that window. This is the interleaving, made deterministic.
+    let interleaved = false;
+    const raced = new Outbox(cp, {
+      resource: OTHER_RESOURCE,
+      holder: OTHER_HOLDER,
+      registry: spikeRegistry(dropbox),
+      checkpoint: (name: string) => {
+        if (name === CHECKPOINT_AFTER_EFFECT_BEFORE_RECORD && !interleaved) {
+          interleaved = true;
+          a.attempt("msg-a", { nowMs: T0 + 1, epoch: EPOCH });
+        }
+      },
+    });
+
+    const outcome = raced.attempt("msg-b", { nowMs: T0 + 2, epoch: EPOCH });
+    expect(interleaved, "the interleaving never happened, so this case proved nothing").toBe(true);
+
+    // The outcome is the deduplicated one, and the message is delivered. Before
+    // the repair this raised `StaleWriterRefused` and left `msg-b` pending.
+    expect(outcome.deduplicated).toBe(true);
+    expect(b.load("msg-b").status).toBe("delivered");
+    expect(a.load("msg-a").status).toBe("delivered");
+
+    // And no false refusal was written. A durable row saying B's lease had
+    // stopped being live would be a claim about the fence that is not true.
+    expect(
+      actionsOf(cp, { status: "refused" }).length,
+      "the loser of a live-writer race recorded a stale-writer refusal that never happened",
+    ).toBe(0);
+
+    // What this does NOT repair, asserted rather than described: the
+    // destination was called twice. Exactly-once at the destination continues
+    // to rest on the declared mechanism, and the window is now reachable with
+    // two live writers and no crash.
+    expect(dropbox.effectCount(keyFor(shared))).toBe(1);
   });
 });

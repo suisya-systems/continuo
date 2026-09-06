@@ -4,6 +4,10 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, test } from "vitest";
 import { helpStrings } from "../../src/cli/parser.js";
 import { buildParser, main, cliSeams as topLevelSeams } from "../../src/cli.js";
+import {
+  DELIVERY_LEASE_RESOURCE,
+  deliveryResourceForRun,
+} from "../../src/control_plane/delivery_resource.js";
 import { openGate } from "../../src/control_plane/gates.js";
 import { acquire } from "../../src/control_plane/lease.js";
 import {
@@ -12,7 +16,6 @@ import {
 } from "../../src/control_plane/migrator.js";
 import { gateCliSeams } from "../../src/gate/cli.js";
 import { relayMessageId } from "../../src/gate/operator.js";
-import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { caseRoot } from "../testkit/cases.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -186,6 +189,8 @@ describe("the operator's walk, through the mounted verbs", () => {
         destination,
         "--holder",
         ACTOR,
+        "--run-id",
+        RUN_ID,
         "--now-ms",
         String(T0 + 2 * MINUTE),
       ]),
@@ -239,6 +244,8 @@ describe("the operator's walk, through the mounted verbs", () => {
         destination,
         "--holder",
         ACTOR,
+        "--run-id",
+        RUN_ID,
         "--now-ms",
         String(T0 + 5 * MINUTE),
       ]),
@@ -335,14 +342,16 @@ describe("what the verbs refuse", () => {
     expect(streams.err()).toBe("error: gate gate-nope does not exist\n");
   });
 
-  test("delivering while a lap holds the delivery lease is refused with the reason", () => {
-    // The serialisation the one delivery resource buys (D-0053 rule 4), seen
-    // from the surface an operator types at.
+  test("delivering while the lap of THAT run holds its delivery lease is refused", () => {
+    // The serialisation D-0053 rule 4 buys, narrowed to one resource by D-1104
+    // and seen from the surface an operator types at: the lap of the run named
+    // by --run-id is that run's delivery authority while it runs, so the verb
+    // says whose lease it is instead of becoming a second writer.
     const { path, destination } = aDatabaseWithAGate("gate-cli-lease");
     const connection = openProductionControlPlane(path);
     try {
       acquire(connection, {
-        resource: DELIVERY_LEASE_RESOURCE,
+        resource: deliveryResourceForRun(RUN_ID),
         holder: "a-running-lap",
         nowMs: T0,
         ttlMs: 300_000,
@@ -362,11 +371,46 @@ describe("what the verbs refuse", () => {
         destination,
         "--holder",
         ACTOR,
+        "--run-id",
+        RUN_ID,
         "--now-ms",
         String(T0 + MINUTE),
       ]),
     ).toBe(2);
     expect(streams.err()).toContain("a-running-lap");
+  });
+
+  test("a holder of the global lease does not refuse a --run-id delivery", () => {
+    // The inversion D-1104 is for, at the same surface. Before it, one holder
+    // of `outbox-delivery` refused every operator delivery in the database
+    // whatever run the rows belonged to; the global resource now governs the
+    // rows belonging to no run, so a holder of it is not this run's authority.
+    // The case delivers rather than merely exiting 0, since an empty pass also
+    // exits 0 and would look like the refusal had simply moved.
+    const { path, destination } = aDatabaseWithAGate("gate-cli-lease-global");
+    const connection = openProductionControlPlane(path);
+    try {
+      acquire(connection, {
+        resource: DELIVERY_LEASE_RESOURCE,
+        holder: "the-runless-drainer",
+        nowMs: T0,
+        ttlMs: 300_000,
+      });
+    } finally {
+      connection.close();
+    }
+    const streams = captureStreams();
+
+    expect(main(presentArgv(path))).toBe(0);
+    expect(main(deliverArgv(path, destination, T0 + 2 * MINUTE))).toBe(0);
+
+    expect(streams.out()).toContain("delivered 1 message(s) to external-notify");
+    expect(streams.err()).toBe("");
+    // And the global pass is still refused while that holder is live, so
+    // nothing here weakened the fence -- it only stopped being one fence for
+    // every run at once.
+    expect(main(deliverArgv(path, destination, T0 + 3 * MINUTE, [], null))).toBe(2);
+    expect(streams.err()).toContain("the-runless-drainer");
   });
 
   test("the outcomes that are not a hand's to write are refused by the parser", () => {
@@ -450,6 +494,8 @@ describe("continuo#122: one rule for the destination directory", () => {
         destination,
         "--holder",
         ACTOR,
+        "--run-id",
+        RUN_ID,
         "--now-ms",
         String(T0 + 2 * MINUTE),
       ]),
@@ -478,7 +524,7 @@ describe("continuo#122: one rule for the destination directory", () => {
 });
 
 describe("the mount", () => {
-  test("all eight verbs are reachable from the top-level parser", () => {
+  test("all nine verbs are reachable from the top-level parser", () => {
     // `src/cli.ts` could hold a correct parser for a subtree it never mounts,
     // and every case above would still be green if they called the handlers
     // directly -- they do not, and this states why.
@@ -488,6 +534,7 @@ describe("the mount", () => {
       "Show one gate:",
       "Enqueue the 'presented' relay",
       "Deliver every relay currently due",
+      "Settle one message that no gate enqueued",
       "Record the ack for one relay",
       "Record the human answer",
       "Close an open gate",
@@ -552,6 +599,8 @@ function carryToPresented(path: string, destination: string): void {
       destination,
       "--holder",
       ACTOR,
+      "--run-id",
+      RUN_ID,
       "--now-ms",
       String(T0 + 2 * MINUTE),
     ]),
@@ -570,6 +619,32 @@ function carryToPresented(path: string, destination: string): void {
       String(T0 + 3 * MINUTE),
     ]),
   ).toBe(0);
+}
+
+/**
+ * One delivered message no gate enqueued, under the resource the caller names.
+ *
+ * Raw SQL: the only producers of a non-relay outbox row are the fenced
+ * `Outbox.enqueue` and `events.fanOut`, and driving either to reach a delivered
+ * row would make every case below fail for somebody else's reason.
+ */
+function addUnrelayedMessage(path: string, deliveryResource: string): string {
+  const messageId = "msg/fan-out/1";
+  const connection = openProductionControlPlane(path);
+  try {
+    connection
+      .prepare<[string, string, number, number, string]>(
+        `
+          INSERT INTO outbox (message_id, recipient, payload, dedup_key, status,
+                              enqueued_at_ms, delivered_at_ms, delivery_resource)
+          VALUES (?, 'external-notify', '{}', ?, 'delivered', ?, ?, ?)
+          `,
+      )
+      .run(messageId, "fanout/1", T0, T0, deliveryResource);
+  } finally {
+    connection.close();
+  }
+  return messageId;
 }
 
 /** A production control plane with no gate in it at all. */
@@ -1059,11 +1134,21 @@ function presentArgv(path: string, extra: readonly string[] = []): readonly stri
   ];
 }
 
+/**
+ * `gate deliver`'s argv, naming the run whose relays these cases enqueued.
+ *
+ * `--run-id` is threaded by default because `enqueueRelay` derives the row's
+ * delivery resource from the gate's `run_id` (`D-1104`): the relays every case
+ * here creates are run-bound, and a pass without the flag would take the
+ * global lease and correctly deliver nothing. Passing `runId: null` is how a
+ * case asks for the global pass on purpose.
+ */
 function deliverArgv(
   path: string,
   destination: string,
   nowMs: number,
   extra: readonly string[] = [],
+  runId: string | null = RUN_ID,
 ): readonly string[] {
   return [
     "gate",
@@ -1074,6 +1159,7 @@ function deliverArgv(
     destination,
     "--holder",
     ACTOR,
+    ...(runId === null ? [] : ["--run-id", runId]),
     "--now-ms",
     String(nowMs),
     ...extra,
@@ -1353,15 +1439,17 @@ describe("continuo#165: every refusal these three verbs can reach is a document"
     });
   });
 
-  test("gate deliver --json refuses while a lap holds the delivery lease", () => {
+  test("gate deliver --json refuses while a lap holds this run's delivery lease", () => {
     // `gate deliver` is the first enveloped verb whose refusal set reaches
     // `LeaseRefusal`, so this is where the shared funnel is shown to carry a
-    // class none of the other six can raise (`D-0097`).
+    // class none of the other six can raise (`D-0097`). The lease held is the
+    // one this pass names (`--run-id`), which since D-1104 is the only holder
+    // that refuses it.
     const { path, destination } = aDatabaseWithAGate("gate-json-deliver-refused");
     const connection = openProductionControlPlane(path);
     try {
       acquire(connection, {
-        resource: DELIVERY_LEASE_RESOURCE,
+        resource: deliveryResourceForRun(RUN_ID),
         holder: "a-running-lap",
         nowMs: T0,
         ttlMs: 300_000,
@@ -1691,5 +1779,170 @@ describe("the --json documents, observed red", () => {
     );
     expect(streams.out(), "nothing reaches stdout").toBe("");
     expect(streams.err(), "and the verb's own refusal writer never ran").toBe("");
+  });
+});
+
+/**
+ * `D-1104` at the surface an operator types at: which resource a pass drains,
+ * and the verb that settles the rows no run's endpoint polls.
+ *
+ * The rules themselves belong to `test/gate/operator.test.ts`. What is here is
+ * the layer this module adds -- the flag reaches the entry point, the new verb
+ * is mounted, and its two output modes carry the same five facts.
+ */
+describe("D-1104: the delivery resource an operator names", () => {
+  test("deliver's --help says what omitting --run-id drains", () => {
+    // The flag D-1104 adds is the one an operator gets wrong silently: without
+    // it the pass drains the global resource, exits 0, and reports "delivered 0
+    // message(s)" over a gate whose relay is sitting on its run's resource. So
+    // the help has to name both halves of the mapping rather than the flag.
+    const help = helpStrings(buildParser()).join("\n");
+    const at = help.indexOf("the run whose relays to drain");
+    expect(at, "the --run-id help is no longer findable").toBeGreaterThanOrEqual(0);
+    const text = help.slice(at, at + 400);
+    expect(text).toContain("Omitted means the global delivery");
+    expect(text).toContain("rows belonging to no run");
+  });
+
+  test("gate ack-unrelayed settles a runless message, in both output modes", () => {
+    // The verb section 6 of the design chose option (b) for: the rows
+    // belonging to no run have no lap to settle them, so this is their
+    // delivery authority. Both modes in one case because the human line and
+    // the document are two renderings of one `UnrelayedAckRecorded`, and a
+    // build that carried a field in one and not the other is the failure.
+    const { path } = aDatabaseWithAGate("gate-cli-ack-unrelayed");
+    const messageId = addUnrelayedMessage(path, DELIVERY_LEASE_RESOURCE);
+    const streams = captureStreams();
+
+    expect(
+      main([
+        "gate",
+        "ack-unrelayed",
+        "--db",
+        path,
+        "--message-id",
+        messageId,
+        "--actor-id",
+        ACTOR,
+        "--holder",
+        ACTOR,
+        "--now-ms",
+        String(T0 + MINUTE),
+      ]),
+    ).toBe(0);
+    expect(streams.out()).toBe(
+      `${messageId}: acked=true cancelled=false recipient=external-notify epoch=1\n`,
+    );
+    expect(streams.err()).toBe("");
+
+    // The repeat, with the flag: a settled replay is a success whose booleans
+    // both read false, and it is what a host branches on after a kill.
+    const machine = captureStreams();
+    expect(
+      main([
+        "gate",
+        "ack-unrelayed",
+        "--db",
+        path,
+        "--message-id",
+        messageId,
+        "--actor-id",
+        ACTOR,
+        "--holder",
+        ACTOR,
+        "--now-ms",
+        String(T0 + 2 * MINUTE),
+        "--json",
+      ]),
+    ).toBe(0);
+    expect(
+      oneDocument(machine.out()),
+      "gate ack-unrelayed's success document changed shape",
+    ).toStrictEqual({
+      schema: "continuo.gate.ack-unrelayed/1",
+      ok: true,
+      db: path,
+      message_id: messageId,
+      recipient: "external-notify",
+      acked: false,
+      cancelled: false,
+      epoch: 2,
+    });
+    expect(machine.err(), "a success writes nothing to stderr").toBe("");
+  });
+
+  test("gate ack-unrelayed refuses a gate relay, as one line and exit 2", () => {
+    // The two verbs are not interchangeable: `gate ack` also takes the step
+    // the ack justifies, so settling a relay here would record the ack and
+    // leave the gate at a stage no recovery pass reports.
+    const { path, destination } = aDatabaseWithAGate("gate-cli-ack-unrelayed-relay");
+    const presented = relayMessageId(GATE_ID, "presented");
+    captureStreams();
+    expect(main(presentArgv(path))).toBe(0);
+    expect(main(deliverArgv(path, destination, T0 + 2 * MINUTE))).toBe(0);
+    const streams = captureStreams();
+
+    expect(
+      main([
+        "gate",
+        "ack-unrelayed",
+        "--db",
+        path,
+        "--message-id",
+        presented,
+        "--actor-id",
+        ACTOR,
+        "--holder",
+        ACTOR,
+        "--now-ms",
+        String(T0 + 3 * MINUTE),
+      ]),
+    ).toBe(2);
+    expect(streams.out()).toBe("");
+    expect(streams.err()).toContain(`${presented} is the relay of gate ${GATE_ID}`);
+  });
+
+  test("gate ack-unrelayed refuses a message on a run's own resource", () => {
+    // Strict where the relay path has a bounded exception: a run-bound
+    // non-relay row has a worker -- that run's endpoint -- and settling it
+    // from the global verb would reach into a partition this caller is not the
+    // authority for.
+    const { path } = aDatabaseWithAGate("gate-cli-ack-unrelayed-run-bound");
+    const messageId = addUnrelayedMessage(path, deliveryResourceForRun(RUN_ID));
+    const streams = captureStreams();
+
+    expect(
+      main([
+        "gate",
+        "ack-unrelayed",
+        "--db",
+        path,
+        "--message-id",
+        messageId,
+        "--actor-id",
+        ACTOR,
+        "--holder",
+        ACTOR,
+        "--now-ms",
+        String(T0 + MINUTE),
+        "--json",
+      ]),
+    ).toBe(2);
+    expect(streams.out()).toBe("");
+    expect(
+      oneDocument(streams.err()),
+      "gate ack-unrelayed's refusal document changed shape",
+    ).toStrictEqual({
+      schema: "continuo.gate.ack-unrelayed/1",
+      ok: false,
+      db: path,
+      error: {
+        class: "UnknownGateRefused",
+        message:
+          `${messageId} belongs to delivery resource ${deliveryResourceForRun(RUN_ID)}; this ` +
+          `verb is the authority for ${DELIVERY_LEASE_RESOURCE} and settles nothing on a run's ` +
+          "own resource",
+      },
+    });
   });
 });

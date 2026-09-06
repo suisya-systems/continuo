@@ -61,6 +61,10 @@ import process from "node:process";
 
 import Database, { type Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
+import {
+  DELIVERY_LEASE_RESOURCE,
+  deliveryResourceForRun,
+} from "../../src/control_plane/delivery_resource.js";
 import { FENCE_NAME } from "../../src/control_plane/destination.js";
 import { EVENT_TYPES } from "../../src/control_plane/events.js";
 import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
@@ -71,7 +75,7 @@ import {
 } from "../../src/control_plane/migrator.js";
 import { admitRun } from "../../src/control_plane/run_admission.js";
 import { FencedSpawner, FenceLedger } from "../../src/fencing/spawn.js";
-import { DELIVERY_LEASE_RESOURCE, EndpointConfig } from "../../src/messagebus/endpoint.js";
+import { EndpointConfig } from "../../src/messagebus/endpoint.js";
 import { MEMORY } from "../../src/sqlite/open.js";
 import {
   branchExists,
@@ -223,6 +227,10 @@ function fixture(
       databasePath: plane.path,
       holder: "operator-1",
       epoch: 1,
+      // `D-1104` made `resource` a required field of the binding, and the
+      // honest value for a fixture whose request carries `RUN_ID` is that run's
+      // own delivery resource -- the same string `performLap` derives.
+      resource: deliveryResourceForRun(RUN_ID),
       recipient: NOTIFY_RECIPIENT,
       destinationDir: join(root, "destination"),
       // A path rather than the real built module: `dist/` need not exist for
@@ -441,7 +449,9 @@ describe("D3: the MCP configuration is one the endpoint would start under", () =
     const env = server?.["env"] as Record<string, string>;
     const config = new EndpointConfig(env);
     expect(config.missing()).toEqual([]);
-    expect(config.resource).toBe(DELIVERY_LEASE_RESOURCE);
+    // Not the global literal any more: the binding's resource is rendered
+    // through, so a run-scoped lap publishes a run-scoped endpoint (`D-1104`).
+    expect(config.resource).toBe(deliveryResourceForRun(RUN_ID));
     expect(config.dbPath).toBe(f.databasePath);
     expect(config.recipient).toBe(NOTIFY_RECIPIENT);
     expect(config.epoch).toBe(1);
@@ -810,17 +820,22 @@ describe("no artifact can land inside the worktree", () => {
 
   test("continuo#122: a dropbox another control plane drove past this epoch is refused", () => {
     // The qualifier on "reused if it does": one dropbox per control plane. The
-    // fencing watermark is keyed by the lease RESOURCE, a constant with no
-    // database in it, while the epochs measured against it are one plane's
-    // lease sequence -- so a dropbox already at epoch 5 refuses this run's
-    // epoch 1, and without this it refuses it at the endpoint's first delivery,
-    // with the workspace, the artifacts and the event already there.
+    // fencing watermark is keyed by the lease RESOURCE, while the epochs
+    // measured against it are one plane's lease sequence -- so a dropbox
+    // already at epoch 5 refuses this run's epoch 1, and without this it
+    // refuses it at the endpoint's first delivery, with the workspace, the
+    // artifacts and the event already there.
+    //
+    // Since `D-1104` the resource is this RUN's and no longer a constant, so
+    // the watermark has to be written under the run's own key for the case to
+    // still be about a foreign plane rather than about a key nobody reads. The
+    // sibling case below is the other half of that narrowing.
     const f = fixture("materialize-destination-foreign-fence");
     const destinationDir = f.request.endpoint.destinationDir;
     mkdirSync(destinationDir, { recursive: true });
     writeFileSync(
       join(destinationDir, FENCE_NAME),
-      `${JSON.stringify({ [DELIVERY_LEASE_RESOURCE]: 5 })}\n`,
+      `${JSON.stringify({ [deliveryResourceForRun(RUN_ID)]: 5 })}\n`,
       "utf8",
     );
     expectRefusal(
@@ -829,6 +844,37 @@ describe("no artifact can land inside the worktree", () => {
       /has already honoured fencing token 5/,
     );
     expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("D-1104: a watermark standing under another scope does not refuse this run", () => {
+    // What makes two concurrent laps possible at all, stated as a case rather
+    // than left implicit in the one above.
+    //
+    // Before `D-1104` every lap shared one fence key, so a destination another
+    // lap had driven to epoch 5 refused the next lap's epoch 1 outright -- and
+    // that is precisely the pre-flight that would have refused the second of
+    // two concurrent laps. Keying the watermark by the per-run resource means
+    // an epoch standing under the GLOBAL key, or under another run's key, says
+    // nothing about this run, so this run is materialised.
+    //
+    // The narrowing is real and intended: cross-plane reuse is now caught only
+    // for a run id this destination has seen before. It is asserted here rather
+    // than only described, so a future re-widening to one shared key turns this
+    // case red instead of passing quietly.
+    const f = fixture("materialize-destination-other-scope-fence");
+    const destinationDir = f.request.endpoint.destinationDir;
+    mkdirSync(destinationDir, { recursive: true });
+    writeFileSync(
+      join(destinationDir, FENCE_NAME),
+      `${JSON.stringify({
+        [DELIVERY_LEASE_RESOURCE]: 5,
+        [deliveryResourceForRun("run-some-other-lap")]: 5,
+      })}\n`,
+      "utf8",
+    );
+
+    const materialized = materializeWorkspace(f.connection, f.request);
+    expect(materialized.artifacts).toHaveLength(3);
   });
 
   test("continuo#122: a dropbox this plane's earlier epoch left behind is reused", () => {
@@ -842,7 +888,9 @@ describe("no artifact can land inside the worktree", () => {
     mkdirSync(destinationDir, { recursive: true });
     writeFileSync(
       join(destinationDir, FENCE_NAME),
-      `${JSON.stringify({ [DELIVERY_LEASE_RESOURCE]: 2 })}\n`,
+      // This run's own key: "the lap that ran before this one" is the same run
+      // scope, which is the only scope this pre-flight still reads (`D-1104`).
+      `${JSON.stringify({ [deliveryResourceForRun(RUN_ID)]: 2 })}\n`,
       "utf8",
     );
 

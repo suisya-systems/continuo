@@ -292,6 +292,14 @@ CREATE TABLE outbox (
     delivered_at_ms  INTEGER,
     acked_at_ms      INTEGER,
 
+    -- D-1104. The exact lease resource string whose epoch sequence governs
+    -- this row's delivery-side mutations. Carried here as well as in the
+    -- production migrations because Outbox is one class over two schemas: its
+    -- fenced statements compare this column inside every write, so a spike
+    -- database without it is a spike database the delivery path cannot run
+    -- against at all. The production side's 0005 header carries the argument.
+    delivery_resource TEXT NOT NULL,
+
     CHECK (typeof(message_id) = 'text' AND typeof(dedup_key) = 'text'),
     CHECK (typeof(retry_count) = 'integer' AND typeof(enqueued_at_ms) = 'integer'),
     CHECK (writer_epoch IS NULL OR typeof(writer_epoch) = 'integer'),
@@ -306,8 +314,19 @@ CREATE TABLE outbox (
     CHECK ((status IN ('delivered', 'acked')) = (delivered_at_ms IS NOT NULL)),
     CHECK ((status = 'acked') = (acked_at_ms IS NOT NULL)),
     CHECK (acked_at_ms IS NULL OR acked_at_ms >= delivered_at_ms),
-    CHECK (delivered_at_ms IS NULL OR delivered_at_ms >= enqueued_at_ms)
+    CHECK (delivered_at_ms IS NULL OR delivered_at_ms >= enqueued_at_ms),
+    CHECK (typeof(delivery_resource) = 'text'),
+    CHECK (length(delivery_resource) > 0)
 );
+
+-- D-1104. A row's delivery resource is decided at enqueue and never moves; a
+-- mutable one is a partition that can be moved out from under a live holder.
+CREATE TRIGGER outbox_delivery_resource_is_frozen
+BEFORE UPDATE OF delivery_resource ON outbox
+WHEN NEW.delivery_resource <> OLD.delivery_resource
+BEGIN
+    SELECT RAISE(ABORT, 'an outbox row keeps the delivery resource it was enqueued under');
+END;
 
 CREATE TRIGGER outbox_retry_count_is_monotonic
 BEFORE UPDATE OF retry_count ON outbox
@@ -483,6 +502,11 @@ CREATE TABLE action (
     refusal_reason          TEXT,
     result                  TEXT,
     writer_epoch            INTEGER,
+    -- D-1104. Which lease minted writer_epoch, for the one action writer that
+    -- cannot say so in its kind. Nullable: every writer that composes its kind
+    -- with effect_kind() keeps writing attributed rows with this column null,
+    -- so NULL means "attributed the other way", never "predates the column".
+    writer_resource         TEXT,
     created_at_ms           INTEGER NOT NULL,
     applied_at_ms           INTEGER,
 
@@ -490,6 +514,8 @@ CREATE TABLE action (
     CHECK (typeof(created_at_ms) = 'integer'),
     CHECK (applied_at_ms IS NULL OR typeof(applied_at_ms) = 'integer'),
     CHECK (writer_epoch IS NULL OR typeof(writer_epoch) = 'integer'),
+    CHECK (writer_resource IS NULL
+           OR (typeof(writer_resource) = 'text' AND length(writer_resource) > 0)),
     CHECK (length(action_id) > 0),
     CHECK (length(kind) > 0),
     CHECK (length(idempotency_key) > 0),
@@ -542,6 +568,18 @@ WHEN OLD.applied_at_ms IS NOT NULL
  AND (NEW.applied_at_ms IS NULL OR NEW.applied_at_ms <> OLD.applied_at_ms)
 BEGIN
     SELECT RAISE(ABORT, 'an applied action is applied once');
+END;
+
+-- D-1104. Attribution, once non-null, is evidence about which lease minted the
+-- epoch in the same row; nothing may re-aim it. Null stays writable in one
+-- direction only, so an unattributed row can gain attribution and an
+-- attributed one can never lose it.
+CREATE TRIGGER action_writer_resource_is_set_once
+BEFORE UPDATE OF writer_resource ON action
+WHEN OLD.writer_resource IS NOT NULL
+ AND (NEW.writer_resource IS NULL OR NEW.writer_resource <> OLD.writer_resource)
+BEGIN
+    SELECT RAISE(ABORT, 'an action row keeps the writer resource its epoch was minted under');
 END;
 
 -- The unique index constrains the rows that exist, so deleting an applied

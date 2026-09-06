@@ -49,6 +49,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
+import { DELIVERY_LEASE_RESOURCE } from "../../src/control_plane/delivery_resource.js";
 import {
   ControlPlaneRefusal,
   CorruptStateRefused,
@@ -338,6 +339,12 @@ interface OutboxOptions {
   writer_epoch?: number | null;
   delivered_at_ms?: number | null;
   acked_at_ms?: number | null;
+  /**
+   * The lease resource whose epoch minted `writer_epoch`. `NOT NULL` with no
+   * `DEFAULT` in the spike schema too, so every insert names one; the spike's
+   * one delivery lease is the global resource.
+   */
+  delivery_resource?: string | null;
 }
 
 function addOutbox(cp: SqliteDatabase, options: OutboxOptions = {}): string {
@@ -351,15 +358,17 @@ function addOutbox(cp: SqliteDatabase, options: OutboxOptions = {}): string {
     writer_epoch: or(options.writer_epoch, 1),
     delivered_at_ms: or(options.delivered_at_ms, null),
     acked_at_ms: or(options.acked_at_ms, null),
+    delivery_resource: or(options.delivery_resource, DELIVERY_LEASE_RESOURCE),
   };
   executeNamed(
     cp,
     `
         INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key, status,
                             retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms,
-                            acked_at_ms)
+                            acked_at_ms, delivery_resource)
         VALUES (:message_id, :run_id, :recipient, :payload, :dedup_key, :status,
-                :retry_count, :writer_epoch, :enqueued_at_ms, :delivered_at_ms, :acked_at_ms)
+                :retry_count, :writer_epoch, :enqueued_at_ms, :delivered_at_ms, :acked_at_ms,
+                :delivery_resource)
         `,
     {
       message_id: messageId,

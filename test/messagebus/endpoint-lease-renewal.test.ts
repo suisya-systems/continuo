@@ -384,6 +384,7 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     });
 
     const hold = holdDeliveryLease(env.connection, {
+      resource: RESOURCE,
       holder: HOLDER,
       nowMs,
       ttlMs: TTL_MS,
@@ -448,6 +449,7 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     // No renewal at all: `schedule` records the tick and never fires it, which
     // is a holder that died the moment it took the lease.
     const hold = holdDeliveryLease(env.connection, {
+      resource: RESOURCE,
       holder: HOLDER,
       nowMs,
       ttlMs: TTL_MS,

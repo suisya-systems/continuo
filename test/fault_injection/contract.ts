@@ -713,7 +713,13 @@ export const INVARIANT_NAMES: readonly string[] = [...SQL_INVARIANTS, ...DESTINA
  * answer is what keeps the durable assertion re-bindable.
  */
 export const INVARIANT_PARAMETERS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  [INVARIANT_NO_UNOWNED_OUTBOX]: ["resource", "now_ms"],
+  // Only `now_ms`. `D-1104` made the unowned-outbox reader database-wide: a row
+  // now carries the delivery resource it was written under, so the query joins
+  // the lease on the row's own column instead of taking the resource from the
+  // caller. Keeping `resource` here would scope the sweep to one role again,
+  // and "no row is left unowned" is exactly the question no single role can
+  // answer about a database several of them wrote to.
+  [INVARIANT_NO_UNOWNED_OUTBOX]: ["now_ms"],
   [INVARIANT_RETRY_COUNT_DURABLE]: ["holder_prefix"],
   [INVARIANT_SINGLE_ACKED_STATE]: ["holder_prefix"],
   [INVARIANT_LINEAR_WRITER_HISTORY]: ["scope"],

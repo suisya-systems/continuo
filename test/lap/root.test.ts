@@ -34,6 +34,7 @@ import process from "node:process";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
+import { deliveryResourceForRun } from "../../src/control_plane/delivery_resource.js";
 import { appendEvent } from "../../src/control_plane/events.js";
 import { NOTIFY_RECIPIENT } from "../../src/control_plane/handlers.js";
 import { isFullyQualified, LapRunIntent } from "../../src/control_plane/lap_run_intent.js";
@@ -60,7 +61,6 @@ import {
   performLap,
   type TerminalReportReader,
 } from "../../src/lap/root.js";
-import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import {
   Failure,
   FailureKind,
@@ -893,10 +893,11 @@ describe("D-0088: the lap asks the cli_args allowlist again, first, before it ta
     // refusal that fires one line later has already run
     // `requireUsableStateRoot`, which creates the provider's state root; two
     // lines later, `holdDeliveryLease` has written a lease row and consumed an
-    // epoch on `outbox-delivery` -- ONE global resource (`D-0053` rule 4), so
-    // for as long as this doomed lap holds it a second lap that would have
-    // succeeded is refused `LeaseHeld`. A run that is going to be refused must
-    // not first take a resource away from the lap that could have used it.
+    // epoch on this run's delivery resource -- one resource per run since
+    // `D-1104`, so for as long as this doomed lap holds it a retry of THIS run
+    // is refused `LeaseHeld`, as is the operator's own `gate deliver --run-id`
+    // pass over it. A run that is going to be refused must not first take a
+    // resource away from the lap that could have used it.
     //
     // Each assertion is a different kind of cost and none implies the others:
     // the lease is a resource taken from somebody else, the state root is a
@@ -911,7 +912,7 @@ describe("D-0088: the lap asks the cli_args allowlist again, first, before it ta
       /is not authorised for role/,
     );
 
-    expect(readLease(f.connection, DELIVERY_LEASE_RESOURCE)).toBeUndefined();
+    expect(readLease(f.connection, deliveryResourceForRun(RUN_ID))).toBeUndefined();
     expect(existsSync(f.stateRoot)).toBe(false);
     expect(f.provider.startCalls).toEqual([]);
   });
@@ -928,8 +929,10 @@ describe("D-0088: the lap asks the cli_args allowlist again, first, before it ta
     // Observed by where the lap gets to rather than by a green lap: this file
     // starts no child and runs no git (see the module docstring), and the
     // question here is only whether the preflight's first entry lets the vector
-    // through. So the delivery resource is taken by somebody else first, and
-    // the lap is watched arriving at step 1b and being refused `LeaseHeld` --
+    // through. So THIS RUN's delivery resource -- the one `performLap` acquires
+    // since `D-1104`, not the global literal, which no longer blocks a lap at
+    // all -- is taken by somebody else first, and the lap is watched arriving
+    // at step 1b and being refused `LeaseHeld` --
     // the step immediately after the whole preflight. The state root pins the
     // same thing from the other end: it exists only because
     // `requireUsableStateRoot`, which is the second-to-last preflight entry,
@@ -939,7 +942,7 @@ describe("D-0088: the lap asks the cli_args allowlist again, first, before it ta
     // `test/lap/teardown.test.ts` and `test/lap/endpoint-lease.test.ts`.
     const f = admittedRun("cli-args-empty", []);
     acquire(f.connection, {
-      resource: DELIVERY_LEASE_RESOURCE,
+      resource: deliveryResourceForRun(RUN_ID),
       holder: OTHER_HOLDER,
       nowMs: T0,
       ttlMs: DELIVERY_LEASE_TTL_MS,
@@ -948,7 +951,10 @@ describe("D-0088: the lap asks the cli_args allowlist again, first, before it ta
     await expectRefusalAsync(
       () => performLap(f.connection, f.provider, UNREACHED_READER, f.request),
       LeaseHeld,
-      /outbox-delivery/,
+      // The run's resource in full rather than the bare `outbox-delivery`
+      // prefix: the prefix is a substring of every run resource, so it would
+      // read as green on a build that still serialised laps globally.
+      deliveryResourceForRun(RUN_ID),
     );
 
     expect(existsSync(f.stateRoot)).toBe(true);

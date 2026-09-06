@@ -650,6 +650,60 @@ per-verb lease as a per-lap one. The second said "scope the endpoint to the work
 mistook a smaller window for a bounded one. Both were attempts to make renewal unnecessary; it is
 not.*
 
+**Update (`D-1104`): the endpoint's lease had two open questions, and this section only answered one
+of them.** The sentence above -- "the endpoint's lease is per-process and must be held and renewed by
+its launcher for the endpoint's whole life" -- fixes a **lifetime**. It says nothing about **scope**:
+how many endpoints may hold a delivery lease at once, and therefore how many laps may run at once.
+That half stayed open here and was later re-derived from the other end, as `D-0074`'s cross-write
+hazard, in `docs/design/parallel-laps-delivery-lease.md`. `D-1104` closes it, so both halves are now
+answered and they are answered differently:
+
+- **Lifetime: built, unconditionally.** `holdDeliveryLease` acquires already-armed -- "There is no
+  `start()` to forget: an acquisition whose renewal was never armed is the failure this module exists
+  to remove, and it would be invisible for exactly one TTL" (`src/lap/endpoint_lease.ts:168-170`) --
+  with `DELIVERY_LEASE_TTL_MS = 60_000` renewed every `15_000` (`:106`, `:109`), and `performLap`
+  releases it in a `finally` on every path out (`src/lap/root.ts:1244`, `:1279`). The requirement in
+  step 4 of section 7 is discharged; note that it is discharged by the **lap**, not by a separate
+  launcher, which is the concrete shape this section left open.
+- **Scope: one delivery resource per run, not one for the deployment.** The lease resource is
+  `deliveryResourceForRun(intent.runId)` (`src/lap/root.ts:1250`) -- `"outbox-delivery:run:<id>"`, or
+  the bare `"outbox-delivery"` literal for a row belonging to no run
+  (`src/control_plane/delivery_resource.ts:63-68`). The lap renders its own resource into the worker's
+  `INTERLOCK_MESSAGEBUS_RESOURCE` (`src/workspace/materializer.ts:834`), and the endpoint admits the
+  global literal or a well-formed run resource and refuses everything else at startup
+  (`src/messagebus/endpoint.ts:570`), where before `D-1104` it admitted exactly one literal.
+
+**What this section's text should be read as saying now.** "The endpoint's lease is per-process" stays
+true of every individual endpoint and is still the reason renewal is mandatory; what it never said,
+and what a reader could have taken from it, is that there is one such lease. There is one **per run**.
+Two `lap perform` processes on one control plane now take two different resources rather than the
+second being refused `LeaseHeld`, and the refusal keeps its meaning narrowed from "a lap is running"
+to "*this run's* lap is running" (`src/lap/endpoint_lease.ts:172-180`).
+
+**The global resource did not go away, and that is what needed a new actor.** Rows belonging to no run
+-- legacy rows migrated by `0005`, runless event fan-out, runless gate relays -- still live under the
+bare literal, and no per-run lap may drain them. `D-1104` gives them the operator rather than a
+daemon: `gate ack-unrelayed` settles one such row under the global resource
+(`src/gate/cli.ts:267`, `:721`). It is a per-invocation acquire and release, like every other `gate`
+verb, and that is the same shape 4.10 already chose for the second relay -- a person is present
+throughout by the lap's own definition. The alternative, a resident process holding the global lease
+and draining it in a loop, was weighed and rejected in the design document's section 6; its second
+ground is one this section is entitled to feel vindicated by, that today's endpoint is a **passive**
+pair of MCP tools rather than a loop that drains anything by itself, so "the endpoint does this
+today" was true of *holding the lease* and not of running a loop.
+
+**One sentence to keep this section from being over-read.** Per-run delivery resources do not make
+parallel laps work; they remove one serialisation from the path. Rondo's F-13 measures an iteration's
+lifetime under rondo's own single-flight lock as 125.4 s, of which the lap -- the only span continuo's
+delivery lease is held for -- is 20.9 s, about 17%; the remaining ~83% is the lock held across an
+unbounded human wait, which nothing in `D-1104` touches. That measurement is **rondo's**, in
+`docs/operations/lap-1-dogfood.md` in the rondo repository, and is cited rather than re-derived here
+because this repository cannot read it; `parallel-laps-delivery-lease.md` section 10.3 is where it is
+cross-measured against continuo's release point.
+
+*This is an addition, not a correction. Nothing above became false; the section asked half a question
+and the missing half was expensive enough to need its own design document.*
+
 ### 4.10 Nobody publishes: L7 has no actor, and the second relay has no acker
 
 The worker is turn-shaped and, once L4 has ingested its terminal result, it has ended. It is also
@@ -1039,10 +1093,45 @@ evidence a later promotion entry must cite -- an orchestrator-driven real child 
 schema, which is precisely the cell no existing test covers. Two plan lines, not decisions, come with
 it: the lap is **turn-shaped** (S1 has no delivery verb by design, the child spawns with
 `stdin: "ignore"`, and start is a single `-p` turn), and the lap runs **one provider instance per
-run**, which makes the documented concurrency residual at
-`src/session/claude_cli_provider.ts:959-994` unreachable at zero cost.
+run**, which makes the documented concurrency residual in
+`ClaudeCliSessionProvider`'s `#queue` docstring unreachable at zero cost.
 
-**Band: continuo, post-lap.**
+*Citation correction, measured by `D-1104`.* This paragraph originally cited that residual as
+`src/session/claude_cli_provider.ts:959-994`. At the revision the sentence was written against, that
+range is `identityMismatchIn` -- an unrelated function, and at `8c706a8` it still is (`:969`). The
+residual is the `#queue` field's docstring, `:1156-1190`, whose own words are "this paragraph is the
+residual rather than a claim there is none" (`:1182-1183`) and "Reaching it needs two verbs called
+concurrently on one instance" (`:1185-1186`). **The line numbers are given as an aid, not as the
+identifier**: search for `D-0301 part 3` or for the `#queue` field, both of which name the thing and
+survive the next edit above them. The wrong range was in this document for as long as it was because
+a range that resolves to *some* plausible-looking code is not self-refuting to a reader who does not
+open it -- which is the argument for citing a name alongside a number.
+
+**The re-band, and what `D-1104` did and did not do to it.** `D-1104` scopes the outbox delivery
+lease per run, so two `lap perform` **processes** can run against one control plane. Each such
+process constructs its own provider at `src/lap/cli.ts:597`
+(`createDefaultSessionProvider` -> `new ClaudeCliSessionProvider`, `src/session/default_provider.ts:40`),
+so **the premise of this paragraph survives the parallel case unchanged**: one provider instance per
+run, and no two verbs on one instance. The residual therefore stays unreachable.
+
+**A different provider hazard does become reachable, and it is not this one.** `--state-root` is
+"Never defaulted: two providers sharing one directory adopt each other's children"
+(`src/lap/cli.ts:136-139`, and the class says the same at
+`src/session/claude_cli_provider.ts:1119-1121`). Until `D-1104` the global delivery lease made two
+concurrent `lap perform` processes impossible, so a shared state root could not be reached whatever
+the operator typed; now it can, and nothing in `D-1104` refuses it -- `requireUsableStateRoot`
+(`src/lap/root.ts:693`) checks usability, not exclusivity. That is a distinct residual from `#queue`,
+it is continuo's, and it is a *new* one rather than a re-banded one: the change that removed its
+guard did not replace it. What `D-1104` changes is only the *evidence obligation* -- the
+parallel case is now discharged rather than merely not-yet-asked -- and it repairs **nothing** in the
+provider; it must not be credited with closing this. Narrowed, the residual becomes live only when
+something proposes **concurrent verbs on one S1 instance, or one provider instance shared across
+runs**. Neither is proposed anywhere today, and S1 has no concurrency contract of its own to hang one
+on (`src/session/claude_cli_provider.ts:1187-1189`).
+
+**Band: continuo, post-lap** -- and it stays continuo's. The trigger above is a change to how continuo
+drives S1, not a change to how work is allocated to laps, so nothing in rondo's ledger can make it
+live.
 
 ---
 

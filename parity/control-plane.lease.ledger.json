@@ -16,9 +16,11 @@
   "target": {
     "test_file": "test/control_plane/lease.test.ts",
     "target_only_tests": {
-      "count": 1,
+      "count": 3,
       "ids": [
-        "test/control_plane/lease.test.ts::seam liveness (target-only) > the generated refusal id comes from the seam"
+        "test/control_plane/lease.test.ts::seam liveness (target-only) > the generated refusal id comes from the seam",
+        "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > the fences own resource is a sentinel and not a spelling",
+        "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a bare kind is attributed by its own column and stays in the history"
       ],
       "note": "Target-only. lease.ts routes its one nondeterministic call -- the generated fallback action_id in recordRefusal -- through leaseSeams.uuid4Hex (D-0014), so a case needing a pinned id has a way to get one. interlock's own suite never needs it (every case that reaches the refusal path passes its own attempt_id), so this liveness test has no source counterpart and is not counted as ported coverage. It exists because a seam nothing routes through is worse than no seam: it would look like a control point while production went around it."
     },

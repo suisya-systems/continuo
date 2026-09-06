@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
+import { deliveryResourceForRun } from "../../src/control_plane/delivery_resource.js";
 import { KeyedDropbox } from "../../src/control_plane/destination.js";
 import { openGate } from "../../src/control_plane/gates.js";
 import { acquire } from "../../src/control_plane/lease.js";
@@ -20,7 +21,6 @@ import {
   reconcile,
   relayMessageId,
 } from "../../src/gate/operator.js";
-import { DELIVERY_LEASE_RESOURCE } from "../../src/messagebus/endpoint.js";
 import { caseRoot } from "../testkit/cases.js";
 
 /**
@@ -57,6 +57,19 @@ const GATE_ID = "gate-1";
 const RUN_ID = "run-1";
 const ACTOR = "operator-1";
 const HOLDER = "endpoint-holder";
+
+/**
+ * The delivery resource this gate's relays live on (`D-1104`).
+ *
+ * The run's, not the global literal: `enqueueRelay` derives the row's resource
+ * from `gate.run_id`, so an endpoint pinned to the global name would poll an
+ * eternally empty queue here. It is also the shape the endpoint's startup
+ * admission has to admit -- before `D-1104` `INTERLOCK_MESSAGEBUS_RESOURCE`
+ * was compared against one literal and anything else exited 2 -- and the
+ * `FATAL:` assertion in {@link startEndpoint} is what makes that falsifiable
+ * in a real process rather than in a predicate's unit test.
+ */
+const RUN_RESOURCE = deliveryResourceForRun(RUN_ID);
 
 /** A minimal line-delimited JSON-RPC client over the child's stdio. */
 class Client {
@@ -201,7 +214,7 @@ function world(label: string): {
   // the endpoint finds expired on its first attempt. The gate's own timestamps
   // stay arithmetic on T0, because nothing fences those.
   const lease = acquire(connection, {
-    resource: DELIVERY_LEASE_RESOURCE,
+    resource: RUN_RESOURCE,
     holder: HOLDER,
     nowMs: Date.now(),
     ttlMs: 3_600_000,
@@ -221,7 +234,7 @@ function startEndpoint(dbPath: string, destination: string, epoch: number): Clie
     env: {
       ...process.env,
       INTERLOCK_MESSAGEBUS_DB: dbPath,
-      INTERLOCK_MESSAGEBUS_RESOURCE: DELIVERY_LEASE_RESOURCE,
+      INTERLOCK_MESSAGEBUS_RESOURCE: RUN_RESOURCE,
       INTERLOCK_MESSAGEBUS_HOLDER: HOLDER,
       INTERLOCK_MESSAGEBUS_EPOCH: String(epoch),
       INTERLOCK_MESSAGEBUS_RECIPIENT: GATE_RELAY_RECIPIENT,

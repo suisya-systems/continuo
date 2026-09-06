@@ -139,6 +139,25 @@ export {
   configureConnection,
   openControlPlaneConnection,
 } from "./control_plane/connection.js";
+/**
+ * The delivery resource names, and the one constructor that builds them
+ * (`D-1104`).
+ *
+ * Exported because `.` is this package's only export path (`D-0002`), and an
+ * installed consumer that reads `UNOWNED_OUTBOX_QUERY` -- the invariant an
+ * operator or an external auditor is meant to run -- now gets a
+ * `delivery_resource` column back and needs the vocabulary to interpret it.
+ * `isDeliveryResource` is exported for the same reason the endpoint refuses on
+ * it: a consumer checking a name should read the same predicate the endpoint
+ * does rather than write a second one.
+ */
+export {
+  DELIVERY_LEASE_RESOURCE,
+  DELIVERY_LEASE_RUN_PREFIX,
+  DELIVERY_RESOURCE_SHAPES,
+  deliveryResourceForRun,
+  isDeliveryResource,
+} from "./control_plane/delivery_resource.js";
 export {
   ATTEMPT_LOG_NAME,
   DeliveryReceipt,
@@ -252,6 +271,7 @@ export {
   fencedInsert,
   fencedUpdate,
   fenceEpoch,
+  fenceResource,
   Increment,
   IsNull,
   increment,
@@ -280,6 +300,7 @@ export {
   value,
   WRITE_HISTORY_QUERY,
   writeHistory,
+  writerResourceOf,
 } from "./control_plane/lease.js";
 export {
   type AppliedMigration,

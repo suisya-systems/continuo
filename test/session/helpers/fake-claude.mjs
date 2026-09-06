@@ -72,7 +72,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { appendFileSync, writeSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync, writeSync } from "node:fs";
 import process from "node:process";
 
 /**
@@ -383,6 +383,63 @@ async function main() {
       await sleep(sleepForMs);
     }
     return 0;
+  }
+
+  if (mode === "barrier") {
+    // `D-1104`, and the ONLY mode that holds and then succeeds.
+    //
+    // A test proving two laps ran CONCURRENTLY cannot assert "both children
+    // exited 0": that is green under serial execution too, and a proof that
+    // would pass if the second lap started after the first finished proves
+    // nothing about concurrency. So the child writes a ready marker and blocks
+    // until the parent releases it, and the parent takes its evidence -- two
+    // live leases, each poll seeing only its own rows -- while BOTH children
+    // are still blocked. Nothing else can hold at this instant: `ok` completes
+    // and permits serial execution, and the `-then-hang` modes never let the
+    // lap exit 0.
+    //
+    // The hold is here, in the CHILD, and not between two test-owned
+    // endpoints, because the lap's duration IS its child's duration: a barrier
+    // between endpoints would let lap A finish before lap B started with every
+    // endpoint assertion still passing.
+    //
+    // Files, not signals: this runs on the Windows serial pass too, and POSIX
+    // signals are not portable there.
+    //
+    // Additive, and safe against the 65 session cases for the same reason the
+    // five modes above it are: the switch defaults to `ok` and no existing
+    // case sets this value.
+    const readyPath = env.FAKE_BARRIER_READY;
+    const releasePath = env.FAKE_BARRIER_RELEASE;
+    if (!readyPath || !releasePath) {
+      errorOut("fake-claude: FAKE_MODE=barrier needs FAKE_BARRIER_READY and FAKE_BARRIER_RELEASE");
+      return 1;
+    }
+    // Written after the init event above, so a parent that has seen the marker
+    // knows the lap reached its child -- which is after the lease was acquired
+    // and the workspace materialised, the overlap the barrier exists to prove.
+    writeFileSync(readyPath, `${process.pid}\n`, "utf8");
+    // **Bounded, and it fails loudly.** A barrier that can hang turns a red CI
+    // cell into a cancelled one, which explains nothing -- the failure mode
+    // `D-1103` records. `FAKE_BARRIER_TIMEOUT` is seconds; the default is well
+    // inside the runner's own per-test budget.
+    const deadline = floatFromEnv("FAKE_BARRIER_TIMEOUT", "30") * 1000;
+    const pollMs = 10;
+    let waited = 0;
+    while (!existsSync(releasePath)) {
+      if (waited >= deadline) {
+        errorOut(
+          `fake-claude: FAKE_MODE=barrier waited ${deadline}ms for ${releasePath} and it never ` +
+            "appeared; the parent never released this child",
+        );
+        return 1;
+      }
+      await sleep(pollMs);
+      waited += pollMs;
+    }
+    // Falls through to the ordinary `ok` tail below: the result event, the
+    // report text, exit 0. A lap that hung and then failed would prove the
+    // overlap and nothing else.
   }
 
   if (mode === "garbage-then-hang") {

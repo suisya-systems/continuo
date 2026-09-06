@@ -81,6 +81,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import Database from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
 
+import { DELIVERY_LEASE_RESOURCE } from "../../src/control_plane/delivery_resource.js";
 import {
   createProductionControlPlane,
   openProductionControlPlane,
@@ -342,6 +343,13 @@ interface OutboxOverrides {
   readonly writer_epoch?: number | null;
   readonly delivered_at_ms?: number | null;
   readonly acked_at_ms?: number | null;
+  /**
+   * The lease resource whose epoch sequence governs the row (`0005`). It has
+   * no `DEFAULT` in the DDL on purpose, so every insert names one; the default
+   * here is the global resource, which is what a row belonging to no run
+   * carries and what `0005` gave every row it inherited.
+   */
+  readonly delivery_resource?: string;
 }
 
 function addOutbox(
@@ -363,13 +371,15 @@ function addOutbox(
     enqueued_at_ms: number;
     delivered_at_ms: number | null;
     acked_at_ms: number | null;
+    delivery_resource: string;
   }>(
     `
         INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key, status,
                             retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms,
-                            acked_at_ms)
+                            acked_at_ms, delivery_resource)
         VALUES (:message_id, :run_id, :recipient, :payload, :dedup_key, :status, :retry_count,
-                :writer_epoch, :enqueued_at_ms, :delivered_at_ms, :acked_at_ms)
+                :writer_epoch, :enqueued_at_ms, :delivered_at_ms, :acked_at_ms,
+                :delivery_resource)
         `,
   ).run({
     message_id: messageId,
@@ -383,6 +393,7 @@ function addOutbox(
     enqueued_at_ms: at,
     delivered_at_ms: or(overrides.delivered_at_ms, null),
     acked_at_ms: or(overrides.acked_at_ms, null),
+    delivery_resource: or(overrides.delivery_resource, DELIVERY_LEASE_RESOURCE),
   });
   return messageId;
 }
@@ -1240,6 +1251,149 @@ describe("section 5 -- the outbox status lattice (0003_outbox_cancelled_status.s
     expect(plan("status IN ('pending', 'delivered')")).toContain("SEARCH");
     expect(plan("status IN ('pending', 'delivered')")).toContain("outbox_undelivered");
     expect(plan("status <> 'acked'")).toContain("SCAN");
+  });
+});
+
+// --------------------------------------------------------------------------
+// section 5 -- the outbox delivery resource (0005_outbox_delivery_resource.sql)
+// --------------------------------------------------------------------------
+
+describe("section 5 -- the outbox delivery resource (0005_outbox_delivery_resource.sql)", () => {
+  test("an outbox row must name the lease its writer epoch was minted by", () => {
+    const cp = cpFixture();
+    // `NOT NULL` with **no** `DEFAULT`, which is why 0005 rebuilt the table
+    // rather than adding a column. A default would outlive the step: a producer
+    // added later that forgot to bind the column would be given the global
+    // resource silently, and a silently global row is one no per-run lap will
+    // ever select -- the failure this column exists to make impossible,
+    // arriving by omission instead of by design.
+    expectSqliteError(
+      () => {
+        cp.exec(
+          "INSERT INTO outbox (message_id, recipient, payload, dedup_key, status," +
+            " retry_count, enqueued_at_ms)" +
+            ` VALUES ('msg-1', 'secretary', '{}', 'dk-1', 'pending', 0, ${T0})`,
+        );
+      },
+      { code: CONSTRAINT, message: /outbox.delivery_resource/ },
+    );
+    // And it is typed and non-empty like every other non-null text column here.
+    expectSqliteError(
+      () => {
+        addOutbox(cp, "msg-2", "dk-2", T0, { delivery_resource: "" });
+      },
+      { code: CONSTRAINT, message: /delivery_resource/ },
+    );
+  });
+
+  test("an outbox row keeps the delivery resource it was enqueued under", () => {
+    const cp = cpFixture();
+    // A mutable partition is one that can be moved out from under a live
+    // holder: rewrite the column and a row one lap is mid-delivery on becomes
+    // another's, whose fenced write then matches it under a fence that is
+    // perfectly intact. The immutability is what makes the in-statement
+    // equality mean ownership rather than "ownership as of whenever this
+    // column was last edited".
+    addOutbox(cp, "msg-1", "dk-1", T0, {
+      delivery_resource: "outbox-delivery:run:run-a",
+    });
+
+    expectSqliteError(
+      () => {
+        cp.exec(
+          "UPDATE outbox SET delivery_resource = 'outbox-delivery:run:run-b'" +
+            " WHERE message_id = 'msg-1'",
+        );
+      },
+      { code: CONSTRAINT, message: /keeps the delivery resource it was enqueued under/ },
+    );
+    expect(rowRaw(cp, "SELECT delivery_resource FROM outbox WHERE message_id = 'msg-1'")).toEqual([
+      "outbox-delivery:run:run-a",
+    ]);
+  });
+
+  test("the inherited marker is written by the migration and by nothing else", () => {
+    const cp = cpFixture();
+    // The marker is recorded provenance about what 0005 did, so a row written
+    // afterwards may not acquire it -- a corrupted relay that could would be
+    // buying itself the legacy exception the operator's relay ack grants
+    // genuinely inherited rows. This database was created at head with no rows
+    // to inherit, so every row here carries NULL.
+    addOutbox(cp, "msg-1");
+    expect(
+      rowRaw(cp, "SELECT delivery_resource_inherited FROM outbox WHERE message_id = 'msg-1'"),
+    ).toEqual([null]);
+
+    expectSqliteError(
+      () => {
+        cp.exec("UPDATE outbox SET delivery_resource_inherited = 1 WHERE message_id = 'msg-1'");
+      },
+      { code: CONSTRAINT, message: /written by migration 0005 and by nothing else/ },
+    );
+    // ...and it is a marker rather than a counter: absent, or the one value
+    // that means "0005 inherited this row".
+    expectSqliteError(
+      () => {
+        cp.prepare<[]>(
+          "INSERT INTO outbox (message_id, recipient, payload, dedup_key, status, retry_count," +
+            " enqueued_at_ms, delivery_resource, delivery_resource_inherited)" +
+            ` VALUES ('msg-2', 'secretary', '{}', 'dk-2', 'pending', 0, ${T0},` +
+            " 'outbox-delivery', 2)",
+        ).run();
+      },
+      { code: CONSTRAINT, message: /delivery_resource_inherited/ },
+    );
+  });
+
+  test("the due indexes lead with the delivery resource and keep the partial predicate", () => {
+    const cp = cpFixture();
+    // Both readers of the due family now carry a resource equality, and both
+    // equalities lead so that `enqueued_at_ms` stays a seekable range term
+    // rather than a filter applied after a scan of the partition. The partial
+    // predicate is spelled as the positive IN list for 0003's reason: SQLite
+    // may use a partial index only when the query's WHERE carries the index's
+    // own predicate as a term.
+    const indexSql = (name: string): string =>
+      String(
+        cp
+          .prepare<[string], string>("SELECT sql FROM sqlite_schema WHERE name = ?")
+          .pluck()
+          .get(name),
+      );
+
+    expect(indexSql("outbox_due_by_recipient")).toContain(
+      "outbox(delivery_resource, recipient, enqueued_at_ms)",
+    );
+    expect(indexSql("outbox_due_by_recipient")).toContain("status IN ('pending', 'delivered')");
+    expect(indexSql("outbox_due_by_resource")).toContain(
+      "outbox(delivery_resource, enqueued_at_ms)",
+    );
+    expect(indexSql("outbox_due_by_resource")).toContain("status IN ('pending', 'delivered')");
+
+    // Measured, not assumed: each of the two due shapes seeks its own index.
+    const plan = (where: string): string =>
+      rowsRaw(
+        cp,
+        "EXPLAIN QUERY PLAN SELECT message_id FROM outbox WHERE " +
+          `status IN ('pending', 'delivered') AND ${where}` +
+          " ORDER BY enqueued_at_ms",
+      )
+        .map((row) => String(row))
+        .join(" ");
+
+    const byRecipient = plan(
+      "delivery_resource = 'outbox-delivery' AND recipient = 'secretary'" +
+        ` AND enqueued_at_ms <= ${T0}`,
+    );
+    expect(byRecipient).toContain("SEARCH");
+    expect(byRecipient).toContain("outbox_due_by_recipient");
+    const byResource = plan(`delivery_resource = 'outbox-delivery' AND enqueued_at_ms <= ${T0}`);
+    expect(byResource).toContain("SEARCH");
+    expect(byResource).toContain("outbox_due_by_resource");
+    // ...and neither replaces `outbox_undelivered`, which is still the only
+    // index a database-wide reader (events.orphaned_outbox, gates.stalled_relays)
+    // can seek: its leading column is unconstrained in those queries.
+    expect(indexSql("outbox_undelivered")).toContain("outbox(enqueued_at_ms)");
   });
 });
 

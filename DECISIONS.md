@@ -207,6 +207,7 @@ spaces distinct.
 | D-1101 | The shared cross-belt band is widened: `D-0019`..`D-0099` is closed, and `D-11xx` is its continuation | accepted |
 | D-1102 | A `lap perform --json` refusal names its session in a top-level `session_id`, present when the lap holds a confirmed identity and absent when it does not | accepted |
 | D-1103 | The Windows `double-green` cells get a 65-minute cap, not 40, for headroom over the measured slowest lap | accepted |
+| D-1104 | The outbox row records WHICH lease minted its `writer_epoch`, and a lap holds its own run's delivery resource | accepted |
 
 ---
 
@@ -15765,3 +15766,412 @@ double-green rule and `ci-gate`'s fail-closed shape, which this entry leaves unc
 corroborating evidence for the headroom this entry adds). Decision id `D-1103`, drawn from the
 `D-11xx` shared cross-belt band opened by `D-1101` (Issue #179); `D-1102` was reserved for a
 concurrent task at the time this entry was drafted, so this entry takes the next free id after it.
+
+---
+
+## D-1104 -- The outbox row records WHICH lease minted its `writer_epoch`, and a lap holds its own run's delivery resource
+
+**Context.** `D-0053` rule 4 admitted one delivery lease resource, `outbox-delivery`, and `D-0074`
+recorded the consequence: two `lap perform` processes against one control plane serialise, because
+the second acquisition is refused. `D-0074` also named the two candidate lifts -- a scope column on
+`outbox`, or a strict recipient predicate on both the due and the recovery passes -- and left both
+open on purpose. Issue #167 is that question. `docs/design/parallel-laps-delivery-lease.md` (landed
+propose-only in #187) measures the tree against both candidates and puts twenty decision lines
+`P-1`..`P-20` to this gate; the operator ratified them, choosing option (b) in its section 6. This
+entry is that ratification, and the implementation of it.
+
+The failure the old shape has is not a missing "scope". Derived at the statement: an outbox row
+records the **third** element of the fence triple `(resource, holder, epoch)` and nothing else about
+its owner, while epoch order is meaningful only *within* a resource -- `acquire` serialises on the
+`lease` table's primary key and takes over by incrementing *that* resource's epoch
+(`src/control_plane/lease.ts`). So with two live resources, holder B's fence clause proves B's own
+lease is live, B's row clause proves the row carries the number 1, and a row A minted at its own
+epoch 1 satisfies both. The update lands, the fence never lied, and A's row was written by B.
+Recovery is worse: A's unowned sweep asks whether a lease exists on **A's** resource at the row's
+epoch, so a row B owns at epoch 2 is reported unowned and `_ADOPT` re-stamps it under A's epoch --
+a live row transferred silently between runs.
+
+**Decision.**
+
+1. **`outbox.delivery_resource` holds the exact lease resource string, and `deliveryResourceForRun`
+   is the one thing that builds one.** Not a scope tag, not a partition id: the row was missing the
+   fence triple's first element, so the honest repair is to store that element, and a shorter tag
+   would need a mapping back to the resource -- a second place the answer can be wrong. The
+   constructor is **one-way**: nothing parses a resource back into a run id, because `outbox.run_id`
+   is already the join and a second decoder is a second thing to disagree with the first
+   (`src/control_plane/delivery_resource.ts`).
+
+2. **Recipient-only is rejected, and the measurement is recorded here so it is not re-opened.** The
+   option is admissible only if two concurrent laps address different recipients. They do not, and
+   it is a decision rather than an accident: both of a gate's relays address `external-notify`
+   (`D-0076`), the constant has one definition and both enqueue sites read it, and the endpoint
+   refuses at startup a recipient no handler serves. So the option collapses either way -- one lease
+   per recipient leaves the serialisation exactly as `D-0074` recorded it, and one lease per run with
+   recipient as the only row predicate lets both laps see every `external-notify` row, because
+   recipient equality is true for all of them. Making recipient sufficient is not a query change but
+   a **re-addressing**: run-unique recipients, a handler registry admitting a family of names, a
+   relay recipient that is no longer a constant -- which is the specific mistake `D-0076` records the
+   first implementation making, and whose wedge is permanent because `(gate_id, to_stage)` makes the
+   row final -- an endpoint admission over a pattern, a materialiser that renders it, and an ack
+   authority re-derived. Recipient still becomes a SQL term on `due`, as a **routing defence** and
+   not as the ownership partition.
+
+3. **Resource equality goes inside every fenced write, never in front of one.** `_ENQUEUE` stamps it,
+   and `_COUNT_ATTEMPT`, `_MARK_DELIVERED` and `_ADOPT` each carry `delivery_resource = :fence_resource`
+   in their `WHERE`. Check-then-write leaves precisely the race in which the lease expires between
+   the check and the write, and resource equality has the same shape of race and the same answer.
+   `_ADOPT` takes the term too, and that does not contradict its deliberate lack of an ownership
+   predicate: resource equality is a **membership** test, so adoption still re-stamps a row whose
+   previous owner is gone -- it just cannot reach out of its own partition to do it.
+   `lease.ts` gains a **`fenceResource` sentinel**, the sibling of `fenceEpoch`, rendering
+   `:fence_resource`. That was not available and is named here rather than discovered: a caller
+   binding its own resource a second time under a second name could bind it wrong, and a guard the
+   caller has to remember is not a guard.
+
+4. **The resource a row gets is decided by producer class, not by `run_id`.** The rule is stated on
+   the **epoch**: on any row, `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`.
+   The **fenced** producer (`Outbox.enqueue`) takes the resource from its own instance, whatever its
+   `runId` is -- its `runId` is optional and defaults to null, so a `run_id` rule would pair a per-run
+   epoch with the global resource and rebuild the ambiguity inside the fix. The two **unfenced**
+   producers (`gates.enqueueRelay`, `events.fanOut`) derive it from the row's durable `run_id`, which
+   may be null and then takes the global literal, so a queue still outlives its worker (`D-0054`).
+   A consequence worth stating: a per-run bus can no longer produce a row on the global resource at
+   all, and a runless fenced send would have to be issued from a bus holding the global resource.
+
+5. **The lap acquires, renews, renders, checks and releases its RUN's resource.** `holdDeliveryLease`
+   gains a **required** `resource` parameter -- a default would be the global resource, and a lap that
+   silently took it would serialise against every other lap while writing rows no per-run poll
+   selects. `EndpointBinding` gains a required `resource` too, so the worker's `mcp.json` names the
+   resource its launcher actually holds. `D-0073`'s semantics hold unchanged within each resource.
+   **This is the holder-identity half, and point 1 without it does not lift the serialisation** --
+   `rondo D-0012`'s falsifier says the enabling change alone is not enough and predicts exactly that
+   misreading.
+
+6. **`UNOWNED_OUTBOX_QUERY` splits into two queries with two questions, and this is the most likely
+   place for the change to be got wrong quietly.** The exported, published invariant becomes
+   **database-wide**: it takes no `:resource` at all and joins on the row's own `delivery_resource`.
+   Binding one resource would make it say "no unowned rows *belonging to whichever resource the
+   operator happened to name*", and a row owned by a resource nobody named would pass by being
+   invisible -- a weaker invariant wearing the same name. `Outbox.recover` asks the other question
+   and reads a new **caller-scoped** form; `_UNOWNED_ONE_QUERY`'s deliberate character-identity is
+   re-anchored to that one, because `adoptIfUnowned` is a delivery worker's act. The belt's invariant
+   gains a second legitimate reason to report a row: a run-bound relay between its lap's exit and the
+   operator's `gate deliver` has no live holder and is correctly unowned.
+
+7. **`action.writer_resource` is added, both audit readers are migrated in the same change, and
+   `0005` backfills the rows they could never read.** `docs/lease-fencing.md` calls `effectKind`'s
+   resource-in-the-kind "a workaround, not a design -- a real schema carries the resource as a
+   column"; this is that column, for the one producer that cannot use the workaround. Measured, and
+   stronger than the design supposed: the workaround was **not in force on the outbox path at all**,
+   so `WRITE_HISTORY_QUERY`'s suffix filter returned **empty** for the bare `notify` kind and
+   `appliedEpochRegressions` **threw** through `resourceOfKind` on it -- the readers were already
+   broken for outbox rows before this entry. `NULL` does **not** mean "predates the column": the four
+   `effectKind`-composing writers (supervisor, watcher, session_binding, run_lifecycle via `lease.ts`)
+   are deliberately unchanged and keep writing attributed rows with a null column for ever, so a row's
+   writer resource is the **disjunction** -- the column when non-null, the `kind` suffix otherwise --
+   and `writerResourceOf` is the one place that says so. `action_one_effect_per_key` stays keyed on
+   `idempotency_key` alone: adding the resource would let two runs each perform one effect and call it
+   exactly-once twice.
+
+8. **A concurrent duplicate is classified as a duplicate, not as a stale writer.** Keeping the dedup
+   index global keeps exactly-once for the effect; it no longer keeps *serialisation*, and that is a
+   new race. Two live writers on messages sharing one dedup key both see one pending `action`, both
+   call the destination, the first records, and the loser's `_RECORD_RESULT` changes zero rows with a
+   perfectly live lease -- which the code read as "the epoch stopped being a live lease while the
+   effect was in flight", wrote as a durable refusal, and left as a message undelivered and due, so
+   the pair replayed for ever on every pass. On zero rows the action is now re-read: `applied` means
+   a duplicate and the recorded result is adopted, still `pending` means the fence and only then is
+   `StaleWriterRefused` the truth. No lock and no action-level claim -- the index was doing its job
+   and what was wrong was how its outcome was read. **Stated plainly: the destination may now be
+   called twice without a crash**, so exactly-once at the destination continues to rest on the
+   declared `exactly_once_mechanism`, exactly as it already did for the crash-replay window; the
+   change is that the window is reachable with two live writers and no crash. Reachable only through
+   `MessageBus.send`'s caller-supplied `dedupKey`, not through any in-tree producer, whose keys are
+   globally unique.
+
+9. **Ack authority is scoped by resource on both surfaces, and it stays unfenced.** Recipient equality
+   was sufficient authority only while one endpoint existed per recipient. Two endpoints now serve
+   `external-notify` at once and the id an endpoint acks is **caller-supplied** -- the MCP `ack` tool
+   passes it through -- so partitioning `poll` is necessary and not enough. `MessageBus.ack` compares
+   `delivery_resource` beside the recipient test, **strictly**: a per-run endpoint has no claim on the
+   global resource and never holds it. `ackRelay` does not go through the bus and stops taking the
+   hard-coded constant, which would now refuse **every** run-bound relay ack -- the ordinary case. It
+   derives the resource from **its own gate's `run_id`**, already loaded on the path, so `gate ack`
+   gains no argument and the check becomes a cross-check between two independently stored facts; a
+   mismatch is a corrupted relay rather than a mistyped flag. On that surface the global literal is
+   admitted **only for a row `0005` marked as inherited** -- recorded provenance, written by the
+   backfill and by nothing else, immutable by trigger. Not a clock comparison: both
+   `migrateControlPlane`'s `nowMs` and `enqueueRelay`'s `enqueuedAtMs` are caller-supplied and
+   unordered against each other under this database's own "time is the caller's" convention, so a
+   timestamp rule would strand genuinely inherited relays in one direction and admit backdated
+   corruption in the other. After `0005` a run-bound relay on the global resource can only be
+   inherited or corrupted, and the marker is what separates them because it is a fact about what the
+   migration did.
+
+10. **`gate deliver` is resource-parameterised, and the global resource gains its own ack.** A fixed
+    global drainer would strand the **ordinary** post-lap path, not an edge case: `enqueueRelay`
+    copies `gate.runId`, and `gate present` / `gate answer` normally run during the human suspend,
+    after `lap perform` has exited -- so no lap is running to select those relays and a global pass
+    never would. The verb takes **`--run-id`, optional, defaulting to the global resource**; a
+    `--resource` option is rejected because it re-exposes the string the endpoint refuses to let an
+    operator choose (`D-0076`'s mistake for `--recipient`), and enumerate-and-drain-each is rejected
+    for lap 1 because the pass would acquire an unbounded set of leases, any of which may be refused,
+    leaving a partially-drained pass whose report cannot say what it skipped. `LeaseHeld` while the
+    lap is live is retained and correct, narrowed from "a lap" to "*this run's* lap". Because the
+    partition removes the worker that existed incidentally for a **global non-relay** row -- runless
+    fan-out, a runless send, polled and acked by whichever endpoint held the single lease -- a new
+    verb **`gate ack-unrelayed`** settles one such row under the global resource, acquired and
+    released per invocation like every other `gate` verb. A resident global worker is rejected on
+    two measurements: residency would make `gate deliver` without `--run-id` return `LeaseHeld` for
+    exactly the legacy and runless relays that path exists to drain, cancelling the option above; and
+    the endpoint it was supposed to imitate is a passive pair of MCP tools a client drives, not a
+    draining loop. The objection that an operator acking on a consumer's behalf is a decision with no
+    content is answered rather than dismissed: a global non-relay row's consumer reached it through an
+    endpoint that no longer polls it, so the choice is not "operator or consumer" but "operator or
+    nobody".
+
+11. **`0005` is a new forward step and the existing four are untouched, using the 12-step rebuild
+    rather than `ADD COLUMN ... NOT NULL DEFAULT`.** SQLite admits the latter only with a non-null
+    constant default, and the default would then outlive the migration: a producer added later that
+    forgot to bind would get `outbox-delivery` **silently**, and a silently-global row is a row no
+    per-run lap ever selects -- the exact failure class this column exists to make impossible,
+    arriving by omission instead of by design. `NOT NULL` with no default refuses that insert at the
+    database. Legacy rows are backfilled to the exact literal `'outbox-delivery'`, which **records**
+    history rather than inventing it: there has only ever been one delivery resource, enforced at four
+    sites. That is the opposite conclusion to `0004`'s refusal to backfill, from the same principle --
+    `0004` could not know the epoch an existing `run` row was written under, and `0005` does know the
+    resource -- and `0005`'s header says so, so that `0004` is not read as precedent against it.
+    `docs/sqlite-value-contract.md` is a **value-representation** contract measured on one driver
+    version and is **not a schema freeze**; stated here so the question is not re-asked.
+
+12. **Three indexes, not two, and the third is a measured deviation from the design.** The design's
+    section 5.4 proposed **replacing** `outbox_undelivered` with `(delivery_resource, recipient,
+    enqueued_at_ms)` and `(delivery_resource, enqueued_at_ms)`. Implementation measured that
+    replacing it regresses a **third** reader the design did not enumerate:
+    `events.ORPHANED_OUTBOX_SQL` is deliberately database-wide -- it asks which rows are stale for
+    *any* owner, so it can never carry a `delivery_resource` term -- and neither composite index can
+    seek `enqueued_at_ms` for it, because their leading column is unconstrained there. Measured on
+    this tree, 400 rows, no `ANALYZE` (which this tree never runs): with the index kept, that query
+    plans as `SEARCH outbox USING INDEX outbox_undelivered (enqueued_at_ms<?)` and its degraded twin
+    as `SCAN`; with the index dropped, **both** become `SCAN outbox USING INDEX
+    outbox_due_by_resource` -- so the shipped form would become indistinguishable from its own
+    degraded twin and the anti-vacuity control in `test/control_plane/events.test.ts` would go vacuous
+    as well as the query going slow. So the step **adds** two indexes and keeps one. This is the same
+    shape of finding as the design's own round A2, applied to a reader outside the `due` family.
+    Both new indexes are needed for the same reason A2 gives: `due` has two call shapes, and on the
+    recipient-less one the composite index cannot seek the range term because the intervening
+    `recipient` is unconstrained. The plan evidence asserts the **constraint list** and not `SEARCH`
+    plus an index name, because both remain true of the degraded plan -- an assertion of the older
+    shape would have passed on exactly the regression it was written to catch.
+
+13. **The proof is a barrier held in the lap's own child, and its evidence is taken while both
+    children are still blocked.** "Two processes both exited 0" is green under serial execution too,
+    so it proves nothing. `test/lap/parallel-laps.test.ts` runs **two built `lap perform` processes**
+    on one control plane and one shared destination directory, and **two built endpoints started from
+    the materialiser's own rendered `mcp.json`** rather than from an env the test composes. The hold
+    is in the child because a lap's duration is its child's duration -- a barrier between two
+    test-owned endpoints would let lap A finish before lap B started with every endpoint assertion
+    still passing -- which is why `fake-claude.mjs` gains **one additive `FAKE_MODE` (`barrier`)**,
+    the only one of its modes that holds and then succeeds, with the switch's `"ok"` default and the
+    65 session cases untouched. The five-step ordering is part of the specification: markers, then the
+    two-live-lease read, then the endpoints and the cross-delivery and cross-partition-ack
+    assertions, then the release, then the exits. Every wait is bounded and fails loudly -- a barrier
+    that can hang turns a red cell into a cancelled one, the failure `D-1103` records as the one that
+    explains nothing. It is mandatory in every `double-green` cell, uses the repository fake child
+    and never an authenticated `claude`, and reaches no network. **The stated budget, measured:**
+    the two cases cost **1.5 s of test time** (2.5 s including transform and import) on the
+    development Linux host, against a whole-suite `node scripts/run-suite.mjs` of 2 m 26 s there --
+    about 1% of one lap of the suite. The barrier's own ceilings are 60 s for the parent's wait on
+    a marker and 90 s for a child's wait on the release, so the worst case this file can contribute
+    to a cell is bounded at roughly two minutes even when it fails, against `D-1103`'s 65-minute
+    Windows cap; the Windows platform factor measured for `double-green` is about 4x the Linux
+    figure, which leaves the addition immaterial to that cap. If that stops being true the fix is
+    this case getting cheaper, not the cap moving again.
+
+14. **The statement-level controls do not live in that case, because a masked defence cannot be
+    falsified through the top of the stack.** This design is deliberately redundant: four fenced
+    writes each stand behind a scoped selection, and `MessageBus.poll` keeps its TypeScript recipient
+    filter beside the new SQL term. Removing the equality from `_MARK_DELIVERED` produces no
+    cross-run stamp in the two-child test, because the due query never returned the foreign row and
+    the attempt counter would have refused it first -- the mutant stays green, and a green mutant is
+    evidence of nothing. So each predicate has a control beside the outbox suite that reaches it
+    directly, and **`_ADOPT` was exported for its own control after the method-level version was
+    observed green with the predicate removed**: `_UNOWNED_ONE_QUERY`'s resource term masks it one
+    layer deeper than the other three. Every predicate this entry adds has been observed red on its
+    own mutant, and the two end-to-end controls -- the cross-partition ack, and restoring the global
+    resource -- were observed red on the real-child case.
+
+15. **This is not "parallel laps now work", and the entry says so because the number matters to
+    rondo's ledger.** `rondo`'s F-13 measured one iteration's lifetime under rondo's single-flight
+    lock at 125.4 s: 20.9 s (**17%**) in `admit()` -- the lap itself -- and 104.5 s (**83%**) in
+    `awaiting_human` with the gate open. Cross-measured against continuo: the delivery lease is
+    released when `lap perform` exits, and the process exits at `awaiting_human` with the gate still
+    open, so **continuo's delivery lease is held only for the first term.** Lifting it removes
+    contention on 17% of the measured lifetime and none of the 83%, which is rondo's lock and is
+    untouched by anything here. That is not an argument against #167 -- 20.9 s of hard serialisation
+    is a real ceiling, and the cross-writes above are a correctness problem regardless of throughput
+    -- it is an argument against reading this entry as more than it is. continuo #167 owns
+    partitioning, fencing and the two-run proof; rondo #8 owns allocation, the capacity bound and
+    suspend accounting. This change does not widen rondo's single-flight index and does not authorise
+    a second rondo admission.
+
+16. **The shared destination's fence file now grows one key per run, for ever, and compaction is
+    explicitly NOT authorised.** The dropbox keys its fence file by the caller's lease resource, so
+    per-run resources give per-run fence keys automatically -- and that is what makes the partition
+    coherent end to end rather than only in the database: had the resource stayed global while the
+    epochs went per run, run B's epoch 1 would be refused as stale against run A's honoured epoch 5,
+    and the materialiser's pre-flight would refuse the second lap outright. The cost is that
+    `fence.json` is one object per destination root, read whole and rewritten whole on every token
+    advance, and it gains roughly fifty bytes per run without bound. Correctness never degrades. **The
+    obvious premise for compaction fails, and recording why is the useful part**: `run.run_id` being a
+    `PRIMARY KEY` constrains one table in one database, while the fence deliberately outlives any
+    particular database in an operator-supplied directory -- restore a backup, replace the database,
+    or re-seed a fixture against the same root, and a new run may legitimately carry an id whose
+    watermark was compacted away, after which a low token is accepted as fresh. That is the single
+    failure the atomic fence write exists to avoid, re-admitted. Safe compaction needs a discriminator
+    the scope key does not carry -- a database or control-plane incarnation id -- or an enforced
+    cross-restore no-reuse guarantee, and that is a design of its own with a fence-format change in
+    it, not a follow-up chore. A related narrowing is recorded rather than hidden: the pre-flight's
+    cross-plane-reuse refusal now reads only this run's scope, so it catches a foreign watermark only
+    for a run id already seen in that destination.
+
+17. **The column had to be added to `spike_schema.sql` as well, and that was not in the design.**
+    `Outbox` is one class over two schemas -- the fault-injection belt drives it against the spike
+    schema, which has no migration path (`D-0026`) -- so a `delivery_resource` term inside every
+    fenced write is a term the spike schema must satisfy or that belt cannot run at all. Both columns
+    and their triggers are carried there, `SCHEMA_REVISION` goes 2 to 3 as its docstring requires, and
+    the inherited marker is deliberately **not** carried: a schema with no migration path has no
+    inherited rows, and the one reader of that marker is a `gate` verb that only ever runs against the
+    production plane. The fault-injection contract's parameter list for the unowned invariant loses
+    its `resource` entry in the same change, because the query no longer takes one.
+
+18. **`HandlerRegistry.register` now refuses an `actionKind` containing `@`.** `effectKind` already
+    refuses that character in an *effect*, in these words and for this reason -- it is the separator an
+    attributed kind is composed with, and an effect using it would make the resource unrecoverable
+    from the row -- while the registry accepted it. That inconsistency became load-bearing: `0005`
+    identifies the outbox's pre-migration action rows by the **absence** of an `@`, so a handler free
+    to write one could produce a row the backfill skips and the readers then mis-attribute to whatever
+    followed the separator. The residual for rows that already exist is named rather than repaired: a
+    legacy `mail@v2` row is byte-identical to a legitimate `effectKind("v2", "mail")` row, so no
+    reader can classify one without misclassifying the other, and what bounds it is a measurement
+    rather than a discriminator -- the package is `"private": true` at version `0.0.0` and unpublished,
+    so every existing database was produced by this tree, where the only outbox action kinds are the
+    two bare ones. A foreign database carrying an `@`-bearing legacy action kind is **out of `0005`'s
+    scope**: unattributable rather than mis-attributed by design, with a window rule 3 closes before
+    publication (`D-0045`) can open it.
+
+19. **A `gate deliver --run-id` naming a run this control plane never admitted is refused before the
+    lease, and this is a measured addition to the design's interface.** Without it a mistyped run id
+    acquires a lease on a resource no producer has ever written, delivers nothing, and exits 0
+    reporting "delivered 0 message(s)" -- indistinguishable from a genuinely empty queue, which is the
+    one report an operator draining a known gate's relays cannot act on. The verb already spends a
+    refusal in that position on an unserved recipient. Omitting `--run-id` is **not** this case: it
+    names the global resource, where legacy and runless rows live and where no `run` row is expected.
+
+20. **`D-0068` and `D-0071`'s read-then-signal residual stay open and are not credited to this
+    change**, on `D-0071`'s own first ground: it is a different lease, `session-run:<runId>`, and
+    per-run delivery resources neither fix nor worsen it. The provider-local same-instance residual
+    likewise stays open and is re-banded rather than repaired: parallel lap **processes** each
+    construct their own provider instance, so the premise that made it unreachable still holds, and it
+    becomes live only when something proposes concurrent verbs on one S1 instance or a provider
+    instance shared across runs -- a continuo change, not a rondo one. `minimal-operating-loop.md`'s
+    stale citation for that residual is corrected in the same change.
+
+21. **A shared `--state-root` stops being unreachable, and what that exposes is an operator readout
+    and not a destructive path -- measured, after a first draft of this point overstated it.** Found
+    during implementation, not in the design. Two places already record the hazard as "two providers
+    silently sharing a directory would adopt each other's children" (`src/lap/cli.ts`'s
+    `STATE_ROOT_HELP`, and `ClaudeCliSessionProvider`'s own docstring), and until this entry it was
+    **unreachable whatever an operator typed**, because the one global delivery lease made two
+    concurrent `lap perform` processes impossible. This entry removes that guard and adds nothing in
+    its place: `requireUsableStateRoot` checks that a state root is usable, not that it is unshared,
+    and nothing ties a state root to a run.
+
+    **What is actually reachable, measured rather than inferred from the docstrings.**
+    `#discoverRecords` (`claude_cli_provider.ts:2870`) scans `readdirSync(stateRoot)` and puts every
+    subdirectory holding a `record.json` on the roster, so the docstrings' description is accurate.
+    But it has exactly two consumers, and neither turns that into damage on any path this tree has:
+
+    - **`listSessions` (`:1536`) has no production caller at all.** `grep -rn listSessions src/`
+      outside the three provider modules returns nothing: it is a verb for an operator or a harness,
+      so a lap that saw a foreign session on its roster would do nothing with it.
+    - **`#holderOfUuid` (`:2834`, consumed at `:1479`) decides by directory name**, and a session
+      directory is named by its session id (`:2663`), which each lap generates fresh -- so a
+      cross-run clash is a uuid clash, and when it does fire it **refuses the spawn**, which is the
+      conservative direction.
+    - **Teardown stops by id behind an ownership test**: `const stopped = mine && (await
+      stopSession(provider, sessionId))` (`src/lap/root.ts:1581`). There is no sweep over the roster,
+      so no path stops or releases another run's session.
+    - **The one file at the root of the state root cannot be torn.** `probe-evidence.txt`
+      (`:1337`) is written through `writeAtomic` -- a `.part` file and a rename (`:1345`) -- and two
+      laps sharing a root write the same bytes anyway, since the content is the same command's
+      `--version` and `--help`. Failing to write it degrades the record and not the probe, as that
+      method's own docstring says.
+
+    So the accurate statement of the residual is: **a shared state root now lets one run's sessions
+    appear on another's operator-facing roster, and nothing in this tree escalates that further.**
+    The first draft of this point read as though destructive cross-run adoption had become
+    reachable. It had not, and an entry that overstates its own consequence is worse than one that
+    understates it, so the measurement is recorded here instead.
+
+    **This is not a reason to leave it alone, and the reason why is the shape of the finding rather
+    than its size.** What protects the destructive cases today is that no production code calls
+    `listSessions` and that session ids do not collide -- which is another *accidental* guard, of
+    exactly the kind that just failed. The global delivery lease was never designed to keep state
+    roots apart either; it did so as a side effect, and this entry is what removed it. A residual
+    whose safety rests on "nothing currently does the dangerous thing" is one a later change can make
+    live without touching anything this entry can point at.
+
+    It is named and not repaired **here** because the repair is a decision this entry had no mandate
+    for: what identifies a claim on a state root (a lease? a marker file? derivation from the run id,
+    as the artifact directory already is under `D-0061`, `src/lap/root.ts:1322`?) is a design
+    question. It has since been put to the gate and answered -- force a run-derived directory rather
+    than build a mechanism to detect sharing -- and that lands as its own change with its own
+    evidence, after this one. Until it does, **anything launching laps concurrently must give each
+    its own `--state-root`**; the proof case does exactly that, which is what a caller should do and
+    is not the same as a refusal.
+
+**Falsification.** Two concurrent laps observed writing each other's outbox rows, or one adopting the
+other's live row, would falsify the partition. A green mutant for any predicate this entry adds --
+the equality removed and the suite still passing -- would falsify point 14's claim that each is
+independently controlled, and is the failure mode this entry spent the most effort on. A relay,
+runless row or global non-relay row with no named worker through to its **ack** would falsify point
+10, whose earlier drafts promised delivery and not settlement. A `double-green` Windows cell
+cancelled by `D-1103`'s cap with the barrier case in it would falsify point 13's budget claim.
+
+**Status.** accepted
+
+**Falsifier.** A recipient that is genuinely per run existing somewhere unmeasured would make point 2
+wrong. A fourth outbox producer, or a further site assuming the global resource, would make point 4's
+inventory incomplete -- the two-schema finding in point 17 is one instance of exactly that risk, found
+during implementation. A dedup key derived from run-independent inputs appearing in the tree would
+make point 8's residual live rather than reachable-only-through-the-public-API. A destination root
+shared by far more runs than point 16 imagines, or token advances frequent enough that the whole-file
+rewrite shows up in delivery latency, would turn that recorded cost into a precondition and make the
+incarnation-discriminator design a blocker rather than a successor. `rondo`'s ledger arriving first
+and measuring the lap term as binding would make point 15's conclusion the wrong way round. A relay
+whose gate `run_id` disagrees with the row's own `delivery_resource` for a reason that is neither
+inheritance nor corruption would give point 9 a third case to decide rather than a corruption to
+refuse. A production path -- or a later change adding one -- that
+stops, releases or reads a session it found on the roster rather than one it started would turn point
+21's measured range from "an operator readout" into the destructive case its first draft claimed, and
+would make shipping this entry without a run-derived state root the wrong call. The two facts holding
+that range are that `listSessions` has no production caller and that teardown tests `mine` first;
+either ceasing to be true falsifies point 21 as written.
+
+**Source.** Issue #167. `docs/design/parallel-laps-delivery-lease.md`, landed propose-only in #187,
+whose `P-1`..`P-20` the operator ratified and whose section 6 option (b) the operator chose; that
+document carries the full measurement, its own falsifier list, and the twelve Codex rounds behind it.
+`D-0074` (the two candidate lifts, named and left open; its fencing premise is kept and only its
+serialisation consequence is superseded here), `D-0053` rule 4 (the one delivery resource, superseded
+by points 1 and 5), `D-0054` (a queue outliving its worker, kept by point 4), `D-0076` (the relay
+recipient as a constant, cited by point 2), `D-0026` (no migration path from the spike schema, which
+is why point 17 bumps its revision rather than migrating it), `D-0080` and `D-0097` (the operator's
+delivery window, which point 10 parameterises), `D-1103` (the Windows `double-green` cap point 13's
+budget is measured against), `D-0005` (double-green), `D-0006` (ASCII output), `rondo D-0012` (whose
+falsifier requires both halves, point 5) and `rondo`'s F-13 (the 17% / 83% split in point 15,
+measured in that repository's `docs/operations/lap-1-dogfood.md` and cited rather than re-derived).
+Query plans in point 12 measured on this tree at implementation time over 400 rows with no `ANALYZE`;
+the observed-red evidence in point 14 recorded per mutant in the pull request body. Decision id
+`D-1104`, drawn from the `D-11xx` shared cross-belt band opened by `D-1101` (Issue #179), taken after
+re-checking against `origin/main` that `D-1103` was the highest id in use.

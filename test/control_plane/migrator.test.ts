@@ -1189,6 +1189,128 @@ describe("the real ledger", () => {
     }
   });
 
+  test("the delivery resource rebuild inherits every row it finds", () => {
+    // 0005 is the second outbox rebuild, and it backfills where 0004 refused to.
+    //
+    // Same two-half shape as the case above and for the same reason: the
+    // database is created at 0004 from a copy of the shipped steps, rows and a
+    // child reference are written into it, and only then is the real ledger
+    // applied. What is new here is the backfill. 0004 could not invent the
+    // epoch an existing row was written under, so it left the column null;
+    // every outbox row on disk, by contrast, was written under the one delivery
+    // resource there has ever been, so 'outbox-delivery' is RECORDED history
+    // and the marker records that this step is what recorded it.
+    const root = caseRoot("migrator");
+    const dbPath = databasePath(root);
+    const at0004 = join(root, "at-0004");
+    for (const name of [
+      "0001_initial.sql",
+      "0002_policy_seed.sql",
+      "0003_outbox_cancelled_status.sql",
+      "0004_run_writer_epoch.sql",
+    ]) {
+      writeStep(at0004, name, readFileSync(join(MIGRATIONS_DIR, name), "utf8"));
+    }
+
+    const connection = createProductionControlPlane(dbPath, {
+      nowMs: T0,
+      migrationsDir: at0004,
+    });
+    try {
+      connection
+        .prepare(
+          "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms) VALUES ('run-1', 'running', ?, ?)",
+        )
+        .run(T0, T0);
+      // No delivery_resource to bind: the column does not exist yet, which is
+      // the whole state this step migrates from.
+      connection
+        .prepare(
+          "INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key," +
+            "                    status, retry_count, writer_epoch, enqueued_at_ms," +
+            "                    delivered_at_ms)" +
+            " VALUES ('msg-1', 'run-1', 'secretary', '{}', 'dk-1', 'delivered', 4, 7, ?, ?)",
+        )
+        .run(T0, T0 + 1);
+      connection.exec("CREATE TABLE child (message_id TEXT REFERENCES outbox(message_id))");
+      connection.exec("INSERT INTO child VALUES ('msg-1')");
+      // Three action rows, one per arm of the backfill's predicate: the outbox
+      // path's bare kind with an epoch (attributed by nothing and so backfilled),
+      // a kind effect_kind() composed (already attributed, so left alone), and a
+      // bare kind with no epoch at all (nothing to attribute).
+      const addAction = connection.prepare(
+        "INSERT INTO action (action_id, run_id, kind, idempotency_key, exactly_once_mechanism," +
+          "                    status, writer_epoch, created_at_ms, applied_at_ms)" +
+          " VALUES (:action_id, 'run-1', :kind, :action_id, 'transactional_with_record'," +
+          "         'applied', :writer_epoch, :at, :at)",
+      );
+      addAction.run({ action_id: "act-bare", kind: "notify", writer_epoch: 7, at: T0 });
+      addAction.run({
+        action_id: "act-composed",
+        kind: "deliver_task@run/run-1",
+        writer_epoch: 3,
+        at: T0,
+      });
+      connection
+        .prepare(
+          "INSERT INTO action (action_id, run_id, kind, idempotency_key, exactly_once_mechanism," +
+            "                    status, created_at_ms)" +
+            " VALUES ('act-pending', 'run-1', 'human_gated', 'act-pending', 'human_gate'," +
+            "         'pending', ?)",
+        )
+        .run(T0);
+    } finally {
+      connection.close();
+    }
+
+    const migrated = migrateControlPlane(dbPath, { nowMs: T1 });
+    try {
+      expect(versionOf(dbPath)).toEqual([headVersion(), headVersion()]);
+      // Every pre-existing column survives the rebuild, and the two new ones
+      // carry the inheritance: the resource every row was genuinely written
+      // under, and the marker saying this migration is what wrote it.
+      expect(
+        migrated
+          .prepare(
+            "SELECT run_id, recipient, dedup_key, status, retry_count, writer_epoch," +
+              "       delivered_at_ms, delivery_resource, delivery_resource_inherited" +
+              "  FROM outbox WHERE message_id = 'msg-1'",
+          )
+          .get(),
+      ).toEqual({
+        run_id: "run-1",
+        recipient: "secretary",
+        dedup_key: "dk-1",
+        status: "delivered",
+        retry_count: 4,
+        writer_epoch: 7,
+        delivered_at_ms: T0 + 1,
+        delivery_resource: "outbox-delivery",
+        delivery_resource_inherited: 1,
+      });
+      // The child reference into the rebuilt parent, as in the 0003 case: the
+      // table is dropped and recreated, so a dangling child is the silent half.
+      expect(migrated.pragma("foreign_key_check")).toEqual([]);
+      expect(migrated.prepare("SELECT message_id FROM child").all()).toEqual([
+        { message_id: "msg-1" },
+      ]);
+      // The audit trail's backfill, one row per arm. The '@'-composed kind is
+      // left untouched because it is already attributed -- writing the column
+      // there would be a second answer to a question the kind already answers,
+      // free to disagree with it.
+      expect(
+        migrated.prepare("SELECT action_id, writer_resource FROM action ORDER BY action_id").all(),
+      ).toEqual([
+        { action_id: "act-bare", writer_resource: "outbox-delivery" },
+        { action_id: "act-composed", writer_resource: null },
+        { action_id: "act-pending", writer_resource: null },
+      ]);
+      expect(migrated.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    } finally {
+      migrated.close();
+    }
+  });
+
   test("the real ledger is discoverable and contiguous", () => {
     const steps = discoverMigrationSteps();
     expect(steps.length, "the production DDL ledger must ship with the package").toBeGreaterThan(0);

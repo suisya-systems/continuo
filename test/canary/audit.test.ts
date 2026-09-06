@@ -57,6 +57,7 @@ import { createRoutingLedger, INTERLOCK, SYNTHETIC_V1 } from "../../src/canary/l
 import { REHEARSAL_MARKING } from "../../src/canary/marking.js";
 import { RunStartRoutingPoint } from "../../src/canary/routing.js";
 import { SyntheticV1RunStore } from "../../src/canary/synthetic_v1.js";
+import { deliveryResourceForRun } from "../../src/control_plane/delivery_resource.js";
 import { createControlPlane } from "../../src/control_plane/schema.js";
 import { caseRoot } from "../testkit/cases.js";
 
@@ -306,10 +307,14 @@ describe("canonical serialisation: stable where it must be, sensitive where it m
       interlock
         .prepare(
           "INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key, " +
-            "status, enqueued_at_ms) VALUES ('msg-1', 'run-1', 'peer', ?, 'dk-1', " +
-            "'pending', ?)",
+            "status, enqueued_at_ms, delivery_resource) VALUES ('msg-1', 'run-1', 'peer', " +
+            "?, 'dk-1', 'pending', ?, ?)",
         )
-        .run(Buffer.from([0x00, 0x01, 0xff]), T0);
+        // `delivery_resource` is NOT NULL with no default since `D-1104`, and a
+        // row on 'run-1' honestly belongs to 'run-1''s delivery lease. The
+        // column list is named rather than positional so a further column
+        // addition is a compile-time edit here and not a silent misalignment.
+        .run(Buffer.from([0x00, 0x01, 0xff]), T0, deliveryResourceForRun("run-1"));
     })();
     const first = canonicalSqliteBytes(interlock);
     expect(first.equals(canonicalSqliteBytes(interlock))).toBe(true);
@@ -334,9 +339,12 @@ describe("canonical serialisation: stable where it must be, sensitive where it m
     scratch.exec("CREATE TABLE outbox (message_id TEXT, run_id TEXT)");
     scratch.exec("CREATE TABLE unrelated (note TEXT)");
     scratch.exec("INSERT INTO run VALUES ('run-parent')");
-    scratch.exec("INSERT INTO outbox VALUES ('msg-1', 'run-orphan')");
-    scratch.exec("INSERT INTO outbox VALUES ('msg-2', NULL)");
-    scratch.exec("INSERT INTO unrelated VALUES ('no run key here')");
+    // Named column lists, even over this two-column scratch table: the shape
+    // that broke on `D-1104`'s column addition was a positional `VALUES`, and a
+    // scratch table is the place where the habit is cheapest to keep.
+    scratch.exec("INSERT INTO outbox (message_id, run_id) VALUES ('msg-1', 'run-orphan')");
+    scratch.exec("INSERT INTO outbox (message_id, run_id) VALUES ('msg-2', NULL)");
+    scratch.exec("INSERT INTO unrelated (note) VALUES ('no run key here')");
     expect(sqliteRunIds(scratch)).toEqual(["run-orphan", "run-parent"]);
   });
 });

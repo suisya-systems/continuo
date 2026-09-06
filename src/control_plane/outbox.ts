@@ -9,6 +9,7 @@ import {
   fencedInsert,
   fencedUpdate,
   fenceEpoch,
+  fenceResource,
   increment,
   isNull,
   type Lease,
@@ -286,11 +287,65 @@ export const CHECKPOINTS = Object.freeze([
  * no-unowned-outbox invariant, run by hand against a recovered database. The
  * fix therefore reaches that belt too: before it, a kill inside a gate
  * closure left evidence the belt would have called a violation.
+ *
+ * **It is DATABASE-WIDE, and since `D-1104` that is a property it has to
+ * state rather than inherit.** It takes no `:resource` parameter at all, and
+ * joins on the row's own `delivery_resource`. The alternative -- binding one
+ * resource, as this query did while there was only one -- would make the
+ * invariant say "no unowned rows *belonging to whichever resource the
+ * operator happened to name*", and a row owned by a resource nobody named
+ * would pass by being invisible. That is a weaker invariant wearing the same
+ * name, which is the one thing a published invariant may not become.
+ * {@link Outbox.recover}'s question is the other one -- "which of the rows I
+ * am responsible for have no live owner?" -- and it reads
+ * {@link _UNOWNED_RECOVERY_QUERY} instead.
+ *
+ * **What it now legitimately reports.** A run-bound gate relay sitting
+ * between its lap's exit and the operator's `gate deliver` has no live
+ * holder and is *correctly* unowned. That window is not new -- it is the
+ * whole reason `gate deliver` exists -- but the partition makes it ordinary,
+ * so a reader must not take a row here as evidence of a defect without
+ * asking whether its resource has a worker running at all.
  */
 export const UNOWNED_OUTBOX_QUERY = `
-    SELECT message_id, status, retry_count, writer_epoch, enqueued_at_ms
+    SELECT message_id, status, retry_count, writer_epoch, enqueued_at_ms,
+           delivery_resource
       FROM outbox
      WHERE status IN ('pending', 'delivered')
+       AND (writer_epoch IS NULL
+            OR NOT EXISTS (SELECT 1
+                             FROM lease
+                            WHERE lease.resource      = outbox.delivery_resource
+                              AND lease.epoch         = outbox.writer_epoch
+                              AND lease.expires_at_ms > :now_ms))
+     ORDER BY enqueued_at_ms, message_id
+`;
+
+/**
+ * What {@link Outbox.recover} and {@link Outbox.unowned} read: the
+ * **caller-scoped** form of the same question.
+ *
+ * The split is `D-1104`'s, and it is the change most likely to be got wrong
+ * quietly, so both halves say which they are. A delivery worker asks "which
+ * of the rows *I* am responsible for have no live owner?", and the answer has
+ * to exclude another resource's rows whether or not that resource's lease is
+ * live -- without the `delivery_resource` term, a row owned by B at B's epoch
+ * 2 has no live lease on A's resource at epoch 2, so A would report it
+ * unowned and `_ADOPT` would re-stamp a live row under A's epoch.
+ *
+ * The null-or-dead-lease disjunction is {@link UNOWNED_OUTBOX_QUERY}'s with
+ * `lease.resource` bound from the caller instead of joined from the row --
+ * which, given the added `delivery_resource = :resource` term, selects the
+ * same rows for this resource as the database-wide form does. The two spell
+ * it differently because they are asked by different callers, and each says
+ * so here.
+ */
+const _UNOWNED_RECOVERY_QUERY = `
+    SELECT message_id, status, retry_count, writer_epoch, enqueued_at_ms,
+           delivery_resource
+      FROM outbox
+     WHERE status IN ('pending', 'delivered')
+       AND delivery_resource = :resource
        AND (writer_epoch IS NULL
             OR NOT EXISTS (SELECT 1
                              FROM lease
@@ -301,7 +356,7 @@ export const UNOWNED_OUTBOX_QUERY = `
 `;
 
 /**
- * {@link UNOWNED_OUTBOX_QUERY}'s predicate asked about **one** row.
+ * {@link _UNOWNED_RECOVERY_QUERY}'s predicate asked about **one** row.
  *
  * Written as its own constant rather than reached by filtering the sweep's
  * result in TypeScript, and the difference is the whole point of
@@ -310,14 +365,29 @@ export const UNOWNED_OUTBOX_QUERY = `
  * ownership over-reach that a per-message adoption exists to avoid. Filtering
  * its rows down to one would pay the scan anyway and only hide it.
  *
- * The `WHERE` is `UNOWNED_OUTBOX_QUERY`'s with `message_id = :message_id`
+ * The `WHERE` is `_UNOWNED_RECOVERY_QUERY`'s with `message_id = :message_id`
  * added and the `ORDER BY` dropped -- one row cannot be out of order. The
- * `status IN ('pending', 'delivered')` and the null-or-dead-lease
- * disjunction are reproduced character for character, deliberately: the two
- * queries answer the same question ("is this row unowned?") and a
- * paraphrase that drifted would let `adoptIfUnowned` and the recovery
- * criterion disagree about the same row, which is the one disagreement
- * neither of them could report.
+ * `status IN ('pending', 'delivered')`, the `delivery_resource = :resource`
+ * term and the null-or-dead-lease disjunction are reproduced character for
+ * character, deliberately: the two queries answer the same question ("is this
+ * row unowned?") and a paraphrase that drifted would let `adoptIfUnowned` and
+ * the recovery criterion disagree about the same row, which is the one
+ * disagreement neither of them could report.
+ *
+ * **Which of the two it mirrors is now a choice, and this is it: the
+ * caller-scoped form.** `adoptIfUnowned` is a delivery worker's act, so the
+ * question it asks is the worker's, not the auditor's. Mirroring the
+ * database-wide form instead would let one run adopt another's row through a
+ * primary-key lookup -- the very cross-run transfer `D-1104` exists to stop.
+ *
+ * It takes the resource term and **no recipient term**. The pre-design review
+ * asked for the recipient on this query as well as on `due`; measurement
+ * refuted it three ways -- `adoptIfUnowned` is handed a message id and no
+ * recipient, so the term has no source without widening a public method; the
+ * character-identity above is with a sweep that spans every recipient by
+ * design; and the lookup is already a primary-key equality, so there is no
+ * set to mis-route. Resource equality is the ownership test and is sufficient
+ * here.
  *
  * The `message_id` equality makes this a primary-key lookup, so the partial
  * index the sweep is spelled to keep is irrelevant here; the positive
@@ -328,6 +398,7 @@ const _UNOWNED_ONE_QUERY = `
       FROM outbox
      WHERE message_id = :message_id
        AND status IN ('pending', 'delivered')
+       AND delivery_resource = :resource
        AND (writer_epoch IS NULL
             OR NOT EXISTS (SELECT 1
                              FROM lease
@@ -349,13 +420,23 @@ const _UNOWNED_ONE_QUERY = `
  * cancellation was written to stop.
  *
  * The predicate is spelled as the positive `IN` list, character-for-character
- * matching the `outbox_undelivered` partial index
+ * matching the partial indexes' own `WHERE`
  * (`... WHERE status IN ('pending', 'delivered')`). SQLite uses a partial
  * index only when the query's `WHERE` carries the index predicate as a term,
  * so the negation of {@link TERMINAL_OUTBOX_STATUSES} -- algebraically the
  * same rows on today's four-word vocabulary -- would silently turn this into
- * a full table scan. The suite asserts the query plan actually names
- * `outbox_undelivered`, so the spelling is checked and not merely intended.
+ * a full table scan. The suite asserts the query plan actually names the
+ * index, so the spelling is checked and not merely intended.
+ *
+ * **`delivery_resource = :resource` is the ownership partition (`D-1104`),
+ * and it is the reason this text is no longer the whole story.** Before it,
+ * this query read every unfinished row in the database regardless of who was
+ * asking, and the fault-injection belt had to scope the result by message id
+ * because -- in its own words -- "the driver scopes what the API does not".
+ * The API scopes it now. The index that serves this shape is
+ * `outbox_due_by_resource`, on `(delivery_resource, enqueued_at_ms)`, with
+ * the same partial predicate: `enqueued_at_ms` stays a seekable range term
+ * because the only column in front of it is constrained by an equality.
  *
  * **Exported for that assertion, and for nothing else.** The underscore keeps
  * it out of the module's ordinary vocabulary, exactly as {@link
@@ -371,19 +452,68 @@ const _UNOWNED_ONE_QUERY = `
  */
 export const _DUE_QUERY = `
     SELECT message_id, run_id, recipient, payload, dedup_key, status,
-           retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms, acked_at_ms
+           retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms,
+           acked_at_ms, delivery_resource
       FROM outbox
      WHERE status IN ('pending', 'delivered')
+       AND delivery_resource = :resource
        AND enqueued_at_ms <= :now_ms
      ORDER BY enqueued_at_ms, message_id
 `;
 
 /**
- * The algebraically identical, index-losing form of {@link _DUE_QUERY} -- the
- * same rows, with `enqueued_at_ms` buried inside an expression no b-tree can
- * seek on (`:now_ms - enqueued_at_ms >= 0` says exactly what `enqueued_at_ms
- * <= :now_ms` says, and SQLite cannot use an index on a column that appears
- * only under arithmetic).
+ * {@link _DUE_QUERY} with the recipient carried as a SQL term: the shape
+ * {@link "../messagebus/bus.js".MessageBus.poll} runs, and the only shape
+ * that does.
+ *
+ * **Derived, never retyped.** The two texts differ by one line and the
+ * derivation says which, so there is still exactly one copy of the column
+ * list, the status predicate and the ordering. A second hand-written query
+ * here is the failure the `_UNOWNED_ONE_QUERY` docstring spends a paragraph
+ * avoiding one screen up: two spellings of one question, free to drift into
+ * disagreeing about the same row. `_DEGRADED_DUE_QUERY` is derived from
+ * `_DUE_QUERY` by the same means and for the same reason.
+ *
+ * **Why the recipient is a term at all.** It is a *routing* defence and not
+ * the ownership partition -- `D-1104` measures why recipient-only cannot be
+ * the partition: two ordinary laps address the same `external-notify`
+ * recipient by decision (`D-0076`), so recipient equality is true for every
+ * row either of them can see. What it buys is that a poll speaking for one
+ * recipient no longer reads another's rows into memory before discarding
+ * them, and it lets `outbox_due_by_recipient` seek. `MessageBus.poll` keeps
+ * its TypeScript filter beside this term: removing it in the same change
+ * that introduced the term would make the SQL the only thing standing
+ * between two runs and each other's rows, on the pass that introduced it.
+ *
+ * **Why a second text and not `(:recipient IS NULL OR recipient =
+ * :recipient)`.** That form is one query and no index: a disjunction on a
+ * bound parameter is not a term SQLite can seek on, so it would cost the
+ * recipient-bearing shape its range term -- the exact regression the
+ * design's own round A2 found in the index it proposed. Measured, not
+ * assumed: the plan assertions in the suite take both shapes with their own
+ * degraded twins and assert on the **constraint list**, because `SEARCH`
+ * plus an index name stays true of a plan using only the first column.
+ */
+export const _DUE_BY_RECIPIENT_QUERY = _DUE_QUERY.replace(
+  "AND delivery_resource = :resource",
+  "AND delivery_resource = :resource\n       AND recipient = :recipient",
+);
+
+/**
+ * The algebraically identical, **range-term-losing** form of
+ * {@link _DUE_QUERY} -- the same rows, with `enqueued_at_ms` buried inside an
+ * expression no b-tree can seek on (`:now_ms - enqueued_at_ms >= 0` says
+ * exactly what `enqueued_at_ms <= :now_ms` says, and SQLite cannot use an
+ * index on a column that appears only under arithmetic).
+ *
+ * **What it degrades has narrowed since `D-1104`, and the wording has to say
+ * so.** While the only term in front of the range was the partial predicate,
+ * losing the range lost the index outright and the plan fell from `SEARCH` to
+ * `SCAN`. Now `delivery_resource = :resource` leads, so the degraded form
+ * still SEARCHes and still names the composite index -- it just seeks on one
+ * column instead of two. That is precisely why the plan assertion is on the
+ * **constraint list** and not on the verb plus an index name: the old shape of
+ * assertion would pass on exactly this degradation.
  *
  * It exists so that the plan assertion on the shipped form is not vacuous.
  * "The due query uses `outbox_undelivered`" would also pass on a database
@@ -405,9 +535,40 @@ export const _DEGRADED_DUE_QUERY = _DUE_QUERY.replace(
   "AND :now_ms - enqueued_at_ms >= 0",
 );
 
+/**
+ * {@link _DUE_BY_RECIPIENT_QUERY}'s degraded twin, for the reason
+ * {@link _DEGRADED_DUE_QUERY} gives in full.
+ *
+ * `D-1104` needs two of these because `due` has two call shapes and each has
+ * its own index: an assertion taken on one shape says nothing about the
+ * other, and the shape without a degraded twin is a shape whose index nobody
+ * has shown is used. **Never executed by the product.**
+ */
+export const _DEGRADED_DUE_BY_RECIPIENT_QUERY = _DUE_BY_RECIPIENT_QUERY.replace(
+  "AND enqueued_at_ms <= :now_ms",
+  "AND :now_ms - enqueued_at_ms >= 0",
+);
+
+/**
+ * One action row's settlement, re-read after a fenced update changed nothing
+ * (`D-1104`).
+ *
+ * By `action_id` and not by `idempotency_key`: the question is about the row
+ * this writer just tried to record, and the key's own lookup already returned
+ * that row's id. It reads `status` and `result` because those are the two
+ * facts that separate "somebody else recorded this effect" (applied, with the
+ * result to adopt) from "our lease is gone" (still pending).
+ */
+const _ACTION_STATUS_QUERY = `
+    SELECT action_id, status, result
+      FROM action
+     WHERE action_id = :action_id
+`;
+
 const _LOAD_QUERY = `
     SELECT message_id, run_id, recipient, payload, dedup_key, status,
-           retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms, acked_at_ms
+           retry_count, writer_epoch, enqueued_at_ms, delivered_at_ms,
+           acked_at_ms, delivery_resource
       FROM outbox
      WHERE message_id = :message_id
 `;
@@ -428,6 +589,31 @@ const _LOAD_QUERY = `
  * `writer_epoch = fenceEpoch` on those statements stores the value the
  * predicate just proved the row already carries; it is the builder's stamp
  * rule made explicit, never a change of attribution.
+ *
+ * **And since `D-1104` every one of them also matches `delivery_resource`
+ * against the fence's own resource, in the statement and never in front of
+ * it.** Three obligations, and the third is the one that makes the other two
+ * compose into ownership rather than into two answers to different
+ * questions:
+ *
+ *   1. `delivery_resource = :fence_resource` -- *which epoch sequence* this
+ *      row belongs to;
+ *   2. a live lease for `(:fence_resource, :fence_holder, :fence_epoch)` --
+ *      the fence itself;
+ *   3. for owned transitions, `writer_epoch = :fence_epoch` -- *which
+ *      writer* within that sequence.
+ *
+ * Without (1), (2) proves the writer's own lease is live and (3) proves the
+ * row carries some number, and a row another resource minted at the same
+ * number satisfies both. It is the `fenceResource` sentinel and not a
+ * caller-bound parameter for the reason `lease.ts` states on the sentinel: a
+ * guard the caller has to remember to bind is not a guard.
+ *
+ * `_ADOPT` takes the resource term too, and that is not a contradiction of
+ * its deliberate lack of an ownership predicate: resource equality is a
+ * *membership* test, not an ownership test. Adoption still re-stamps a row
+ * whose previous owner is gone -- it just cannot reach out of its own
+ * partition to do it.
  */
 const _ENQUEUE: FencedStatement = fencedInsert("outbox", {
   values: {
@@ -440,6 +626,16 @@ const _ENQUEUE: FencedStatement = fencedInsert("outbox", {
     retry_count: value(0),
     writer_epoch: fenceEpoch,
     enqueued_at_ms: param("enqueued_at_ms"),
+    // The FENCED producer's rule (`D-1104`): the row's resource is this
+    // instance's own, taken from the lease that just minted the epoch beside
+    // it, and never derived from `run_id`. `enqueue`'s `runId` is optional and
+    // defaults to null, so a `run_id` rule would let a per-run bus write the
+    // global resource next to a per-run epoch -- a row whose two ownership
+    // fields name different sequences, which is the ambiguity the column
+    // exists to remove, rebuilt inside the fix. The invariant this keeps true
+    // by construction is `writer_epoch IS NULL OR writer_epoch was minted by
+    // delivery_resource`.
+    delivery_resource: fenceResource,
   },
 });
 
@@ -489,6 +685,7 @@ export const _COUNT_ATTEMPT: FencedStatement = fencedUpdate("outbox", {
     // message no attempt is ever made on again.
     ..._notTerminal(),
     eq("writer_epoch", fenceEpoch),
+    eq("delivery_resource", fenceResource),
   ),
 });
 
@@ -525,6 +722,7 @@ export const _MARK_DELIVERED: FencedStatement = fencedUpdate("outbox", {
     eq("status", value("pending")),
     isNull("delivered_at_ms"),
     eq("writer_epoch", fenceEpoch),
+    eq("delivery_resource", fenceResource),
   ),
 });
 
@@ -537,6 +735,14 @@ export const _PENDING_ACTION: FencedStatement = fencedInsert("action", {
     exactly_once_mechanism: param("mechanism"),
     status: value("pending"),
     writer_epoch: fenceEpoch,
+    // `D-1104`. The outbox path is the one `action` writer that does not
+    // compose its resource into `kind` -- `handler.actionKind` is the bare
+    // `notify` or `human_gated` -- so before this column an outbox action row
+    // carried an epoch with no attribution and no fallback, and both audit
+    // readers were already broken for it: `WRITE_HISTORY_QUERY`'s suffix
+    // filter returned empty and `resourceOfKind` threw. Stamped from the
+    // sentinel for the same reason the epoch is.
+    writer_resource: fenceResource,
     created_at_ms: param("created_at_ms"),
   },
 });
@@ -562,15 +768,34 @@ const _RECORD_RESULT: FencedStatement = fencedUpdate("action", {
  * the row carried, including one whose lease row was itself lost -- see
  * {@link Outbox.recover}.
  *
+ * The `delivery_resource` equality `D-1104` adds is not an ownership
+ * predicate and does not weaken that: it is the membership test that says the
+ * row is in this writer\'s partition at all. Adoption without it is how one
+ * run silently takes over another\'s live row -- the foreign row\'s epoch has
+ * no live lease on *this* resource, so it reads as unowned, and `_ADOPT` has
+ * nothing left to refuse it with.
+ *
+ * **Exported, and only for the suite's own fence case**, on the same ground as
+ * {@link _COUNT_ATTEMPT} and {@link _MARK_DELIVERED}: this predicate is
+ * *masked* by `_UNOWNED_ONE_QUERY`'s own resource term, which `adoptIfUnowned`
+ * consults first, so a control that went through the method would be green
+ * with the predicate removed -- and a green mutant is evidence of nothing.
+ * Measured, not assumed: that mutant WAS green before this constant was
+ * exported and the control rewritten to run the statement directly.
+ *
  * The status conjunct is the generated negation of
  * {@link TERMINAL_OUTBOX_STATUSES}, for the reasons set out on
  * {@link _COUNT_ATTEMPT}. It was `ne("status", value("acked"))`, which let
  * recovery adopt a cancelled row: recovery would hand a live owner to a
  * message that will never be advanced again, on every pass, forever.
  */
-const _ADOPT: FencedStatement = fencedUpdate("outbox", {
+export const _ADOPT: FencedStatement = fencedUpdate("outbox", {
   set: { writer_epoch: fenceEpoch },
-  where: and_(eq("message_id", param("message_id")), ..._notTerminal()),
+  where: and_(
+    eq("message_id", param("message_id")),
+    ..._notTerminal(),
+    eq("delivery_resource", fenceResource),
+  ),
 });
 
 // --------------------------------------------------------------------------
@@ -835,6 +1060,14 @@ export class OutboxMessage {
   readonly enqueuedAtMs: number;
   readonly deliveredAtMs: number | null;
   readonly ackedAtMs: number | null;
+  /**
+   * The exact lease resource whose epoch sequence governs this row
+   * (`D-1104`). Not optional and never `undefined`: `undefined` binds as SQL
+   * `NULL` with no error (`docs/sqlite-value-contract.md` section 4), and a
+   * row whose partition read as absent would be a row every partition's
+   * predicate rejects.
+   */
+  readonly deliveryResource: string;
 
   constructor(options: {
     readonly messageId: string;
@@ -848,6 +1081,7 @@ export class OutboxMessage {
     readonly enqueuedAtMs: number;
     readonly deliveredAtMs: number | null;
     readonly ackedAtMs: number | null;
+    readonly deliveryResource: string;
   }) {
     this.messageId = options.messageId;
     this.runId = options.runId;
@@ -860,6 +1094,7 @@ export class OutboxMessage {
     this.enqueuedAtMs = options.enqueuedAtMs;
     this.deliveredAtMs = options.deliveredAtMs;
     this.ackedAtMs = options.ackedAtMs;
+    this.deliveryResource = options.deliveryResource;
     Object.freeze(this);
   }
 
@@ -876,6 +1111,7 @@ export class OutboxMessage {
       enqueuedAtMs: row.enqueued_at_ms as number,
       deliveredAtMs: row.delivered_at_ms as number | null,
       ackedAtMs: row.acked_at_ms as number | null,
+      deliveryResource: row.delivery_resource as string,
     });
   }
 }
@@ -1129,6 +1365,23 @@ export class HandlerRegistry {
         `${handler.constructor.name} does not name the action kind it records`,
       );
     }
+    if (handler.actionKind.includes("@")) {
+      // `D-1104`. `effectKind(resource, effect)` already refuses this
+      // character in an effect, in these words and for this reason: it is the
+      // separator an attributed kind is composed with, so an effect that used
+      // it would make the resource unrecoverable from the row. This registry
+      // accepted it, and the inconsistency was load-bearing rather than
+      // cosmetic -- `0005` identifies the outbox's own pre-migration action
+      // rows by the ABSENCE of an '@', so a handler free to write one could
+      // produce a row the backfill skips and the readers then mis-attribute
+      // to whatever follows the separator. Closed here, going forward, on the
+      // composer's own rule.
+      throw new HandlerRejected(
+        `${handler.constructor.name} declares action kind ${pythonRepr(handler.actionKind)}, ` +
+          "which may not contain '@'; it is the separator an attributed action kind is composed " +
+          "with, and a kind that used it would make the resource unrecoverable from the row",
+      );
+    }
     const mechanism = handler.exactlyOnceMechanism;
     if (!(EXACTLY_ONCE_MECHANISMS as readonly string[]).includes(mechanism)) {
       throw new HandlerRejected(
@@ -1339,14 +1592,48 @@ export class Outbox {
    * `status IN ('pending', 'delivered')` and so excludes a `cancelled` row
    * as well, and a docstring that goes on promising every unacked row is a
    * reader's reason to look for the missing relay in the wrong place.
+   *
+   * **Scoped to this instance's own delivery resource since `D-1104`**, and
+   * that sentence replaces the one this method used to be described by. It
+   * did read every unfinished row in the database, which is why the
+   * fault-injection driver scoped the result by message id itself ("the
+   * driver scopes what the API does not"); the API scopes it now, and the
+   * driver's hand-scoping is redundant rather than load-bearing.
+   *
+   * *recipient*, when given, is carried as a SQL term as well -- a routing
+   * defence, not the ownership partition, and optional because it has no
+   * source here: `MessageBus.poll` is the one caller that speaks for a
+   * recipient. Every other caller keeps today's meaning, which is why this
+   * is an optional argument rather than a mandatory parameter that would
+   * have rewritten every existing call for a defence they do not need.
    */
-  due(nowMs: number): readonly OutboxMessage[] {
-    return Object.freeze(this._all(_DUE_QUERY, { now_ms: nowMs }).map(OutboxMessage.fromRow));
+  due(nowMs: number, options?: { readonly recipient?: string }): readonly OutboxMessage[] {
+    const recipient = options?.recipient;
+    const rows =
+      recipient === undefined
+        ? this._all(_DUE_QUERY, { resource: this._resource, now_ms: nowMs })
+        : this._all(_DUE_BY_RECIPIENT_QUERY, {
+            resource: this._resource,
+            recipient,
+            now_ms: nowMs,
+          });
+    return Object.freeze(rows.map(OutboxMessage.fromRow));
   }
 
-  /** Unfinished rows with no live owner. The recovery criterion, as a read. */
+  /**
+   * Unfinished rows of **this resource** with no live owner. The recovery
+   * criterion, as a read.
+   *
+   * Reads {@link _UNOWNED_RECOVERY_QUERY} and not the exported, database-wide
+   * {@link UNOWNED_OUTBOX_QUERY}: the two ask different questions since
+   * `D-1104`, and a delivery worker asks the caller-scoped one. Adopting on
+   * the database-wide answer is how one run re-stamps another's live row.
+   */
   unowned(nowMs: number): readonly string[] {
-    const rows = this._all(UNOWNED_OUTBOX_QUERY, { resource: this._resource, now_ms: nowMs });
+    const rows = this._all(_UNOWNED_RECOVERY_QUERY, {
+      resource: this._resource,
+      now_ms: nowMs,
+    });
     return Object.freeze(rows.map((row) => String(row.message_id)));
   }
 
@@ -1607,6 +1894,10 @@ export class Outbox {
     // `action_apply_is_set_once` trigger would abort on a second write, so
     // an already-applied action keeps the result it was recorded with.
     let receiptRef = priorResult;
+    // `D-1104`. True when this writer lost a race for one pending action to
+    // another LIVE writer -- a duplicate, not a stale writer. See the
+    // reclassification below.
+    let deduplicatedByRace = false;
     if (!alreadyApplied) {
       receiptRef = receipt !== null ? receipt.receiptRef : null;
       const info = this._connection
@@ -1626,17 +1917,44 @@ export class Outbox {
         });
       const recorded = info.changes === 1;
       if (!recorded) {
-        // The effect landed and we are no longer entitled to say so. The
-        // action stays pending, so recovery replays it and the destination
-        // deduplicates -- which is exactly the ambiguous window the
-        // declared mechanism exists to make survivable. What must not
-        // happen is a stale writer marking it applied.
-        const reason =
-          `refused to record the result for ${pythonRepr(messageId)}: epoch ${epoch} stopped ` +
-          `being a live lease on ${pythonRepr(this._resource)} held by ` +
-          `${pythonRepr(this._holder)} while the effect was in flight`;
-        const refusal = this._recordRefusal(message, handler, reason, { nowMs, epoch });
-        throw new StaleWriterRefused(reason, refusal);
+        // **Zero rows changed has two causes, and until `D-1104` this path
+        // reported only one of them.** The fence is one: our lease stopped
+        // being live while the effect was in flight, and a stale writer must
+        // not mark the action applied. The other is new, and it is new
+        // because parallelism made it reachable: `action_one_effect_per_key`
+        // is global by decision (adding the resource to it would let two runs
+        // each perform one effect and call it exactly-once twice), so two
+        // LIVE writers on different resources can hold one pending action for
+        // messages sharing a dedup key. Both see it pending, both call the
+        // destination, the first records, and the second's `_RECORD_RESULT`
+        // fails its `status = 'pending'` conjunct with a perfectly live
+        // lease.
+        //
+        // Reported as a stale writer, that second outcome is a false durable
+        // refusal and a message left undelivered and due -- so the pair
+        // replays for ever, on every pass. So the action is re-read: applied
+        // means this is a DUPLICATE and the result it was recording is
+        // already recorded, still pending means the fence really is the
+        // explanation. No lock and no action-level claim: the index is doing
+        // its job, and what was wrong was how its outcome was read.
+        //
+        // What this does NOT repair, stated plainly: the destination really
+        // was called twice. Exactly-once at the destination continues to rest
+        // on the declared `exactly_once_mechanism`, exactly as it already did
+        // for the crash-replay window documented above -- the change is that
+        // the window is now reachable with two live writers and no crash.
+        const settled = this._one(_ACTION_STATUS_QUERY, { action_id: actionId });
+        if (settled !== undefined && settled.status === "applied") {
+          receiptRef = (settled.result ?? null) as string | null;
+          deduplicatedByRace = true;
+        } else {
+          const reason =
+            `refused to record the result for ${pythonRepr(messageId)}: epoch ${epoch} stopped ` +
+            `being a live lease on ${pythonRepr(this._resource)} held by ` +
+            `${pythonRepr(this._holder)} while the effect was in flight`;
+          const refusal = this._recordRefusal(message, handler, reason, { nowMs, epoch });
+          throw new StaleWriterRefused(reason, refusal);
+        }
       }
     }
     this._markDelivered(messageId, { nowMs, epoch, message, handler });
@@ -1645,7 +1963,7 @@ export class Outbox {
     return new AttemptOutcome({
       messageId,
       retryCount,
-      deduplicated: Boolean(receipt?.deduplicated),
+      deduplicated: Boolean(receipt?.deduplicated) || deduplicatedByRace,
       actionId,
       idempotencyKey,
       exactlyOnceMechanism: handler.exactlyOnceMechanism,
@@ -2388,9 +2706,11 @@ export class Outbox {
           `
                 INSERT INTO action (action_id, run_id, kind, idempotency_key,
                                     exactly_once_mechanism, status,
-                                    refusal_reason, writer_epoch, created_at_ms)
+                                    refusal_reason, writer_epoch,
+                                    writer_resource, created_at_ms)
                 VALUES (:action_id, :run_id, :kind, :idempotency_key,
-                        :mechanism, 'refused', :reason, :epoch, :now_ms)
+                        :mechanism, 'refused', :reason, :epoch,
+                        :writer_resource, :now_ms)
                 `,
         )
         .run({
@@ -2401,6 +2721,12 @@ export class Outbox {
           mechanism,
           reason,
           epoch,
+          // `D-1104`. The refused epoch is this instance's, so the resource
+          // that minted it is too. Bound explicitly and never left to a
+          // missing property: `undefined` binds as SQL NULL with no error
+          // (`docs/sqlite-value-contract.md` section 4), so a misspelling here
+          // would read back as an unattributed row rather than as a mistake.
+          writer_resource: this._resource,
           now_ms: nowMs,
         });
     });

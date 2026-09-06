@@ -140,14 +140,28 @@ export const EXACTLY_ONCE_MECHANISMS = Object.freeze([
 
 /**
  * The write history, as data, so it can be run by hand against a database
- * recovered from a crash (D-0001). The spike `action` table has no resource
- * column -- which component owns which state item was `Q-0001` and open on
- * this schema (D-0029 has since answered it in the production schema, section
- * 4.2, but this module still runs against the spike table) -- so the caller
- * names the effect *kind* it wants the history of, and {@link effectKind} is
- * how a kind carries the resource whose epochs its rows were written under --
- * which is also what lets this filter by resource across every effect taken
- * under one lease.
+ * recovered from a crash (D-0001).
+ *
+ * **A row's writer resource is `writer_resource` when it is non-null, and the
+ * suffix of `kind` otherwise** (`D-1104`), and the resource filter is that
+ * disjunction. `action` used to have no resource column at all, so the only
+ * attribution was {@link effectKind}'s -- the resource composed into `kind`,
+ * which `docs/lease-fencing.md` calls "a workaround, not a design: a real
+ * schema carries the resource as a column". `0005` adds the column, for the
+ * one writer that could not use the workaround: the outbox path binds
+ * `handler.actionKind` unchanged, so its kinds are the bare `notify` and
+ * `human_gated`, and a resource-filtered history over them was **empty** --
+ * not wrong-but-useful, empty, because a bare kind has no `@` for the suffix
+ * test to match.
+ *
+ * `NULL` in that column does **not** mean "predates the column". The four
+ * writers that compose their kind with `effectKind` (supervisor, watcher,
+ * session_binding, run_lifecycle) are deliberately unchanged by `D-1104` and
+ * keep writing exactly-attributed rows with a null column for ever. Every
+ * row carries its attribution in exactly one of the two forms, and the
+ * disjunction below is how both are read at once -- which is also what makes
+ * history written before `0005` readable, since the migration backfilled the
+ * outbox-path rows it could identify exactly.
  *
  * The order is `rowid`, the database's own insertion order, and **not**
  * `created_at_ms`. The timestamp is the caller's clock (that is the point of
@@ -158,12 +172,14 @@ export const EXACTLY_ONCE_MECHANISMS = Object.freeze([
  */
 export const WRITE_HISTORY_QUERY = `
     SELECT rowid AS write_seq, action_id, kind, status, writer_epoch,
-           refusal_reason, created_at_ms, applied_at_ms
+           writer_resource, refusal_reason, created_at_ms, applied_at_ms
       FROM action
      WHERE writer_epoch IS NOT NULL
        AND (:kind IS NULL OR kind = :kind)
        AND (:resource IS NULL
-            OR substr(kind, -(length(:resource) + 1)) = '@' || :resource)
+            OR (writer_resource IS NOT NULL AND writer_resource = :resource)
+            OR (writer_resource IS NULL
+                AND substr(kind, -(length(:resource) + 1)) = '@' || :resource))
      ORDER BY write_seq
 `;
 
@@ -849,6 +865,35 @@ class _FenceEpoch {
  */
 export const fenceEpoch: _FenceEpoch = new _FenceEpoch();
 
+/** The fence's own resource, as an assignable value. See {@link fenceResource}. */
+class _FenceResource {
+  // pragma: no cover - repr only, kept for structural parity with _FenceEpoch
+  toString(): string {
+    return "fence_resource";
+  }
+}
+
+/**
+ * The one way a statement refers to the fence's resource (target-only,
+ * `D-1104`).
+ *
+ * The sibling of {@link fenceEpoch}, and it exists for the same reason at a
+ * different column. Once more than one delivery resource can be live at
+ * once, a fence proves only that *some* lease of this writer's is live: the
+ * row also has to say which epoch sequence its `writer_epoch` was minted by,
+ * or the two facts compose into nothing (`D-0074`, and the derivation in
+ * `docs/design/parallel-laps-delivery-lease.md` section 2). That check has to
+ * sit **inside** the statement, beside the fence and never in front of it.
+ *
+ * It is a sentinel rather than a parameter for exactly the reason
+ * {@link Param} refuses every name in {@link FENCE_PARAMS}: a caller that
+ * had to remember to bind its own resource a second time, under a second
+ * name, could bind it wrong -- and a guard the caller has to remember is not
+ * a guard. Rendered as `:fence_resource`, so the value compared against the
+ * row is the same string the fence itself is proved against, bound once.
+ */
+export const fenceResource: _FenceResource = new _FenceResource();
+
 /** A named placeholder, bound at execution time. Build with {@link param}. */
 export class Param {
   readonly name: string;
@@ -858,8 +903,8 @@ export class Param {
     if ((FENCE_PARAMS as readonly string[]).includes(name)) {
       throw new LeaseUsageError(
         `parameter ${pythonRepr(name)} is bound by the fence itself; use fence_epoch to stamp the ` +
-          "writer epoch, and never bind the fence's resource, holder or clock from a caller " +
-          "value",
+          "writer epoch and fence_resource to compare a row against the fence's own resource, " +
+          "and never bind the fence's resource, holder or clock from a caller value",
       );
     }
     this.name = name;
@@ -940,20 +985,29 @@ export function increment(column: string, by = 1): Increment {
 export class Comparison {
   readonly column: string;
   readonly operator: "=" | "<>";
-  readonly operand: Param | Value | _FenceEpoch;
+  readonly operand: Param | Value | _FenceEpoch | _FenceResource;
 
-  constructor(column: string, operator: "=" | "<>", operand: Param | Value | _FenceEpoch) {
+  constructor(
+    column: string,
+    operator: "=" | "<>",
+    operand: Param | Value | _FenceEpoch | _FenceResource,
+  ) {
     requireColumn("a comparison column", column);
     if (operator !== "=" && operator !== "<>") {
       throw new LeaseUsageError(
         `a comparison operator is '=' or '<>', got ${pythonRepr(operator)}`,
       );
     }
-    if (!isExact(Param, operand) && !isExact(Value, operand) && operand !== fenceEpoch) {
+    if (
+      !isExact(Param, operand) &&
+      !isExact(Value, operand) &&
+      operand !== fenceEpoch &&
+      operand !== fenceResource
+    ) {
       throw new UnfencedStatement(
-        `the operand for ${pythonRepr(column)} must be param(...), value(...) or fence_epoch ` +
-          `itself, got ${pythonRepr(operand)}; a predicate is composed from the builder's own ` +
-          "typed objects, never from a subclass of them and never from SQL text",
+        `the operand for ${pythonRepr(column)} must be param(...), value(...), fence_epoch or ` +
+          `fence_resource itself, got ${pythonRepr(operand)}; a predicate is composed from the ` +
+          "builder's own typed objects, never from a subclass of them and never from SQL text",
       );
     }
     if (isExact(Value, operand) && operand.constant === null) {
@@ -1005,12 +1059,18 @@ export class Conjunction {
 export type Predicate = Comparison | IsNull | Conjunction;
 
 /** The predicate `column = operand`. */
-export function eq(column: string, operand: Param | Value | _FenceEpoch): Comparison {
+export function eq(
+  column: string,
+  operand: Param | Value | _FenceEpoch | _FenceResource,
+): Comparison {
   return new Comparison(column, "=", operand);
 }
 
 /** The predicate `column <> operand`. */
-export function ne(column: string, operand: Param | Value | _FenceEpoch): Comparison {
+export function ne(
+  column: string,
+  operand: Param | Value | _FenceEpoch | _FenceResource,
+): Comparison {
   return new Comparison(column, "<>", operand);
 }
 
@@ -1048,15 +1108,23 @@ function renderOperand(expression: unknown): string {
   // the sentinel identity, never instanceof: a *subclass* of Param or Value
   // is its author's code wearing the builder's name, free to answer
   // construction-time validation with one text and rendering with another.
-  if (!isExact(Param, expression) && !isExact(Value, expression) && expression !== fenceEpoch) {
+  if (
+    !isExact(Param, expression) &&
+    !isExact(Value, expression) &&
+    expression !== fenceEpoch &&
+    expression !== fenceResource
+  ) {
     throw new UnfencedStatement(
-      `a rendered value must be param(...), value(...) or fence_epoch itself, got ` +
-        `${pythonRepr(expression)}. The builders take no SQL text from a caller -- and no ` +
+      `a rendered value must be param(...), value(...), fence_epoch or fence_resource itself, ` +
+        `got ${pythonRepr(expression)}. The builders take no SQL text from a caller -- and no ` +
         "subclass either: a raw fragment is exactly the surface #42 retired",
     );
   }
   if (expression === fenceEpoch) {
     return ":fence_epoch";
+  }
+  if (expression === fenceResource) {
+    return ":fence_resource";
   }
   // Construction-time validation is repeated here, on the field as it stands
   // at rendering: what is validated is what is rendered, at the moment it is
@@ -1074,8 +1142,8 @@ function renderOperand(expression: unknown): string {
     }
     return `:${name}`;
   }
-  // Only Value and the fence_epoch sentinel remain here; the sentinel case
-  // returned above and Param is handled above too, so this is a Value.
+  // Only Value remains here; both sentinel cases returned above and Param is
+  // handled above too, so this is a Value.
   const constant = (expression as Value).constant;
   if (constant === null) {
     return "NULL";
@@ -1825,6 +1893,29 @@ export function writeHistory(
 }
 
 /**
+ * The resource a history row's `writer_epoch` was minted under (`D-1104`).
+ *
+ * The read side of the disjunction {@link WRITE_HISTORY_QUERY} filters on:
+ * `writer_resource` when the column carries one, and the suffix of `kind`
+ * otherwise. Exported so a caller partitioning a history by resource reads it
+ * the same way the query selected it -- two spellings of "which lease wrote
+ * this" is how a reader ends up disagreeing with its own filter.
+ *
+ * @throws {LeaseUsageError} if the row is attributed neither way -- a null
+ *   column beside a kind {@link effectKind} did not compose. Before `0005`
+ *   that was every outbox action row, and {@link resourceOfKind} threw on
+ *   them, which is why the migration backfills rather than relying on this
+ *   fallback alone.
+ */
+export function writerResourceOf(row: Readonly<Record<string, unknown>>): string {
+  const recorded = row.writer_resource;
+  if (typeof recorded === "string" && recorded !== "") {
+    return recorded;
+  }
+  return resourceOfKind(row.kind as string);
+}
+
+/**
  * Applied writes, in time order, whose epoch goes backwards.
  *
  * Any pair returned is a rejected writer that got in anyway: its row landed
@@ -1837,7 +1928,8 @@ export function writeHistory(
  * clock is the caller's and the suite skews it on purpose.
  *
  * @throws {LeaseUsageError} if `history` spans more than one leased
- *   resource, or contains a kind {@link effectKind} did not compose. Epochs
+ *   resource, or contains a row attributed neither by `writer_resource` nor
+ *   by a kind {@link effectKind} composed ({@link writerResourceOf}). Epochs
  *   are allocated per resource and two resources' sequences are unrelated,
  *   so comparing them would report a valid epoch 2 for one resource
  *   followed by a valid epoch 1 for another as a violation -- and would
@@ -1847,7 +1939,7 @@ export function writeHistory(
 export function appliedEpochRegressions(
   history: readonly Readonly<Record<string, unknown>>[],
 ): readonly (readonly [Readonly<Record<string, unknown>>, Readonly<Record<string, unknown>>])[] {
-  const resources = new Set(history.map((row) => resourceOfKind(row.kind as string)));
+  const resources = new Set(history.map((row) => writerResourceOf(row)));
   if (resources.size > 1) {
     throw new LeaseUsageError(
       `this history spans resources ${pythonList([...resources].sort())}, whose epochs were ` +

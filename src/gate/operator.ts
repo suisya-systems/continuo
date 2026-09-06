@@ -31,10 +31,13 @@
  * relay exists there is no endpoint alive to poll it and no worker to ack it.
  * A relay enqueued and never polled is a question nobody is ever asked, which
  * is the failure a green suite hides best. {@link deliverRelays} is the
- * operator's delivery worker: it takes the one delivery lease
- * ({@link DELIVERY_LEASE_RESOURCE}, `D-0053` rule 4), polls once, and releases.
- * Holding the same single resource is what serialises it against a running lap
- * rather than letting two writers advance one outbox.
+ * operator's delivery worker: it takes the delivery lease of the resource it
+ * was asked to drain -- the run's, or the global one -- polls once, and
+ * releases. Holding **that** resource is what serialises it against a running
+ * lap rather than letting two writers advance one row. Until `D-1104` there
+ * was one such resource ({@link DELIVERY_LEASE_RESOURCE}, `D-0053` rule 4) and
+ * so one serialisation; the refusal is now per run, which is what lets this
+ * verb drain run A while run B's lap is still running.
  *
  * **What this module does not decide.** No tolerance and no expiry policy.
  * {@link reconcile} advances what an ack already justified and closes what a
@@ -44,7 +47,10 @@
  */
 
 import type { Database as SqliteDatabase } from "better-sqlite3";
-
+import {
+  DELIVERY_LEASE_RESOURCE,
+  deliveryResourceForRun,
+} from "../control_plane/delivery_resource.js";
 import { KeyedDropbox } from "../control_plane/destination.js";
 import {
   AnswerBodyRequired,
@@ -67,7 +73,6 @@ import { NOTIFY_RECIPIENT, spikeRegistry } from "../control_plane/handlers.js";
 import { acquire, release } from "../control_plane/lease.js";
 import { HandlerRegistry, Outbox } from "../control_plane/outbox.js";
 import { pythonJsonObject } from "../control_plane/python_json.js";
-import { DELIVERY_LEASE_RESOURCE } from "../messagebus/endpoint.js";
 import { MessageBus } from "../messagebus/index.js";
 
 /**
@@ -244,6 +249,25 @@ export interface AckRecorded {
   readonly advanced: boolean;
   /** Whether this call closed the gate as `answered_and_forwarded`. */
   readonly closed: boolean;
+}
+
+/**
+ * What {@link ackUnrelayed} recorded. No gate, by construction.
+ *
+ * Its own shape rather than {@link AckRecorded} with null fields: this verb
+ * settles a row no gate enqueued, so `gateId`, `toStage`, `advanced` and
+ * `closed` have no meaning here at all, and a record that carried them as
+ * nulls would invite a reader to look for the gate that is not missing.
+ */
+export interface UnrelayedAckRecorded {
+  readonly messageId: string;
+  readonly recipient: string;
+  /** Whether this call recorded the ack (`false` is a repeat or a cancelled row). */
+  readonly acked: boolean;
+  /** Whether the row had been cancelled before the ack. */
+  readonly cancelled: boolean;
+  /** The lease epoch the pass was taken under, so the report can name it. */
+  readonly epoch: number;
 }
 
 /** One delivery attempt's outcome, as `gate deliver` reports it. */
@@ -744,7 +768,26 @@ export function answerGate(
  * uses one directory per control plane, and the exactly-once claim holds per
  * destination, which is the scope `ACCEPTANCE.md` section 2 states it in.
  *
- * @throws {LeaseHeld} if a lap or an endpoint is holding the delivery lease.
+ * **The pass drains ONE delivery resource, and since `D-1104` the caller says
+ * which** (`runId`, or the global resource when it is omitted). A fixed global
+ * pass would strand the ordinary post-lap path rather than an edge case:
+ * `enqueueRelay` copies `gate.runId` onto the row, so a gate's relays are
+ * run-bound, and `gate present` / `gate answer` normally run during the human
+ * suspend -- which happens *after* `lap perform` has exited. No lap is running
+ * to select those rows and a globally-pinned drainer never would, so they would
+ * sit unowned for ever. Rows belonging to no run -- runless gates, event
+ * fan-out, and every row `0005` inherited -- keep the global resource and are
+ * drained by this same verb with no `runId`.
+ *
+ * Enumerating the distinct resources and draining each was considered and
+ * rejected for lap 1: the pass would acquire an unbounded set of leases, any
+ * one of which may be refused, and one `LeaseHeld` in the middle would leave a
+ * partially-drained pass whose report cannot say what it skipped.
+ *
+ * @throws {LeaseHeld} if a lap or an endpoint is holding **this run's**
+ *   delivery lease. That is the correct answer and it is kept: for as long as
+ *   a run's lap runs, that run's delivery authority is the lap's. It no longer
+ *   means "some lap somewhere is running".
  * @throws {HandlerRejected} if no handler serves `recipient` -- the same
  *   refusal the endpoint makes at startup, made here before anything is
  *   attempted rather than as an empty queue that looks like nothing was due.
@@ -755,26 +798,61 @@ export function deliverRelays(
     readonly holder: string;
     readonly destinationDir: string;
     readonly recipient?: string;
+    /**
+     * The run whose relays this pass drains, or omitted/null for the global
+     * resource (`D-1104`).
+     *
+     * A run id and not a resource string, deliberately: an operator spelling
+     * a lease resource is the mistake `D-0076` records for `--recipient`, and
+     * the endpoint refuses to let one be chosen for the same reason. The verb
+     * takes the run and derives the resource itself.
+     */
+    readonly runId?: string | null;
     readonly nowMs: number;
     readonly ttlMs: number;
     readonly clock?: (() => number) | undefined;
   },
 ): DeliveryReport {
-  const { holder, destinationDir, recipient = GATE_RELAY_RECIPIENT, nowMs, ttlMs, clock } = options;
+  const {
+    holder,
+    destinationDir,
+    recipient = GATE_RELAY_RECIPIENT,
+    runId = null,
+    nowMs,
+    ttlMs,
+    clock,
+  } = options;
+  const resource = deliveryResourceForRun(runId);
   const registry = spikeRegistry(new KeyedDropbox(destinationDir, "gate-cli"));
-  // Before the lease, so an unserved recipient costs no claim on the one
+  // Before the lease, so an unserved recipient costs no claim on the
   // delivery resource -- and before the dropbox is read from, so the refusal
   // names the misconfiguration rather than whatever the directory contained.
   registry.forRecipient(recipient);
+  // **A run id that names no run is refused, in the same place and for the
+  // same reason.** Measured during implementation rather than designed: a
+  // mistyped `--run-id` otherwise acquires a lease on a resource no producer
+  // has ever written, delivers nothing, and exits 0 reporting "delivered 0
+  // message(s)" -- indistinguishable from a genuinely empty queue, which is
+  // the one report an operator draining a known gate's relays cannot act on.
+  // The verb already spends a refusal here on an unserved recipient; this is
+  // the same class of typo one argument over. Omitting `--run-id` is NOT this
+  // case: that names the global resource, which is where legacy and runless
+  // rows live and where a `run` row is not expected to exist.
+  if (runId !== null && !runExists(connection, runId)) {
+    throw new UnknownGateRefused(
+      `run ${runId} is not admitted in this control plane; a delivery pass for a run that does ` +
+        "not exist would take a lease on a resource no producer writes and report an empty queue",
+    );
+  }
   const lease = acquire(connection, {
-    resource: DELIVERY_LEASE_RESOURCE,
+    resource,
     holder,
     nowMs,
     ttlMs,
   });
   try {
     const bus = new MessageBus(connection, {
-      resource: DELIVERY_LEASE_RESOURCE,
+      resource,
       holder,
       registry,
     });
@@ -839,13 +917,64 @@ function relayOf(
  * either. The resource and holder are still required arguments of the outbox
  * and are still true of this caller: they name whose write this would be if it
  * were a fenced one, and no fenced statement runs on this path.
+ *
+ * **The resource is an argument since `D-1104`, and the hard-coded constant it
+ * replaced would now be actively wrong.** Once that constant means "the global
+ * partition" rather than "the delivery resource", an equality against it on
+ * this path would refuse every run-bound relay ack -- the ordinary case. The
+ * caller derives the resource from the relay's own gate; see {@link ackRelay}.
  */
-function ackOutbox(connection: SqliteDatabase, holder: string): Outbox {
+function ackOutbox(connection: SqliteDatabase, holder: string, resource: string): Outbox {
   return new Outbox(connection, {
-    resource: DELIVERY_LEASE_RESOURCE,
+    resource,
     holder,
     registry: new HandlerRegistry(),
   });
+}
+
+/**
+ * The run a gate belongs to, or `null`. `undefined` when there is no such
+ * gate.
+ *
+ * Its own two-column read rather than {@link gateDetail}, which
+ * {@link ackRelay} also calls -- but only *after* the ack, to decide the
+ * advance. The resource cross-check has to happen **before** the ack, because
+ * a settlement performed and then complained about is a settlement: the row's
+ * `acked_at_ms` is set once by its own trigger and cannot be taken back.
+ */
+function runExists(connection: SqliteDatabase, runId: string): boolean {
+  return (
+    connection
+      .prepare<[string], { run_id: string }>("SELECT run_id FROM run WHERE run_id = ?")
+      .get(runId) !== undefined
+  );
+}
+
+function runOfGate(connection: SqliteDatabase, gateId: string): string | null | undefined {
+  const row = connection
+    .prepare<[string], { run_id: string | null }>("SELECT run_id FROM gate WHERE gate_id = ?")
+    .get(gateId);
+  return row === undefined ? undefined : row.run_id;
+}
+
+/**
+ * Whether migration `0005` marked this row as one it inherited (`D-1104`).
+ *
+ * Read here and nowhere else, which is the point: the marker exists to answer
+ * exactly one question on exactly one path. It is written by the `0005`
+ * backfill, refused to every later writer by
+ * `outbox_delivery_resource_inherited_is_frozen`, and absent from the spike
+ * schema -- which is correct, because a schema with no migration path has no
+ * inherited rows and this verb never runs against it (`gate` tables exist only
+ * in the production plane).
+ */
+function inheritedByMigration(connection: SqliteDatabase, messageId: string): boolean {
+  const row = connection
+    .prepare<[string], { delivery_resource_inherited: number | null }>(
+      "SELECT delivery_resource_inherited FROM outbox WHERE message_id = ?",
+    )
+    .get(messageId);
+  return row !== undefined && row.delivery_resource_inherited === 1;
 }
 
 /**
@@ -893,7 +1022,17 @@ export function ackRelay(
       `${messageId} is not a gate relay; this verb settles the messages a gate enqueued`,
     );
   }
-  const outbox = ackOutbox(connection, actorId);
+  // The resource this relay's row must belong to, derived from the gate rather
+  // than taken as an argument (`D-1104`). `enqueueRelay` copied `gate.run_id`
+  // onto the row and derived the row's resource from the same value, so this
+  // equality is a cross-check between **two independently stored facts** -- and
+  // a mismatch is a corrupted relay rather than a mistyped flag, which is
+  // exactly what a check on this path should catch. A `gate ack --run-id` would
+  // instead add a second caller-supplied value to a path whose problem is
+  // already that its message id is caller-supplied.
+  const gateRun = runOfGate(connection, relay.gateId);
+  const expectedResource = deliveryResourceForRun(gateRun ?? null);
+  const outbox = ackOutbox(connection, actorId, expectedResource);
   const message = outbox.load(messageId);
   if (message.recipient !== recipient) {
     // The carried invariant `MessageBus.ack` states: a confirm from anyone but
@@ -902,6 +1041,33 @@ export function ackRelay(
     // see {@link ackOutbox} for why it does not.
     throw new UnknownGateRefused(
       `${messageId} is addressed to ${message.recipient}; an ack from ${recipient} does not settle it`,
+    );
+  }
+  // **Two values are admissible here and only two, and the second is bounded
+  // by recorded provenance.** The derived resource is the ordinary case. The
+  // global literal is admitted only for a row `0005` marked as inherited: an
+  // in-flight relay a migration met is backfilled to the resource it was
+  // genuinely written under, while the derivation, reading the same gate's
+  // still-present `run_id`, produces the run resource -- so a strict equality
+  // would leave exactly those gates unable to advance, having been delivered
+  // by the global drainer moments earlier.
+  //
+  // It is bounded, and not a permanent two-value rule, because after `0005` a
+  // run-bound relay carrying the global resource is impossible by construction
+  // (`enqueueRelay` derives the resource on every insert). Such a row can
+  // therefore only be inherited or corrupted, and the marker is what separates
+  // them -- a clock cannot, because both `migrateControlPlane`'s `nowMs` and
+  // `enqueueRelay`'s `enqueuedAtMs` are caller-supplied and unordered against
+  // each other by this database's own "time is the caller's" convention.
+  const admissible =
+    message.deliveryResource === expectedResource ||
+    (message.deliveryResource === DELIVERY_LEASE_RESOURCE &&
+      inheritedByMigration(connection, messageId));
+  if (!admissible) {
+    throw new UnknownGateRefused(
+      `${messageId} names delivery resource ${message.deliveryResource}, but the gate it relays ` +
+        `for is on ${expectedResource}; a relay whose resource disagrees with its own gate's run ` +
+        "is a corrupted relay and is not settled here",
     );
   }
   const outcome = outbox.recordAck(messageId, { nowMs });
@@ -1159,4 +1325,94 @@ export function reconcile(
         : stalledRelays(connection, { nowMs, toleranceMs: stalledToleranceMs }),
     pastDeadline: gatesPastDeadline(connection, { nowMs }),
   });
+}
+
+/**
+ * Settle one **non-relay** row on the global delivery resource.
+ *
+ * The global resource's own worker, and `D-1104` adds it because the partition
+ * removes the one that existed incidentally. A global non-relay row -- runless
+ * event fan-out, or a runless `MessageBus.send` -- was polled, delivered and
+ * acked by whichever endpoint held the single lease. After the partition no
+ * per-run endpoint polls it (its poll is scoped to its run) and
+ * {@link MessageBus.ack}'s strict equality keeps a per-run endpoint from
+ * settling it, while {@link deliverRelays} can deliver it but {@link ackRelay}
+ * refuses any id absent from `gate_relay`. Without this verb the row would sit
+ * `delivered` and due for replay for ever.
+ *
+ * **A resident global worker was the other candidate and is rejected on two
+ * measurements.** A holder that keeps the global lease makes `gate deliver`
+ * without `--run-id` return `LeaseHeld` for every legacy and runless relay --
+ * which is that verb's own path, so the two proposals would cancel. And the
+ * loop it was supposed to imitate does not exist: the endpoint is a passive
+ * pair of MCP tools a client drives, not a process that drains anything by
+ * itself. "The endpoint does this today" was true of *holding the lease*, not
+ * of running a loop.
+ *
+ * The objection to putting a consumer's settlement in an operator's hands
+ * stands and is answered rather than dismissed: there is no consumer left to
+ * defer to, so the choice is not "operator or consumer" but "operator or
+ * nobody". If a real consumer for these rows ever exists it will hold the
+ * global resource itself, and the resident worker becomes available on its own
+ * merits.
+ *
+ * The lease is acquired and released around the settlement like every other
+ * `gate` verb, even though `recordAck` is unfenced and stays unfenced: what it
+ * buys is that this verb refuses while something else is the global resource's
+ * live authority, instead of racing it.
+ *
+ * @throws {LeaseHeld} if something holds the global delivery lease.
+ * @throws {UnknownGateRefused} if the row is a gate relay -- that one is
+ *   {@link ackRelay}'s, which also advances the gate the ack justifies -- or
+ *   if it belongs to a run's resource rather than the global one.
+ */
+export function ackUnrelayed(
+  connection: SqliteDatabase,
+  options: {
+    readonly messageId: string;
+    readonly actorId: string;
+    readonly holder: string;
+    readonly nowMs: number;
+    readonly ttlMs: number;
+  },
+): UnrelayedAckRecorded {
+  const { messageId, actorId, holder, nowMs, ttlMs } = options;
+  const relay = relayOf(connection, messageId);
+  if (relay !== undefined) {
+    throw new UnknownGateRefused(
+      `${messageId} is the relay of gate ${relay.gateId}; settle it with the relay ack, which ` +
+        "also takes the step the ack justifies",
+    );
+  }
+  const lease = acquire(connection, {
+    resource: DELIVERY_LEASE_RESOURCE,
+    holder,
+    nowMs,
+    ttlMs,
+  });
+  try {
+    const outbox = ackOutbox(connection, actorId, DELIVERY_LEASE_RESOURCE);
+    const message = outbox.load(messageId);
+    if (message.deliveryResource !== DELIVERY_LEASE_RESOURCE) {
+      // Strict here, unlike the relay path: the legacy exception there exists
+      // for a row a migration inherited under a gate that names a run, and
+      // there is no such shape without a gate. A run-bound non-relay row has a
+      // worker -- that run's endpoint -- and settling it from here would be
+      // this verb reaching into a partition it is not the authority for.
+      throw new UnknownGateRefused(
+        `${messageId} belongs to delivery resource ${message.deliveryResource}; this verb is the ` +
+          `authority for ${DELIVERY_LEASE_RESOURCE} and settles nothing on a run's own resource`,
+      );
+    }
+    const outcome = outbox.recordAck(messageId, { nowMs });
+    return Object.freeze({
+      messageId,
+      recipient: message.recipient,
+      acked: outcome.recorded,
+      cancelled: outcome.cancelled,
+      epoch: lease.epoch,
+    });
+  } finally {
+    release(connection, lease, { nowMs });
+  }
 }

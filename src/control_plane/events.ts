@@ -1,4 +1,5 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import { deliveryResourceForRun } from "./delivery_resource.js";
 import { resolveToleranceMs } from "./policy.js";
 import { pythonJsonDumpsSorted } from "./python_json.js";
 import { pythonRepr } from "./python_repr.js";
@@ -438,12 +439,14 @@ function fanOut(
           payload: string;
           dedup_key: string | null;
           enqueued_at_ms: number;
+          delivery_resource: string;
         }>(
           `
                 INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key,
-                                    status, retry_count, enqueued_at_ms)
+                                    status, retry_count, enqueued_at_ms,
+                                    delivery_resource)
                 VALUES (:message_id, :run_id, :recipient, :payload, :dedup_key,
-                        'pending', 0, :enqueued_at_ms)
+                        'pending', 0, :enqueued_at_ms, :delivery_resource)
                 `,
         )
         .run({
@@ -453,6 +456,12 @@ function fanOut(
           payload: body,
           dedup_key: messageId,
           enqueued_at_ms: createdAtMs,
+          // The UNFENCED producer's rule (`D-1104`): derived from the row's
+          // own durable `run_id`, which is nullable here and takes the global
+          // resource when it is null. This insert holds no lease, so
+          // `writer_epoch` stays null and this column is the only thing that
+          // says which epoch sequence may adopt the row.
+          delivery_resource: deliveryResourceForRun(runId),
         });
       messages.push(messageId);
     }

@@ -1695,16 +1695,23 @@ export function opEnqueue(ctx: Context, outbox: Outbox): void {
  * The record -> effect -> result path: where all four windows live.
  *
  * Scoped to **this role's own rows**, by the message ids this role derives from
- * its own holder identity. That scoping is load-bearing rather than tidy:
- * `Outbox.due()` returns every unacked row in the database, not the rows of the
- * outbox object's own `(resource, holder)`, and the fence it validates is
- * `writer_epoch = :epoch` against *this* writer's live lease -- so with every
- * role sitting at epoch 1 (which is the normal case, since each holds a
- * different resource) one role's delivery loop will happily deliver another
- * role's messages into its own destination. Disjoint write-sets are what makes a
+ * its own holder identity. That scoping used to be the only thing standing
+ * between the roles: `Outbox.due()` returned every unacked row in the database,
+ * not the rows of the outbox object's own `(resource, holder)`, and the fence it
+ * validates is `writer_epoch = :epoch` against *this* writer's live lease -- so
+ * with every role sitting at epoch 1 (which is the normal case, since each holds
+ * a different resource) one role's delivery loop would happily deliver another
+ * role's messages into its own destination.
+ *
+ * `D-1104` closed that: an outbox row now records the delivery resource it was
+ * written under, and `due` / `attempt` / `markDelivered` all carry
+ * `delivery_resource = :resource`, so the API scopes to the instance's own
+ * resource by itself. The hand-scoping below is **retained and now redundant**,
+ * not retained because it is still needed. It stays because it is the thing this
+ * driver asserts about its own scripts -- disjoint write-sets are what makes a
  * combination case a cross-role interleaving rather than three processes doing
- * each other's work (design 2.1 item 5), so the driver scopes what the API does
- * not.
+ * each other's work (design 2.1 item 5) -- and a harness that leaned on the
+ * production filter alone would stop being able to observe a regression in it.
  */
 export function opAttempt(ctx: Context, outbox: Outbox): void {
   const lease = ctx.lease;
@@ -2022,7 +2029,9 @@ class DropboxObserver implements DestinationObserver {
 export const INVARIANT_QUERIES: Readonly<Record<string, string>> = Object.freeze({
   // No outbox row is left in a state with no owner after recovery
   // (ACCEPTANCE.md section 2, outbox resend row). This is the outbox's own
-  // query.
+  // query, and since `D-1104` it is database-wide: it binds only `:now_ms` and
+  // joins the lease on each row's `delivery_resource`, so one call answers for
+  // every role's rows at once rather than once per resource.
   [contract.INVARIANT_NO_UNOWNED_OUTBOX]: UNOWNED_OUTBOX_QUERY,
   // Retry count is durable across restarts and never goes backwards; the
   // schema's own trigger forbids a decrease, so the query reports the values and

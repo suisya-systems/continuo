@@ -1,4 +1,5 @@
 import type { Database as SqliteDatabase } from "better-sqlite3";
+import { deliveryResourceForRun } from "./delivery_resource.js";
 import { appendEvent } from "./events.js";
 import { pythonJsonList, pythonJsonObject } from "./python_json.js";
 import { pythonList, pythonTuple } from "./python_repr.js";
@@ -603,13 +604,34 @@ export function enqueueRelay(
           "an answer it predates",
       );
     }
-    tx.prepare<[string, string | null, string, string, string, number]>(
+    tx.prepare<[string, string | null, string, string, string, number, string]>(
       `
             INSERT INTO outbox (message_id, run_id, recipient, payload, dedup_key,
-                                status, enqueued_at_ms)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                                status, enqueued_at_ms, delivery_resource)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
             `,
-    ).run(messageId, gate.runId, recipient, payload, `gate/${gateId}/${toStage}`, enqueuedAtMs);
+    ).run(
+      messageId,
+      gate.runId,
+      recipient,
+      payload,
+      `gate/${gateId}/${toStage}`,
+      enqueuedAtMs,
+      // The UNFENCED producer's rule (`D-1104`): derived from the row's own
+      // durable `run_id` -- the same `gate.runId` bound two arguments up --
+      // and never from a live lease, because this insert holds none and a
+      // queue that only accepted work while a delivery worker was live is a
+      // queue that does not outlive its worker (`D-0054`). `writer_epoch`
+      // stays null for that reason and this column is what says which
+      // sequence will own the row once a worker adopts it.
+      //
+      // `gate.runId` may be null -- `openGate` defaults it and `gate.run_id`
+      // carries no NOT NULL -- and `deliveryResourceForRun` is total on that,
+      // returning the global resource. A runless relay is then drained by
+      // `gate deliver` without `--run-id`, the same path legacy and fan-out
+      // rows take, so no relay is left unwritable or unreachable.
+      deliveryResourceForRun(gate.runId),
+    );
     tx.prepare<[string, string, string, number]>(
       `
             INSERT INTO gate_relay (gate_id, to_stage, message_id, enqueued_at_ms)
