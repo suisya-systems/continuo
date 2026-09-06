@@ -9,8 +9,9 @@ nothing from this repository to replay it. `D-0093` is the decision it belongs t
 
 If any entry of `sandbox.filesystem.denyRead` or `sandbox.filesystem.denyWrite` in a settings file is
 not a string -- for example the object form `{"path": "~/.ssh"}`, or a number -- Claude Code
-`2.1.261` accepts the settings file, exits zero, prints no warning and writes nothing to stderr, and
-then applies **neither** `permissions.deny` **nor** any `PreToolUse` hook for that run.
+`2.1.261` -- and `2.1.263`, where this was re-measured -- accepts the settings file, exits zero,
+prints no warning and writes nothing to stderr, and then applies **neither** `permissions.deny`
+**nor** any `PreToolUse` hook for that run.
 
 The failure is open, not closed. A `Read` of a path covered by a `permissions.deny` rule succeeds and
 the file's contents are returned to the model. The `PreToolUse` hook -- the documented escape hatch
@@ -22,7 +23,8 @@ existing rules, ends up strictly *less* restrictive than the same file with that
 
 ## Environment
 
-- Claude Code CLI **2.1.261**
+- Claude Code CLI **2.1.261** (and re-confirmed on **2.1.263** -- see *Re-confirmed on 2.1.263*
+  below)
 - node **v22.17.0**
 - Linux (WSL2)
 - Model used in the repro: `claude-haiku-4-5-20251001`
@@ -174,9 +176,31 @@ The decisive pair -- string entry versus object entry, all else equal -- was run
 configuration: 4/4 enforced with the string form, 4/4 entirely unenforced with the object form. The
 remaining cells were run once each; no cell disagreed with its row.
 
+## Re-confirmed on 2.1.263
+
+Re-run on 2026-09-06 against Claude Code CLI **`2.1.263`**, node `v22.17.0`, Linux (WSL2), model
+`claude-haiku-4-5-20251001`, in a *fresh* git repository carrying no settings of its own, with the
+same argv shape as above (`--settings <file> --setting-sources '' --output-format json`) and the
+same witness hook. Ten cells, one real child each:
+
+| `sandbox` value | denied command (its rule) | hook invoked? | the denied command |
+|---|---|---|---|
+| key absent entirely | `ls -la .` (`Bash(ls:*)`) | yes | refused |
+| `{enabled:true, filesystem:{denyRead:["<abs>"]}}`, ×3 | `ls -la .` (`Bash(ls:*)`) | yes, 3/3 | refused, 3/3 |
+| `{enabled:true, filesystem:{denyRead:[{"path":"<abs>"}]}}`, ×3 | `ls -la .` (`Bash(ls:*)`) | **no, 3/3** | **ran, 3/3** -- the listing came back |
+| `{enabled:true, filesystem:{denyRead:["<abs>"]}}` | `cat <secret>` (`Bash(cat:*)`) | yes | refused; the nonce is absent from the transcript |
+| `{enabled:true, filesystem:{denyRead:[{"path":"<abs>"}]}}` | `cat <secret>` (`Bash(cat:*)`) | **no** | **ran, and the nonce was returned to the model** |
+
+Exit status 0 and empty stderr in all ten, both spellings alike. So the defect is present on
+`2.1.263` as it was on `2.1.261`; those two releases are the measured band, and nothing between or
+after them was run. Note also the first two rows: with the entry spelled as a string, the *read-only*
+`ls` -- the command whose behaviour first raised this -- is refused. Read-only-ness is not the
+variable in this release either; the spelling of the deny entry is.
+
 ## Scope of the measurement
 
-Held constant, and therefore untested: one CLI version (`2.1.261`); one platform (Linux under WSL2);
+Held constant, and therefore untested: two CLI versions (`2.1.261`, and the ten cells above on
+`2.1.263`); one platform (Linux under WSL2);
 one invocation mode (`claude -p` -- never interactive); one model; `"permissionMode": "acceptEdits"`
 in every cell; and one delivery route for the settings (`--settings <file>` with
 `--setting-sources ''`, against a target carrying none) -- a `sandbox` block arriving from project,
