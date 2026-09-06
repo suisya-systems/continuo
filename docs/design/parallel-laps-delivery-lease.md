@@ -280,7 +280,7 @@ The closed inventory, statement by statement, at the lines measured in section 1
 
 | Statement | Line | Add |
 |---|---|---|
-| `_DUE_QUERY` | `:372-380` | `delivery_resource = :resource` **and** `recipient = :recipient` |
+| `_DUE_QUERY` | `:372-380` | `delivery_resource = :resource` **and** `recipient = :recipient` -- the first needs no signature change, the second does (below) |
 | `UNOWNED_OUTBOX_QUERY` | `:290-301` | see section 4.1 -- it splits |
 | `_UNOWNED_ONE_QUERY` | `:326-341` | `delivery_resource = :resource` and **nothing else** -- no recipient term; kept character-identical to the caller-scoped recovery form (section 4.1) |
 | `_ENQUEUE` | `:432-444` | write `delivery_resource` from the caller's own resource |
@@ -306,6 +306,32 @@ source says exists to stop the two criteria disagreeing about one row; and the d
 because the lookup is already a primary-key equality (`:322-324`) -- there is no set to mis-route.
 Resource equality is the ownership test and it is sufficient here. P-6 is amended to say `due` only,
 and the reason is recorded so the fuller form is not re-proposed as an oversight.
+
+**The two new terms on `due` do not cost the same, and the second is a third interface this entry has
+to carry.** `delivery_resource = :resource` is free at the signature: `this._resource` is already an
+instance field and `unowned` already binds it the same way (`outbox.ts:1348-1350`). `recipient` has no
+source at all -- `due(nowMs)` takes nothing else (`:1343-1345`), and the recipient belongs to
+`MessageBus.poll`, not to the outbox.
+
+**And the resource term, though free, is not invisible: it changes what the fault-injection belt
+sees.** `opAttempt` calls `outbox.due(...)` and then scopes the result to its own rows by message id,
+because -- in its own words -- "`Outbox.due()` returns every unacked row in the database, not the rows
+of the outbox object's own `(resource, holder)` ... so the driver scopes what the API does not"
+(`test/fault_injection/spike_driver.ts:1694-1714`). Each role there holds a different resource, so
+after this change the API scopes it too and the driver's hand-scoping becomes redundant. That is the
+right direction and it changes no case's verdict -- but **the docstring becomes false the moment the
+term lands**, and a comment asserting the API does not scope, sitting above code that now relies on it
+doing so, is precisely the drift section 4.1 worries about elsewhere. The entry carries that edit.
+
+The recipient term is the one that needs an interface, and the smallest that works is an optional
+argument: `due(nowMs, { recipient })`, passed by `MessageBus.poll` alone. Every existing caller keeps
+today's meaning -- the belt, and the sixteen assertions in `test/control_plane/outbox.test.ts` and the
+messagebus suite -- while the one caller that has a recipient supplies it. A mandatory parameter would
+rewrite all of them for a routing defence, and a separate `dueFor` method would leave two nearly
+identical queries to drift apart, which is the failure section 4.1 spends a page avoiding. **This is
+the third interface addition this design carries**, beside `holdDeliveryLease`'s resource parameter
+(P-3) and `gate deliver --run-id` (P-10), and it belongs in the entry for the same reason as those:
+an interface assumed rather than named is a change the implementation discovers on its own.
 
 `MessageBus.poll`'s TypeScript filter (`bus.ts:259-264`) stays. It becomes redundant once due carries
 the recipient term, and redundancy in the safe direction is not a defect: removing it in the same
@@ -924,13 +950,21 @@ So the controls split by layer, and the entry must say which layer each one live
 | restoring the global resource breaks the second acquisition | end-to-end | the failure is the whole point of the change and no other defence hides it |
 | pinning `gate deliver` to the global resource strands the post-lap relay | end-to-end | nothing else drains that row |
 | the cross-partition ack succeeds without the ack's resource equality | end-to-end | already **direct** by construction -- section 4.2's assertion hands the id past the poll, which is why it is the one hazard partitioning the poll does not close |
-| resource equality in `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` | **statement-level, in-process** | each is masked by the selection in front of it; the control must call the method directly on an `Outbox` bound to resource B, with a live epoch, against a row belonging to A, and require **zero rows changed** |
+| resource equality in `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT` | **statement-level, in-process** | each is masked by the selection in front of it; the control must call the method directly on an `Outbox` bound to resource B, with a live epoch, against a row belonging to A, and require **zero rows changed** |
+| `_ENQUEUE`'s stamp | **statement-level, in-process, and a different shape** | `_ENQUEUE` *inserts*; there is no foreign row for it to refuse and no zero-changes assertion to make. Reusing A's message id would fail on the primary key, and a fresh id correctly produces a B-owned row either way. The control is an assertion **on the inserted row** -- enqueue from an `Outbox` bound to B and require the new row's `delivery_resource` to be B -- and its mutant is dropping the stamp or writing the global literal. Unlike the three above it is not masked, so it could be end-to-end; it is kept here because it is cheaper and reads beside them |
 | the SQL recipient term on `due` | **statement-level, in-process** | masked by the TypeScript filter that section 4 deliberately keeps; the control must exercise the query below the filter, or assert on the rendered SQL |
 | ids generated per run defeat a hard-coded expectation | end-to-end | a property of the fixture, not of a predicate |
 
+**The distinction the table is really drawing is between a predicate that refuses and a stamp that
+writes**, and it is worth naming because the two need opposite controls. A refusing predicate is
+proved by an attempt that changes nothing; a stamp is proved by reading back what it wrote. Prescribing
+the first shape for `_ENQUEUE` -- as an earlier draft of this section did -- produces a control that
+cannot run at all, which is a worse failure than a vacuous one because it does not even survive being
+written.
+
 This is a real cost of the redundancy and not a testing detail: **every predicate this design adds
-behind another one needs its own direct test, or the entry is asking for four checks that have never
-been seen red.** The statement-level controls belong beside the existing outbox tests, not inside the
+behind another one needs its own direct test, or the entry is asking for checks that have never been
+seen red.** The statement-level controls belong beside the existing outbox tests, not inside the
 mandatory real-child case, which keeps that case's wall-clock budget (section 9.4) for the thing only
 it can prove -- overlap.
 
@@ -1101,8 +1135,8 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-2** | Add `outbox.delivery_resource` holding the **exact lease resource string**, constructed by `deliveryResourceForRun(runId) = "outbox-delivery:run:" + runId` or the literal `"outbox-delivery"`. One exported constructor, never parsed back into a run id (`run_id` is the join). **Which of the two a row gets is decided by producer class, not by `run_id`**: the `run_id`-derived rule is the **unfenced** producers' (and the migration's backfill), while a fenced producer takes its own instance's resource whatever its `run_id` is -- P-4 and section 4.0 govern, and reading this line as a `run_id` rule would pair a per-run epoch with the global resource and rebuild section 2's ambiguity inside the fix. | pre-review, amended |
 | **P-3** | The lap acquires, renews, renders, checks and releases **its run's** resource. `holdDeliveryLease` gains a resource parameter (`src/lap/endpoint_lease.ts:177-192`); `D-0073`'s semantics hold unchanged within each resource. **This is the holder-identity half, and P-2 without it does not lift the serialisation** (see P-13). | pre-review, amended |
 | **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer under the two rules of section 4.2 -- the **fenced** producer writes its own `Outbox` instance's resource, the **unfenced** producers derive it from the row's durable `run_id`. The invariant is `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`, and a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review, amended |
-| **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. **Each of the four carries a statement-level observed-red control of its own**, because every one is masked by the selection in front of it and cannot be falsified through the end-to-end case (`AGENTS.md:108-112`; section 9.3). The same applies to the SQL recipient term on `due`, which the retained TypeScript filter masks. | pre-review, amended |
-| **P-6** | Recipient becomes a SQL term on `due` **only**, as a routing defence. The pre-review also asked for it on one-row adoption; that is **refuted by measurement** -- `adoptIfUnowned` receives no recipient (`outbox.ts:1861-1863`), the query is character-identical to the all-recipient sweep by design (`:308-320`), and the lookup is already a primary-key equality, so the term has no source, breaks a deliberate identity and defends nothing (section 4). It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
+| **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. **Each carries a statement-level observed-red control of its own** (`AGENTS.md:108-112`; section 9.3): the three refusing predicates because each is masked by the selection in front of it, and `_ENQUEUE` because it stamps rather than refuses, so its control asserts the **inserted row's** resource instead of a zero-changes outcome. The SQL recipient term on `due` is likewise masked, by the TypeScript filter this design keeps. | pre-review, amended |
+| **P-6** | Recipient becomes a SQL term on `due` **only**, as a routing defence, **and it carries an interface change**: `due(nowMs)` has no recipient to bind (`outbox.ts:1343-1345`), so it gains an optional `{ recipient }` passed by `MessageBus.poll` alone, leaving every existing caller's meaning intact. The `delivery_resource` term needs no signature change but **does** narrow what the fault-injection belt sees, so `spike_driver.ts:1699-1706`'s docstring -- "the driver scopes what the API does not" -- is corrected in the same change rather than left asserting the opposite of the code. The pre-review also asked for it on one-row adoption; that is **refuted by measurement** -- `adoptIfUnowned` receives no recipient (`outbox.ts:1861-1863`), the query is character-identical to the all-recipient sweep by design (`:308-320`), and the lookup is already a primary-key equality, so the term has no source, breaks a deliberate identity and defends nothing (section 4). It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
 | **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable. **`NULL` does not mean "predates the column"** -- the four `effectKind`-composing writers keep writing attributed rows with a null column for ever, so the definition is the disjunction: a row's writer resource is `writer_resource` when non-null and the `kind` suffix otherwise, and every row carries exactly one of the two (section 7.2). Those four writers are deliberately left unchanged. Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix otherwise, **and `0005` backfills the pre-migration outbox rows** -- exactly identifiable, since the outbox path is the only `action` writer that does not compose its kind (section 7.2) -- so no history row is left with neither form of attribution. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
 | **P-8** | Split `UNOWNED_OUTBOX_QUERY` into a **caller-scoped** recovery form and a **database-wide** invariant form that joins on the row's own `delivery_resource` and takes no `:resource`. Re-anchor `_UNOWNED_ONE_QUERY`'s character-identity to the recovery form and say in the source which it mirrors. `INVARIANT_NO_UNOWNED_OUTBOX` and `src/index.ts`'s export are part of this change. | measured here |
 | **P-9** | Use the next forward migration (`0005`); never edit a historical one; backfill existing rows to the exact literal `"outbox-delivery"`; replace the due index with a measured `(delivery_resource, recipient, enqueued_at_ms)` partial form and keep positive **and** degraded EXPLAIN evidence. Say explicitly in the entry that `sqlite-value-contract.md` is a value contract and not a schema freeze. **Prefer the 12-step rebuild over `ADD COLUMN ... NOT NULL DEFAULT`** (section 5.2); the gate may take the default instead with a schema test pinning its legacy-only meaning. | pre-review, amended |
@@ -1227,6 +1261,15 @@ the lines.
 | M10 | P-7's "`NULL` means predates the column" is false the day the migration lands, because the non-outbox writers keep producing null-column rows | **Confirmed.** The four composing writers (supervisor, watcher, session_binding, run_lifecycle via `lease.ts`) are not changed by this entry, so a definition in terms of time is immediately untrue; the definition the readers implement is a disjunction over the two attribution forms. | Section 7.2 gains the disjunction and the reason the four writers are deliberately left alone; **P-7 amended** |
 | M11 | P-16's check on `MessageBus.ack` does not reach `gate ack`: `ackRelay` bypasses the bus and builds `ackOutbox` on the global constant, with no source for a run resource | **Confirmed, and one step worse than stated**: once the constant means the global resource, a literal equality on that path would refuse every run-bound relay ack -- the ordinary case. Measurement also supplies the missing source the finding asked for: `ackRelay` already loads the gate (`gateDetail`, `operator.ts:928`) and the gate carries the `runId` `enqueueRelay` copied onto the row. | Section 4.2 gains the second surface and the derived resource, with the reason a `gate ack --run-id` is worse than deriving it; **P-16 amended**, section 6's ack bullet corrected |
 
+**Round 8** raised one Blocker and one Major. Both are interface findings, and both concern surfaces
+this document had already reasoned about correctly at the SQL level and then not followed into the
+API.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| B18 | `_DUE_QUERY` cannot receive `:recipient` through `Outbox.due(nowMs)`, and direct callers rely on due being database-wide -- the fault-injection belt's `opAttempt` most explicitly | **Confirmed, both halves.** `due(nowMs)` takes nothing else (`outbox.ts:1343-1345`), and `spike_driver.ts:1694-1714` says in its own docstring that it hand-scopes because "the API does not". Measurement adds a third point the finding did not: the **resource** term needs no signature change but does narrow what the belt sees, in the direction the driver already emulates, which makes that docstring false the moment the term lands. | Section 4 separates the two terms by cost, adds the optional `due(nowMs, { recipient })` used by `MessageBus.poll` alone, and carries the docstring correction; **P-6 amended** |
+| M19 | The prescribed `_ENQUEUE` observed-red control cannot run: `_ENQUEUE` inserts, so there is no foreign row to refuse -- A's id fails on the primary key, a fresh id correctly inserts a B-owned row | **Confirmed, and it is round 7's own repair overreaching.** Round 7 grouped four statements under one control shape without noticing that three refuse and one writes. | Section 9.3 splits `_ENQUEUE` out with the opposite control shape -- an assertion on the inserted row, mutant drops the stamp -- and names the refuse/stamp distinction; **P-5 amended** |
+
 **Round 7** raised two Majors, and one of them fired a falsifier this document had written for itself
 one round earlier -- which is the falsification section working rather than failing.
 
@@ -1251,7 +1294,7 @@ row this document had carried forward from the pre-review rather than one it wro
 | M12 | Section 4.0 claims a gate's `run_id` is always present; `openGate` defaults it to `null` and the schema permits it, so the producer rule is undefined for a runless gate relay | **Confirmed.** `gates.ts:445`, `:460`; `0001_initial.sql:1267` carries no `NOT NULL`. The one caller in the tree does pass a run (`report_ingress.ts:371-390`), so the case is admissible but unexercised -- which is how it survived four rounds. | Section 4.0's table corrected and the null mapped to the global literal, with the drainer consequence stated so no relay is unwritable or unreachable |
 | M13 | P-6's recipient term on one-row adoption is incompatible with section 4's inventory, with `_UNOWNED_ONE_QUERY`'s character-identity, and with `adoptIfUnowned`'s signature | **Confirmed, and it resolves against P-6.** `adoptIfUnowned(messageId, {nowMs, epoch})` receives no recipient (`outbox.ts:1861-1863`); the query is deliberately character-identical to the all-recipient sweep (`:308-320`); and the lookup is a primary-key equality (`:322-324`), so the term has no source, breaks an identity the source explains, and defends nothing. | Section 4 gains the refutation; **P-6 amended to `due` only**, with the reason recorded so the fuller form is not re-proposed |
 
-**The seventeen fall into four groups, and the order they arrived in is itself the finding.** Rounds
+**The nineteen fall into four groups, and the order they arrived in is itself the finding.** Rounds
 1-2 (B1-B6) were the same mistake six times: the first draft partitioned *selection* carefully and
 under-specified the places authority is established without a selection in front of it -- the post-lap
 drainer, the ack, the fenced insert -- and then under-specified the *interfaces* those repairs need:
@@ -1278,4 +1321,7 @@ between them, so a repair is not finished when it is stated -- it is finished wh
 against every other rule the same row has to satisfy. Round 7 is the sharpest instance of that in both
 directions at once: the redundancy this design chose for safety is the same property that makes half
 its evidence vacuous, and the premise it reached for to bound a cost was one its own falsification
-section had already named as doubtful.
+section had already named as doubtful. Round 8 then made the point once more in the register rounds
+1-2 established: the SQL was right and the signature that has to carry it was never checked, which is
+the same "narrowest surface that has to name it" failure arriving at the eighth round in a place
+nobody had looked.
