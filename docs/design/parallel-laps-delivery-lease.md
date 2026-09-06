@@ -388,6 +388,29 @@ A's gate on evidence B produced.
 a stale-writer refusal. It adds no lease clause, so late acks, duplicate acks and acks of cancelled
 rows keep behaving exactly as `recordAck` decides today. P-16.
 
+**There are two ack surfaces, not one, and the second does not go through the bus.** `ackRelay`
+duplicates the recipient check inline and says so in a comment -- "this path does not go through the
+bus" (`src/gate/operator.ts:896-906`) -- then records through `ackOutbox`, which builds an `Outbox`
+with `resource: DELIVERY_LEASE_RESOURCE` hard-coded (`:843-849`). Adding the equality only to
+`MessageBus.ack` would therefore leave the operator's `gate ack` unscoped, and worse: once the
+constant means "the global resource" rather than "the delivery resource" (section 4.1), a
+literal-minded equality on that path would refuse **every run-bound relay ack**, which is the
+ordinary case. So P-16 names both surfaces, and `ackOutbox` stops taking the constant.
+
+**The resource it takes instead needs no new argument, because the path already loads it.**
+`ackRelay` resolves the relay to its gate (`relayOf`, `:818-828`) and already calls
+`gateDetail(connection, relay.gateId)` a few lines later for the closure test (`:928`); `gateDetail`
+returns the gate's `runId` (`gates.ts:963`), and that is the same `gate.runId` `enqueueRelay` copied
+onto the row (`:612`). So the ack's resource is `deliveryResourceForRun(gate.runId)`, or the global
+literal when the gate has no run, computed from data the verb has in hand. That is strictly better
+than a `gate ack --run-id` option would be, and not merely cheaper: an operator-supplied run id would
+be one more caller-supplied value on a path whose problem is already that its message id is
+caller-supplied, whereas the derived form makes P-16's equality a cross-check between **two
+independently stored facts** -- the gate's run and the message's own `delivery_resource`. A mismatch
+there is a corrupted relay rather than a mistyped flag, and it is exactly what the check should
+catch. `gate ack` keeps the argument list it has today (`src/gate/cli.ts`), and the operator remains
+the post-lap delivery authority for every run without having to name one.
+
 This is the one place where partitioning `poll` is not enough on its own, and it is the reason
 section 9's assertions are not satisfied by "each lap polled only its own rows".
 
@@ -535,7 +558,10 @@ state the property this entry supersedes.
 - `LeaseHeld` while the lap is still live is retained and is the correct answer: for as long as a run's
   lap runs, that run's delivery authority is the lap's. `src/gate/cli.ts:44` already documents that
   refusal, and it keeps its meaning, narrowed from "a lap" to "*this run's* lap".
-- The ack path (`ackOutbox`, `:843-849`) takes the same resource, for P-16's reason.
+- The ack path does **not** take this verb's resource: `ackRelay` derives the row's resource from its
+  own gate's run, which needs no argument at all. Section 4.2 gives the reason the two verbs differ --
+  `gate deliver` chooses which rows to drain and so must be told, while `gate ack` is handed one row
+  and can look its owner up.
 
 The roles then read cleanly, which is the test of whether the partition is the right one:
 
@@ -576,8 +602,25 @@ two resources).
 design" by the document that defines it, and adopting it would put a run id inside `action.kind`,
 which is the column `action_one_effect_per_key` does *not* key on but which every kind-based reader
 does. Nullable **`action.writer_resource TEXT`** is the direct repair, with non-null attribution
-immutable by trigger and `NULL` meaning only "this row predates the column" -- the same nullable shape
-and the same honesty `0004` chose for `run.writer_epoch`.
+immutable by trigger -- the same nullable shape and the same honesty `0004` chose for
+`run.writer_epoch`.
+
+**What `NULL` means has to be stated carefully, because the obvious wording is false the day the
+migration lands.** "`NULL` means the row predates the column" would be untrue immediately: the four
+non-outbox writers measured below compose their kind with `effectKind` and are **not** changed by
+this entry, so they keep writing attributed rows with `writer_resource IS NULL` for ever. The
+definition that is actually true, and the one the readers already implement, is the disjunction:
+
+> **A row's writer resource is `writer_resource` when it is non-null, and the suffix of `kind`
+> otherwise. Every `action` row carries its attribution in exactly one of the two forms, and the
+> column exists for the one producer that cannot use the other.**
+
+Leaving the four composing writers alone is the deliberate choice and not an omission: `effectKind`
+already attributes their rows exactly, changing five call sites to duplicate that attribution would
+be churn with no reader behind it, and the disjunction costs the readers one `COALESCE`-shaped branch
+they need anyway for history written before the migration. An entry that instead required every
+producer to populate the column would be a larger change with the same queries at the end of it; the
+gate may take that variant, but it should take it knowing it buys nothing this design needs.
 
 `sqlite-value-contract.md:67-83` decides the binding: `undefined` binds as SQL `NULL` with no error,
 so a misspelled property reaches a nullable column silently. The compatibility column must therefore
@@ -926,6 +969,9 @@ and S1 has no concurrency contract of its own to hang it on (`claude_cli_provide
 - **The additive `barrier` fake mode is not enough to hold a lap at the right instant** -- if the lap
   reaches the child later than the acquisition it is meant to overlap, the marker proves the wrong
   overlap and section 9.3 needs a different hold point.
+- **`ackRelay`'s gate turns out not to determine the row's resource** -- a relay whose gate `run_id`
+  disagrees with the row's own `delivery_resource` -- which would mean P-16's cross-check has a third
+  case to decide rather than a corruption to refuse, and section 4.2 would owe that case a rule.
 - **A bare `action.kind` turns out not to identify an outbox-path row** -- a writer added since this
   measurement, or one in a database this tree did not produce -- which would make section 7.2's
   backfill inexact and force a read-time mapping instead.
@@ -947,12 +993,12 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | Line | Proposal | Origin |
 |---|---|---|
 | **P-1** | Keep `D-0074`'s fencing premise intact and supersede only its serialisation consequence (`DECISIONS.md:12371-12377`). Section 2 re-derives the premise for two runs at the statement level; nothing in it is overturned. | measured here |
-| **P-2** | Add `outbox.delivery_resource` holding the **exact lease resource string**. Run-bound rows use `deliveryResourceForRun(runId) = "outbox-delivery:run:" + runId`; runless rows use the literal `"outbox-delivery"`. One exported constructor, never parsed back into a run id (`run_id` is the join). | pre-review |
+| **P-2** | Add `outbox.delivery_resource` holding the **exact lease resource string**, constructed by `deliveryResourceForRun(runId) = "outbox-delivery:run:" + runId` or the literal `"outbox-delivery"`. One exported constructor, never parsed back into a run id (`run_id` is the join). **Which of the two a row gets is decided by producer class, not by `run_id`**: the `run_id`-derived rule is the **unfenced** producers' (and the migration's backfill), while a fenced producer takes its own instance's resource whatever its `run_id` is -- P-4 and section 4.0 govern, and reading this line as a `run_id` rule would pair a per-run epoch with the global resource and rebuild section 2's ambiguity inside the fix. | pre-review, amended |
 | **P-3** | The lap acquires, renews, renders, checks and releases **its run's** resource. `holdDeliveryLease` gains a resource parameter (`src/lap/endpoint_lease.ts:177-192`); `D-0073`'s semantics hold unchanged within each resource. **This is the holder-identity half, and P-2 without it does not lift the serialisation** (see P-13). | pre-review, amended |
 | **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer under the two rules of section 4.2 -- the **fenced** producer writes its own `Outbox` instance's resource, the **unfenced** producers derive it from the row's durable `run_id`. The invariant is `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`, and a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review, amended |
 | **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. | pre-review |
 | **P-6** | Recipient becomes a SQL term on `due` and on one-row adoption, as a routing defence. It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
-| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable; `null` means only "predates the column". Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix otherwise, **and `0005` backfills the pre-migration outbox rows** -- exactly identifiable, since the outbox path is the only `action` writer that does not compose its kind (section 7.2) -- so no history row is left with neither form of attribution. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
+| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable. **`NULL` does not mean "predates the column"** -- the four `effectKind`-composing writers keep writing attributed rows with a null column for ever, so the definition is the disjunction: a row's writer resource is `writer_resource` when non-null and the `kind` suffix otherwise, and every row carries exactly one of the two (section 7.2). Those four writers are deliberately left unchanged. Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix otherwise, **and `0005` backfills the pre-migration outbox rows** -- exactly identifiable, since the outbox path is the only `action` writer that does not compose its kind (section 7.2) -- so no history row is left with neither form of attribution. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
 | **P-8** | Split `UNOWNED_OUTBOX_QUERY` into a **caller-scoped** recovery form and a **database-wide** invariant form that joins on the row's own `delivery_resource` and takes no `:resource`. Re-anchor `_UNOWNED_ONE_QUERY`'s character-identity to the recovery form and say in the source which it mirrors. `INVARIANT_NO_UNOWNED_OUTBOX` and `src/index.ts`'s export are part of this change. | measured here |
 | **P-9** | Use the next forward migration (`0005`); never edit a historical one; backfill existing rows to the exact literal `"outbox-delivery"`; replace the due index with a measured `(delivery_resource, recipient, enqueued_at_ms)` partial form and keep positive **and** degraded EXPLAIN evidence. Say explicitly in the entry that `sqlite-value-contract.md` is a value contract and not a schema freeze. **Prefer the 12-step rebuild over `ADD COLUMN ... NOT NULL DEFAULT`** (section 5.2); the gate may take the default instead with a schema test pinning its legacy-only meaning. | pre-review, amended |
 | **P-10** | Name the drainer for every row a lap does not drain, and make it resource-parameterised. `deliverRelays` / `gate deliver` stop naming `DELIVERY_LEASE_RESOURCE` (`src/gate/operator.ts:769-774`) and instead acquire **the resource of the rows they are asked to drain** -- the run's for a run-bound relay, the global literal for legacy and runless rows. A fixed global `gate deliver` would strand every post-lap gate relay, because `enqueueRelay` copies `gate.runId` (`gates.ts:612`) and `gate present` / `gate answer` normally run after `lap perform` has exited. `LeaseHeld` while the lap is live is the correct answer and is kept. **This carries a CLI addition -- `gate deliver --run-id`, optional, defaulting to the global resource** -- because the verb today takes no gate, run or resource argument at all (`src/gate/cli.ts:951-969`). | measured here, amended after Codex review |
@@ -961,7 +1007,7 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-13** | State that `D-1104` takes **both** halves -- the enabling change and the holder identity -- because `rondo D-0012`'s falsifier says the enabling change alone is not enough (`rondo/DECISIONS.md:1057-1064`). continuo #167 owns partitioning, fencing and the two-run proof; rondo #8 owns allocation, the capacity bound and suspend accounting. This change does not widen rondo's single-flight index and does not authorise a second rondo admission. | measured here |
 | **P-14** | Record F-13's measurement in the entry: the delivery lease is held for the lap only (~20.9 s of a measured 125.4 s lifetime), the remaining 83% is rondo's lock across an unbounded human wait, and `D-1104` therefore removes contention on the smaller term. `D-1104` is not "parallel laps now work". | measured here |
 | **P-15** | `D-0068` and `D-0071`'s read-then-signal residual stay open and are not credited to this change (`DECISIONS.md:11771`, `:12168-12211`). | pre-review, amended |
-| **P-16** | Scope ack authority by resource. `MessageBus.ack` (`bus.ts:466-479`) settles on recipient equality alone, `Outbox.recordAck` updates by message id and status, and the endpoint's `ack` tool takes a caller-supplied id (`endpoint.ts:330`). With two endpoints on one recipient that is no longer an authority check. Add `message.deliveryResource === this._resource` beside the recipient test, in the same caller-bug family and **still unfenced**, so late and duplicate acks keep settling nothing. Section 4.2. | measured here, after Codex review |
+| **P-16** | Scope ack authority by resource on **both** ack surfaces. `MessageBus.ack` (`bus.ts:466-479`) settles on recipient equality alone, `Outbox.recordAck` updates by message id and status, and the endpoint's `ack` tool takes a caller-supplied id (`endpoint.ts:330`). With two endpoints on one recipient that is no longer an authority check. Add `message.deliveryResource === this._resource` beside the recipient test, in the same caller-bug family and **still unfenced**, so late and duplicate acks keep settling nothing. **The second surface is `ackRelay`, which does not go through the bus** (`operator.ts:896-906`) and builds `ackOutbox` on the hard-coded constant (`:843-849`); it takes `deliveryResourceForRun` of **its own gate's run**, already loaded on the path (`gateDetail`, `:928`; `gates.ts:963`, `:612`), so `gate ack` gains no argument and the equality becomes a cross-check of two independently stored facts. Section 4.2. | measured here, after Codex review |
 | **P-17** | Implementation starts only after the gate accepts or amends these lines and creates `D-1104`. This document allocates no entry and is not accepted authority. | pre-review |
 
 ---
@@ -980,8 +1026,10 @@ Return or reject `D-1104` unless every answer is yes.
 5. Is there a **named drainer for every row a lap does not drain** -- including run-bound gate relays
    enqueued after their lap exits -- and does the belt's unowned invariant still state what the
    post-lap window means (P-10, P-8)?
-6. Is **ack authority** scoped by resource and not by recipient alone, given that the acked id is
-   caller-supplied rather than reached through the endpoint's own poll (P-16)?
+6. Is **ack authority** scoped by resource and not by recipient alone on **both** ack surfaces --
+   the bus and `ackRelay` -- given that the acked id is caller-supplied rather than reached through
+   the endpoint's own poll, and does the operator's verb derive the resource rather than be told it
+   (P-16)?
 7. Does the fenced producer take its resource from **its own lease** rather than from `run_id`, so
    that no row names two epoch sequences (P-4, section 4.0)?
 8. Is future action-epoch attribution queryable by resource **and actually read that way by
@@ -1059,7 +1107,18 @@ repairs rather than new subject matter.
 | B7 | A read-time fallback does not rescue pre-migration outbox action rows: they have `writer_resource IS NULL` **and** a bare kind, so the suffix fallback excludes or throws on them exactly as before | **Confirmed.** Round 2's repair was incomplete. Measuring every `action` writer showed the mapping is nonetheless **exact**: supervisor, watcher, session_binding, run_lifecycle and `lease.ts` all compose their kind with `effectKind`, and the outbox path is the only one that does not. | Section 7.2 gains the writer inventory and a backfill on `instr(kind,'@') = 0`; **P-7 amended** |
 | B8 | The barrier releases before the endpoint assertions, so a released lap can exit and stop its lease, making the two-live-lease read a race | **Confirmed**, and the reviewer's second half is right too: the child cannot mark readiness "after its endpoint answers", because the endpoints belong to the parent. `performLap`'s `finally` stops the lease on every path (`root.ts:1261-1274`). | Section 9.1 re-worded; section 9.3 gains an explicit five-step ordering with the evidence taken during the hold; **P-11 amended** |
 
-All eight are cases of the same thing: the first draft partitioned *selection* carefully and then
+**Round 4** raised three findings, all confirmed, and their shape is different from rounds 1-3: none
+is a hole in the mechanism, and all three are places where a **summary line said less than the
+section behind it**, which for a document put to a human gate is the same defect -- the gate reads
+the lines.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| M9 | P-2's `run_id` rule for runless rows contradicts P-4 and section 4.0, which give a fenced producer its own instance's resource; following P-2 would pair a per-run epoch with the global resource | **Confirmed as stated, and the contradiction is real in P-2's text** -- though section 4.0 already derives the correct rule and states the consequence explicitly. The defect is that P-2 is the line the gate votes on and it read as normative. | **P-2 amended** to say the `run_id` derivation is the unfenced producers' rule and that P-4 governs |
+| M10 | P-7's "`NULL` means predates the column" is false the day the migration lands, because the non-outbox writers keep producing null-column rows | **Confirmed.** The four composing writers (supervisor, watcher, session_binding, run_lifecycle via `lease.ts`) are not changed by this entry, so a definition in terms of time is immediately untrue; the definition the readers implement is a disjunction over the two attribution forms. | Section 7.2 gains the disjunction and the reason the four writers are deliberately left alone; **P-7 amended** |
+| M11 | P-16's check on `MessageBus.ack` does not reach `gate ack`: `ackRelay` bypasses the bus and builds `ackOutbox` on the global constant, with no source for a run resource | **Confirmed, and one step worse than stated**: once the constant means the global resource, a literal equality on that path would refuse every run-bound relay ack -- the ordinary case. Measurement also supplies the missing source the finding asked for: `ackRelay` already loads the gate (`gateDetail`, `operator.ts:928`) and the gate carries the `runId` `enqueueRelay` copied onto the row. | Section 4.2 gains the second surface and the derived resource, with the reason a `gate ack --run-id` is worse than deriving it; **P-16 amended**, section 6's ack bullet corrected |
+
+All eleven are cases of the same thing: the first draft partitioned *selection* carefully and then
 under-specified the three places authority is established without a selection in front of it -- the
 post-lap drainer, the ack, and the fenced insert -- and then under-specified the *interfaces* the
 repairs need: a way for the drainer to name a resource, a way for the child to be held, a reader that
