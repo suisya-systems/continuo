@@ -601,9 +601,29 @@ adding at all**, and it is also why adding the column without migrating the read
 section 7.1's problem exactly where it is while looking repaired.
 
 So P-7 covers the readers as well as the column: both select, filter and partition on
-`writer_resource` when it is non-null, and fall back to the `kind`-suffix derivation only for rows
-that predate it. The fallback is what keeps `lease.ts`'s spike-schema callers working; the primary
-path is what makes the outbox's own history readable for the first time.
+`writer_resource` when it is non-null, and fall back to the `kind`-suffix derivation otherwise.
+
+**A read-time fallback alone is not enough, and the reason is the same measurement.** A pre-migration
+outbox action row has `writer_resource IS NULL` *and* a bare `kind`, so the suffix fallback excludes it
+from `WRITE_HISTORY_QUERY` and throws out of `resourceOfKind` exactly as before. The migration must
+therefore backfill those rows -- and it can do so **exactly**, because a bare kind identifies them:
+
+| `action` writer | Line | `kind` |
+|---|---|---|
+| `src/supervisor.ts:501-522`, `:579` | fenced insert | `effectKind(lease.resource, "post_spawn_gate")` |
+| `src/control_plane/watcher.ts:729-740` | raw insert | `effectKind(scopeLeaseResource(scopeId), "watcher_heartbeat")` |
+| `src/control_plane/session_binding.ts:157`, `:207`, `:257`, `:294` | via `lease.ts` | `effectKind(lease.resource, ...)` |
+| `src/control_plane/run_lifecycle.ts:408` | via `lease.ts` | `effectKind(runLeaseResource(runId), ...)` |
+| `src/control_plane/lease.ts:1587` | raw insert | composed by its callers above |
+| **`src/control_plane/outbox.ts:531-543`, `:2389`** | fenced insert / raw refusal | **bare `handler.actionKind`** |
+
+Every other writer composes the kind; **the outbox path is the only one that does not**. So
+`writer_epoch IS NOT NULL AND writer_resource IS NULL AND instr(kind, '@') = 0` selects exactly the
+outbox-path rows, and those rows were written under the one delivery resource there has ever been.
+Backfilling them to the literal `'outbox-delivery'` records what is known, on section 5.3's rule, and
+is not the fabrication `0004` refused. After the backfill every history row `WRITE_HISTORY_QUERY`
+admits carries either a non-null `writer_resource` or a composed kind, and neither reader has a hole
+left.
 
 ### 7.3 Effect deduplication stays global -- and this needs saying, because the temptation is real
 
@@ -676,9 +696,9 @@ rondo #8's -- section 10.1). Resources are `outbox-delivery:run:r-A` and `outbox
 Blocker 3, confirmed. A test that would pass if the second child started after the first finished
 proves nothing about concurrency.
 
-**The proof is a barrier.** Both children write a ready marker after acquiring and after their
-endpoint answers; the parent releases only once **both** markers exist; a missing marker is a failure,
-never permission to proceed serially. That is the assertion -- overlap -- and everything else is
+**The proof is a barrier.** Both lap children write a ready marker and block; the parent takes its
+evidence while both are blocked and releases only once **both** markers exist; a missing marker is a
+failure, never permission to proceed serially. That is the assertion -- overlap -- and everything else is
 consequence.
 
 ### 9.2 What the tree can and cannot build today
@@ -715,7 +735,7 @@ rendered `mcp.json` rather than composed by the test. That reuses `endpoint-rela
 machinery and proves the materialiser's output is what two concurrent endpoints run under, which a
 test-composed env would not.
 
-**The overlap is the lap's, so the hold has to be the child's.** The endpoints are the test's, so a
+**The overlap is the lap's, so the hold has to be the child's, and the assertions belong inside it.** The endpoints are the test's, so a
 barrier between *them* would not prove the two **laps** overlapped -- lap A could complete before lap
 B started and every endpoint assertion would still pass. The lap's duration is its child's duration,
 so the child is the only place a hold can go, and neither existing mode gives one: `"ok"` completes
@@ -732,6 +752,24 @@ ready markers exist. A missing marker is a failure, never permission to run the 
 
 The barrier is files, not signals: `test/lap/cli.test.ts` already runs on the Windows serial pass, and
 POSIX signals are not portable there.
+
+**The ordering is part of the specification, not an implementation detail.** Everything that needs both
+leases live must be observed **while both children are still blocked**, because the moment a child is
+released its lap may finish and `performLap`'s `finally` stops that lease (`src/lap/root.ts:1261-1274`)
+-- after which a poll is a stale-writer refusal and the two-live-leases read is a race. The child also
+cannot mark readiness "after its endpoint answers": the endpoints are the parent's, and the child knows
+nothing about them. So the sequence is:
+
+1. both children write their ready markers after the lap has acquired and materialised, and block;
+2. the parent, with both blocked, reads the `lease` table and asserts **two live rows** with the
+   expected holders, resources and epochs;
+3. the parent starts each built endpoint from its lap's rendered `mcp.json`, polls, asserts the
+   cross-delivery absences, acks, and attempts the cross-partition ack that section 4.2 must refuse;
+4. only then does the parent write the release file;
+5. both laps exit 0 without `LeaseHeld`, and the terminal assertions (dropbox tokens, row resources and
+   epochs, the off-recipient controls) are taken after the exits.
+
+Steps 2 and 3 are the proof; steps 1 and 4 are what make them simultaneous.
 
 Assertions after release -- **negative evidence is the substance, positive evidence is the setup**:
 
@@ -888,6 +926,9 @@ and S1 has no concurrency contract of its own to hang it on (`claude_cli_provide
 - **The additive `barrier` fake mode is not enough to hold a lap at the right instant** -- if the lap
   reaches the child later than the acquisition it is meant to overlap, the marker proves the wrong
   overlap and section 9.3 needs a different hold point.
+- **A bare `action.kind` turns out not to identify an outbox-path row** -- a writer added since this
+  measurement, or one in a database this tree did not produce -- which would make section 7.2's
+  backfill inexact and force a read-time mapping instead.
 - **`gate deliver --run-id` turns out not to determine the resource uniquely** -- a relay whose run is
   not the gate's, say -- which would push the drainer toward the enumeration option section 6
   rejects.
@@ -911,11 +952,11 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer under the two rules of section 4.2 -- the **fenced** producer writes its own `Outbox` instance's resource, the **unfenced** producers derive it from the row's durable `run_id`. The invariant is `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`, and a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review, amended |
 | **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. | pre-review |
 | **P-6** | Recipient becomes a SQL term on `due` and on one-row adoption, as a routing defence. It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
-| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable; `null` means only "predates the column". Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix only for older rows. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
+| **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable; `null` means only "predates the column". Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **Migrate the audit readers in the same change**: `WRITE_HISTORY_QUERY` and `appliedEpochRegressions` derive the resource from the `kind` suffix, which is empty-or-throwing for the outbox's bare kinds today (section 7.2); both read `writer_resource` when non-null and fall back to the suffix otherwise, **and `0005` backfills the pre-migration outbox rows** -- exactly identifiable, since the outbox path is the only `action` writer that does not compose its kind (section 7.2) -- so no history row is left with neither form of attribution. **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
 | **P-8** | Split `UNOWNED_OUTBOX_QUERY` into a **caller-scoped** recovery form and a **database-wide** invariant form that joins on the row's own `delivery_resource` and takes no `:resource`. Re-anchor `_UNOWNED_ONE_QUERY`'s character-identity to the recovery form and say in the source which it mirrors. `INVARIANT_NO_UNOWNED_OUTBOX` and `src/index.ts`'s export are part of this change. | measured here |
 | **P-9** | Use the next forward migration (`0005`); never edit a historical one; backfill existing rows to the exact literal `"outbox-delivery"`; replace the due index with a measured `(delivery_resource, recipient, enqueued_at_ms)` partial form and keep positive **and** degraded EXPLAIN evidence. Say explicitly in the entry that `sqlite-value-contract.md` is a value contract and not a schema freeze. **Prefer the 12-step rebuild over `ADD COLUMN ... NOT NULL DEFAULT`** (section 5.2); the gate may take the default instead with a schema test pinning its legacy-only meaning. | pre-review, amended |
 | **P-10** | Name the drainer for every row a lap does not drain, and make it resource-parameterised. `deliverRelays` / `gate deliver` stop naming `DELIVERY_LEASE_RESOURCE` (`src/gate/operator.ts:769-774`) and instead acquire **the resource of the rows they are asked to drain** -- the run's for a run-bound relay, the global literal for legacy and runless rows. A fixed global `gate deliver` would strand every post-lap gate relay, because `enqueueRelay` copies `gate.runId` (`gates.ts:612`) and `gate present` / `gate answer` normally run after `lap perform` has exited. `LeaseHeld` while the lap is live is the correct answer and is kept. **This carries a CLI addition -- `gate deliver --run-id`, optional, defaulting to the global resource** -- because the verb today takes no gate, run or resource argument at all (`src/gate/cli.ts:951-969`). | measured here, amended after Codex review |
-| **P-11** | Gate implementation on a mandatory continuo target-only real-child case: two built `lap perform` processes on one production plane, two built endpoints started from the **materialiser's own rendered `mcp.json`**, a file barrier both must cross, and negative cross-delivery assertions with observed-red controls. Repository fake child only; no credentials, no network; a **stated wall-clock budget** with a bounded barrier that fails loudly (`D-1103`). The hold must be in the **child**, not between the endpoints -- otherwise the laps need not overlap -- so this carries **one additive `FAKE_MODE` (`barrier`)** on the fake's existing mode switch (`fake-claude.mjs:267`), default `"ok"` untouched. It does **not** extend the fake to speak MCP or start a grandchild (section 9.2). | pre-review, amended |
+| **P-11** | Gate implementation on a mandatory continuo target-only real-child case: two built `lap perform` processes on one production plane, two built endpoints started from the **materialiser's own rendered `mcp.json`**, a file barrier both must cross, and negative cross-delivery assertions with observed-red controls. Repository fake child only; no credentials, no network; a **stated wall-clock budget** with a bounded barrier that fails loudly (`D-1103`). The hold must be in the **child**, not between the endpoints -- otherwise the laps need not overlap -- so this carries **one additive `FAKE_MODE` (`barrier`)** on the fake's existing mode switch (`fake-claude.mjs:267`), default `"ok"` untouched. **Every assertion needing two live leases is taken while both children are still blocked**, because releasing one lets its lap exit and stop its lease (`root.ts:1261-1274`); section 9.3 fixes that ordering as part of the specification. It does **not** extend the fake to speak MCP or start a grandchild (section 9.2). | pre-review, amended |
 | **P-12** | Discharge `minimal-operating-loop.md:1037-1045`'s obligation to show parallel laps keep one provider instance per run. Do **not** claim the provider's same-instance residual is fixed; re-band it to a future continuo change that first proposes concurrent verbs on one S1 instance or a shared provider, and correct that passage's stale citation (`:959-994` should be `:1156-1190`). | pre-review, amended |
 | **P-13** | State that `D-1104` takes **both** halves -- the enabling change and the holder identity -- because `rondo D-0012`'s falsifier says the enabling change alone is not enough (`rondo/DECISIONS.md:1057-1064`). continuo #167 owns partitioning, fencing and the two-run proof; rondo #8 owns allocation, the capacity bound and suspend accounting. This change does not widen rondo's single-flight index and does not authorise a second rondo admission. | measured here |
 | **P-14** | Record F-13's measurement in the entry: the delivery lease is held for the lap only (~20.9 s of a measured 125.4 s lifetime), the remaining 83% is rondo's lock across an unbounded human wait, and `D-1104` therefore removes contention on the smaller term. `D-1104` is not "parallel laps now work". | measured here |
@@ -948,8 +989,8 @@ Return or reject `D-1104` unless every answer is yes.
 9. Is recovery limited to its own resource, and does the database-wide invariant keep its
    database-wide meaning?
 10. Does the real-child case prove **overlap** by a barrier held in the lap's own child -- not merely
-    between endpoints -- and **absence** of cross-delivery on poll and ack both, with observed-red
-    controls for each assertion?
+    between endpoints -- with the two-live-lease and cross-delivery evidence taken **while both
+    children are still blocked**, and observed-red controls for each assertion?
 11. Is it mandatory in every `double-green` cell, free of credentials and network, and inside a stated
     wall-clock budget that `D-1103`'s cap can carry?
 12. Are the provider-local residual and `D-0068` explicitly left open, and is the stale
@@ -1010,7 +1051,15 @@ finding, which is the shape of a converging review rather than a contested one.
 | B5 | A resource-parameterised `gate deliver` has no way to choose a resource | **Confirmed.** The verb takes `--db`, `--destination-dir`, `--holder`, `--now-ms`, `--json` and nothing else (`src/gate/cli.ts:951-969`). P-10 was unimplementable as written. | Section 6 gains the interface comparison; **P-10 amended** to carry `gate deliver --run-id`, with `--resource` and resource-enumeration rejected and the reasons given |
 | B6 | `action.writer_resource` alone does not repair section 7.1, because both audit readers still derive the resource from `action.kind` | **Confirmed, and it is worse than "not yet migrated"**: `WRITE_HISTORY_QUERY`'s suffix filter (`lease.ts:158-167`) returns **empty** for a bare kind, and `appliedEpochRegressions` **throws** through `resourceOfKind` (`:1424-1440`) on the outbox's bare `notify`. The readers are already broken for outbox rows today. | Section 7.2 gains the measurement; **P-7 amended** to migrate both readers with a legacy fallback |
 
-All six are cases of the same thing: the first draft partitioned *selection* carefully and then
+**Round 3** raised two findings, again with no repeats, and both were refinements of round 2's own
+repairs rather than new subject matter.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| B7 | A read-time fallback does not rescue pre-migration outbox action rows: they have `writer_resource IS NULL` **and** a bare kind, so the suffix fallback excludes or throws on them exactly as before | **Confirmed.** Round 2's repair was incomplete. Measuring every `action` writer showed the mapping is nonetheless **exact**: supervisor, watcher, session_binding, run_lifecycle and `lease.ts` all compose their kind with `effectKind`, and the outbox path is the only one that does not. | Section 7.2 gains the writer inventory and a backfill on `instr(kind,'@') = 0`; **P-7 amended** |
+| B8 | The barrier releases before the endpoint assertions, so a released lap can exit and stop its lease, making the two-live-lease read a race | **Confirmed**, and the reviewer's second half is right too: the child cannot mark readiness "after its endpoint answers", because the endpoints belong to the parent. `performLap`'s `finally` stops the lease on every path (`root.ts:1261-1274`). | Section 9.1 re-worded; section 9.3 gains an explicit five-step ordering with the evidence taken during the hold; **P-11 amended** |
+
+All eight are cases of the same thing: the first draft partitioned *selection* carefully and then
 under-specified the three places authority is established without a selection in front of it -- the
 post-lap drainer, the ack, and the fenced insert -- and then under-specified the *interfaces* the
 repairs need: a way for the drainer to name a resource, a way for the child to be held, a reader that
