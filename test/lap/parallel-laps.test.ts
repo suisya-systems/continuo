@@ -118,6 +118,9 @@ const REPORT_TEXT = "The fence refuses the push. May I publish?";
 const MARKER_WAIT_MS = 60_000;
 const CHILD_BARRIER_TIMEOUT_S = "90";
 
+/** How much of a captured child file the failure message carries. */
+const EVIDENCE_TAIL_CHARS = 4_000;
+
 /** The whole case, generously: six processes, two worktrees, one release. */
 const CASE_TIMEOUT_MS = 180_000;
 
@@ -475,6 +478,73 @@ function sessionsUnder(stateRoot: string): readonly string[] {
     .sort();
 }
 
+/**
+ * Everything the runner knows about why a lap's child stopped, as text.
+ *
+ * **Written for a failure this test could not explain, and it explained it.**
+ * At `019e3b8a` -- this file's own merge, before it was touched again -- the
+ * Windows cell failed with `[0, 2]`: every step-2 and step-3 assertion passing,
+ * both leases live, both endpoints partitioned, and one lap exiting 2 with "the
+ * child ... is gone without writing a result event", and the same failure
+ * recurred on the next branch to touch this file. The lap's own stderr says
+ * only that the child went; **why it went is in the child's captured stderr and
+ * event stream**, which the provider writes into the session directory as
+ * `stderr-<generation>.log` and `events-<generation>.jsonl` -- files that live
+ * on the runner and are thrown away with it.
+ *
+ * So the evidence is pulled into the assertion message, and the next red cell
+ * settled the question in one run: three children across two Node versions had
+ * a **complete `result` line** in their transcripts and an empty stderr. That
+ * is `D-1106` -- the provider read the transcript and asked whether the child
+ * was still running in that order, so a child that wrote its last line and
+ * exited in between was reported as having written nothing. The ordering is
+ * fixed and `test/session/liveness-read-ordering.test.ts` holds it.
+ *
+ * **This function stays, and not out of sentiment.** `D-1106` closed one way
+ * for a child to be reported gone with no report; the message an operator and
+ * this case see is the same for every other way -- a child that died
+ * mid-stream, a barrier deadline the fake announces on its own stderr, a
+ * transcript that was truncated. The lap will never say which. Nothing else
+ * here reads those two files, and the cost of keeping them is two small reads
+ * when the message is built.
+ *
+ * Reading is best-effort and never throws: this runs while a test is already
+ * failing, and a diagnostic that raises replaces the failure being diagnosed.
+ * Each file is tailed rather than quoted whole, because an event stream is
+ * unbounded and only its end is in question.
+ */
+function childEvidence(lap: LapUnderTest): string {
+  const tail = (path: string): string => {
+    try {
+      const text = readFileSync(path, "utf8");
+      return text.length > EVIDENCE_TAIL_CHARS ? `...${text.slice(-EVIDENCE_TAIL_CHARS)}` : text;
+    } catch (error) {
+      return `<unreadable: ${String(error)}>`;
+    }
+  };
+  if (!existsSync(lap.stateRoot)) {
+    return `${lap.runId}: no state root at ${lap.stateRoot}`;
+  }
+  const lines: string[] = [`${lap.runId}: state root ${lap.stateRoot}`];
+  for (const session of readdirSync(lap.stateRoot)) {
+    const dir = join(lap.stateRoot, session);
+    let entries: readonly string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      // `probe-evidence.txt` and anything else that is a file rather than a
+      // session directory: not an error, just not evidence.
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith("stderr-") || entry.startsWith("events-")) {
+        lines.push(`--- ${session}/${entry} ---`, tail(join(dir, entry)));
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
 describe("two laps on one control plane, at the same instant (target-only)", () => {
   test(
     "both laps hold their own delivery lease, and neither reaches the other's rows",
@@ -633,7 +703,14 @@ describe("two laps on one control plane, at the same instant (target-only)", () 
             }),
         ),
       );
-      expect(codes, `A: ${lapA.stderr.join("")}\nB: ${lapB.stderr.join("")}`).toEqual([0, 0]);
+      // The two laps' own stderr, and -- because the lap only ever says that
+      // its child went, never why -- what the children themselves wrote. See
+      // {@link childEvidence}.
+      expect(
+        codes,
+        `A: ${lapA.stderr.join("")}\nB: ${lapB.stderr.join("")}\n` +
+          `${childEvidence(lapA)}\n${childEvidence(lapB)}`,
+      ).toEqual([0, 0]);
       for (const lap of [lapA, lapB]) {
         expect(lap.stderr.join("") + lap.stdout.join("")).not.toContain("LeaseHeld");
       }
