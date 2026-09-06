@@ -693,6 +693,7 @@ export {
   type LapTerminalReport,
   LapUsageError,
   lapArtifactDir,
+  lapStateRoot,
   MaterializedWorkspaceRequired,
   performLap,
   type TerminalReportReader,

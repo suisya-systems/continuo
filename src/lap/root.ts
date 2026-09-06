@@ -356,8 +356,58 @@ function percentEncode(character: string): string {
  *
  * Not a hash: an operator looking for a run's fence has the run id and should be
  * able to find the directory by reading it.
+ *
+ * The encoding itself lives in {@link runIdSegment}, because `D-1105` gave the
+ * provider's state root the same layout under its own operator-named parent.
  */
 export function lapArtifactDir(artifactRoot: string, runId: string): string {
+  // `join` rather than string concatenation: the encoded name carries no
+  // separator of either platform's, so there is nothing here for `join` to
+  // collapse, and the root is spelled the way the operator gave it.
+  return join(artifactRoot, runIdSegment(runId));
+}
+
+/**
+ * The provider's state root for this lap: `<stateRoot>/<encoded runId>`
+ * (`D-1105`).
+ *
+ * **The same shape as {@link lapArtifactDir}, for the same reason and by the
+ * same encoding.** `--state-root` is an operator-named parent, and the *layout*
+ * under it is this step's -- so two laps handed one parent cannot be handed one
+ * directory, and nothing has to detect that they were. `D-1104` made two
+ * `lap perform` processes possible against one control plane and, in doing so,
+ * removed the accidental guard that had made a shared state root unreachable:
+ * the one global delivery lease. Deriving is what replaces it, rather than a
+ * lease or a marker file over the directory -- an occupancy mechanism has a
+ * lifetime, a holder and a stale-entry story, and none of that is needed to
+ * answer a question the run identifier already answers.
+ *
+ * **Derived from the run id and not from a per-process value.** A uuid minted
+ * per process would also keep two laps apart, and would break the thing this
+ * directory is *for*: `#discoverRecords` and `#holderOfUuid` read the records
+ * already under it, so a second lap OF THE SAME RUN has to see the first one's.
+ * Keying on the run id is the only rule that removes the cross-run sharing and
+ * keeps the same-run identity reservation.
+ *
+ * Unlike the artifact directory this one has no containment obligation of its
+ * own here: `requireUsableStateRoot` and the containment check both run over
+ * what this function returns, because a check over the parent would guard a
+ * directory nothing writes to.
+ */
+export function lapStateRoot(stateRoot: string, runId: string): string {
+  return join(stateRoot, runIdSegment(runId));
+}
+
+/**
+ * The run identifier as one directory name: the encoding {@link lapArtifactDir}
+ * documents, shared with {@link lapStateRoot}.
+ *
+ * One function and not two copies, because the rules it encodes are the
+ * *filesystem's* -- if a run identifier is unsafe as a directory name it is
+ * unsafe under either root, and a second implementation is a second thing to
+ * get the reserved-name list wrong in.
+ */
+function runIdSegment(runId: string): string {
   let encoded = "";
   for (const character of runId) {
     encoded += ARTIFACT_SEGMENT_SAFE.test(character) ? character : percentEncode(character);
@@ -396,10 +446,7 @@ export function lapArtifactDir(artifactRoot: string, runId: string): string {
         "exceed this well before it looks long; a shorter identifier is the fix",
     );
   }
-  // `join` rather than string concatenation: the encoded name carries no
-  // separator of either platform's, so there is nothing here for `join` to
-  // collapse, and the root is spelled the way the operator gave it.
-  return join(artifactRoot, encoded);
+  return encoded;
 }
 
 // --------------------------------------------------------------------------
@@ -684,6 +731,15 @@ function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
  * `--state-root` naming an existing regular file, or a directory this process
  * may not write, is an ordinary operator typo, and the whole value of catching
  * it here is that a corrected retry is still free.
+ *
+ * **What it is asked about is `request.providerStateRoot`, which since `D-1105`
+ * is `<--state-root>/<run id>` and not the flag** ({@link lapStateRoot}). The
+ * distinction is not pedantic: the parent being creatable and writable is a
+ * weaker statement than this run's own directory being so -- a regular file at
+ * `<parent>/<run id>` satisfies the first and fails the second, from the
+ * provider's `mkdirSync`, in exactly the late position described above. This
+ * check still says nothing about whether the directory is *unshared*; it does
+ * not have to, because deriving it from the run id is what makes it unshared.
  *
  * **This check has a side effect, and its position is chosen for it.** It
  * creates the directory, which is what makes "can this be written" answerable
@@ -1040,6 +1096,12 @@ export interface LapRequest {
    * the worker can edit is a gate opened over words its own subject wrote --
    * and this is the only place that knows both the path and the workspace it
    * must stay out of. See {@link requireOutsideWorkspace} and `D-0067`.
+   *
+   * **This is the run's own directory, not the operator's `--state-root`**
+   * (`D-1105`): a caller running laps concurrently derives one per run with
+   * {@link lapStateRoot}, builds the provider over that, and passes the same
+   * value here. Passing the parent would make both checks true of a directory
+   * the provider never writes into.
    */
   readonly providerStateRoot: string;
   /** The worker's own command, if the caller pinned one, for the same check. */

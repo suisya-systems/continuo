@@ -70,7 +70,7 @@
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -127,6 +127,12 @@ interface LapUnderTest {
   readonly repository: string;
   readonly workspace: string;
   readonly artifactDir: string;
+  /**
+   * The directory this lap's provider must end up writing under -- **derived**,
+   * never passed (`D-1105`). Both laps are given one `--state-root` parent, so
+   * this path existing with only this lap's session under it is the whole of
+   * the evidence that the derivation happened.
+   */
   readonly stateRoot: string;
   readonly readyMarker: string;
   readonly claudeCommand: readonly [string, string];
@@ -163,6 +169,7 @@ function world(label: string): {
   readonly root: string;
   readonly databasePath: string;
   readonly destinationDir: string;
+  readonly stateRootParent: string;
   readonly laps: readonly [LapUnderTest, LapUnderTest];
   readonly releaseMarker: string;
 } {
@@ -170,6 +177,12 @@ function world(label: string): {
   const databasePath = join(root, "production.sqlite3");
   const destinationDir = join(root, "destination");
   const releaseMarker = join(root, "release");
+  // **One `--state-root` for both laps, and that is the point of the case**
+  // (`D-1105`). Handing each lap its own would be what a careful caller does
+  // and would prove nothing: the question is whether a caller that does NOT is
+  // still safe, which is the situation `D-1104` created when it removed the
+  // global delivery lease that had made two concurrent laps impossible.
+  const stateRootParent = join(root, "state");
 
   const out: string[] = [];
   patchSeams(dbCliSeams, {
@@ -223,7 +236,7 @@ function world(label: string): {
       repository,
       workspace,
       artifactDir: join(artifactRoot, runId),
-      stateRoot: join(lapRoot, "state"),
+      stateRoot: join(stateRootParent, runId),
       readyMarker: join(root, `ready-${suffix}`),
       claudeCommand: fakeCli(lapRoot),
       resource: deliveryResourceForRun(runId),
@@ -232,7 +245,7 @@ function world(label: string): {
     };
   }) as unknown as readonly [LapUnderTest, LapUnderTest];
 
-  return { root, databasePath, destinationDir, laps, releaseMarker };
+  return { root, databasePath, destinationDir, stateRootParent, laps, releaseMarker };
 }
 
 /** Start one built `lap perform`, with its child held at the barrier. */
@@ -241,6 +254,7 @@ function startLap(
   options: {
     readonly databasePath: string;
     readonly destinationDir: string;
+    readonly stateRootParent: string;
     readonly releaseMarker: string;
   },
 ): void {
@@ -259,8 +273,10 @@ function startLap(
       lap.repository,
       "--artifact-root",
       join(lap.artifactDir, ".."),
+      // The shared PARENT, deliberately: what the provider writes under is
+      // `lap.stateRoot`, and this command line is what has to derive it.
       "--state-root",
-      lap.stateRoot,
+      options.stateRootParent,
       "--endpoint-recipient",
       NOTIFY_RECIPIENT,
       "--endpoint-destination-dir",
@@ -442,6 +458,23 @@ function offRecipientRow(
     .run(messageId, HUMAN_GATED_RECIPIENT, "{}", messageId, nowMs, resource);
 }
 
+/**
+ * The session directories under one state root, by name.
+ *
+ * "A subdirectory holding a `record.json`" is `#discoverRecords`'s own rule
+ * (`src/session/claude_cli_provider.ts`), so this reads the roster the provider
+ * would build rather than a listing of everything on disk -- `probe-evidence.txt`
+ * lives at the root of the state root and is not a session.
+ */
+function sessionsUnder(stateRoot: string): readonly string[] {
+  if (!existsSync(stateRoot)) {
+    return [];
+  }
+  return readdirSync(stateRoot)
+    .filter((entry) => existsSync(join(stateRoot, entry, "record.json")))
+    .sort();
+}
+
 describe("two laps on one control plane, at the same instant (target-only)", () => {
   test(
     "both laps hold their own delivery lease, and neither reaches the other's rows",
@@ -604,6 +637,33 @@ describe("two laps on one control plane, at the same instant (target-only)", () 
       for (const lap of [lapA, lapB]) {
         expect(lap.stderr.join("") + lap.stdout.join("")).not.toContain("LeaseHeld");
       }
+
+      // **Two laps, one `--state-root`, two state roots** (`D-1105`). Both
+      // command lines above named `w.stateRootParent` and nothing else; what
+      // the two providers wrote under is one derived directory each. Taken
+      // after the exits because that is when every record and the probe
+      // evidence have been written.
+      //
+      // The parent's own children are asserted exactly, and that is the half
+      // that goes red when the derivation is removed: a lap built over the
+      // parent puts its session directory -- named by a session uuid -- and
+      // `probe-evidence.txt` there instead, so the listing is neither run id.
+      expect(readdirSync(w.stateRootParent).sort()).toEqual([lapA.runId, lapB.runId].sort());
+      const sessionsA = sessionsUnder(lapA.stateRoot);
+      const sessionsB = sessionsUnder(lapB.stateRoot);
+      // One session under each, and the two are different sessions: the second
+      // half is what says the rosters are disjoint rather than identical.
+      expect(sessionsA).toHaveLength(1);
+      expect(sessionsB).toHaveLength(1);
+      expect(sessionsA).not.toEqual(sessionsB);
+      // `#discoverRecords` reads exactly this listing, so a lap's roster
+      // carries its own session and no other run's -- which is the hazard
+      // `D-1104` point 21 measured and left open.
+      expect(sessionsA).not.toContain(sessionsB[0]);
+      // The probe wrote into the derived directory too, so nothing about this
+      // lap's state landed in the shared parent.
+      expect(existsSync(join(lapA.stateRoot, "probe-evidence.txt"))).toBe(true);
+      expect(existsSync(join(lapB.stateRoot, "probe-evidence.txt"))).toBe(true);
 
       // Both leases were released by their own laps, and neither withheld
       // anything from the other.

@@ -208,6 +208,7 @@ spaces distinct.
 | D-1102 | A `lap perform --json` refusal names its session in a top-level `session_id`, present when the lap holds a confirmed identity and absent when it does not | accepted |
 | D-1103 | The Windows `double-green` cells get a 65-minute cap, not 40, for headroom over the measured slowest lap | accepted |
 | D-1104 | The outbox row records WHICH lease minted its `writer_epoch`, and a lap holds its own run's delivery resource | accepted |
+| D-1105 | `lap perform --state-root` is a parent, and the lap's state root is derived from the run id | accepted |
 | D-1106 | The liveness observation is taken before the transcript read it is composed with | accepted |
 
 ---
@@ -16132,6 +16133,13 @@ a live row transferred silently between runs.
     its own `--state-root`**; the proof case does exactly that, which is what a caller should do and
     is not the same as a refusal.
 
+    *Resolved by `D-1105`* -- appended, with everything above left exactly as it was taken. The
+    change this paragraph anticipated has landed: `--state-root` is a parent and the lap's state
+    root is `<parent>/<run id>`. Every word above stands as the record of what was true when this
+    entry was written, including the interim instruction, which is now discharged rather than still
+    required -- a caller may still give each lap its own `--state-root`, and that is no longer what
+    keeps two laps apart. `D-1105` carries the reasoning, the evidence and the consequences.
+
 **Falsification.** Two concurrent laps observed writing each other's outbox rows, or one adopting the
 other's live row, would falsify the partition. A green mutant for any predicate this entry adds --
 the equality removed and the suite still passing -- would falsify point 14's claim that each is
@@ -16259,3 +16267,106 @@ the control), `D-0301` part 4 (the macrotask turn `settleExits` exists for, whic
 entry closes). Decision id `D-1106` in the `D-11xx` shared cross-belt band opened by `D-1101`:
 `D-1105` is claimed by the open pull request #191 (the run-derived state root) and is deliberately
 not reused here, so this file will carry `D-1106` before `D-1105` if that branch lands second.
+
+
+## D-1105 -- `lap perform --state-root` is a parent, and the lap's state root is derived from the run id
+
+**Context.** `D-1104` scoped the outbox delivery lease per run so that two `lap perform` processes
+can run against one control plane. Its own point 21 records what that removed: the single global
+delivery lease had made two concurrent laps impossible, and in doing so had made a **shared
+`--state-root` unreachable whatever an operator typed**. `D-1104` had no mandate to replace that
+guard, so it named the residual and left it -- with the interim instruction that anything launching
+laps concurrently must hand each its own `--state-root`.
+
+Point 21 also measured the damage that is reachable today, and the measurement is small: the shared
+directory puts one run's sessions on another's operator-facing roster (`#discoverRecords`), and
+nothing in this tree escalates it -- `listSessions` has no production caller, `#holderOfUuid` decides
+by a session id each lap mints fresh and refuses in the conservative direction when it does clash,
+teardown stops by id behind an ownership test, and `probe-evidence.txt` is written atomically with
+identical bytes. **That small size is not the reason to act, and the reason to act is carried
+forward here so it is not mistaken for one.** What kept the destructive cases out of reach was that
+no production code calls `listSessions` and that session ids do not collide -- another *accidental*
+guard, of exactly the kind that had just failed. Safety resting on "nothing currently does the
+dangerous thing" is safety a later change can remove without touching anything the entry can point
+at. This entry exists to delete that shape, not to fix a live bug.
+
+**Decision.**
+
+1. **`--state-root` becomes a parent, and the lap's state root is `<parent>/<run id>`.** The flag's
+   help says so, and `lapStateRoot` is the one thing that builds the path -- the sibling of
+   `D-0061`'s `lapArtifactDir`, sharing its encoding through `runIdSegment`. One encoder and not two
+   copies: the rules it encodes are the *filesystem's* (separators, Windows case folding, trailing
+   dots, reserved device names, the 255-character cap the `%XX` escape can push a name past), so an
+   identifier unsafe as a directory name is unsafe under either root, and a second implementation is
+   a second place to get the reserved-name list wrong.
+
+2. **Derivation, and not an occupancy mechanism.** A lease or a marker file over the directory was
+   the alternative and was rejected at the gate: an occupancy mechanism has a lifetime, a holder, a
+   renewal story and a stale-entry story, all to answer a question the run identifier already
+   answers -- and a **detected** collision is still a refusal an operator has to act on, where a
+   derived directory is a collision that cannot be expressed. The symmetry with the artifact
+   directory is the point rather than a coincidence: both are per-run layouts under an
+   operator-named root, for the same reason.
+
+3. **The derivation key is the run id, and specifically not a per-process value.** A uuid minted per
+   process would also keep two laps apart, and would break what the directory is *for*: the records
+   under it are how a second lap **of the same run** sees the identity the first one reserved
+   (`#discoverRecords`, `#holderOfUuid`). Only the run id removes the cross-run sharing while keeping
+   the same-run reservation; that is the whole of why the key is not a free choice.
+
+4. **The derived path is what `performLap` is handed as `providerStateRoot`, never the parent.** It
+   is carried to be checked (`D-0067` containment, `requireUsableStateRoot`), and a check over the
+   parent would be a statement about a directory nothing writes into: "the parent is creatable and
+   writable" is satisfied by a regular file sitting at `<parent>/<run id>`, and the failure then
+   arrives from the provider's own `mkdirSync` after the branch and the worktree exist -- the exact
+   late refusal that check was added to prevent (`D-0057` refuses a second materialisation, so it
+   costs the run identifier).
+
+5. **`requireUsableStateRoot` is not made to check exclusivity, and this is deliberate.** It asks
+   whether a directory can be written and says nothing about whether it is shared. After this entry
+   it does not have to: being unshared is a property of how the path was built, not a condition to
+   test at runtime.
+
+6. **The evidence is `test/lap/parallel-laps.test.ts` giving both laps the SAME `--state-root`.**
+   Before this entry that file handed each lap its own, which is what a careful caller does and
+   proves nothing about a caller that does not -- so the guard had no observed red. It now asserts
+   the parent's direct children are exactly the two run ids, that each derived directory holds
+   exactly one session record, that the two are different sessions, and that each `probe-evidence.txt`
+   landed under the derived directory rather than the shared parent. Removing the derivation turns
+   all four red, because a lap built over the parent writes a uuid-named session directory and its
+   probe evidence there instead. `test/lap/cli.test.ts` adds the single-lap half: a run id containing
+   `/` and `:` is encoded rather than concatenated, and the two state-root refusals now assert that
+   the message names the **derived** path.
+
+**Consequence for readers of the path.** The provider's records move from `<state-root>/<session id>/`
+to `<state-root>/<run id>/<session id>/`. Nothing in continuo composes that path outside
+`lapStateRoot` and the provider itself, but anything outside this repository that reads or builds it
+-- `rondo`, which launches laps -- has to be told rather than left to discover it.
+
+**Falsification.** A caller launching two laps with one `--state-root` and observing one run's
+session under the other's directory would falsify the partition. The parallel case passing with the
+derivation removed would falsify point 6, and is the failure this entry spent its evidence on. A run
+identifier that is admissible to `run admit` but cannot be a directory name under `runIdSegment`, and
+so refuses a lap that would previously have run, would falsify point 1's claim that the encoder is
+the artifact directory's rule and no stricter -- the two refuse identically, because they are one
+function.
+
+**Status.** accepted
+
+**Falsifier.** A second lap of one run needing a state root the first one's records are *not* under
+would make point 3's key wrong -- the identity reservation is what fixes it, so a change that moves
+identity out of the state root reopens the choice. A provider whose per-session layout stops being
+"one directory per session under the state root" would make point 6's assertions describe a shape
+that no longer exists, though not the decision. An operator workflow that depends on
+`<state-root>/<session id>` as a stable path -- a script, a log collector -- would make the
+consequence above a migration rather than a note; none is known in this tree, and `rondo` is the one
+consumer outside it.
+
+**Source.** Issue #167. `D-1104` point 21 (the residual, its measurement, and the interim
+instruction this entry retires), `D-0061` (the artifact directory's derivation and encoding, which
+this mirrors), `D-0067` (the containment rule the derived path is checked against), `D-0057` (why a
+late refusal costs the run identifier), `D-0074` (the serialisation `D-1104` lifted). The design was
+fixed at the operator gate before implementation -- derive rather than detect -- so this entry
+records a ratified choice rather than proposing one. Decision id `D-1105`, the next in the `D-11xx`
+shared cross-belt band opened by `D-1101` (Issue #179), taken after checking `origin/main` that
+`D-1104` was the highest id in use.
