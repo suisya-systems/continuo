@@ -432,6 +432,26 @@ there is a corrupted relay rather than a mistyped flag, and it is exactly what t
 catch. `gate ack` keeps the argument list it has today (`src/gate/cli.ts`), and the operator remains
 the post-lap delivery authority for every run without having to name one.
 
+**The equality on this surface admits two values, not one, and the second is what keeps migrated gates
+answerable.** A strict equality against the derived resource would strand exactly the relays a
+migration inherits: an in-flight relay whose gate has a run is backfilled to the global literal by
+`0005`, because that is the resource it was genuinely written under and section 5.3 refuses to
+fabricate otherwise -- while the derivation, reading the same gate's `run_id`, produces
+`outbox-delivery:run:<runId>`. The two disagree by construction, so the ack would refuse, and the gate
+that the global drainer had just delivered could never advance. The rule is therefore:
+
+> `ackRelay` admits a row whose `delivery_resource` is **either** `deliveryResourceForRun(gate.runId)`
+> **or** the global literal, and refuses any other value as a corrupted relay.
+
+Admitting the literal costs nothing this check was defending. The attack P-16 exists to stop is a
+per-run endpoint acking another run's row, and that is the **bus** surface, where the equality stays
+strict -- a per-run endpoint has no claim on the global resource and never holds it. On the operator's
+surface the global literal is not a loophole but the name of the two row classes the verb is already
+the authority for: runless relays, and pre-migration relays written before the partition existed. What
+the rule still refuses is the case worth refusing -- a row naming run B under a gate belonging to run
+A, which is a corrupted relay rather than a legacy one. It is a permanent rule and not a migration
+window, so nothing has to be remembered and later removed.
+
 This is the one place where partitioning `poll` is not enough on its own, and it is the reason
 section 9's assertions are not satisfied by "each lap polled only its own rows".
 
@@ -730,6 +750,28 @@ rondo #8's -- section 10.1). Resources are `outbox-delivery:run:r-A` and `outbox
    in any shared destination, and the materialiser's pre-flight (`materializer.ts:1195-1204`) would
    refuse the second lap outright. The keying is what makes P-2 coherent end to end, and a test must
    pin it rather than let it be discovered later.
+
+   **What it does change is the size of that file, and the design should say so rather than let it be
+   found in production.** `fence.json` is one JSON object per destination root, read whole and
+   rewritten whole on every token advance (`destination.ts:736-753`), and the root is operator-supplied
+   and shared -- the same `--destination-dir` serves `gate deliver` (`operator.ts:764`), the endpoint
+   (`endpoint.ts:638`) and the materialiser's pre-flight (`materializer.ts:1186`). One global key
+   today becomes **one key per run for ever**, at roughly fifty bytes each, with a whole-file read and
+   `rename` on each advance. Correctness never degrades -- a larger map refuses exactly what a smaller
+   one does -- but a long-lived plane pays a growing cost on a path that is currently constant, and an
+   entry that did not name it would be promising a change with no cost.
+
+   **The retirement rule is safe, and it is safe for a reason worth stating.** A scope's watermark may
+   be dropped only when no writer can ever offer a token under that resource again; drop one early and
+   the stale writer it was holding off is silently re-admitted, which is the single failure
+   `destination.ts:749-752` writes the file atomically to avoid. For a **run** resource the condition
+   is decidable: `run.run_id` is a `PRIMARY KEY` (`0001_initial.sql:74`), so a run id is never reissued,
+   and a terminal run's lap will not acquire again -- therefore a key for a terminal run is dead and
+   may be compacted. The global key is never retired. This is a **bounded, deferrable** cost, so P-18
+   requires the entry to state the growth and the rule, and bands the compaction pass itself as
+   follow-up work rather than a precondition; what it must not do is leave the premise unrecorded,
+   because a later reader who compacts on age instead of on run terminality would re-admit a stale
+   writer and have no line to have read.
 5. **Enqueue.** A's gate relay is written by `enqueueRelay` with `run_id = r-A` and
    `delivery_resource = deliveryResourceForRun('r-A')`, `writer_epoch` still `NULL` -- the durable
    queue still outlives its worker (`outbox.ts:1240-1250`), because the resource is derived from the
@@ -990,6 +1032,9 @@ and S1 has no concurrency contract of its own to hang it on (`claude_cli_provide
 - **The additive `barrier` fake mode is not enough to hold a lap at the right instant** -- if the lap
   reaches the child later than the acquisition it is meant to overlap, the marker proves the wrong
   overlap and section 9.3 needs a different hold point.
+- **Run ids turn out to be reissued somewhere** -- a restore, a test fixture, an import that reuses an
+  id under a fresh database -- which would make P-18's retirement rule unsafe and force compaction to
+  be abandoned rather than merely deferred.
 - **A runless gate relay turns out to need a run-scoped drainer after all** -- if some future gate
   without a run is nonetheless answered inside a lap -- which would make section 4.0's global mapping
   the wrong default and put the relay back in the post-lap window section 6 exists to close.
@@ -1031,8 +1076,9 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-13** | State that `D-1104` takes **both** halves -- the enabling change and the holder identity -- because `rondo D-0012`'s falsifier says the enabling change alone is not enough (`rondo/DECISIONS.md:1057-1064`). continuo #167 owns partitioning, fencing and the two-run proof; rondo #8 owns allocation, the capacity bound and suspend accounting. This change does not widen rondo's single-flight index and does not authorise a second rondo admission. | measured here |
 | **P-14** | Record F-13's measurement in the entry: the delivery lease is held for the lap only (~20.9 s of a measured 125.4 s lifetime), the remaining 83% is rondo's lock across an unbounded human wait, and `D-1104` therefore removes contention on the smaller term. `D-1104` is not "parallel laps now work". | measured here |
 | **P-15** | `D-0068` and `D-0071`'s read-then-signal residual stay open and are not credited to this change (`DECISIONS.md:11771`, `:12168-12211`). | pre-review, amended |
-| **P-16** | Scope ack authority by resource on **both** ack surfaces. `MessageBus.ack` (`bus.ts:466-479`) settles on recipient equality alone, `Outbox.recordAck` updates by message id and status, and the endpoint's `ack` tool takes a caller-supplied id (`endpoint.ts:330`). With two endpoints on one recipient that is no longer an authority check. Add `message.deliveryResource === this._resource` beside the recipient test, in the same caller-bug family and **still unfenced**, so late and duplicate acks keep settling nothing. **The second surface is `ackRelay`, which does not go through the bus** (`operator.ts:896-906`) and builds `ackOutbox` on the hard-coded constant (`:843-849`); it takes `deliveryResourceForRun` of **its own gate's run**, already loaded on the path (`gateDetail`, `:928`; `gates.ts:963`, `:612`), so `gate ack` gains no argument and the equality becomes a cross-check of two independently stored facts. Section 4.2. | measured here, after Codex review |
+| **P-16** | Scope ack authority by resource on **both** ack surfaces. `MessageBus.ack` (`bus.ts:466-479`) settles on recipient equality alone, `Outbox.recordAck` updates by message id and status, and the endpoint's `ack` tool takes a caller-supplied id (`endpoint.ts:330`). With two endpoints on one recipient that is no longer an authority check. Add `message.deliveryResource === this._resource` beside the recipient test, in the same caller-bug family and **still unfenced**, so late and duplicate acks keep settling nothing. **The second surface is `ackRelay`, which does not go through the bus** (`operator.ts:896-906`) and builds `ackOutbox` on the hard-coded constant (`:843-849`); it takes `deliveryResourceForRun` of **its own gate's run**, already loaded on the path (`gateDetail`, `:928`; `gates.ts:963`, `:612`), so `gate ack` gains no argument and the equality becomes a cross-check of two independently stored facts. **On that surface the admissible set is two values** -- the derived run resource **or** the global literal -- because a migrated in-flight relay is backfilled to the literal while its gate still names a run, and a strict equality would leave exactly those gates unable to advance. The bus surface keeps the strict equality. Section 4.2. | measured here, after Codex review |
 | **P-17** | Implementation starts only after the gate accepts or amends these lines and creates `D-1104`. This document allocates no entry and is not accepted authority. | pre-review |
+| **P-18** | Record the fence file's new growth as a named, bounded cost: per-run resources give per-run keys in the shared destination's `fence.json` (`destination.ts:736-753`), one per run for ever, whole-file read and rewrite per advance. Correctness is unaffected. State the retirement rule **and its premise** -- a key may be dropped only for a terminal run, safe only because `run.run_id` is a `PRIMARY KEY` and never reissued (`0001_initial.sql:74`) -- and band the compaction pass as follow-up. Retiring on age instead of terminality would re-admit a stale writer. | measured here, after Codex review |
 
 ---
 
@@ -1069,7 +1115,9 @@ Return or reject `D-1104` unless every answer is yes.
     `minimal-operating-loop.md` citation corrected?
 13. Does allocation, the capacity bound and suspend accounting remain rondo #8's, with F-13's
     measurement recorded so the ledger is designed against the human term (P-14)?
-14. Does implementation wait for the gate-created `D-1104`?
+14. Is the fence file's per-run growth stated as a cost, with a retirement rule whose premise --
+    run ids are never reissued -- is written down beside it (P-18)?
+15. Does implementation wait for the gate-created `D-1104`?
 
 ---
 
@@ -1142,6 +1190,14 @@ the lines.
 | M10 | P-7's "`NULL` means predates the column" is false the day the migration lands, because the non-outbox writers keep producing null-column rows | **Confirmed.** The four composing writers (supervisor, watcher, session_binding, run_lifecycle via `lease.ts`) are not changed by this entry, so a definition in terms of time is immediately untrue; the definition the readers implement is a disjunction over the two attribution forms. | Section 7.2 gains the disjunction and the reason the four writers are deliberately left alone; **P-7 amended** |
 | M11 | P-16's check on `MessageBus.ack` does not reach `gate ack`: `ackRelay` bypasses the bus and builds `ackOutbox` on the global constant, with no source for a run resource | **Confirmed, and one step worse than stated**: once the constant means the global resource, a literal equality on that path would refuse every run-bound relay ack -- the ordinary case. Measurement also supplies the missing source the finding asked for: `ackRelay` already loads the gate (`gateDetail`, `operator.ts:928`) and the gate carries the `runId` `enqueueRelay` copied onto the row. | Section 4.2 gains the second surface and the derived resource, with the reason a `gate ack --run-id` is worse than deriving it; **P-16 amended**, section 6's ack bullet corrected |
 
+**Round 6** raised one Blocker and one Major, both of them consequences of repairs made in rounds 4-5
+rather than of the original draft -- the first is two of this document's own rules meeting.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| B14 | A migrated in-flight relay is backfilled to the global literal while its gate names a run, so round 4's derived-resource ack refuses exactly those relays and their gates can never advance | **Confirmed, and it is the collision of two rules this document added**: section 5.3 refuses to fabricate a run resource for legacy rows, and section 4.2 derives one from the gate. Both are right; the equality between them was wrong. | Section 4.2 states the admissible set as **two** values on the operator's surface -- the derived resource or the global literal -- with the reason the literal is not a loophole there and the bus keeps the strict form; **P-16 amended** |
+| M15 | Per-run fence scopes make `fence.json` grow one key per run for ever in a shared destination, with a whole-file read and rewrite per advance and no retirement rule | **Confirmed.** The map is read and rewritten whole (`destination.ts:736-753`) and the root is operator-supplied and shared by the drainer, the endpoint and the pre-flight (`operator.ts:764`, `endpoint.ts:638`, `materializer.ts:1186`). Correctness is unaffected; the cost is real and currently constant. | Section 8 step 4 gains the cost, the retirement rule and its premise -- run ids are never reissued (`0001_initial.sql:74`) -- with compaction banded as follow-up; **new P-18** and checklist question 14 |
+
 **Round 5** raised two findings, both confirmed, and the second is the first time the loop refuted a
 row this document had carried forward from the pre-review rather than one it wrote itself.
 
@@ -1150,7 +1206,7 @@ row this document had carried forward from the pre-review rather than one it wro
 | M12 | Section 4.0 claims a gate's `run_id` is always present; `openGate` defaults it to `null` and the schema permits it, so the producer rule is undefined for a runless gate relay | **Confirmed.** `gates.ts:445`, `:460`; `0001_initial.sql:1267` carries no `NOT NULL`. The one caller in the tree does pass a run (`report_ingress.ts:371-390`), so the case is admissible but unexercised -- which is how it survived four rounds. | Section 4.0's table corrected and the null mapped to the global literal, with the drainer consequence stated so no relay is unwritable or unreachable |
 | M13 | P-6's recipient term on one-row adoption is incompatible with section 4's inventory, with `_UNOWNED_ONE_QUERY`'s character-identity, and with `adoptIfUnowned`'s signature | **Confirmed, and it resolves against P-6.** `adoptIfUnowned(messageId, {nowMs, epoch})` receives no recipient (`outbox.ts:1861-1863`); the query is deliberately character-identical to the all-recipient sweep (`:308-320`); and the lookup is a primary-key equality (`:322-324`), so the term has no source, breaks an identity the source explains, and defends nothing. | Section 4 gains the refutation; **P-6 amended to `due` only**, with the reason recorded so the fuller form is not re-proposed |
 
-**The thirteen fall into three groups, and the order they arrived in is itself the finding.** Rounds
+**The fifteen fall into four groups, and the order they arrived in is itself the finding.** Rounds
 1-2 (B1-B6) were the same mistake six times: the first draft partitioned *selection* carefully and
 under-specified the places authority is established without a selection in front of it -- the post-lap
 drainer, the ack, the fenced insert -- and then under-specified the *interfaces* those repairs need:
@@ -1162,9 +1218,16 @@ summarised, a definition stated in time that was false on arrival, a check named
 surfaces, a claim of totality that the schema does not carry, and one pre-review row that measurement
 refutes outright.
 
+Round 6 (B14, M15) is a fourth kind again, and the one most worth naming: both findings are
+consequences of the repairs themselves rather than of the original draft, and B14 is two of this
+document's own rules meeting -- section 5.3's refusal to fabricate a legacy resource and section 4.2's
+derivation of one from the gate, each correct alone and contradictory where they touch.
+
 That progression is worth recording, because it says where this design is prone to being wrong and how
 that changes as it converges. Early: a partition is only as good as the narrowest surface that has to
 name it, and each of those surfaces is a change this entry has to carry rather than assume. Late: the
 document is put to a **human gate that votes on section 12, not on section 4**, so a decision line
 that says less than the section behind it is not a presentational defect -- it is the defect, because
-the line is what gets accepted.
+the line is what gets accepted. Latest: once enough repairs are in, the remaining defects are
+between them, so a repair is not finished when it is stated -- it is finished when it has been read
+against every other rule the same row has to satisfy.
