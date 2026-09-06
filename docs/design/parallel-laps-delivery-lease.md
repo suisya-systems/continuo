@@ -10,7 +10,7 @@ proof of it has to show.
 **Status: propose-only.** No code, schema, test or decision record accompanies it. It files no
 `DECISIONS.md` entry. The entry it proposes is referred to **by name only**, as
 **`D-1104`**, and only continuo's human gate may create it (`D-0031`, `D-0036`). Section 12's
-`P-1`..`P-14` are the lines put to that gate; they are proposals, not decisions taken. Implementation
+`P-1`..`P-17` are the lines put to that gate; they are proposals, not decisions taken. Implementation
 starts after the gate, not after this document.
 
 **Provenance.** A Codex pre-design review (2026-09-06) supplied three Blockers, three Majors and one
@@ -301,6 +301,43 @@ the recipient term, and redundancy in the safe direction is not a defect: removi
 change would make the SQL term the only thing standing between two runs and each other's rows, on the
 same pass that introduces it.
 
+### 4.0 What writes the column: two rules, by producer class
+
+The obvious rule -- "derive it from `run_id`" -- is wrong for one of the three producers, and the way
+it is wrong is the same ambiguity this design exists to remove.
+
+`Outbox.enqueue` is **fenced**: `_ENQUEUE` stamps `writer_epoch` from the enqueuing instance's live
+lease (`outbox.ts:432-444`). Its `runId` is optional and defaults to `null` (`:1283-1285`). So a
+per-run bus that enqueues a runless message under the `run_id` rule would write
+`delivery_resource = 'outbox-delivery'` beside an epoch minted by `outbox-delivery:run:<runId>` -- a
+row whose two ownership fields name different sequences, which is section 2's failure reconstructed
+inside the fix.
+
+The rule that holds is therefore stated on the epoch rather than on the run:
+
+> **A row's `delivery_resource` is the resource whose epoch sequence governs that row's
+> delivery-side mutations. On any row, `writer_epoch IS NULL OR writer_epoch was minted by
+> `delivery_resource`.**
+
+Applied to the three producers measured in section 1.6:
+
+| Producer | Fenced? | `delivery_resource` |
+|---|---|---|
+| `Outbox.enqueue` / `MessageBus.send` | yes -- stamps an epoch | **the enqueuing instance's own resource**, never `run_id`. The instance holds the lease that minted the epoch, so the invariant holds by construction. |
+| `enqueueRelay` (gate) | no -- `writer_epoch` stays `NULL` | derived from the row's durable `run_id` (`gates.ts:612`), which is always present for a gate |
+| delivery fan-out (events) | no -- `writer_epoch` stays `NULL` | derived from the row's durable `run_id`, or the global literal when it is `null` (`events.ts:415`, `:451`) |
+
+The unfenced rows are the ones `D-0054` is about, and deriving their resource from durable row input
+rather than from a live lease is what keeps the queue outliving its worker (`outbox.ts:1240-1250`).
+The fenced row has a live lease by definition, so taking the resource from it is available and is the
+only choice that keeps the invariant true.
+
+**A consequence worth stating rather than leaving implicit:** under this rule a per-run bus can no
+longer produce a row on the global resource at all. If a runless fenced send is ever needed it must
+be issued from a bus that holds the global resource, and `MessageBus.send`'s optional `runId` becomes
+independent of the partition instead of deciding it. The implementation should assert the invariant
+in a test rather than trust the two call sites.
+
 ### 4.1 The one exported constant has to become two, and that is a real cost
 
 This is measurement this document adds, and it is the sharpest cost of the recommendation.
@@ -327,6 +364,32 @@ two each constant mirrors, or the drift the identity was written to prevent retu
 
 **P-8 records this split. It is not a detail: it changes a published invariant and a belt, and it is
 the single most likely place for this change to be got wrong quietly.**
+
+---
+
+### 4.2 Ack authority stops being a recipient question
+
+`ack` is deliberately unfenced (`D-0053`; `docs/production-schema.md:592`), and it should stay that
+way: an ack is idempotent, and a fence on it would turn a settlement that changed nothing into a
+refusal. But unfenced is not the same as unauthorised, and today's authority test is recipient
+equality alone -- `MessageBus.ack` refuses only when `message.recipient !== recipient`
+(`bus.ts:466-479`), after which `Outbox.recordAck` loads and updates **by message id and status**.
+
+That test is sufficient only while one endpoint exists per recipient. Under P-2 and P-3, two
+endpoints serve `external-notify` simultaneously, and the id an endpoint acks is **caller-supplied**:
+the MCP `ack` tool passes it straight through (`endpoint.ts:330`). Gate relay ids are deterministic
+and operator-visible (`gates.ts:606-620`), so run B's endpoint can ack run A's delivered row even
+though its own poll -- correctly partitioned by section 4 -- never returned it. Nothing downstream
+notices: the ack is set once by the outbox's own trigger, and `D-0080`'s reconcile pass then advances
+A's gate on evidence B produced.
+
+**The repair is one more equality on the row, in the same family and at the same place:** refuse when
+`message.deliveryResource !== this._resource`, beside the recipient test, as a caller bug rather than
+a stale-writer refusal. It adds no lease clause, so late acks, duplicate acks and acks of cancelled
+rows keep behaving exactly as `recordAck` decides today. P-16.
+
+This is the one place where partitioning `poll` is not enough on its own, and it is the reason
+section 9's assertions are not satisfied by "each lap polled only its own rows".
 
 ---
 
@@ -435,24 +498,45 @@ Under a per-run lap resource, classes 2 and 3 are selected by nobody:
 - `recover`'s caller-scoped sweep never adopts them.
 - The database-wide belt invariant (4.1) **does** see them, and reports them as unowned, forever.
 
-So a naive per-run change converts a live invariant into a permanent violation and strands real
-relays. `D-1104` must therefore also say **who drains the global resource**, and there is a good
-answer already in the tree: `gate deliver` acquires `DELIVERY_LEASE_RESOURCE` by name
-(`src/gate/operator.ts:769-774`) and is an operator-invoked verb, not a lap. Keeping it on the exact
-global resource makes it the legacy-and-runless drainer at zero new machinery, and makes the two
-resources' roles legible: **a lap drains its own run; the operator's verb drains what belongs to no
-run.**
+There is a **fourth class**, and it is the one that makes the obvious answer wrong. `gate deliver`
+exists precisely as "the operator's delivery worker for the window after a lap has ended"
+(`src/gate/cli.ts:194-196`), and `enqueueRelay` copies `gate.runId` onto the row (`gates.ts:612`). So
+under section 4.0 a gate relay is **run-bound**, and the relays that matter most are enqueued *after*
+the lap exits: `gate present` and `gate answer` run during the human suspend, which the dogfood
+records as happening after `lap perform` has returned (rondo `docs/operations/lap-1-dogfood.md:900-910`,
+step 10). A `gate deliver` pinned to the global resource would never select them, and no lap is
+running to select them either. Those relays would be stranded permanently -- the ordinary path, not an
+edge case.
+
+So the drainer cannot be "the verb that holds the global resource". It has to be **the verb that
+holds the resource of the rows it is draining**:
+
+- `deliverRelays` (`src/gate/operator.ts:763-780`) stops naming `DELIVERY_LEASE_RESOURCE` and takes
+  the resource for the pass -- derived from the gate's or the run's id for a run-bound relay, and the
+  global literal for legacy and runless rows.
+- `LeaseHeld` while the lap is still live is retained and is the correct answer: for as long as a run's
+  lap runs, that run's delivery authority is the lap's. `src/gate/cli.ts:44` already documents that
+  refusal, and it keeps its meaning, narrowed from "a lap" to "*this run's* lap".
+- The ack path (`ackOutbox`, `:843-849`) takes the same resource, for P-16's reason.
+
+The roles then read cleanly, which is the test of whether the partition is the right one:
+
+> **Delivery authority for a run is held by that run's lap while it runs, and by the operator's verb
+> afterwards. Rows belonging to no run are drained under the global resource, by the same verb.**
 
 Two consequences the gate should see:
 
-- `gate deliver` and a lap can then run at once, which is new. It is safe under the same rule as
-  everything else: they hold different resources and no row's `delivery_resource` matches both.
-- The belt invariant stays meaningful only if the global resource has a live holder while it is being
-  checked, exactly as it does today. Nothing is weakened; what changes is that "unowned" acquires a
-  second reason to be true, and the invariant text has to name it.
+- A `gate deliver` for run A and a lap for run B may now run at once. That is safe under the same rule
+  as everything else: they hold different resources and no row's `delivery_resource` matches both.
+- The database-wide belt invariant (4.1) gains a second reason to report a row: a run-bound relay
+  sitting between the lap's exit and the operator's `gate deliver` has no live holder and is
+  genuinely, correctly unowned. That window exists today too -- it is the whole reason `gate deliver`
+  exists -- but the invariant's text has to name it, or the belt reports the design working as a
+  violation.
 
-**Recommendation: adopt the `gate deliver` drainer, and make an unfinished class-2/class-3 row with no
-drainer an explicitly stated known limit rather than an unstated one.**
+**Recommendation: make `gate deliver` resource-parameterised (P-10) rather than keeping it global. The
+global-only reading strands the ordinary post-lap relay path, and no other verb is positioned to drain
+it.**
 
 ---
 
@@ -531,14 +615,14 @@ rondo #8's -- section 10.1). Resources are `outbox-delivery:run:r-A` and `outbox
    not in the result set -- not filtered out afterwards, absent.
 7. **Attempt.** `_COUNT_ATTEMPT` and `_MARK_DELIVERED` each carry all three of section 2's
    obligations. B's live epoch 1 cannot match A's row, because the resource conjunct fails first.
-8. **Ack.** Unfenced and recipient-matched (`bus.ts:466-479`). Both endpoints serve
-   `external-notify`, so ack authority alone does not separate them -- but neither endpoint can obtain
-   the other's message id, because `poll` is the only way an id reaches an endpoint and poll is now
-   partitioned. **The proof obligation is therefore on the poll, and section 9's assertions are
-   written for that.**
+8. **Ack.** Unfenced and recipient-matched (`bus.ts:466-479`), and **that is no longer sufficient**:
+   both endpoints serve `external-notify`, and the id an endpoint acks is caller-supplied rather than
+   reached through its own poll (`endpoint.ts:330`). Section 4.2 adds `delivery_resource` equality
+   beside the recipient test, still unfenced. Partitioning the poll is necessary and not enough, and
+   section 9's assertions are written for both halves.
 9. **Recovery.** A's sweep is scoped to A's resource, so it cannot adopt B's rows whether or not B's
-   lease is live. Class-2 and class-3 rows belong to neither and are drained by `gate deliver`
-   (section 6).
+   lease is live. Rows belonging to no run, and run-bound relays enqueued after their lap exited, are
+   drained by a resource-parameterised `gate deliver` (section 6).
 10. **Release.** Each `finally` releases its own resource (`root.ts:1261-1274`). Neither withholds
     anything from the other.
 
@@ -597,12 +681,19 @@ Assertions after release -- **negative evidence is the substance, positive evide
 - A's poll returned A's message and **no** B message; B's returned B's and **no** A message;
 - each delivered row carries its own `delivery_resource` and its own epoch;
 - an off-recipient control row per resource is still `pending` and unstamped by either endpoint;
-- each dropbox honoured a token under **its own** resource key (section 8 step 4).
+- each dropbox honoured a token under **its own** resource key (section 8 step 4);
+- **an ack attempted across the partition is refused**: hand B's endpoint A's message id directly --
+  not through a poll -- and require the refusal, since this is the one hazard partitioning the poll
+  does not close (section 4.2);
+- a run-bound relay enqueued after both laps exit is drained by `gate deliver` under **that run's**
+  resource, and a runless row by the same verb under the global one (section 6).
 
 Observed-red controls, so each assertion is shown to be able to fail: restoring the global resource
 must break the second marker; removing resource equality from `_MARK_DELIVERED` must produce a
-cross-run stamp; removing the recipient term must adopt the off-recipient row; ids generated per run
-must defeat any hard-coded expected output.
+cross-run stamp; removing the recipient term must adopt the off-recipient row; removing the ack's
+resource equality must let the cross-partition ack succeed; pinning `gate deliver` to the global
+resource must strand the post-lap relay; ids generated per run must defeat any hard-coded expected
+output.
 
 ### 9.4 The budget, which is a live constraint and not a formality
 
@@ -728,7 +819,11 @@ and S1 has no concurrency contract of its own to hang it on (`claude_cli_provide
   decision, not an adjustment.
 - **A dedup key derived from run-independent inputs** appears, making section 7.3's residual live.
 - **Class-3 (runless) rows turn out to be unreachable in practice** -- which would make section 6
-  smaller, and is worth knowing, but does not remove class 2.
+  smaller, and is worth knowing, but does not remove class 2 or the post-lap relay window.
+- **A resource-parameterised `gate deliver` turns out to need a run id the verb does not have**, which
+  would make section 6's drainer a larger change to the gate CLI than it is presented as.
+- **A fourth way an outbox message id reaches an endpoint** exists besides `poll` and the operator's
+  hand, which would mean section 4.2's ack repair is necessary but still not sufficient.
 - **rondo's ledger arrives first and measures the lap term as binding**, contradicting F-13's shape and
   making section 10.3's conclusion the wrong way round.
 
@@ -746,19 +841,20 @@ and confirmed by measurement here), *pre-review, amended* (supplied but changed 
 | **P-1** | Keep `D-0074`'s fencing premise intact and supersede only its serialisation consequence (`DECISIONS.md:12371-12377`). Section 2 re-derives the premise for two runs at the statement level; nothing in it is overturned. | measured here |
 | **P-2** | Add `outbox.delivery_resource` holding the **exact lease resource string**. Run-bound rows use `deliveryResourceForRun(runId) = "outbox-delivery:run:" + runId`; runless rows use the literal `"outbox-delivery"`. One exported constructor, never parsed back into a run id (`run_id` is the join). | pre-review |
 | **P-3** | The lap acquires, renews, renders, checks and releases **its run's** resource. `holdDeliveryLease` gains a resource parameter (`src/lap/endpoint_lease.ts:177-192`); `D-0073`'s semantics hold unchanged within each resource. **This is the holder-identity half, and P-2 without it does not lift the serialisation** (see P-13). | pre-review, amended |
-| **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer -- `Outbox.enqueue`, `enqueueRelay`, event fan-out -- derived from the row's own durable `run_id` and never from a live lease, so a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review |
+| **P-4** | `delivery_resource` is immutable by trigger, `NOT NULL`, `length > 0`, and written by **every** producer under the two rules of section 4.2 -- the **fenced** producer writes its own `Outbox` instance's resource, the **unfenced** producers derive it from the row's durable `run_id`. The invariant is `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`, and a queue still outlives its worker (`D-0054`, `outbox.ts:1240-1250`). | pre-review, amended |
 | **P-5** | Resource equality goes **inside** every fenced write -- `_COUNT_ATTEMPT`, `_MARK_DELIVERED`, `_ADOPT`, `_ENQUEUE` -- and not only in the preceding selection. Section 4 carries the closed inventory. | pre-review |
 | **P-6** | Recipient becomes a SQL term on `due` and on one-row adoption, as a routing defence. It is **not** the ownership partition, and section 3.1's measurement is recorded in the entry so recipient-only is not re-proposed. `MessageBus.poll`'s TypeScript filter stays. | pre-review, amended |
 | **P-7** | Add nullable `action.writer_resource`; every new outbox action and refusal row writes the current resource; non-null attribution is immutable; `null` means only "predates the column". Bound explicitly as `string \| null` (`sqlite-value-contract.md:67-83`). **`action_one_effect_per_key` stays keyed on `idempotency_key` alone** -- adding the resource would let two runs each perform one effect and call it exactly-once twice. | pre-review, amended |
 | **P-8** | Split `UNOWNED_OUTBOX_QUERY` into a **caller-scoped** recovery form and a **database-wide** invariant form that joins on the row's own `delivery_resource` and takes no `:resource`. Re-anchor `_UNOWNED_ONE_QUERY`'s character-identity to the recovery form and say in the source which it mirrors. `INVARIANT_NO_UNOWNED_OUTBOX` and `src/index.ts`'s export are part of this change. | measured here |
 | **P-9** | Use the next forward migration (`0005`); never edit a historical one; backfill existing rows to the exact literal `"outbox-delivery"`; replace the due index with a measured `(delivery_resource, recipient, enqueued_at_ms)` partial form and keep positive **and** degraded EXPLAIN evidence. Say explicitly in the entry that `sqlite-value-contract.md` is a value contract and not a schema freeze. **Prefer the 12-step rebuild over `ADD COLUMN ... NOT NULL DEFAULT`** (section 5.2); the gate may take the default instead with a schema test pinning its legacy-only meaning. | pre-review, amended |
-| **P-10** | Name the drainer for rows belonging to no run: `gate deliver` keeps the exact global resource (`src/gate/operator.ts:769-774`) and drains legacy **and** runless rows. Without this, `run_id IS NULL` rows are selected by nobody and the belt's unowned invariant is permanently violated. | measured here |
+| **P-10** | Name the drainer for every row a lap does not drain, and make it resource-parameterised. `deliverRelays` / `gate deliver` stop naming `DELIVERY_LEASE_RESOURCE` (`src/gate/operator.ts:769-774`) and instead acquire **the resource of the rows they are asked to drain** -- the run's for a run-bound relay, the global literal for legacy and runless rows. A fixed global `gate deliver` would strand every post-lap gate relay, because `enqueueRelay` copies `gate.runId` (`gates.ts:612`) and `gate present` / `gate answer` normally run after `lap perform` has exited. `LeaseHeld` while the lap is live is the correct answer and is kept. | measured here, amended after Codex review |
 | **P-11** | Gate implementation on a mandatory continuo target-only real-child case: two built `lap perform` processes on one production plane, two built endpoints started from the **materialiser's own rendered `mcp.json`**, a file barrier both must cross, and negative cross-delivery assertions with observed-red controls. Repository fake child only; no credentials, no network; a **stated wall-clock budget** with a bounded barrier that fails loudly (`D-1103`). Do not extend `fake-claude.mjs` to speak MCP (section 9.2). | pre-review, amended |
 | **P-12** | Discharge `minimal-operating-loop.md:1037-1045`'s obligation to show parallel laps keep one provider instance per run. Do **not** claim the provider's same-instance residual is fixed; re-band it to a future continuo change that first proposes concurrent verbs on one S1 instance or a shared provider, and correct that passage's stale citation (`:959-994` should be `:1156-1190`). | pre-review, amended |
 | **P-13** | State that `D-1104` takes **both** halves -- the enabling change and the holder identity -- because `rondo D-0012`'s falsifier says the enabling change alone is not enough (`rondo/DECISIONS.md:1057-1064`). continuo #167 owns partitioning, fencing and the two-run proof; rondo #8 owns allocation, the capacity bound and suspend accounting. This change does not widen rondo's single-flight index and does not authorise a second rondo admission. | measured here |
 | **P-14** | Record F-13's measurement in the entry: the delivery lease is held for the lap only (~20.9 s of a measured 125.4 s lifetime), the remaining 83% is rondo's lock across an unbounded human wait, and `D-1104` therefore removes contention on the smaller term. `D-1104` is not "parallel laps now work". | measured here |
 | **P-15** | `D-0068` and `D-0071`'s read-then-signal residual stay open and are not credited to this change (`DECISIONS.md:11771`, `:12168-12211`). | pre-review, amended |
-| **P-16** | Implementation starts only after the gate accepts or amends these lines and creates `D-1104`. This document allocates no entry and is not accepted authority. | pre-review |
+| **P-16** | Scope ack authority by resource. `MessageBus.ack` (`bus.ts:466-479`) settles on recipient equality alone, `Outbox.recordAck` updates by message id and status, and the endpoint's `ack` tool takes a caller-supplied id (`endpoint.ts:330`). With two endpoints on one recipient that is no longer an authority check. Add `message.deliveryResource === this._resource` beside the recipient test, in the same caller-bug family and **still unfenced**, so late and duplicate acks keep settling nothing. Section 4.2. | measured here, after Codex review |
+| **P-17** | Implementation starts only after the gate accepts or amends these lines and creates `D-1104`. This document allocates no entry and is not accepted authority. | pre-review |
 
 ---
 
@@ -773,21 +869,26 @@ Return or reject `D-1104` unless every answer is yes.
 3. Does the lap take **its run's** resource, so the entry contains the holder-identity half and not
    only the schema half (P-3, P-13)?
 4. Are legacy rows preserved under the global resource rather than relabelled as run history?
-5. Is there a **named drainer** for rows belonging to no run, and does the belt's unowned invariant
-   still hold after the change (P-10, P-8)?
-6. Is future action-epoch attribution queryable by resource, while effect deduplication stays global
+5. Is there a **named drainer for every row a lap does not drain** -- including run-bound gate relays
+   enqueued after their lap exits -- and does the belt's unowned invariant still state what the
+   post-lap window means (P-10, P-8)?
+6. Is **ack authority** scoped by resource and not by recipient alone, given that the acked id is
+   caller-supplied rather than reached through the endpoint's own poll (P-16)?
+7. Does the fenced producer take its resource from **its own lease** rather than from `run_id`, so
+   that no row names two epoch sequences (P-4, section 4.0)?
+8. Is future action-epoch attribution queryable by resource, while effect deduplication stays global
    (P-7)?
-7. Is recovery limited to its own resource, and does the database-wide invariant keep its
+9. Is recovery limited to its own resource, and does the database-wide invariant keep its
    database-wide meaning?
-8. Does the real-child case prove **overlap** by barrier and **absence** of cross-delivery, with
-   observed-red controls for each assertion?
-9. Is it mandatory in every `double-green` cell, free of credentials and network, and inside a stated
-   wall-clock budget that `D-1103`'s cap can carry?
-10. Are the provider-local residual and `D-0068` explicitly left open, and is the stale
+10. Does the real-child case prove **overlap** by barrier and **absence** of cross-delivery -- poll
+    and ack both -- with observed-red controls for each assertion?
+11. Is it mandatory in every `double-green` cell, free of credentials and network, and inside a stated
+    wall-clock budget that `D-1103`'s cap can carry?
+12. Are the provider-local residual and `D-0068` explicitly left open, and is the stale
     `minimal-operating-loop.md` citation corrected?
-11. Does allocation, the capacity bound and suspend accounting remain rondo #8's, with F-13's
+13. Does allocation, the capacity bound and suspend accounting remain rondo #8's, with F-13's
     measurement recorded so the ledger is designed against the human term (P-14)?
-12. Does implementation wait for the gate-created `D-1104`?
+14. Does implementation wait for the gate-created `D-1104`?
 
 ---
 
@@ -818,3 +919,22 @@ The pre-review's draft (`tmp/codex-draft-continuo-167.md`) supplied the structur
 1-8 and the ten-question checklist expanded in section 13. Its file:line claims were re-measured
 individually; those that survived appear above with their measurement, and those that did not are
 named in this appendix rather than dropped silently.
+
+---
+
+## Appendix B. The in-loop Codex review of this document
+
+A `codex exec review` pass over the committed document (round 1) raised three findings, all of which
+were confirmed against the tree and are answered above rather than noted as limitations.
+
+| # | Finding | Verdict | Where answered |
+|---|---|---|---|
+| B1 | A globally-pinned `gate deliver` cannot drain run-bound gate relays, because `enqueueRelay` copies `gate.runId` and `gate present` / `gate answer` normally run **after** `lap perform` exits | **Confirmed.** `gates.ts:612` binds `gate.runId`; `src/gate/cli.ts:194-196` states the verb's window is "after a lap has ended"; the dogfood shows the suspend happening post-exit. The first draft's section 6 was wrong in a way that stranded the ordinary path, not an edge case. | Section 6 rewritten; **P-10 amended** to make `deliverRelays` resource-parameterised |
+| B2 | Recipient equality no longer establishes ack authority once two endpoints share `external-notify`, and the acked id is caller-supplied | **Confirmed.** `bus.ts:466-479` tests recipient only; `recordAck` updates by id and status; the MCP `ack` tool passes the caller's id through (`endpoint.ts:330`); relay ids are deterministic (`gates.ts:606-620`). Partitioning `poll` does not close it. | **New section 4.2**; **new P-16**; new assertion and observed-red control in section 9.3 |
+| M3 | Deriving `delivery_resource` from `run_id` on the **fenced** enqueue path writes the global resource beside a per-run epoch, recreating the ambiguity the design removes | **Confirmed**, and it was an internal contradiction in the first draft's P-4: `Outbox.enqueue` stamps the epoch (`outbox.ts:432-444`) while its `runId` defaults to `null` (`:1283-1285`). | **New section 4.0**: the rule is stated on the epoch, not the run, with the invariant `writer_epoch IS NULL OR writer_epoch was minted by delivery_resource`; **P-4 amended** |
+
+All three are cases of the same thing: the first draft partitioned *selection* carefully and then
+under-specified the three places authority is established without a selection in front of it -- the
+post-lap drainer, the ack, and the fenced insert. That is worth recording as the shape of mistake this
+design is prone to, and it is why section 4's inventory is now stated as closed and checkable rather
+than as a list.
