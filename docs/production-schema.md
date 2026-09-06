@@ -209,6 +209,10 @@ audited, and their absence is what a recovery query notices. `D-0029` extends th
 `gate_relay`, `ai_invocation` (G6's AC-9 ledger — DDL in
 [`measurement-harness.md`](./measurement-harness.md) §2.3).
 
+`D-1105` adds one more: `delegation_record`, the values a run was admitted under. It is
+source-of-truth state in the strong sense the paragraph above uses — it is audited, its absence is
+what an incident review notices, and nothing else in the system can reconstruct it. §4.4 has it.
+
 `Gate` in particular was absent from the list, which the design review flagged: `#64` and `#65`
 both treat it as first-class, and `docs/parity-audit.md` §1.2 makes human gates a first-class entity
 as an operator direction. It is named here rather than arriving as an implementation detail.
@@ -230,6 +234,7 @@ event spine unusable — `#64`'s whole point is that several producers write CI 
 |---|---|---|---|
 | `run.status` | in-place, forward-only over the §4.3 vocabulary | **Secretary** | run lease epoch |
 | `run` (creation) | append | Secretary | — |
+| `delegation_record` | append, immutable | the admission command, in the transaction that creates the run | `run_id` primary key; no-UPDATE / no-DELETE triggers (§4.4) |
 | `session` binding phase | in-place, forward-only | **Supervisor** | session lease epoch |
 | `lease` | in-place (CAS) | the acquiring claimant | epoch monotonicity trigger |
 | `outbox` (enqueue) | append | any producer | `message_id` primary key; `delivery_resource` bound by every producer, `NOT NULL` with no default (§5.8); `writer_epoch` left null by the two unfenced producers |
@@ -371,6 +376,48 @@ Four things already read this vocabulary, which is why it is a constraint rather
   should stay empty, and a non-zero count is then a schema-integrity signal rather than routine noise.
 
 ---
+
+### 4.4 `delegation_record` — what a run was permitted to do
+
+Added by `0005_delegation_record.sql` under `D-1105`. The `run` row records that a run exists, the
+`run_delegation_recorded` event records what it was *asked* to do (`D-0055`), and this records what
+it was *allowed* to do. The three are written in one transaction, and the reason is atomicity rather
+than convenience: a commit between them would leave a run that is admissible and whose permissions
+nothing recorded, which is the state that made every already-merged run unauditable.
+
+```sql
+CREATE TABLE delegation_record (
+    run_id            TEXT    PRIMARY KEY REFERENCES run(run_id),
+    record_schema     TEXT    NOT NULL,
+    envelope          TEXT    NOT NULL,
+    envelope_digest   TEXT    NOT NULL,
+    digest_algorithm  TEXT    NOT NULL,
+    canonicalization  TEXT    NOT NULL,
+    recorded_at_ms    INTEGER NOT NULL
+);
+```
+
+Four properties, and each is a decision rather than a shape:
+
+1. **`envelope` is opaque.** This schema constrains its form — non-empty, `json_valid`, at most 1 MiB
+   — and nothing about its meaning. No column is extracted from inside it, no index covers anything
+   it contains, and no `CHECK` reads a key. The values in there are the delegating layer's
+   semantics, and a control plane that branches on them has taken that layer's meaning into itself.
+2. **The bytes are stored verbatim.** `envelope_digest` is `sha256` over exactly the bytes in the
+   column, which are exactly the bytes the producer handed in; `canonicalization` records that as
+   `verbatim-utf8`. Re-encoding through this build's JSON writer would make the stored record depend
+   on the writer rather than on the value that was applied.
+3. **`run_id` is both the primary key and a foreign key**, so one record per run is the table's own
+   shape, and a record for a run that does not exist is unrepresentable. That reference is also what
+   forces the INSERT order inside admission's transaction under `PRAGMA foreign_keys = ON`.
+4. **The row is immutable**, in the form `event` and `schema_migration` use: paired
+   `delegation_record_rows_are_immutable` and `delegation_record_rows_are_never_deleted` triggers. A
+   record states what was applied at a moment that has passed; a row that can be edited afterwards is
+   a record of what somebody last wanted it to say.
+
+**The step does not backfill.** Runs admitted before it have no row here and never will. That is the
+unrecoverable past, and it stays visible rather than being filled with an invented value — §12's
+standing rule about a value invented to satisfy a `NOT NULL` applies to it exactly.
 
 ## 5. The event spine
 
@@ -1993,6 +2040,10 @@ to answer it by inertia -- not that it is waiting on anyone.
 - **`task` and `assessment`.** `D-0001` names both and neither has DDL, here or in the spike,
   because neither G3 nor G4 exercises them. They are not designed by implication: the first Issue
   that needs them writes their DDL as a migration step, against this document's conventions.
+  `D-1105` considered and rejected putting the delegation record in `task`: a table being empty is
+  not a claim on what belongs in it, and if `task` ever binds retries or several runs then a mutable
+  task row cannot hold what each individual run was authorised to do. The record went into its own
+  table keyed by `run_id` (§4.4) and `task` stays a hole.
 - **`Q-0002` (incident collapse, re-notification window)** is unanswered. `incident.dedup_key` remains
   non-unique and no window appears in any table above, so both collapse rules remain expressible and
   `ACCEPTANCE.md` §2's requirement that tests parameterise the choice still holds.

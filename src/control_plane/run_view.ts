@@ -137,6 +137,24 @@ export interface RunOutboxView {
 }
 
 /**
+ * This run's delegation record, or `null` for a run admitted before it existed.
+ *
+ * The envelope is carried as the verbatim column text and is **not** parsed
+ * here, exactly as the event and outbox payloads are not. Re-encoding it would
+ * make what a console renders depend on this build's JSON writer rather than on
+ * the bytes the producer wrote, and those bytes are what the digest beside them
+ * covers.
+ */
+export interface RunDelegationRecordView {
+  readonly recordSchema: string;
+  readonly envelope: string;
+  readonly envelopeDigest: string;
+  readonly digestAlgorithm: string;
+  readonly canonicalization: string;
+  readonly recordedAtMs: number;
+}
+
+/**
  * One run and everything a console draws beside it.
  *
  * The four lists are always present and are empty when nothing matched; the
@@ -148,6 +166,7 @@ export interface RunOutboxView {
 export interface RunView {
   readonly run: RunRecord;
   readonly lease: RunLeaseView | null;
+  readonly delegationRecord: RunDelegationRecordView | null;
   readonly sessions: readonly RunSessionView[];
   readonly gates: readonly RunGateView[];
   readonly events: readonly RunEventView[];
@@ -238,6 +257,22 @@ const SELECT_OUTBOX = `
      ORDER BY enqueued_at_ms, message_id
 `;
 
+/**
+ * This run's delegation record, by primary key.
+ *
+ * One row or none: `run_id` is the table's primary key, so there is no ordering
+ * to choose and no LIMIT to justify. `null` means the run predates
+ * `0005_delegation_record.sql`, which is a fact about the database and is
+ * rendered as such rather than as an empty object -- a console must be able to
+ * tell "admitted before the record existed" from "admitted under an empty one".
+ */
+const SELECT_DELEGATION_RECORD = `
+    SELECT record_schema, envelope, envelope_digest, digest_algorithm,
+           canonicalization, recorded_at_ms
+      FROM delegation_record
+     WHERE run_id = :run_id
+`;
+
 /** An INTEGER column that may be NULL, as a number that may be `null`. */
 function optionalNumber(value: unknown): number | null {
   return value === null || value === undefined ? null : Number(value);
@@ -316,6 +351,10 @@ export function runView(connection: SqliteDatabase, runId: string): RunView {
     ingestedAtMs: Number(row.ingested_at_ms),
   }));
 
+  const delegationRow = connection.prepare(SELECT_DELEGATION_RECORD).get(parameters) as
+    | Record<string, unknown>
+    | undefined;
+
   const outbox = (
     connection.prepare(SELECT_OUTBOX).all(parameters) as readonly Record<string, unknown>[]
   ).map((row) => ({
@@ -342,6 +381,17 @@ export function runView(connection: SqliteDatabase, runId: string): RunView {
             epoch: lease.epoch,
             acquiredAtMs: lease.acquiredAtMs,
             expiresAtMs: lease.expiresAtMs,
+          }),
+    delegationRecord:
+      delegationRow === undefined
+        ? null
+        : Object.freeze({
+            recordSchema: String(delegationRow.record_schema),
+            envelope: String(delegationRow.envelope),
+            envelopeDigest: String(delegationRow.envelope_digest),
+            digestAlgorithm: String(delegationRow.digest_algorithm),
+            canonicalization: String(delegationRow.canonicalization),
+            recordedAtMs: Number(delegationRow.recorded_at_ms),
           }),
     sessions: Object.freeze(sessions),
     gates: Object.freeze(gates),

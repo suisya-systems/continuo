@@ -58,6 +58,7 @@ import { runView } from "../../src/control_plane/run_view.js";
 import { prepareBinding } from "../../src/control_plane/session_binding.js";
 import { presentGate } from "../../src/gate/operator.js";
 import { caseRoot, suiteTemplate } from "../testkit/cases.js";
+import { aDelegationRecord } from "../testkit/delegation.js";
 import { patchSeam } from "../testkit/seams.js";
 
 /** An arbitrary fixed epoch-milliseconds instant, and later ones. */
@@ -90,6 +91,7 @@ function admittedFixture(runId: string = RUN_ID): {
     connection.close();
   });
   admitRun(connection, {
+    delegationRecord: aDelegationRecord(),
     intent: new LapRunIntent({
       runId,
       leaseClaimantId: "secretary-1",
@@ -235,6 +237,7 @@ describe("runView", () => {
     // makes the filter observable.
     const { connection } = populatedFixture("view-mine");
     admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
       intent: new LapRunIntent({
         runId: "view-theirs",
         leaseClaimantId: "secretary-1",
@@ -307,6 +310,17 @@ describe("continuo run show --json", () => {
         updated_at_ms: T0,
       },
       lease: null,
+      // Always present for a run this build admitted: `admitRun` writes it in
+      // the same transaction as the row (`D-1105`), so a run with a `null` here
+      // would be one admitted before the record existed.
+      delegation_record: {
+        record_schema: "testkit.delegation/1",
+        envelope: '{"fixture": "a delegation record continuo never reads"}',
+        envelope_digest: "76d87b6dc073b31f85d22c6e2f3d6ae93c5a8bb00c2c62673f9393da4ed9e524",
+        digest_algorithm: "sha256",
+        canonicalization: "verbatim-utf8",
+        recorded_at_ms: T0,
+      },
       sessions: [],
       gates: [],
       events: events.map((row) => ({
@@ -407,6 +421,7 @@ describe("continuo run show --json", () => {
     const path = productionTemplate.copyInto(caseRoot("run-show-payload"));
     const connection = openProductionControlPlane(path);
     admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
       intent: new LapRunIntent({
         runId: "payload",
         leaseClaimantId: "secretary-1",
@@ -611,10 +626,11 @@ describe("continuo run show --json, observed red", () => {
     // line and admission's two events. Anything the three hostile values
     // smuggled in would show up here as a sixth.
     const lines = streams.out().split("\n").filter(Boolean);
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(6);
     for (const [prefix, count] of [
       ["run ", 1],
       ["lease ", 1],
+      ["delegation_record ", 1],
       ["session ", 1],
       ["gate ", 0],
       ["event ", 2],

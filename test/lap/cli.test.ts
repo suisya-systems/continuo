@@ -143,6 +143,12 @@ function lap(
   initRepository(repository);
 
   const databasePath = join(root, "production.sqlite3");
+  // `run admit` requires a delegation record (`D-1105`), and it takes it as a
+  // file rather than an argument. The content is deliberately not a plausible
+  // contract: nothing in continuo reads a key of it, and a fixture shaped like
+  // one would invite a reader to think some field of it drives the lap.
+  const delegationRecordPath = join(root, "delegation-record.json");
+  writeFileSync(delegationRecordPath, '{"fixture": "a record continuo never reads"}', "utf8");
   const workspace = join(root, "worktree");
   const artifactRoot = join(root, "artifacts");
   const stateRoot = join(root, "state");
@@ -207,6 +213,10 @@ function lap(
       TOPIC_BRANCH,
       "--prompt",
       "do the work",
+      "--delegation-record",
+      delegationRecordPath,
+      "--delegation-record-schema",
+      "testkit.delegation/1",
       "--now-ms",
       String(T0),
     ]),

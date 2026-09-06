@@ -97,7 +97,8 @@ import {
 import { transaction } from "../../src/control_plane/txn.js";
 import { bundledCliArgsAllowPath, cliArgsRefusal } from "../../src/fencing/cli_args_allow.js";
 import { roleNames } from "../../src/fencing/renderer.js";
-import { caseRoot, databasePath, suiteTemplate, writeStep } from "../testkit/cases.js";
+import { caseRoot, databasePath, suiteRoot, suiteTemplate, writeStep } from "../testkit/cases.js";
+import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -140,12 +141,32 @@ function intent(overrides: Partial<LapRunIntentFields> = {}): LapRunIntent {
 const WORKSPACE = resolve("wt", "run-1");
 
 /**
+ * The delegation record file every `run admit` argv below points at.
+ *
+ * Written once for the file rather than per case: `--delegation-record` takes a
+ * path, the cases here are about the verb rather than about the record, and a
+ * per-case file would put a `writeFileSync` in front of every argv for a value
+ * none of them reads back.
+ */
+/** `sha256` of {@link DELEGATION_ENVELOPE}, as the record and the report spell it. */
+const DELEGATION_DIGEST = "76d87b6dc073b31f85d22c6e2f3d6ae93c5a8bb00c2c62673f9393da4ed9e524";
+
+/** The bytes in that file, so a case can assert what was stored. */
+const DELEGATION_ENVELOPE = '{"fixture": "a delegation record continuo never reads"}';
+
+const DELEGATION_RECORD_PATH = (() => {
+  const path = join(suiteRoot("run-admission-record"), "delegation-record.json");
+  writeFileSync(path, DELEGATION_ENVELOPE, "utf8");
+  return path;
+})();
+
+/**
  * `continuo run admit`'s argv with every flag the record requires.
  *
  * A helper rather than a literal per case, and it is the flag *set* that is the
- * point: `run admit` now refuses unless all seven intent fields are given, so a
- * case that spelled its own argv would go red for a missing flag it never meant
- * to be about the day an eighth is added.
+ * point: `run admit` refuses unless all seven intent fields and both delegation
+ * record flags are given, so a case that spelled its own argv would go red for a
+ * missing flag it never meant to be about the day another is added.
  */
 function admitArgv(
   path: string,
@@ -160,6 +181,8 @@ function admitArgv(
     "--base-branch": "main",
     "--topic-branch": "feat/run-1",
     "--prompt": "port the thing",
+    "--delegation-record": DELEGATION_RECORD_PATH,
+    "--delegation-record-schema": "testkit.delegation/1",
     ...overrides,
   };
   return ["run", "admit", ...Object.entries(flags).flat()];
@@ -283,7 +306,11 @@ describe("admitRun writes the run and its admission event", () => {
   test("inserts the run at 'created' with one caller-supplied clock", () => {
     const { connection } = cpFixture();
 
-    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
+    const admitted = admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent(),
+      nowMs: T0,
+    });
 
     expect(admitted.runId).toBe(RUN_ID);
     expect(admitted.status).toBe(ADMITTED_RUN_STATUS);
@@ -307,7 +334,11 @@ describe("admitRun writes the run and its admission event", () => {
   test("appends exactly one run_created event, pointed at the run it created", () => {
     const { connection } = cpFixture();
 
-    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
+    const admitted = admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent(),
+      nowMs: T0,
+    });
 
     const events = eventRows(connection);
     // Two: `run_created` and, after it, `run_delegation_recorded`. This case is
@@ -345,8 +376,16 @@ describe("admitRun writes the run and its admission event", () => {
   test("admits several runs independently", () => {
     const { connection } = cpFixture();
 
-    admitRun(connection, { intent: intent({ runId: "run-a" }), nowMs: T0 });
-    admitRun(connection, { intent: intent({ runId: "run-b" }), nowMs: T1 });
+    admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent({ runId: "run-a" }),
+      nowMs: T0,
+    });
+    admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent({ runId: "run-b" }),
+      nowMs: T1,
+    });
 
     expect(runRows(connection).map((row) => row["run_id"])).toEqual(["run-a", "run-b"]);
     // Each run's pair, in append order, with no interleaving: one admission is
@@ -367,7 +406,11 @@ describe("admitRun writes the run and its admission event", () => {
     // arrive as a foreign-key error rather than as anything readable.
     const { connection } = cpFixture();
 
-    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
+    const admitted = admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent(),
+      nowMs: T0,
+    });
 
     expect(admitted.eventSeq).toBeGreaterThan(0);
     expect(connection.prepare("SELECT COUNT(*) AS n FROM event_consumption").get()).toEqual({
@@ -385,7 +428,11 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
   test("appends run_delegation_recorded after run_created, both about the run", () => {
     const { connection } = cpFixture();
 
-    const admitted = admitRun(connection, { intent: intent(), nowMs: T0 });
+    const admitted = admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent(),
+      nowMs: T0,
+    });
 
     const events = eventRows(connection);
     expect(events).toHaveLength(2);
@@ -429,6 +476,7 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     const { connection } = cpFixture();
 
     admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
       intent: intent({
         leaseClaimantId: "secretary-7",
         role: "curator",
@@ -484,7 +532,11 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     const { connection } = cpFixture();
     const prompt = String.fromCodePoint(0x65e5, 0x672c, 0x8a9e);
 
-    admitRun(connection, { intent: intent({ prompt }), nowMs: T0 });
+    admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent({ prompt }),
+      nowMs: T0,
+    });
 
     const text = String(eventRows(connection)[1]?.["payload"]);
     expect(text).toContain('"prompt": "\\u65e5\\u672c\\u8a9e"');
@@ -500,7 +552,7 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     // given none.
     const { connection } = cpFixture();
 
-    admitRun(connection, { intent: intent(), nowMs: T0 });
+    admitRun(connection, { delegationRecord: aDelegationRecord(), intent: intent(), nowMs: T0 });
 
     const payload = JSON.parse(String(eventRows(connection)[1]?.["payload"])) as Record<
       string,
@@ -522,10 +574,12 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     const { connection } = cpFixture();
 
     admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
       intent: intent({ runId: "run-a", prompt: "the first" }),
       nowMs: T0,
     });
     admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
       intent: intent({ runId: "run-b", prompt: "the second" }),
       nowMs: T1,
     });
@@ -558,7 +612,7 @@ describe("the row and the event commit together or not at all", () => {
 
     expect(() => {
       transaction(connection, (tx) => {
-        admitRun(tx, { intent: intent(), nowMs: T0 });
+        admitRun(tx, { delegationRecord: aDelegationRecord(), intent: intent(), nowMs: T0 });
         throw new Error("the caller abandoned the transaction");
       });
     }).toThrow("the caller abandoned the transaction");
@@ -569,12 +623,17 @@ describe("the row and the event commit together or not at all", () => {
 
   test("a refused second admission writes nothing at all", () => {
     const { connection } = cpFixture();
-    admitRun(connection, { intent: intent(), nowMs: T0 });
+    admitRun(connection, { delegationRecord: aDelegationRecord(), intent: intent(), nowMs: T0 });
     const runsBefore = runRows(connection);
     const eventsBefore = eventRows(connection);
 
     expectRefusal(
-      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent(),
+          nowMs: T1,
+        }),
       RunAlreadyAdmitted,
       /already admitted/,
     );
@@ -594,10 +653,15 @@ describe("the row and the event commit together or not at all", () => {
 describe("a run identifier is admitted once", () => {
   test("refuses a re-admission and names the status the run is at", () => {
     const { connection } = cpFixture();
-    admitRun(connection, { intent: intent(), nowMs: T0 });
+    admitRun(connection, { delegationRecord: aDelegationRecord(), intent: intent(), nowMs: T0 });
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent(),
+          nowMs: T1,
+        }),
       RunAlreadyAdmitted,
     );
 
@@ -612,7 +676,7 @@ describe("a run identifier is admitted once", () => {
     // to `created`. The status in the message is what tells the operator which
     // run they actually found.
     const { connection } = cpFixture();
-    admitRun(connection, { intent: intent(), nowMs: T0 });
+    admitRun(connection, { delegationRecord: aDelegationRecord(), intent: intent(), nowMs: T0 });
     const lease = acquireRunLease(connection, {
       runId: RUN_ID,
       holder: "secretary-1",
@@ -629,7 +693,12 @@ describe("a run identifier is admitted once", () => {
     });
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent(),
+          nowMs: T1,
+        }),
       RunAlreadyAdmitted,
     );
 
@@ -643,10 +712,15 @@ describe("a run identifier is admitted once", () => {
     // a refusal outside it would reach the operator as a stack trace with the
     // message this class carefully writes buried above it.
     const { connection } = cpFixture();
-    admitRun(connection, { intent: intent(), nowMs: T0 });
+    admitRun(connection, { delegationRecord: aDelegationRecord(), intent: intent(), nowMs: T0 });
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { intent: intent(), nowMs: T1 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent(),
+          nowMs: T1,
+        }),
       RunAlreadyAdmitted,
     );
     expect(refusal.name).toBe("RunAlreadyAdmitted");
@@ -662,7 +736,12 @@ describe("admitRun refuses a role outside the fence renderer's roster", () => {
     const { connection } = cpFixture();
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { intent: intent({ role: "reviewer" }), nowMs: T0 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent({ role: "reviewer" }),
+          nowMs: T0,
+        }),
       UnknownRoleRefused,
       /not in the role roster/,
     );
@@ -682,7 +761,12 @@ describe("admitRun refuses a role outside the fence renderer's roster", () => {
     const { connection } = cpFixture();
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { intent: intent({ role: "reviewer" }), nowMs: T0 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent({ role: "reviewer" }),
+          nowMs: T0,
+        }),
       UnknownRoleRefused,
     );
     expect(refusal.name).toBe("UnknownRoleRefused");
@@ -710,7 +794,11 @@ describe("admitRun refuses a role outside the fence renderer's roster", () => {
     (role) => {
       const { connection } = cpFixture();
 
-      const admitted = admitRun(connection, { intent: intent({ role }), nowMs: T0 });
+      const admitted = admitRun(connection, {
+        delegationRecord: aDelegationRecord(),
+        intent: intent({ role }),
+        nowMs: T0,
+      });
 
       expect(admitted.status).toBe(ADMITTED_RUN_STATUS);
       const payload = JSON.parse(String(eventRows(connection)[1]?.["payload"])) as Record<
@@ -740,7 +828,12 @@ describe("admitRun refuses a cli_args vector the allowlist does not authorise", 
     const { connection } = cpFixture();
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { intent: intent({ cliArgs: ["--model=sonnet"] }), nowMs: T0 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent({ cliArgs: ["--model=sonnet"] }),
+          nowMs: T0,
+        }),
       CliArgsNotAuthorised,
       /is not authorised for role/,
     );
@@ -769,7 +862,12 @@ describe("admitRun refuses a cli_args vector the allowlist does not authorise", 
     const { connection } = cpFixture();
 
     const refusal = expectRefusal(
-      () => admitRun(connection, { intent: intent({ cliArgs: ["--verbose"] }), nowMs: T0 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent({ cliArgs: ["--verbose"] }),
+          nowMs: T0,
+        }),
       CliArgsNotAuthorised,
     );
     expect(refusal.name).toBe("CliArgsNotAuthorised");
@@ -785,7 +883,11 @@ describe("admitRun refuses a cli_args vector the allowlist does not authorise", 
     // survives an empty document and would survive an unreadable one.
     const { connection } = cpFixture();
 
-    const admittedRun = admitRun(connection, { intent: intent({ cliArgs: [] }), nowMs: T0 });
+    const admittedRun = admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent({ cliArgs: [] }),
+      nowMs: T0,
+    });
 
     expect(admittedRun.status).toBe(ADMITTED_RUN_STATUS);
     expect(runRows(connection)).toHaveLength(1);
@@ -806,6 +908,7 @@ describe("admitRun refuses a cli_args vector the allowlist does not authorise", 
     const refusal = expectRefusal(
       () =>
         admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
           intent: intent({ role: "reviewer", cliArgs: ["--model=sonnet"] }),
           nowMs: T0,
         }),
@@ -881,6 +984,7 @@ describe("a malformed argument is refused before anything is written", () => {
     expectRefusal(
       () =>
         admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
           intent: { runId: RUN_ID } as unknown as LapRunIntent,
           nowMs: T0,
         }),
@@ -896,7 +1000,12 @@ describe("a malformed argument is refused before anything is written", () => {
     const { connection } = cpFixture();
 
     expectRefusal(
-      () => admitRun(connection, { intent: intent(), nowMs: T0 + 0.5 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent(),
+          nowMs: T0 + 0.5,
+        }),
       RunAdmissionUsageError,
       /now_ms must be an int/,
     );
@@ -911,7 +1020,12 @@ describe("a malformed argument is refused before anything is written", () => {
     const { connection } = cpFixture();
 
     const error = expectRefusal(
-      () => admitRun(connection, { intent: intent(), nowMs: T0 + 0.5 }),
+      () =>
+        admitRun(connection, {
+          delegationRecord: aDelegationRecord(),
+          intent: intent(),
+          nowMs: T0 + 0.5,
+        }),
       RunAdmissionUsageError,
     );
     expect(error).not.toBeInstanceOf(RunAlreadyAdmitted);
@@ -970,12 +1084,16 @@ describe("continuo run admit", () => {
     expect(code).toBe(0);
     expect(streams.err()).toBe("");
     // Both events on the one line, in append order and with their sequence
-    // numbers: the report is where an operator sees that the work statement
-    // landed with the run rather than after it.
+    // numbers, and the delegation record's digest after them: the report is
+    // where an operator sees that the work statement and the authorisation
+    // landed with the run rather than after it. The digest and not the
+    // envelope, because the envelope may hold a newline and this line is one
+    // line.
     expect(streams.out()).toBe(
       `admitted ${RUN_ID} in ${path}: status created, ` +
         `run_created/${RUN_ID} at seq 1, ` +
-        `run_delegation_recorded/${RUN_ID} at seq 2\n`,
+        `run_delegation_recorded/${RUN_ID} at seq 2, ` +
+        `delegation record ${DELEGATION_DIGEST}\n`,
     );
 
     // The claim in the printed line is checked against the file, not against
@@ -1247,6 +1365,16 @@ describe("continuo run admit --json", () => {
           seq: 2,
         },
       },
+      // The digest and the two values that say how to reproduce it -- never the
+      // envelope. A host stores this instead of a copy, which is what keeps one
+      // record in one place; echoing the document back would put a second copy
+      // of it in every admission's stdout.
+      delegation_record: {
+        record_schema: "testkit.delegation/1",
+        envelope_digest: DELEGATION_DIGEST,
+        digest_algorithm: "sha256",
+        canonicalization: "verbatim-utf8",
+      },
     });
   });
 
@@ -1349,7 +1477,8 @@ describe("continuo run admit --json, observed red", () => {
     expect(streams.out()).toBe(
       `admitted ${RUN_ID} in ${path}: status created, ` +
         `${RUN_CREATED_EVENT_TYPE}/${RUN_ID} at seq 1, ` +
-        `${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${RUN_ID} at seq 2\n`,
+        `${RUN_DELEGATION_RECORDED_EVENT_TYPE}/${RUN_ID} at seq 2, ` +
+        `delegation record ${DELEGATION_DIGEST}\n`,
     );
     expect(() => JSON.parse(streams.out()), "the human line must not be a document").toThrow();
   });
@@ -1437,7 +1566,7 @@ describe("reading the delegation record back (D-0063)", () => {
       prompt: "port the thing",
       cliArgs,
     });
-    admitRun(connection, { intent, nowMs: T0 });
+    admitRun(connection, { delegationRecord: aDelegationRecord(), intent, nowMs: T0 });
     return { connection, intent };
   }
 

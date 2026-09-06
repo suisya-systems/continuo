@@ -2,6 +2,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { cliArgsRefusal } from "../fencing/cli_args_allow.js";
 import { roleNames } from "../fencing/renderer.js";
+import { DelegationRecord } from "./delegation_record.js";
 import { appendEvent } from "./events.js";
 import { LapRunIntent, PAYLOAD_KEYS } from "./lap_run_intent.js";
 import { pythonJsonObject } from "./python_json.js";
@@ -46,6 +47,16 @@ import { transaction } from "./txn.js";
  *   would make "admitted but never delegated" a state an operator has to
  *   recover from, and there is no recovery, because a second admission is
  *   refused.
+ *
+ *   `D-1105` puts the **delegation record** inside the same boundary, one step
+ *   further out again, and for the sharpest version of the argument: an
+ *   admission that committed the run and then failed to write the record would
+ *   leave a run that is admissible and whose *permissions* nothing recorded.
+ *   That is not a half of L1 that a later pass could reconstruct -- there is
+ *   nowhere else the values exist. The record is a required argument for the
+ *   same reason the intent is, and `delegation_record.run_id` is a foreign key
+ *   onto `run(run_id)`, so the schema forces the row first and the record
+ *   second exactly as it forces the row before the events.
  * - **A second admission of one run is refused, not absorbed.** Re-running the
  *   command is not an idempotent retry: `run admit` is the statement that a run
  *   *begins*, and a second statement of a beginning is either a mistaken repeat
@@ -274,6 +285,16 @@ export interface AdmittedRun {
    */
   readonly delegationEventId: string;
   readonly delegationEventSeq: number;
+  /**
+   * The digest of the delegation record this admission wrote (`D-1105`).
+   *
+   * The digest and not the record: what a caller does with this is quote it,
+   * hand it to a host that stores a reference instead of a copy, or look the
+   * row back up. Returning the envelope here would put a second copy of it on
+   * every admission's result, and the whole point of the record is that there
+   * is one copy and it is the one in the database.
+   */
+  readonly delegationRecordDigest: string;
 }
 
 /** The one identity an event of `type` about `runId` has. */
@@ -282,9 +303,17 @@ function factId(eventType: string, runId: string): string {
 }
 
 /**
- * Admit a run: insert its row at `created`, append the `run_created` event that
- * says why it exists, and append the `run_delegation_recorded` event that says
- * what it was admitted to do. One transaction.
+ * Admit a run: insert its row at `created`, write the delegation record that
+ * says what it was permitted to do, append the `run_created` event that says
+ * why it exists, and append the `run_delegation_recorded` event that says what
+ * it was admitted to do. One transaction.
+ *
+ * `delegationRecord` is `D-1105`'s addition and is **required**, for the same
+ * reason the whole block is one transaction: a run that is admissible and whose
+ * authorisation nothing recorded is the state that made the audit of every
+ * already-merged run impossible. It arrives already validated -- see
+ * {@link DelegationRecord} -- and this function reads nothing inside its
+ * envelope, here or anywhere else.
  *
  * `intent` is the whole of what admission fixes about this lap, and it arrives
  * already validated: {@link LapRunIntent} has no other constructor, and it
@@ -338,13 +367,29 @@ function factId(eventType: string, runId: string): string {
  */
 export function admitRun(
   connection: SqliteDatabase,
-  options: { readonly intent: LapRunIntent; readonly nowMs: number },
+  options: {
+    readonly intent: LapRunIntent;
+    readonly delegationRecord: DelegationRecord;
+    readonly nowMs: number;
+  },
 ): AdmittedRun {
-  const { intent, nowMs } = options;
+  const { intent, delegationRecord, nowMs } = options;
 
   if (!(intent instanceof LapRunIntent)) {
     throw new RunAdmissionUsageError(
       `intent must be a LapRunIntent, got ${pythonRepr(intent)}; ` +
+        "the record is validated by its own constructor and there is no other " +
+        "way to obtain one",
+    );
+  }
+  // Required, with no absent case and no default. A parameter that could be
+  // omitted would be a supported way to admit a run whose authorisation nothing
+  // recorded, which is the defect `D-1105` exists to close -- and it would be
+  // the shape that comes back, because the omission is convenient at exactly
+  // the moment somebody is in a hurry.
+  if (!(delegationRecord instanceof DelegationRecord)) {
+    throw new RunAdmissionUsageError(
+      `delegation_record must be a DelegationRecord, got ${pythonRepr(delegationRecord)}; ` +
         "the record is validated by its own constructor and there is no other " +
         "way to obtain one",
     );
@@ -418,6 +463,51 @@ export function admitRun(
       updated_at_ms: nowMs,
     });
 
+    // **The delegation record, in this transaction and immediately after the
+    // row it is about.** `delegation_record.run_id` is a foreign key onto
+    // `run(run_id)` and the connection runs with `PRAGMA foreign_keys = ON`
+    // (`connection.ts`), so this statement cannot precede the `INSERT INTO
+    // run` above -- the order is forced by the schema rather than by this
+    // ordering being remembered. What is *not* forced, and is why the whole
+    // block is one transaction, is the failure in between: a commit after the
+    // run row and before this insert would leave a run that is admissible and
+    // whose permissions nothing recorded, which is the precise state `D-1105`
+    // exists to make unrepresentable.
+    //
+    // Nothing here reads inside `envelope`. The four values beside it are this
+    // module's own bookkeeping -- the format name the producer supplied, the
+    // digest over the bytes as they arrived, and how that digest is to be
+    // reproduced -- and every one of them is read off the record's own frozen
+    // fields rather than computed a second time here.
+    tx.prepare<{
+      run_id: string;
+      record_schema: string;
+      envelope: string;
+      envelope_digest: string;
+      digest_algorithm: string;
+      canonicalization: string;
+      recorded_at_ms: number;
+    }>(
+      `
+        INSERT INTO delegation_record (
+            run_id, record_schema, envelope, envelope_digest,
+            digest_algorithm, canonicalization, recorded_at_ms
+        )
+        VALUES (
+            :run_id, :record_schema, :envelope, :envelope_digest,
+            :digest_algorithm, :canonicalization, :recorded_at_ms
+        )
+        `,
+    ).run({
+      run_id: runId,
+      record_schema: delegationRecord.recordSchema,
+      envelope: delegationRecord.envelope,
+      envelope_digest: delegationRecord.envelopeDigest,
+      digest_algorithm: delegationRecord.digestAlgorithm,
+      canonicalization: delegationRecord.canonicalization,
+      recorded_at_ms: nowMs,
+    });
+
     const created = appendOrRefuse(tx, {
       eventType: RUN_CREATED_EVENT_TYPE,
       runId,
@@ -439,6 +529,7 @@ export function admitRun(
       eventSeq: created.seq,
       delegationEventId: delegation.eventId,
       delegationEventSeq: delegation.seq,
+      delegationRecordDigest: delegationRecord.envelopeDigest,
     });
   });
 }
@@ -659,4 +750,131 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
       { cause: error },
     );
   }
+}
+
+/**
+ * A run that carries no delegation record.
+ *
+ * Distinct from {@link RunNotAdmitted}, and the distinction is the point. A run
+ * this build admitted always has one -- {@link admitRun} writes it in the same
+ * transaction as the row -- so the only rows that reach this refusal are runs
+ * admitted **before** `0005_delegation_record.sql` existed. Collapsing the two
+ * refusals into one would report those runs as never admitted, which is false
+ * and is the wrong thing to send an operator looking for.
+ *
+ * What it says instead is the true and unwelcome fact: this run predates the
+ * record, so what it was permitted to do is not recoverable from this database.
+ * That absence is the finding `D-1105` was taken to stop accumulating, and it
+ * is reported rather than papered over with a default.
+ */
+export class DelegationRecordUnrecorded extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "DelegationRecordUnrecorded";
+    Object.setPrototypeOf(this, DelegationRecordUnrecorded.prototype);
+  }
+}
+
+/**
+ * A stored delegation record that no longer hashes to what admission recorded.
+ *
+ * In the {@link ControlPlaneRefusal} family, and it is the one member of it that
+ * is **not** an ordinary outcome of a typed command. It is here anyway, rather
+ * than as a thrown defect, because of who has to see it: the operator running
+ * the verb is the person who needs to know that the database's account of what
+ * a run was permitted to do has been altered, and a stack trace three frames
+ * deep is not how that reaches them. `run_cli.ts` catches the family and prints
+ * one line; this is a line worth printing.
+ *
+ * The table's two triggers refuse an `UPDATE` and a `DELETE`, so nothing that
+ * went through SQLite's own path produced this: the bytes were changed by
+ * something else holding the file.
+ */
+export class DelegationRecordTampered extends ControlPlaneRefusal {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "DelegationRecordTampered";
+    Object.setPrototypeOf(this, DelegationRecordTampered.prototype);
+  }
+}
+
+/**
+ * Read back the {@link DelegationRecord} admission fixed for `runId`.
+ *
+ * **The stored row is rebuilt through the record's own constructor, and the
+ * digest is recomputed rather than trusted.** The row carries a digest column,
+ * so the cheap reader would return it; this one hands the stored envelope to
+ * {@link DelegationRecord}, which digests the bytes again, and then compares.
+ * The comparison is the whole value of storing the digest at all: a record that
+ * no longer hashes to what admission recorded is a record something edited
+ * after the fact, and the two immutability triggers on the table mean any such
+ * edit reached the file some way other than through this build. Returning it
+ * unremarked would make the digest column decorative.
+ *
+ * **Nothing here reads inside the envelope.** The comparison is over bytes and
+ * the reconstruction is over columns; no key of the document is named in this
+ * function, and that is the property `D-1105` point 2 asks the control plane to
+ * keep.
+ *
+ * The lookup is by primary key, which is exact -- one record per run is the
+ * table's own shape, not an ordering convention.
+ *
+ * @throws {RunAdmissionUsageError} for a malformed `runId` argument.
+ * @throws {DelegationRecordUnrecorded} when the run carries no record: either
+ *   no such run, or a run admitted before the record existed.
+ * @throws {DelegationRecordTampered} when the stored bytes no longer hash to
+ *   the stored digest.
+ */
+export function readDelegationRecord(connection: SqliteDatabase, runId: string): DelegationRecord {
+  if (typeof runId !== "string" || runId === "") {
+    throw new RunAdmissionUsageError(`run_id must be a non-empty string, got ${pythonRepr(runId)}`);
+  }
+  // Quoted for the reason `readLapRunIntent` quotes it: this path runs when an
+  // operator's `--run-id` matched no row, so the identifier is a value nothing
+  // has validated on its way into a one-line refusal.
+  const quoted = pythonRepr(runId);
+
+  const row = connection
+    .prepare<
+      { run_id: string },
+      { record_schema: string; envelope: string; envelope_digest: string }
+    >(
+      `
+      SELECT record_schema, envelope, envelope_digest
+      FROM delegation_record
+      WHERE run_id = :run_id
+      `,
+    )
+    .get({ run_id: runId });
+  if (row === undefined) {
+    throw new DelegationRecordUnrecorded(
+      `run ${quoted} carries no delegation record; either no run was admitted ` +
+        "under that identifier, or it was admitted by a build that predates " +
+        "the record, in which case what it was permitted to do is not " +
+        "recoverable from this database",
+    );
+  }
+
+  let record: DelegationRecord;
+  try {
+    record = new DelegationRecord({
+      recordSchema: row.record_schema,
+      envelope: row.envelope,
+    });
+  } catch (error) {
+    throw new DelegationRecordTampered(
+      `run ${quoted}'s delegation record is no longer a record this build can ` +
+        `read back: ${String(error)}`,
+      { cause: error },
+    );
+  }
+  if (record.envelopeDigest !== row.envelope_digest) {
+    throw new DelegationRecordTampered(
+      `run ${quoted}'s delegation record hashes to ${pythonRepr(record.envelopeDigest)} ` +
+        `but was recorded as ${pythonRepr(row.envelope_digest)}; the stored bytes ` +
+        "changed after admission, and the table's own triggers refuse an UPDATE, " +
+        "so this build is not what changed them",
+    );
+  }
+  return record;
 }

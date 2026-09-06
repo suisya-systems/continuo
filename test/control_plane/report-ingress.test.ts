@@ -42,6 +42,7 @@ import {
 import { admitRun } from "../../src/control_plane/run_admission.js";
 import { transaction } from "../../src/control_plane/txn.js";
 import { caseRoot, suiteTemplate } from "../testkit/cases.js";
+import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusal } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -83,7 +84,11 @@ function cpFixture(): { connection: SqliteDatabase; path: string } {
   // Both `event.run_id` and `gate.run_id` are foreign keys onto `run(run_id)`
   // and the connection runs with `PRAGMA foreign_keys = ON`, so the run has to
   // exist before anything below can be written at all.
-  admitRun(connection, { intent: intent(RUN_ID), nowMs: T0 });
+  admitRun(connection, {
+    delegationRecord: aDelegationRecord(),
+    intent: intent(RUN_ID),
+    nowMs: T0,
+  });
   bindSession(connection, { sessionId: SESSION_ID, runId: RUN_ID });
   return { connection, path };
 }
@@ -468,7 +473,11 @@ describe("what is not an escalation", () => {
     // question into a gate on a run that worker never touched, and nothing
     // downstream could tell: the payload's session id has no foreign key.
     const { connection, path } = cpFixture();
-    admitRun(connection, { intent: intent("run-2"), nowMs: T0 });
+    admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent("run-2"),
+      nowMs: T0,
+    });
 
     expectRefusal(
       () =>
@@ -506,7 +515,11 @@ describe("what is not an escalation", () => {
     // Its own run: `session_one_active_binding_per_run` admits one active
     // binding per run, and this case needs a second session.
     const { connection, path } = cpFixture();
-    admitRun(connection, { intent: intent("run-2"), nowMs: T0 });
+    admitRun(connection, {
+      delegationRecord: aDelegationRecord(),
+      intent: intent("run-2"),
+      nowMs: T0,
+    });
     bindSession(connection, { sessionId: "unconfirmed", runId: "run-2", phase: "spawned" });
 
     expectRefusal(

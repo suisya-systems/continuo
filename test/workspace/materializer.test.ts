@@ -101,6 +101,7 @@ import {
   WorkspaceMaterializationUsageError,
 } from "../../src/workspace/materializer.js";
 import { caseRoot } from "../testkit/cases.js";
+import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusal } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -168,6 +169,7 @@ function controlPlane(root: string, at?: string): { connection: SqliteDatabase; 
   // key onto it. Admitted through the real writer with the real intent, so
   // these cases sit downstream of step 6 the way step 7 does.
   admitRun(connection, {
+    delegationRecord: aDelegationRecord(),
     intent: new LapRunIntent({
       runId: RUN_ID,
       leaseClaimantId: "operator-1",
