@@ -3,7 +3,7 @@ import { DelegationRecord } from "../../src/control_plane/delegation_record.js";
 /**
  * A delegation record for a case that is not about the record.
  *
- * `admitRun` requires one (`D-1105`), so every case that admits a run has to
+ * `admitRun` requires one (`D-1107`), so every case that admits a run has to
  * hand it something, and most of them are about something else entirely -- a
  * lease, a gate, a workspace. One shared fixture rather than a literal in each
  * file, so that those cases say "a run was admitted" and not "a run was

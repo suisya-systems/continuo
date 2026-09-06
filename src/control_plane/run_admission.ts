@@ -49,7 +49,7 @@ import { transaction } from "./txn.js";
  *   recover from, and there is no recovery, because a second admission is
  *   refused.
  *
- *   `D-1105` puts the **delegation record** inside the same boundary, one step
+ *   `D-1107` puts the **delegation record** inside the same boundary, one step
  *   further out again, and for the sharpest version of the argument: an
  *   admission that committed the run and then failed to write the record would
  *   leave a run that is admissible and whose *permissions* nothing recorded.
@@ -314,7 +314,7 @@ export interface AdmittedRun {
   readonly delegationEventId: string;
   readonly delegationEventSeq: number;
   /**
-   * The digest of the delegation record this admission wrote (`D-1105`).
+   * The digest of the delegation record this admission wrote (`D-1107`).
    *
    * The digest and not the record: what a caller does with this is quote it,
    * hand it to a host that stores a reference instead of a copy, or look the
@@ -336,7 +336,7 @@ function factId(eventType: string, runId: string): string {
  * why it exists, and append the `run_delegation_recorded` event that says what
  * it was admitted to do. One transaction.
  *
- * `delegationRecord` is `D-1105`'s addition and is **required**, for the same
+ * `delegationRecord` is `D-1107`'s addition and is **required**, for the same
  * reason the whole block is one transaction: a run that is admissible and whose
  * authorisation nothing recorded is the state that made the audit of every
  * already-merged run impossible. It arrives already validated -- see
@@ -412,7 +412,7 @@ export function admitRun(
   }
   // Required, with no absent case and no default. A parameter that could be
   // omitted would be a supported way to admit a run whose authorisation nothing
-  // recorded, which is the defect `D-1105` exists to close -- and it would be
+  // recorded, which is the defect `D-1107` exists to close -- and it would be
   // the shape that comes back, because the omission is convenient at exactly
   // the moment somebody is in a hurry.
   if (!(delegationRecord instanceof DelegationRecord)) {
@@ -499,7 +499,7 @@ export function admitRun(
     // ordering being remembered. What is *not* forced, and is why the whole
     // block is one transaction, is the failure in between: a commit after the
     // run row and before this insert would leave a run that is admissible and
-    // whose permissions nothing recorded, which is the precise state `D-1105`
+    // whose permissions nothing recorded, which is the precise state `D-1107`
     // exists to make unrepresentable.
     //
     // Nothing here reads inside `envelope`. The four values beside it are this
@@ -807,7 +807,7 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
  *
  * What it says instead is the true and unwelcome fact: this run predates the
  * record, so what it was permitted to do is not recoverable from this database.
- * That absence is the finding `D-1105` was taken to stop accumulating, and it
+ * That absence is the finding `D-1107` was taken to stop accumulating, and it
  * is reported rather than papered over with a default.
  */
 export class DelegationRecordUnrecorded extends ControlPlaneRefusal {
@@ -856,7 +856,7 @@ export class DelegationRecordTampered extends ControlPlaneRefusal {
  *
  * **Nothing here reads inside the envelope.** The comparison is over bytes and
  * the reconstruction is over columns; no key of the document is named in this
- * function, and that is the property `D-1105` point 2 asks the control plane to
+ * function, and that is the property `D-1107` point 2 asks the control plane to
  * keep.
  *
  * The lookup is by primary key, which is exact -- one record per run is the

@@ -311,7 +311,7 @@ describe("continuo run show --json", () => {
       },
       lease: null,
       // Always present for a run this build admitted: `admitRun` writes it in
-      // the same transaction as the row (`D-1105`), so a run with a `null` here
+      // the same transaction as the row (`D-1107`), so a run with a `null` here
       // would be one admitted before the record existed.
       delegation_record: {
         record_schema: "testkit.delegation/1",

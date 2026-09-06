@@ -17,7 +17,7 @@
 --  what it was allowed to do does not. Admission is continuo's -- run_admission
 --  .ts holds the only INSERT INTO run in the build -- so this is the only place
 --  the two writes can be one write. rondo is on the far side of a process
---  boundary and cannot join this transaction at all. D-1105.
+--  boundary and cannot join this transaction at all. D-1107.
 --
 --  WHY run_id IS THE PRIMARY KEY AND A FOREIGN KEY. One record per run, and the
 --  reference relation runs record -> run rather than run -> record. With
@@ -61,7 +61,7 @@
 --  record_schema is the one where that matters, and it is why this is written
 --  down rather than left as an obvious consequence. It is not a label: it is
 --  the DECLARATION OF WHAT FORMAT THE ENVELOPE IS IN, and rondo is on the side
---  of the boundary that is allowed to interpret the envelope (D-1105's
+--  of the boundary that is allowed to interpret the envelope (D-1107's
 --  cadenza/rondo asymmetry). A rondo that reads record_schema to choose how to
 --  parse the bytes is doing what the column is for, so a record_schema that
 --  changed underneath is a reader pointed at the wrong grammar for bytes that

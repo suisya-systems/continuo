@@ -409,7 +409,7 @@ function intentOf(args: Namespace): LapRunIntent {
  *
  * **The format name is a separate flag and is not read out of the document.**
  * A self-describing wrapper would be the obvious alternative, and it is
- * rejected in `D-1105`: extracting an inner document from a wrapper means
+ * rejected in `D-1107`: extracting an inner document from a wrapper means
  * either re-serialising it -- so the stored bytes become this build's
  * renderer's rather than the producer's -- or slicing the source text, which is
  * parsing the envelope by another name. The record continuo stores is the file,
@@ -520,7 +520,7 @@ export function cmdRunAdmit(args: Namespace): number {
               },
               // The digest, not the record. A host stores this instead of a
               // copy, and the copy it would otherwise keep is the second home
-              // for one value that `D-1105` exists to prevent.
+              // for one value that `D-1107` exists to prevent.
               delegation_record: {
                 record_schema: delegationRecord.recordSchema,
                 envelope_digest: admitted.delegationRecordDigest,
@@ -938,7 +938,7 @@ export function addSubparsers(sub: Subparsers): void {
     });
   }
   // The delegation record, in the two flags it takes. Both required: a run
-  // admitted without one is exactly the state `D-1105` closes, and an optional
+  // admitted without one is exactly the state `D-1107` closes, and an optional
   // flag is a supported way back into it.
   admit.addArgument({
     optionStrings: ["--delegation-record"],

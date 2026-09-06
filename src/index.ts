@@ -139,7 +139,7 @@ export {
   configureConnection,
   openControlPlaneConnection,
 } from "./control_plane/connection.js";
-// `D-1105`'s delegation record. Exported for the same reason the intent above
+// `D-1107`'s delegation record. Exported for the same reason the intent above
 // is: `admitRun` takes one, the package exports only `.` (D-0002), and a
 // consumer that cannot name the type cannot call the function. The constants
 // travel with it because a host that stores a digest has to be able to say

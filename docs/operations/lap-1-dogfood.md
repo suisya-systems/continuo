@@ -114,11 +114,11 @@ node "$CLI" run admit \
 #   run_created/lap1-dogfood-003 at seq 10, run_delegation_recorded/lap1-dogfood-003 at seq 11   (0.10 s)
 ```
 
-> **And since `D-1105` the command above is missing two required flags.** `run admit` now writes the
+> **And since `D-1107` the command above is missing two required flags.** `run admit` now writes the
 > delegation record -- what the run is *permitted* to do -- in the same transaction as the row, and
 > takes it as `--delegation-record PATH --delegation-record-schema NAME`. A run admitted today needs
 > both; these three laps predate the record, and their rows carry none, which is precisely the
-> unrecoverable past `D-1105` was taken to stop accumulating. The report line gains
+> unrecoverable past `D-1107` was taken to stop accumulating. The report line gains
 > `delegation record <sha256>` after the two event ids.
 
 The two `--cli-arg` lines are **the workaround for F-2**, not something this verb should need. Drop

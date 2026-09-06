@@ -1,5 +1,5 @@
 /**
- * `D-1105`: the delegation record, written in the transaction that admits the
+ * `D-1107`: the delegation record, written in the transaction that admits the
  * run, stored opaquely, and never interpreted.
  *
  * Three claims carry the decision, and each has cases here that go RED when the
@@ -194,7 +194,7 @@ describe("the run and its delegation record commit together or not at all", () =
     // The other direction of the reference, and the one an ordering mistake
     // would hide. A run whose record could be removed from under it is a run
     // that can end up admitted with nothing saying what it may do -- the exact
-    // state `D-1105` closes, reached by deletion instead of by a missing write.
+    // state `D-1107` closes, reached by deletion instead of by a missing write.
     // The record's own trigger refuses a DELETE of the record, and the foreign
     // key refuses a DELETE of the run while the record points at it, so neither
     // half can be removed alone.
@@ -468,7 +468,7 @@ describe("continuo stores the envelope and does not read it", () => {
   });
 
   test("the record and the lap intent stay two records", () => {
-    // `D-0055`'s payload is not widened by `D-1105`: the intent still reads
+    // `D-0055`'s payload is not widened by `D-1107`: the intent still reads
     // back through its own reader, unchanged, beside a record that says
     // something else about the same run.
     const { connection } = cpFixture("two-records");

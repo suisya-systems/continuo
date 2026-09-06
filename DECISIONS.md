@@ -210,6 +210,7 @@ spaces distinct.
 | D-1104 | The outbox row records WHICH lease minted its `writer_epoch`, and a lap holds its own run's delivery resource | accepted |
 | D-1105 | `lap perform --state-root` is a parent, and the lap's state root is derived from the run id | accepted |
 | D-1106 | The liveness observation is taken before the transcript read it is composed with | accepted |
+| D-1107 | The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely | accepted |
 
 ---
 
@@ -16373,7 +16374,7 @@ shared cross-belt band opened by `D-1101` (Issue #179), taken after checking `or
 
 ---
 
-## D-1105 -- The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely
+## D-1107 -- The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely
 
 **Context.** Only the fingerprints of a delegation were being kept, and the values they point at
 existed nowhere. rondo's `iteration` row carries `agent_type_digest`, `config_digest` and
@@ -16596,10 +16597,16 @@ same decision. The window's ruling, recorded here as the shape to follow:
 - **The canonical entry is in the repository that owns the object being decided.** That is this
   entry, in continuo, because the record and its DDL are continuo's.
 - **cadenza and rondo each carry a short counterpart stub in their own `DECISIONS.md`**, written by
-  the later tasks. A stub carries: the decision id `continuo D-1105`; the content hash of this
+  the later tasks. A stub carries: the decision id `continuo D-1107`; the content hash of this
   entry's text; a one-paragraph statement of what that repository is undertaking (cadenza: the
   serialisation surface and no persistence; rondo: the digests become one reference, resolved
   through a verb); and that repository's own approval. It does not restate the argument.
+- **Both values are read off this entry as merged, not as drafted.** The id moved twice during
+  review -- `D-1105`, then `D-1106`, then `D-1107` -- as two concurrent branches landed ahead of
+  this one, and the renumbering changed this text, so the content hash moved with it. A stub written
+  from a draft would cite an id nothing carries and a hash of text that was never merged, which is
+  exactly the "two ledgers pointing at different decisions" failure the stub scheme exists to
+  prevent. The later tasks take both values from `origin/main`.
 - Two alternatives were rejected. **A joint ADR whose canonical copy sits in one party's
   repository** gives that party agenda-setting power over a decision it does not solely own.
   **The same text as two full ADRs** produces two decisions that drift apart the first time either
@@ -16723,7 +16730,12 @@ run`), `D-0055` (the lap intent, which this entry deliberately does not widen), 
 `D-0046` rule 4 and `docs/production-schema.md` §4.2 (the writer table this adds a row to). Cross-
 repository: cadenza `docs/design/g2-delegation-contract.md` §§1, 4, 6 and `D-0026`; rondo
 `src/store/sqlite.ts`'s `iteration` DDL and `D-0015` rule 1. `minimal-operating-loop.md` §8's "gap
-in the machinery" is the defect the counterpart-stub scheme above closes. Decision id `D-1105`,
-drawn from the `D-11xx` shared cross-belt band opened by `D-1101` (Issue #179); `D-1104` was
-reserved for a concurrent task at the time this entry was drafted, so this entry takes the next free
-id after it.
+in the machinery" is the defect the counterpart-stub scheme above closes. Decision id `D-1107`,
+drawn from the `D-11xx` shared cross-belt band opened by `D-1101` (Issue #179). The id was taken
+three times before it stuck: this entry was drafted as `D-1105` after `D-1104` was reserved for a
+concurrent task, but `D-1105` went to #191 (the run-derived state root) and `D-1106` to #194 (the
+liveness observation's ordering), both of which merged first. It is renumbered here rather than
+anywhere else because the rule this organization settled the same week is that a sequential resource
+taken by two concurrent tasks is not avoided by announcing intentions -- read-then-take has no
+atomicity, so the collision is allowed to happen, made visible, and resolved by whoever lands
+second. This entry landed third.

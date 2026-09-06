@@ -209,7 +209,7 @@ audited, and their absence is what a recovery query notices. `D-0029` extends th
 `gate_relay`, `ai_invocation` (G6's AC-9 ledger — DDL in
 [`measurement-harness.md`](./measurement-harness.md) §2.3).
 
-`D-1105` adds one more: `delegation_record`, the values a run was admitted under. It is
+`D-1107` adds one more: `delegation_record`, the values a run was admitted under. It is
 source-of-truth state in the strong sense the paragraph above uses — it is audited, its absence is
 what an incident review notices, and nothing else in the system can reconstruct it. §4.4 has it.
 
@@ -379,7 +379,7 @@ Four things already read this vocabulary, which is why it is a constraint rather
 
 ### 4.4 `delegation_record` — what a run was permitted to do
 
-Added by `0006_delegation_record.sql` under `D-1105`. The `run` row records that a run exists, the
+Added by `0006_delegation_record.sql` under `D-1107`. The `run` row records that a run exists, the
 `run_delegation_recorded` event records what it was *asked* to do (`D-0055`), and this records what
 it was *allowed* to do. The three are written in one transaction, and the reason is atomicity rather
 than convenience: a commit between them would leave a run that is admissible and whose permissions
@@ -2052,7 +2052,7 @@ to answer it by inertia -- not that it is waiting on anyone.
 - **`task` and `assessment`.** `D-0001` names both and neither has DDL, here or in the spike,
   because neither G3 nor G4 exercises them. They are not designed by implication: the first Issue
   that needs them writes their DDL as a migration step, against this document's conventions.
-  `D-1105` considered and rejected putting the delegation record in `task`: a table being empty is
+  `D-1107` considered and rejected putting the delegation record in `task`: a table being empty is
   not a claim on what belongs in it, and if `task` ever binds retries or several runs then a mutable
   task row cannot hold what each individual run was authorised to do. The record went into its own
   table keyed by `run_id` (§4.4) and `task` stays a hole.

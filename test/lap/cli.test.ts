@@ -143,7 +143,7 @@ function lap(
   initRepository(repository);
 
   const databasePath = join(root, "production.sqlite3");
-  // `run admit` requires a delegation record (`D-1105`), and it takes it as a
+  // `run admit` requires a delegation record (`D-1107`), and it takes it as a
   // file rather than an argument. The content is deliberately not a plausible
   // contract: nothing in continuo reads a key of it, and a fixture shaped like
   // one would invite a reader to think some field of it drives the lap.

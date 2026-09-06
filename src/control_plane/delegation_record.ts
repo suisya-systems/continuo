@@ -8,7 +8,7 @@ import { pythonRepr } from "./python_repr.js";
  *
  * This is the other half of the sentence `lap_run_intent.ts` starts.
  * {@link LapRunIntent} records what a lap was *asked* for; this records what it
- * was *allowed*. They are two facts about two subjects, and D-1105 keeps them
+ * was *allowed*. They are two facts about two subjects, and D-1107 keeps them
  * two records for the reason D-0055 kept `run_created` and
  * `run_delegation_recorded` apart: folding an authorisation statement into a
  * work statement grows a record whose meaning is "this is the job" into the
@@ -43,7 +43,7 @@ import { pythonRepr } from "./python_repr.js";
  * **Secrets are not values here.** A producer records the *identifier and
  * version* of a secret, never its value; nothing in this module can enforce
  * that, because enforcing it would require reading the envelope. It is stated
- * in D-1105 as an obligation on the producer and is the reason the record is
+ * in D-1107 as an obligation on the producer and is the reason the record is
  * not a general-purpose blob store.
  *
  * **ASCII only** in the messages this module writes, per

@@ -201,7 +201,7 @@ function world(label: string): {
 
   expect(main(["db", "create", "--db", databasePath, "--now-ms", String(T0)])).toBe(0);
 
-  // `run admit` requires a delegation record (`D-1105`) and takes it as a file.
+  // `run admit` requires a delegation record (`D-1107`) and takes it as a file.
   // These cases are about two laps sharing one control plane, not about the
   // record, so one file serves both admissions.
   const delegationRecordPath = join(root, "delegation-record.json");
