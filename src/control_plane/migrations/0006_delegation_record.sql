@@ -49,6 +49,42 @@
 --  that reason -- and would make the digest incomparable with the one the
 --  producer computed over its own bytes.
 --
+--  WHAT THE DIGEST COVERS, AND WHAT IT DOES NOT. envelope_digest covers the
+--  envelope column and NOTHING ELSE. The four columns beside it --
+--  record_schema, digest_algorithm, canonicalization, recorded_at_ms -- are
+--  outside it, so a writer holding this file that edits one of them leaves a
+--  row that still verifies: readDelegationRecord returns it and `run show`
+--  reports digest_verified = true. Measured, not deduced: record_schema was
+--  rewritten from one format name to another and recorded_at_ms was moved,
+--  both outside SQLite, and both read back clean.
+--
+--  record_schema is the one where that matters, and it is why this is written
+--  down rather than left as an obvious consequence. It is not a label: it is
+--  the DECLARATION OF WHAT FORMAT THE ENVELOPE IS IN, and rondo is on the side
+--  of the boundary that is allowed to interpret the envelope (D-1105's
+--  cadenza/rondo asymmetry). A rondo that reads record_schema to choose how to
+--  parse the bytes is doing what the column is for, so a record_schema that
+--  changed underneath is a reader pointed at the wrong grammar for bytes that
+--  are themselves intact -- and no digest here says so.
+--
+--  Widening the digest to cover the row was NOT done, and the reason is that
+--  it would not close the hole it appears to close: a writer that can edit one
+--  column can compute a new digest over the edited row just as easily, so a
+--  row-wide digest buys detection of careless edits only, at the price of
+--  looking like it buys more. See the sentence below on what this record is.
+--
+--  WHAT THIS RECORD IS: A RECORD, NOT A SEAL. Every check here -- the digest,
+--  the three triggers, WITHOUT ROWID -- is aimed at a run's authorisation being
+--  written down at the moment it was fixed, and at this build never quietly
+--  rewriting it afterwards. None of it is a defence against somebody with write
+--  access to this file who intends to forge. Such a writer edits the envelope
+--  and the digest together and produces a row that verifies on both read
+--  surfaces, which is not a defect to be repaired: with no key and no anchor
+--  outside the file, no arrangement of columns can distinguish a self-
+--  consistent forgery from the truth. The property is atomicity with what was
+--  admitted, and integrity against corruption and against this build's own
+--  mistakes -- not sealing against an adversary who holds the database.
+--
 --  WHAT THIS STEP DELIBERATELY DOES NOT DO.
 --
 --  - It does not backfill. Runs admitted before this step have no row here and

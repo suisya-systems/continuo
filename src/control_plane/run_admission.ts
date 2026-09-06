@@ -3,7 +3,7 @@ import type { Database as SqliteDatabase } from "better-sqlite3";
 import { cliArgsRefusal } from "../fencing/cli_args_allow.js";
 import { roleNames } from "../fencing/renderer.js";
 import { isSqliteError } from "../sqlite/errors.js";
-import { DelegationRecord } from "./delegation_record.js";
+import { DelegationRecord, DIGEST_ALGORITHM } from "./delegation_record.js";
 import { appendEvent } from "./events.js";
 import { LapRunIntent, PAYLOAD_KEYS } from "./lap_run_intent.js";
 import { pythonJsonObject } from "./python_json.js";
@@ -866,7 +866,10 @@ export class DelegationRecordTampered extends ControlPlaneRefusal {
  * @throws {DelegationRecordUnrecorded} when the run carries no record: either
  *   no such run, or a run admitted before the record existed.
  * @throws {DelegationRecordTampered} when the stored bytes no longer hash to
- *   the stored digest.
+ *   the stored digest, or when the row names a `digest_algorithm` this build
+ *   cannot reproduce -- the same guard `run_view.ts` puts on `digest_verified`,
+ *   so the two read surfaces agree about a row that got past the column's
+ *   CHECK rather than one being strict and the other lenient.
  */
 export function readDelegationRecord(connection: SqliteDatabase, runId: string): DelegationRecord {
   if (typeof runId !== "string" || runId === "") {
@@ -880,10 +883,15 @@ export function readDelegationRecord(connection: SqliteDatabase, runId: string):
   const row = connection
     .prepare<
       { run_id: string },
-      { record_schema: string; envelope: string; envelope_digest: string }
+      {
+        record_schema: string;
+        envelope: string;
+        envelope_digest: string;
+        digest_algorithm: string;
+      }
     >(
       `
-      SELECT record_schema, envelope, envelope_digest
+      SELECT record_schema, envelope, envelope_digest, digest_algorithm
       FROM delegation_record
       WHERE run_id = :run_id
       `,
@@ -909,6 +917,26 @@ export function readDelegationRecord(connection: SqliteDatabase, runId: string):
       `run ${quoted}'s delegation record is no longer a record this build can ` +
         `read back: ${String(error)}`,
       { cause: error },
+    );
+  }
+  // The algorithm the ROW names, checked before its digest is compared against
+  // one this build computed. `digest_algorithm` has a CHECK admitting only
+  // 'sha256', so a row failing this arrived past that CHECK -- the same class of
+  // event the digest comparison below exists for, since a file altered outside
+  // this build is not held to the column's constraints either. Without it the
+  // two read surfaces disagree: `run_view.ts` already guards its
+  // `digest_verified` on the algorithm, so a row under an unknown algorithm
+  // reads as unverified there while this reader would compare a sha256 digest
+  // against a value that never claimed to be one, and either accept it or
+  // report a mismatch as tampering. Reported as tampering either way, but with
+  // the true reason named.
+  if (row.digest_algorithm !== DIGEST_ALGORITHM) {
+    throw new DelegationRecordTampered(
+      `run ${quoted}'s delegation record names digest algorithm ` +
+        `${pythonRepr(row.digest_algorithm)}, and this build can only reproduce ` +
+        `${pythonRepr(DIGEST_ALGORITHM)}; the column's CHECK admits no other value, ` +
+        "so the row reached the file some way other than through this build, and " +
+        "its digest cannot be checked at all",
     );
   }
   if (record.envelopeDigest !== row.envelope_digest) {

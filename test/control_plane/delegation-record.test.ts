@@ -618,6 +618,73 @@ describe("a written record is never edited", () => {
     );
   });
 
+  test("both read surfaces refuse to check a digest under an algorithm this build cannot reproduce", () => {
+    // The two readers must not disagree about the same row. `run_view.ts`
+    // guards `digest_verified` on the algorithm the row names; before this case
+    // `readDelegationRecord` did not select the column at all, so a row whose
+    // `digest_algorithm` says something else -- but whose digest happens to be
+    // a correct sha256 over the bytes -- read as INTACT through the strict
+    // reader and as UNVERIFIED through the console's. The strict surface was
+    // the lenient one, which is the wrong way round.
+    //
+    // Reaching that row means getting past the column's CHECK, which is the
+    // point rather than a cheat: the digest comparison exists for a file
+    // altered outside this build, and such a file is not held to this build's
+    // constraints either. `writable_schema` is how that is reproduced here.
+    const { connection, path } = cpFixture("foreign-digest-algorithm");
+    const ddl = connection
+      .prepare<[], { sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'delegation_record'",
+      )
+      .get() as { sql: string };
+    const relaxed = ddl.sql.replace("digest_algorithm IN ('sha256')", "1");
+    expect(relaxed).not.toBe(ddl.sql);
+    // `unsafeMode` lifts better-sqlite3's own refusal to touch `sqlite_master`;
+    // it is the driver's defence, not the database's, and lifting it here is
+    // what lets this case stand in for a writer that never had it.
+    connection.unsafeMode(true);
+    connection.pragma("writable_schema = ON");
+    connection
+      .prepare("UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = ?")
+      .run(relaxed, "delegation_record");
+    connection.pragma("writable_schema = OFF");
+    connection.close();
+
+    // Reopened so the relaxed schema is the one in force.
+    const altered = openProductionControlPlane(path);
+    onTestFinished(() => {
+      altered.close();
+    });
+    const envelope = '{"granted": ["everything"]}';
+    // The digest is CORRECT for the bytes. What is wrong is the claim about how
+    // it was produced, and that is the whole of what this case turns on.
+    const digest = createHash("sha256").update(Buffer.from(envelope, "utf-8")).digest("hex");
+    altered
+      .prepare(
+        `INSERT INTO run (run_id, status, created_at_ms, updated_at_ms)
+         VALUES ('run-1', 'created', :now, :now)`,
+      )
+      .run({ now: T0 });
+    altered
+      .prepare(
+        `INSERT INTO delegation_record (
+           run_id, record_schema, envelope, envelope_digest,
+           digest_algorithm, canonicalization, recorded_at_ms
+         ) VALUES ('run-1', 's/1', :envelope, :digest, 'blake3-of-somewhere-else',
+                   'verbatim-utf8', :now)`,
+      )
+      .run({ envelope, digest, now: T0 });
+
+    expectRefusal(
+      () => readDelegationRecord(altered, "run-1"),
+      DelegationRecordTampered,
+      /names digest algorithm/,
+    );
+    // The console's half, unchanged and now agreeing: unverified, with the rest
+    // of the run still drawable.
+    expect(runView(altered, "run-1").delegationRecord?.digestVerified).toBe(false);
+  });
+
   test("run show reports a tampered record as unverified instead of refusing the whole run", () => {
     // The read surface's half of the tamper check, and the reason it is a field
     // rather than a refusal: `run show` is what a console draws a run from, and

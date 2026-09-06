@@ -16527,6 +16527,37 @@ continuo overruling cadenza's plan.
     `envelopeDigestOf`, so there is one statement of what the digest is. Raised by review of this
     change: without it the digest column was checked only by a reader no shipped verb called.
 
+14. **The digest covers the envelope and nothing else, and `record_schema` sitting outside it is the
+    part worth stating.** Point 3 says `envelope_digest` is `sha256` over the envelope's bytes, which
+    is exact; what it does not say is how far the *detection* in point 13 reaches, and the honest
+    answer is: that column only. `record_schema`, `digest_algorithm`, `canonicalization` and
+    `recorded_at_ms` are outside the digest, so a writer holding the file that edits one of them
+    leaves a row that still verifies -- `readDelegationRecord` returns it and `run show` reports
+    `digest_verified: true`. Measured rather than reasoned: `record_schema` was rewritten from one
+    format name to another and `recorded_at_ms` was moved, both outside SQLite, and both read back
+    clean. This is recorded because `record_schema` is not a label. It is the declaration of *which
+    format the envelope is to be read as*, and the cadenza/rondo asymmetry below puts rondo on the
+    side that may interpret the envelope -- so a rondo that reads `record_schema` to choose a parser
+    is using the column exactly as intended, and a `record_schema` that changed underneath points a
+    reader at the wrong grammar for bytes that are themselves intact. Nothing in the record says so.
+    Widening the digest to cover the whole row was considered and rejected: a writer that can edit
+    one column can recompute a digest over the edited row just as easily, so it would detect careless
+    edits only while looking like it detected more, which is the failure mode point 15 is about.
+
+15. **This is a record, not a seal, and the difference is stated because points 8 and 13 read like a
+    tamper-detection claim.** Everything in this entry -- the digest, the three triggers,
+    `WITHOUT ROWID` -- exists so that a run's authorisation is *written down in the transaction that
+    admitted it* and is never quietly rewritten by this build afterwards. None of it defends against
+    somebody with write access to the database file who intends to forge. Such a writer edits the
+    envelope and `envelope_digest` together, and the result verifies on both read surfaces. That is
+    not a defect awaiting repair: with no key and no anchor outside the file, no arrangement of
+    columns distinguishes a self-consistent forgery from the truth, and **no repair is undertaken
+    here.** What the mechanisms do buy is real and is what they are for: atomicity with admission,
+    detection of corruption and of half-writes, and a hard stop on this build ever editing a record
+    in place. What they do not buy is an assurance against a holder of the file. A reader who takes
+    `digest_verified: true` as "nobody has altered this" has read it as a seal; it says the bytes
+    hash to the digest recorded beside them, which is a smaller and more useful thing.
+
 **What this entry requires of cadenza (input to a later task, not done here).**
 
 - **A serialisation surface for the resolved contract**, with a wire schema and a `schema_version`
@@ -16628,6 +16659,14 @@ when the property is removed rather than when something near it moves:
   refusing the whole run* go red. The second is the read surface's half, added after review pointed
   out that the verifying reader had no shipped caller -- the digest column was checked only by code
   nothing ran.
+- Stop guarding either reader on the algorithm the row names: *both read surfaces refuse to check a
+  digest under an algorithm this build cannot reproduce* goes red. The two surfaces had split --
+  `run_view.ts` checked `digest_algorithm` before reporting `digest_verified`, while
+  `readDelegationRecord` did not select the column at all, so a row past the column's `CHECK` naming
+  a foreign algorithm, but carrying a correct `sha256` digest, read as **intact** through the strict
+  reader and **unverified** through the console's. The strict surface was the lenient one. Found by
+  measurement of the digest's scope (point 14), and the case pins both surfaces on one row so they
+  cannot drift apart again. Verified by mutation.
 - Accept a raw unpaired surrogate: *a raw unpaired surrogate is refused, and an escaped one is not*
   goes red, and so does *an escaped surrogate and astral text survive the database byte for byte* if
   the rule is widened to refuse the escaped form too.
