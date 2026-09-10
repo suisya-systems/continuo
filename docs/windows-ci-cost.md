@@ -7,8 +7,9 @@ and the rest of the table in section 7 remains costed and unchosen.
 
 Read `docs/ci-merge-gate.md` first for what the cells are and why there are four
 of them. The short version of why this file exists: `double-green` runs its four
-cells in parallel, so the wait is the slowest cell, and that is always Windows --
-21 to 33 minutes against single digits for ubuntu.
+cells in parallel, so the wait is the slowest cell, and that was always Windows --
+21 to 33 minutes against single digits for ubuntu. Past tense since `D-1109`: it
+is now 7 to 9 minutes, and section 5b is the measurement of that.
 
 Every number below is dated and says which machine -- and, it turns out, which
 *drive* -- produced it. That is the headline: two machines running the same
@@ -214,13 +215,23 @@ D-1003's skip may all be the same single cause. If so, this changes how often th
 cell is *red*, not just how long it is *slow*. Untested as a flakiness claim --
 it would take a run of Windows cells on `D:` to support it.
 
-### What is still not measured
+**Left unmeasured on purpose.** Confirming it means watching failure rates over
+many runs, and the operator chose to let the cells that run anyway supply that
+evidence rather than open a task to manufacture it. So this is a deliberate wait,
+not an oversight: if a later reader wants the answer, the way to get it is to
+count red Windows cells since `D-1109`, not to re-run anything.
 
-The nine files are 478s of the suite's 1149s of test work. Applying the measured
-ratio puts a suite run at roughly 474s against 652s, so the cell at about 15
-minutes against 21 -- but **the parallel pass's other 463s of work is
-extrapolation, not measurement.** The way to settle it is one `double-green`
-Windows cell run with `TMP`/`TEMP` set, which is also the adoption test.
+### The extrapolation, kept here because it was wrong in the useful direction
+
+From the nine files -- 478s of the suite's 1149s of test work -- this section
+originally predicted a suite run at roughly 474s against 652s, so the cell at
+"about 15 minutes against 21", and said in as many words that the parallel pass's
+other 463s was arithmetic rather than measurement.
+
+The measurement came in at **7m27s**. The extrapolation was conservative by
+roughly a factor of two, because the 463s that had not been measured turned out
+to be the same kind of work as the 478s that had. Section 5b has the real
+numbers.
 
 Two other things this benchmark settles, both non-obvious:
 
@@ -230,6 +241,54 @@ Two other things this benchmark settles, both non-obvious:
 - **WAL is not free**: it makes commits 29x cheaper and database *creation* 3x
   more expensive (22.3ms to 71.6ms per database on the runner). A suite that
   creates many planes and commits a few times to each could lose.
+
+## 5b. Adopted, and what it bought
+
+`D-1109`. Two adjacent runs on the same branch and the same `windows-latest,
+node 24` cell, differing in the temporary directory and nothing that touches
+Windows -- run `34515834981` (before) against `34521636568` (after). The
+`origin/main` merge between them carries #199, which only affects the nested
+suite run that D-1003 skips on Windows; both logs still report `24 passed |
+2 skipped`, so it is not in these numbers.
+
+| | before | after | ratio |
+|---|---|---|---|
+| **cell, end to end** | **22m25s** | **7m27s** | **3.0x** |
+| parallel pass, wall | 295.26s | 55.04s | 5.4x |
+| parallel pass, test work | 819.17s | 126.68s | 6.5x |
+| serial pass, wall | 395.67s | 148.72s | 2.7x |
+| serial pass, test work | 384.32s | 137.93s | 2.8x |
+
+Across all four cells, before against after (the second Windows cell is `node
+22`, and the two Windows cells disagree because runners still vary -- 22m25s and
+17m18s before, 7m27s and 9m07s after):
+
+| cell | before | after |
+|---|---|---|
+| windows, node 22 | 20m23s | **9m07s** |
+| windows, node 24 | 21m02s | **7m27s** |
+| ubuntu, node 22 | 4m18s | 3m45s |
+| ubuntu, node 24 | 3m31s | 3m42s |
+
+**ubuntu did not move**, which is the confirmation that scoping mattered: the
+step does not run there, and had the two names been set unconditionally the
+Linux cells would have moved too, since POSIX `os.tmpdir()` falls back to TMP and
+TEMP after TMPDIR.
+
+### What this changes about what to look at next
+
+The two halves have swapped places. The serial pass is now **73%** of a suite
+run (148.72s of 203.76s) where it was 56%, because the parallel pass improved
+5.4x and it improved 2.7x. Section 2's distinction is therefore more load-bearing
+than before, not less: the remaining wall clock is mostly the half where every
+file is on the critical path 1:1, and section 4 already measured that half as
+child processes rather than fsync (`workspace/materializer.test.ts`, 98%
+unchanged under durability-off, 1.3x here).
+
+The parallel pass's concurrency also fell, 2.80 to 2.30 (126.68s of work in
+55.04s of wall), because per-file fixed costs are a larger share once the fsync
+is gone. Whether `maxWorkers` is still the right number is now a different
+question from the one section 7 recorded, and still unmeasured.
 
 ## 6. What any of this is worth, and what is still guessed
 
@@ -246,12 +305,14 @@ measured.
 Still unmeasured, and named so that nobody re-derives them from a guess:
 
 - the Defender axis (section 4)
+- whether `D-1109` reduced the Windows failure rate as well as the duration
+  (section 5a -- a deliberate wait, not an oversight)
 - how many commits the suite actually performs
 - WAL's net effect across the whole suite, creation cost included
 - whether raising `maxWorkers` above the vCPU count helps a workload this
   fsync-bound
 
-## 7. Candidates, costed, none adopted
+## 7. Candidates, costed, one adopted
 
 | | effort | what it costs | status |
 |---|---|---|---|

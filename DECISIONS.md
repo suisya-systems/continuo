@@ -16870,7 +16870,9 @@ is slow at is fsync specifically -- which is exactly what `synchronous = FULL` s
 volume as `os.tmpdir()`, or that stops shipping a local `D:`, makes this entry a no-op rather than a
 mistake -- the step prints the directory it selects, so a log says which. The measured 3.0x is over
 nine files holding 478s of the suite's 1149s of test work; the cell-level figure is the `double-green`
-Windows cell's own duration before and after, which is the number to check.
+Windows cell's own duration before and after, which is the number to check. **Checked**: runs
+`34515834981` and `34521636568`, same cell, 22m25s to 7m27s -- and 20m23s to 9m07s on `node 22` --
+with ubuntu unmoved. `docs/windows-ci-cost.md` 5b holds the per-pass split.
 
 **Explicitly not claimed.** That this fixes the Windows flakiness. It may: the same `C:` measured
 82.4ms and 15.60ms per commit on two runs, 5.3x apart on one drive, which is what a network-attached
