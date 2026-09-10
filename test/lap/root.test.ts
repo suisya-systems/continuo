@@ -71,7 +71,7 @@ import {
   WorkspaceVerdict,
 } from "../../src/session/provider.js";
 import { ScriptedProvider } from "../gate_item2/helpers.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { expectRefusalAsync } from "../testkit/errors.js";
 
 /** An arbitrary fixed epoch-milliseconds instant. */
@@ -762,6 +762,11 @@ interface LapFixture {
   readonly stateRoot: string;
 }
 
+/** The schema every fixture here starts from, migrated once per file (D-0025/D-0033). */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
 /**
  * A control plane holding one run admitted to perform with `cliArgs`, and a
  * `performLap` request over it.
@@ -790,8 +795,7 @@ interface LapFixture {
  */
 function admittedRun(label: string, cliArgs: readonly string[]): LapFixture {
   const root = caseRoot(label);
-  const databasePath = join(root, "production.sqlite3");
-  createProductionControlPlane(databasePath, { nowMs: T0 }).close();
+  const databasePath = productionTemplate.copyInto(root, "production.sqlite3");
   const connection = openProductionControlPlane(databasePath);
   onTestFinished(() => {
     connection.close();

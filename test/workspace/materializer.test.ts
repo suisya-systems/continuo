@@ -56,7 +56,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
 
 import Database, { type Database as SqliteDatabase } from "better-sqlite3";
@@ -100,7 +100,7 @@ import {
   WorkspaceMaterializationRefused,
   WorkspaceMaterializationUsageError,
 } from "../../src/workspace/materializer.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusal } from "../testkit/errors.js";
 
@@ -151,6 +151,18 @@ function initRepository(root: string): GitOptions {
 }
 
 /**
+ * The migrated control plane every case here starts from, built once per file.
+ *
+ * This file asked for a migrated plane 90 times per run -- more than any other
+ * file in the suite -- at about 90ms each against about 0.45ms to copy one
+ * (D-0025/D-0033). Nothing here tests the migrator, so what each case actually
+ * needs is a plane at head, which a copy gives it identically and ~155x cheaper.
+ */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/**
  * A production control plane at head with one admitted run on it.
  *
  * `at` is a parameter for exactly one case: the containment rule wards the
@@ -159,8 +171,7 @@ function initRepository(root: string): GitOptions {
  */
 function controlPlane(root: string, at?: string): { connection: SqliteDatabase; path: string } {
   const path = at ?? join(root, "production.sqlite3");
-  mkdirSync(dirname(path), { recursive: true });
-  createProductionControlPlane(path, { nowMs: T0 }).close();
+  productionTemplate.copyInto(dirname(path), basename(path));
   const connection = openProductionControlPlane(path);
   onTestFinished(() => {
     connection.close();

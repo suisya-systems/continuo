@@ -32,13 +32,27 @@ jobs:
     # cases to it was cancelled mid-second-run -- which surfaces as `ci-gate`
     # failing on a `cancelled` result rather than as anything a log explains.
     #
-    # The cost is per-test SQLite: nearly every case builds a migrated
-    # production control plane, ~50ms locally and far worse on Windows file I/O.
-    # Copying a per-file template instead of re-migrating is ~100x cheaper and
-    # is the real fix, but it needs a suite-scoped temporary directory that
-    # `test/testkit` does not have yet, and testkit is frozen behind its own
-    # change. Until that lands, the cap has to leave room for a suite that is
-    # still growing by design.
+    # The cost *was* per-test SQLite: nearly every case built a migrated
+    # production control plane, and that is far worse on Windows file I/O than
+    # locally. The fix this comment used to name as pending has since landed --
+    # a suite-scoped temporary directory (`D-0025`) with `suiteTemplate` over it
+    # (`D-0033`), which migrates one plane per *file* and hands each case a copy.
+    # Measured on one Linux box: 70.4ms to migrate a plane against 0.45ms to
+    # copy one, N=30. The testkit freeze that blocked it is over.
+    #
+    # With that adopted everywhere it applies, the suite migrates 170 planes per
+    # run rather than 357 (37.5s of SQLite down to 17.8s, one Linux box,
+    # `suite-runs-unchanged` excluded so its nested runs are not counted twice).
+    # The 170 that remain are the ones that have to migrate: `migrator.test.ts`
+    # and `db-cli.test.ts` have migration itself under test, `lap/cli.test.ts`
+    # builds its fixture by driving the real `db create` verb, and the endpoint
+    # cases hand the migrator a wall-clock instant a fixed template cannot carry.
+    #
+    # So this cap is no longer waiting on that change, and what dominates the
+    # remaining wall clock is child processes rather than SQLite: on the same
+    # measurement `gate_item11/suite-runs-unchanged.test.ts`, which re-runs the
+    # whole suite, is ~30% of test time by itself. The cap stays where D-1103
+    # measured it for the reason below; it is not tuned to hide anything.
     #
     # 65 on Windows, not 40 (D-1103). The same slide happened again: run
     # 33781360734 (continuo#114, 2026-09-03) finished `windows-latest, node 24`
