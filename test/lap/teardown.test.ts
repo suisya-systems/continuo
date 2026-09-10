@@ -54,7 +54,7 @@ import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import { WORKSPACE_MATERIALIZED_EVENT_TYPE } from "../../src/workspace/materializer.js";
 import { observed, ScriptedProvider } from "../gate_item2/helpers.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusalAsync } from "../testkit/errors.js";
 
@@ -174,6 +174,11 @@ interface Fixture {
   readonly request: LapRequest;
 }
 
+/** The schema every fixture here starts from, migrated once per file (D-0025/D-0033). */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
 /**
  * A repository, an admitted run, and a `performLap` request over a scripted
  * provider whose `start` does whatever the case says.
@@ -183,8 +188,7 @@ function fixture(label: string, onStart: () => never, nowMs: () => number = () =
   const repository = join(root, "repo");
   initRepository(repository);
 
-  const databasePath = join(root, "production.sqlite3");
-  createProductionControlPlane(databasePath, { nowMs: T0 }).close();
+  const databasePath = productionTemplate.copyInto(root, "production.sqlite3");
   const connection = openProductionControlPlane(databasePath);
   onTestFinished(() => {
     connection.close();

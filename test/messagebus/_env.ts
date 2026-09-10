@@ -7,9 +7,13 @@ import {
 } from "../../src/control_plane/delivery_resource.js";
 import { KeyedDropbox } from "../../src/control_plane/destination.js";
 import { NOTIFY_RECIPIENT, spikeRegistry } from "../../src/control_plane/handlers.js";
-import { createProductionControlPlane } from "../../src/control_plane/migrator.js";
+import {
+  createProductionControlPlane,
+  openProductionControlPlane,
+} from "../../src/control_plane/migrator.js";
 import { type DeliveredEnvelope, MessageBus } from "../../src/messagebus/index.js";
 import { createTempDir } from "../helpers/tmp.js";
+import { suiteTemplate } from "../testkit/cases.js";
 
 /**
  * The one place this suite knows the control plane's vocabulary -- and, since
@@ -256,6 +260,17 @@ export interface BusEnvOptions {
 }
 
 /**
+ * The migrated plane a world at the suite's fixed instant starts from.
+ *
+ * Top level of the importing test file, which is where {@link suiteTemplate}
+ * has to be reached from: this module is imported at the top of each messagebus
+ * file, so each of them builds its own once and copies it per world.
+ */
+const productionTemplate = suiteTemplate("control-plane.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/**
  * One fresh world.
  *
  * `nowMs` anchors the run and lease rows: the suite's fixed instant by default,
@@ -272,7 +287,17 @@ export function makeBusEnv(root: string, tag: string, options: BusEnvOptions = {
   // ledger, the run and the lease all agree on when this world began -- the
   // endpoint cases hand in wall-clock time here for the same reason they hand it
   // to the run row.
-  const connection = createProductionControlPlane(dbPath, { nowMs });
+  // At the default instant the plane is identical for every world, so it is
+  // built once per file and copied (about 90ms against about 0.45ms,
+  // D-0025/D-0033). A caller-supplied `nowMs` still gets its own build: that is
+  // the case the paragraph above is about, and a copy would carry the
+  // template's instant in the ledger instead of the one the caller chose.
+  const connection =
+    nowMs === T0
+      ? openProductionControlPlane(
+          productionTemplate.copyInto(root, `control-plane-${tag}.sqlite3`),
+        )
+      : createProductionControlPlane(dbPath, { nowMs });
   connection
     .prepare(
       "INSERT INTO run (run_id, status, created_at_ms, updated_at_ms) VALUES (?, 'running', ?, ?)",

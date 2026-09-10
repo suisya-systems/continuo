@@ -16,7 +16,7 @@ import {
 } from "../../src/control_plane/migrator.js";
 import { gateCliSeams } from "../../src/gate/cli.js";
 import { OPERATOR_CLOSE_OUTCOMES, relayMessageId } from "../../src/gate/operator.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { patchSeam } from "../testkit/seams.js";
 
 /**
@@ -85,6 +85,17 @@ function countedClock(instant: number): { reads: () => number } {
 }
 
 /**
+ * The migrated control plane both fixtures below start from, built once per file.
+ *
+ * Nothing here tests the migrator: every case wants a plane at head so it can
+ * drive a `gate` verb against it. Building one per case cost about 90ms against
+ * about 0.45ms to copy one (D-0025/D-0033), and this file asked for 43 of them.
+ */
+const productionTemplate = suiteTemplate("control-plane.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
+/**
  * A production control plane holding one open `worker_escalation` gate.
  *
  * Written through `openGate` and raw rows rather than through `lap perform`:
@@ -100,8 +111,8 @@ function aDatabaseWithAGate(
   } = {},
 ): { readonly path: string; readonly destination: string } {
   const root = caseRoot(label);
-  const path = join(root, "control-plane.sqlite3");
-  const connection: SqliteDatabase = createProductionControlPlane(path, { nowMs: T0 });
+  const path = productionTemplate.copyInto(root, "control-plane.sqlite3");
+  const connection: SqliteDatabase = openProductionControlPlane(path);
   try {
     connection
       .prepare<[string, number, number]>(
@@ -649,9 +660,7 @@ function addUnrelayedMessage(path: string, deliveryResource: string): string {
 
 /** A production control plane with no gate in it at all. */
 function aDatabaseWithNoGates(label: string): string {
-  const path = join(caseRoot(label), "control-plane.sqlite3");
-  createProductionControlPlane(path, { nowMs: T0 }).close();
-  return path;
+  return productionTemplate.copyInto(caseRoot(label), "control-plane.sqlite3");
 }
 
 describe("continuo#155: the JSON documents a host reads", () => {

@@ -66,7 +66,7 @@ import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import { MCP_CONFIG_FILENAME, MCP_SERVER_NAME } from "../../src/workspace/materializer.js";
 import { observed, ScriptedProvider } from "../gate_item2/helpers.js";
-import { caseRoot } from "../testkit/cases.js";
+import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { aDelegationRecord } from "../testkit/delegation.js";
 import { expectRefusal, expectRefusalAsync } from "../testkit/errors.js";
 
@@ -156,10 +156,14 @@ function fire(tick: ArmedTick): void {
   tick.fire();
 }
 
+/** The schema every fixture here starts from, migrated once per file (D-0025/D-0033). */
+const productionTemplate = suiteTemplate("production.sqlite3", (path) => {
+  createProductionControlPlane(path, { nowMs: T0 }).close();
+});
+
 /** A control plane with nothing in it but a schema. */
 function plane(label: string): SqliteDatabase {
-  const path = join(caseRoot(label), "production.sqlite3");
-  createProductionControlPlane(path, { nowMs: T0 }).close();
+  const path = productionTemplate.copyInto(caseRoot(label), "production.sqlite3");
   const connection = openProductionControlPlane(path);
   onTestFinished(() => {
     connection.close();
@@ -500,8 +504,7 @@ function fixture(label: string, nowMs: () => number = () => T0): Fixture {
   const repository = join(root, "repo");
   initRepository(repository);
 
-  const databasePath = join(root, "production.sqlite3");
-  createProductionControlPlane(databasePath, { nowMs: T0 }).close();
+  const databasePath = productionTemplate.copyInto(root, "production.sqlite3");
   const connection = openProductionControlPlane(databasePath);
   onTestFinished(() => {
     connection.close();
