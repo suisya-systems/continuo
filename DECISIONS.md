@@ -211,6 +211,7 @@ spaces distinct.
 | D-1105 | `lap perform --state-root` is a parent, and the lap's state root is derived from the run id | accepted |
 | D-1106 | The liveness observation is taken before the transcript read it is composed with | accepted |
 | D-1107 | The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely | accepted |
+| D-1108 | `D-1003`'s nested `fileParallelism: false` is removed: it only ever ran where the contention it guarded against never was | accepted |
 
 ---
 
@@ -16739,3 +16740,74 @@ anywhere else because the rule this organization settled the same week is that a
 taken by two concurrent tasks is not avoided by announcing intentions -- read-then-take has no
 atomicity, so the collision is allowed to happen, made visible, and resolved by whoever lands
 second. This entry landed third.
+
+---
+
+## D-1108 -- `D-1003`'s nested `fileParallelism: false` is removed: it only ever ran where the contention it guarded against never was
+
+**Context.** Issue #198. `test/gate_item11/suite-runs-unchanged.test.ts` is the single most
+expensive file in the suite: measured here at **90s of a 147s full-suite run** on a 5-core Linux
+box at seed `199925462`, roughly a third of the whole. The cost is structural and intended -- the
+file's premise (`D-1002`) is running the real, unmodified `test/control_plane` suite as a real
+subprocess, once unbound and once per provider -- so the question Issue #198 asks is whether any of
+it can come off without narrowing what item 11 measures.
+
+**Diagnosis.** It can, and the piece that comes off is one line, for a reason visible only when
+`D-1003`'s two halves are read together:
+
+1. `D-1003` responded to a Windows CI contention failure with **two** changes: every case in
+   `suite-runs-unchanged.test.ts` skips on Windows, *and* the nested config serialises its own
+   files with `fileParallelism: false`. The second was applied "alongside, not instead of" the
+   first, on the stated grounds that it is "cheap and risk-free".
+2. Those two changes do not overlap. The skip means the nested run **never executes on Windows at
+   all**, so the serialisation only ever takes effect on the platforms where the contention it
+   guards against was never observed -- `ubuntu-latest` passed both cells in ~2.5 minutes in the
+   very run `D-1003` was written from.
+3. It is not cheap there. Measured on this box, one nested unbound run of `test/control_plane`
+   (22 files, 956 cases) takes **31s serialised** and **12s parallel**; the outer suite already
+   runs those same files in parallel under `vitest.config.ts` every time.
+
+So the line costs the platforms that run it about 19s per nested run, three nested runs deep, and
+buys the platform it was written for nothing, because that platform does not run it.
+
+**Decision.** Remove `fileParallelism: false` from
+`test/gate_item11/support/suite-runs-unchanged.config.ts`. `D-1003`'s Windows skip -- the half that
+actually answers the failure `D-1003` was written from -- is untouched, as is every assertion in
+`suite-runs-unchanged.test.ts`, the nested config's `include`, its `isolate: true`, and its
+`sequence.concurrent: false`.
+
+**Why this narrows nothing.** Both nested runs read the same config, so both are scheduled the same
+way; the comparison is between two runs that still differ only in whether `CONTINUO_ITEM11_PROVIDER`
+is set. What the file asserts is a set of per-test ids, per-test and per-file outcomes, and per-file
+SHA-256 digests -- none of which is a function of the order or concurrency the files were scheduled
+in. The unmodified `test/control_plane` suite is already required to pass under file parallelism
+*and* a shuffled order in every ordinary run of the outer suite, so nothing here subjects it to a
+regime it does not already have to survive twice per CI cell.
+
+**Measured, seed `199925462`, 5-core Linux, `npm run build` fresh:**
+
+| | before | after |
+| --- | --- | --- |
+| `suite-runs-unchanged.test.ts` alone | 94.7s | 38.5s |
+| full suite (112 files, 3626 cases) | 147.2s | 88.1s |
+
+Both after-runs green, same counts. Windows is unaffected by construction: the file is skipped
+there.
+
+**Alternatives rejected.** Capping the nested run's workers rather than uncapping it entirely was
+measured (`maxWorkers: 2` -> 58.6s, `maxWorkers: 3` -> 46.9s for the file alone) and rejected: the
+cap protects only the platforms where no contention was ever measured, at a cost of most of the win,
+and any particular number for it would be arbitrary. Issue #198's other two suggestions -- a
+narrower subject for the double-run, and caching a run keyed on its inputs -- both weaken what
+`D-1002` deliberately buys (the whole real suite, observed rather than assumed) and are not taken.
+
+**Falsifier.** If a Linux (or any non-Windows) cell begins showing `D-1003`'s signature -- an
+unrelated file blowing a tuned budget, or `support/run.ts`'s `the ... run wrote no report` with
+empty `stdout`/`stderr`, which is what its 300s `spawnSync` timeout looks like -- the nested run is
+oversubscribing that runner too, and the answer is a measured `maxWorkers` cap here rather than a
+return to full serialisation. `D-1003`'s own falsifier (revisit the Windows skip if the pressure
+goes away) stands unchanged; this decision does not discharge it.
+
+**Source.** Task `continuo-suite-runs-unchanged-cost`, 2026-09-11, Issue #198. Decision id `D-1108`,
+the next in the `D-11xx` band opened by `D-1101`, taken after checking that `D-1107` was the highest
+id in use.

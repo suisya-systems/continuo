@@ -31,7 +31,7 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const CONFIG_PATH = join(REPO_ROOT, "test/gate_item11/support/suite-runs-unchanged.config.ts");
 const VITEST_ENTRY = join(REPO_ROOT, "node_modules/vitest/vitest.mjs");
 
-/** Long enough for a subprocess double-run of `test/control_plane` (measured ~7s unbound). */
+/** Long enough for a subprocess run of `test/control_plane` (measured ~12s unbound, D-1108). */
 const RUN_TIMEOUT_MS = 300_000;
 
 interface JsonReporterFile {
