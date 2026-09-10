@@ -1,8 +1,9 @@
 # Where the Windows CI cell's wall clock goes
 
-A measurement record, not a decision. Nothing here has been adopted: the point of
-the investigation it comes from was to replace a set of plausible guesses with
-numbers, and the candidates in the last section are costed but unchosen.
+A measurement record. The investigation it comes from existed to replace a set of
+plausible guesses with numbers; one of the candidates it produced has since been
+adopted (`DECISIONS.md` `D-1109` -- the temporary directory's drive, section 5a),
+and the rest of the table in section 7 remains costed and unchosen.
 
 Read `docs/ci-merge-gate.md` first for what the cells are and why there are four
 of them. The short version of why this file exists: `double-green` runs its four
@@ -254,7 +255,7 @@ Still unmeasured, and named so that nobody re-derives them from a guess:
 
 | | effort | what it costs | status |
 |---|---|---|---|
-| Point the suite's temp directory at `RUNNER_TEMP` (`D:`) | one env var | nothing: no durability claim, journal mode or test changes | **measured, 3.0x (section 5a)** |
+| Point the suite's temp directory at `RUNNER_TEMP` (`D:`) | one env var | nothing: no durability claim, journal mode or test changes | **adopted, `D-1109`** -- measured 3.0x (section 5a) |
 | Defender exclusion in CI | 3 lines | nothing on a disposable runner | still unmeasured, and now lower value: the fsync cost was the drive |
 | `journal_mode = WAL` for test planes only | medium | test and production planes stop sharing a journal mode; `connection.ts` declines WAL for three stated reasons; creation gets 3x dearer | **not needed** -- `D:` is faster and costs nothing |
 | Reduce commits per case | large | nothing semantic | commit count unmeasured; less pressing at 1.14ms a commit |

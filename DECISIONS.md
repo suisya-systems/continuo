@@ -212,6 +212,7 @@ spaces distinct.
 | D-1106 | The liveness observation is taken before the transcript read it is composed with | accepted |
 | D-1107 | The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely | accepted |
 | D-1108 | `D-1003`'s nested `fileParallelism: false` is removed: it only ever ran where the contention it guarded against never was | accepted |
+| D-1109 | The Windows cells put the suite's temporary directory on the runner's local disk, because that is where the cell's wall clock was going | accepted |
 
 ---
 
@@ -16811,3 +16812,72 @@ goes away) stands unchanged; this decision does not discharge it.
 **Source.** Task `continuo-suite-runs-unchanged-cost`, 2026-09-11, Issue #198. Decision id `D-1108`,
 the next in the `D-11xx` band opened by `D-1101`, taken after checking that `D-1107` was the highest
 id in use.
+
+## D-1109 -- The Windows cells put the suite's temporary directory on the runner's local disk, because that is where the cell's wall clock was going
+
+**Context.** `double-green` runs its four cells in parallel, so the wait for a merge is the slowest
+cell, and that has always been Windows: 21 to 33 minutes against single digits for ubuntu. Three
+prior entries treated pieces of this as a fact about the platform. `D-0012` fixes
+`synchronous = FULL` and the `vitest.config.ts` comment above `testTimeout` explains the suite's
+timeouts by "Windows file I/O". `D-0052` recorded one test at 28ms on linux, 321ms on a healthy
+windows runner and 13,556ms on a slow one -- a 42x spread with no code between the last two -- and
+scaled the budgets to absorb it as runner luck. `D-1003` skipped a file outright on Windows, and
+`D-0048` serialized the child-process tests there. `D-1103` raised the cap to 65 minutes because the
+suite kept outgrowing it.
+
+The investigation behind this entry measured rather than assumed, and `docs/windows-ci-cost.md`
+holds the whole of it. Two findings matter here. First, 97% of the cell is the two suite runs and
+essentially all of that is `tests` rather than transform, import or setup, and the per-file excess
+over ubuntu on the same commit sits in files that spawn no child process at all
+(`canary/audit.test.ts`, 1.4s against 87.9s). Second, and this is the part that overturns the
+platform explanation: the same benchmark that costs 82.4ms per commit on `windows-latest` costs
+1.94ms on a developer's own Windows machine -- which is *faster* than that developer's Linux. Two
+Windows machines, 42x apart, which is D-0052's own number.
+
+The cause is that the suite writes to the wrong disk. The runner checks the workspace out onto `D:`,
+the local ephemeral SSD, while `test/helpers/tmp.ts` creates every test database under
+`os.tmpdir()`, which on that image is `C:\Users\RUNNER~1\AppData\Local\Temp` -- the
+network-attached OS disk. Measured in one job with nothing else varying (run `34515834981`): one
+commit under the control plane's rollback journal costs **15.60ms on `C:` and 1.14ms on `D:`**,
+database creation 13.61ms against 1.60ms, and the nine heaviest files **129.24s against 43.78s** of
+test time. A plain 64KiB file create-and-delete moves only 1.6x across the same pair, so what `C:`
+is slow at is fsync specifically -- which is exactly what `synchronous = FULL` spends its time on.
+
+**Decision.**
+
+1. **The Windows `double-green` cells set `TEMP` and `TMP` to `RUNNER_TEMP` before the suite runs.**
+   Both names, because Node's `os.tmpdir()` reads TEMP before TMP on win32 and the result should not
+   depend on which the image defines. Written into `GITHUB_ENV` from one step rather than onto the
+   two suite steps, so that an edit cannot move one lap and not the other.
+
+2. **This is preferred over every other candidate because it gives up nothing.** No durability claim,
+   journal mode, timeout, or test changes. On the same measurement it also beats abandoning
+   durability outright: `D:` at `synchronous = FULL` is 43.78s where `C:` at `synchronous = OFF` is
+   70.9s. So `D-0012` stands, `src/control_plane/connection.ts`'s three reasons for declining WAL
+   stand, and `D-0052`'s budgets and `D-1103`'s cap are untouched -- this entry removes a cost, not a
+   property.
+
+3. **The Linux cells are untouched, and not by a conditional on the value.** The step itself does not
+   run on ubuntu. That distinction is load-bearing: on POSIX `os.tmpdir()` falls back to TMP and TEMP
+   after TMPDIR, so setting these names unconditionally would quietly move the Linux cells too, which
+   nothing here has measured.
+
+4. **`ci-gate` is unchanged.** It reads no temporary directory, and "every required cell green twice
+   under random ordering" (`D-0005`) gates the merge exactly as strictly before and after.
+
+**What would falsify this.** The unit costs above are from run `34515834981` on the
+`windows-latest` image as it stood on 2026-09-10; a runner image that puts `RUNNER_TEMP` on the same
+volume as `os.tmpdir()`, or that stops shipping a local `D:`, makes this entry a no-op rather than a
+mistake -- the step prints the directory it selects, so a log says which. The measured 3.0x is over
+nine files holding 478s of the suite's 1149s of test work; the cell-level figure is the `double-green`
+Windows cell's own duration before and after, which is the number to check.
+
+**Explicitly not claimed.** That this fixes the Windows flakiness. It may: the same `C:` measured
+82.4ms and 15.60ms per commit on two runs, 5.3x apart on one drive, which is what a network-attached
+disk with neighbours looks like, and continuo #83's roughly one-in-five Windows failures are two
+thirds timeouts rather than assertions. `D-0052`'s 42x, #83, and `D-1003`'s skip may all be this one
+cause. That is an **inference from the speed measurement, not a measurement of failure rates**, and
+nothing here has run enough Windows cells to support it. `D-1003`'s skip and `D-0048`'s
+serialization therefore stay exactly as they are until someone measures that separately -- and
+`workspace/materializer.test.ts`, which improves only 1.3x here, is evidence that the serial half is
+a different problem.
