@@ -68,7 +68,7 @@ export default defineConfig({
     // job is to shut down the TypeScript parser's compiler child process at
     // the end of the file; see test/helpers/parser-lifecycle.ts for why that
     // cannot be left to the files that parse.
-    setupFiles: ["test/helpers/parser-lifecycle.ts"],
+    setupFiles: ["test/helpers/parser-lifecycle.ts", "test/helpers/profile-pragmas.ts"],
 
     // Fail closed on an empty selection: a glob that stops matching must not
     // read as "everything passed".

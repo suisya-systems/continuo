@@ -257,6 +257,123 @@ jobs:
         # files -- months later, with the breaking diff long gone.
         run: npm run inventory
 
+  windows-profile:
+    # TEMPORARY, and deliberately outside `ci-gate`'s `needs`: this job measures
+    # rather than gates, and it is meant to be deleted once the question it was
+    # opened for is answered.
+    #
+    # The question is where the Windows cell's 21-33 minutes go. Two thirds of
+    # that is already answered from the logs of runs that have happened: on run
+    # 34506576632 the `windows-latest, node 24` cell spent 32s on everything
+    # that is not the suite (checkout, install, type-check, both builds) and
+    # 1229s inside the two `npm test` steps, and vitest's own breakdown puts
+    # essentially all of that in `tests` rather than transform, import or setup.
+    # Per file, against the ubuntu cell on the same commit, the excess is 6.8x
+    # overall and is NOT concentrated in the child-process tests that D-0048
+    # serializes: `test/canary/audit.test.ts` is 61.7x (1.4s -> 87.9s),
+    # `test/canary/ledger.test.ts` 54.6x, `test/gate/operator.test.ts` 44.9x --
+    # files whose cases open a SQLite database and commit to it and do nothing
+    # else.
+    #
+    # What a log cannot decide is *why* those commits cost what they do, because
+    # two mechanisms predict the same per-test number: an fsync that is
+    # genuinely slower on the runner's filesystem (`synchronous = FULL`,
+    # D-0012), and Defender scanning every file a commit touches. So this runs
+    # the same ten files four times -- durability on and off, crossed with the
+    # scanner excluded and not -- and a unit-cost benchmark to divide the result
+    # by. Ubuntu runs the same arms as the control.
+    name: windows-profile (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    env:
+      # The arms run at one worker so that a file's number is that file's cost
+      # rather than its share of the contention D-0048 measured separately, and
+      # at a fixed seed so the four arms shuffle identically.
+      CONTINUO_TEST_SEED: "20260911"
+      # The ten files with the largest absolute windows-over-ubuntu excess on
+      # run 34506576632, none of which spawns a child process -- so what is
+      # being measured is the control plane's own file I/O.
+      PROFILE_FILES: >-
+        test/canary/audit.test.ts
+        test/canary/ledger.test.ts
+        test/canary/routing.test.ts
+        test/control_plane/ci-ingest.test.ts
+        test/control_plane/events.test.ts
+        test/control_plane/gates.test.ts
+        test/gate/cli.test.ts
+        test/gate/operator.test.ts
+        test/measurement/ac9.test.ts
+        test/messagebus/messagebus.test.ts
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install from the lockfile
+        run: npm ci --ignore-scripts
+
+      - name: Build the distribution
+        # The arms call vitest directly rather than `npm test`, so nothing else
+        # here runs `pretest`; a few of the profiled files assert against dist/.
+        run: npm run build
+
+      - name: Unit cost of a commit and of a database
+        run: node scripts/profile-sqlite-cost.mjs
+
+      - name: Arm A -- durability on, scanner on
+        # Every arm runs even when an earlier one is red: this is one push on a
+        # runner that takes twenty minutes to answer, and a missing arm costs
+        # another whole round trip. `!cancelled()` rather than `always()` so a
+        # job the operator stops still stops.
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
+
+      - name: Arm B -- durability off, scanner on
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CONTINUO_PROFILE_SYNCHRONOUS: "OFF"
+        run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
+
+      - name: Exclude the workspace and the temp directory from Defender
+        # Windows only, and only from here on: arms A and B above are the
+        # scanner-on half of the cross. `runs-on: windows-latest` is
+        # administrator, so this needs no elevation.
+        if: ${{ !cancelled() && matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
+          Add-MpPreference -ExclusionProcess 'node.exe'
+          (Get-MpPreference).ExclusionPath
+          (Get-MpPreference).ExclusionProcess
+
+      - name: Arm C -- durability on, scanner excluded
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
+
+      - name: Arm D -- durability off, scanner excluded
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CONTINUO_PROFILE_SYNCHRONOUS: "OFF"
+        run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
+
+      - name: Unit cost again, with the scanner excluded
+        if: ${{ !cancelled() }}
+        run: node scripts/profile-sqlite-cost.mjs
+
   ci-gate:
     # THE REQUIRED CHECK. The default-branch ruleset references this literal
     # name and no other. Matrix leg names embed their matrix values, so making
