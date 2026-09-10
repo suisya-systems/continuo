@@ -21,16 +21,13 @@ import { runnerTimeoutMs } from "../../helpers/runner-timeouts.js";
  * a run invoked without it fails loud rather than overwriting a stray default
  * file two concurrent runs might share.
  *
- * `fileParallelism: false` (D-1003, applied everywhere, not only on the
- * Windows cell `suite-runs-unchanged.test.ts` itself skips): this nested run's
- * 14 files run one at a time instead of concurrently, so it does not also
- * multiply the thread count it competes with the *outer* suite's own parallel
- * files for. Cheap and risk-free -- it can only lengthen this nested run's own
- * wall time, never widen what it measures -- but D-1003 treats it as a
- * supplement to `suite-runs-unchanged.test.ts`'s own Windows skip, not a
- * substitute for it: nothing here was measured to be sufficient alone against
- * a Windows CI runner already saturated by the outer suite's own worker pool,
- * and CI is the only place that contention is reproducible at all.
+ * This run's files are *not* serialised. D-1003 added `fileParallelism: false`
+ * here to spare the Windows runner whose contention failure it responded to,
+ * and in the same decision skipped every case in
+ * `suite-runs-unchanged.test.ts` on Windows -- so the serialisation only ever
+ * took effect on the platforms where that contention was never observed, while
+ * costing them the whole of it. D-1108 removes it; the Windows skip, which is
+ * what actually answers D-1003's failure, is untouched.
  */
 
 const REPORT_ENV = "CONTINUO_ITEM11_REPORT";
@@ -66,7 +63,6 @@ export default defineConfig({
       concurrent: false,
     },
     isolate: true,
-    fileParallelism: false,
     globalSetup: ["test/gate_item11/support/provider-plugin.ts"],
     reporters: ["json"],
     outputFile: report,

@@ -84,7 +84,7 @@ const S2_UNAVAILABLE = S2.unavailable();
 const S2_SKIP = WINDOWS || S2_UNAVAILABLE !== null;
 const S2_SKIP_REASON = WINDOWS ? WINDOWS_SKIP_REASON : (S2_UNAVAILABLE ?? "");
 
-/** Generous headroom over the measured ~7s per subprocess run of `test/control_plane`. */
+/** Generous headroom over the measured ~12s per subprocess run of `test/control_plane`. */
 const CASE_TIMEOUT_MS = 900_000;
 
 function outcomeIds(run: RunResult): string[] {
