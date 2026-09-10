@@ -10,9 +10,14 @@
  * denominated in, so the suite-level arms alongside it have a cost per commit
  * to be divided by.
  *
- * Everything here opens the database the way `src/control_plane/connection.ts`
- * does -- WAL, `foreign_keys = ON` -- and varies only `synchronous`, which is
- * the pragma D-0012 fixes at FULL.
+ * Journal mode is one of the two axes rather than a constant, because the
+ * control plane is deliberately NOT in WAL: `src/control_plane/connection.ts`
+ * and `src/canary/ledger.ts` both stay on SQLite's rollback journal, which
+ * creates and deletes a `-journal` file per transaction. That is a different
+ * cost from a WAL append under both candidate explanations -- more fsyncs, and
+ * two directory entries per commit for a scanner to notice -- so a WAL-only
+ * number would be the wrong denominator for the files being profiled. `delete`
+ * is the mode those files actually run in; `wal` is here as the contrast.
  *
  * ASCII only: this prints on the cp932 Windows console
  * (docs/cli-output-policy.md).
@@ -40,10 +45,12 @@ process.on("exit", () => {
 });
 
 let counter = 0;
-function openDatabase(synchronous) {
+function openDatabase(journal, synchronous) {
   const path = join(root, `plane-${counter++}.db`);
   const connection = new Database(path);
-  connection.pragma("journal_mode = WAL");
+  // `delete` is SQLite's default and therefore what the control plane gets;
+  // it is set explicitly so that the two arms differ in exactly this pragma.
+  connection.pragma(`journal_mode = ${journal}`);
   connection.pragma("foreign_keys = ON");
   connection.pragma(`synchronous = ${synchronous}`);
   connection.exec("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)");
@@ -59,45 +66,49 @@ function millis(work) {
 function report(label, total, n, unit) {
   const per = (total / n).toFixed(3);
   console.log(
-    `  ${label.padEnd(34)} ${total.toFixed(0).padStart(7)}ms total  ${per.padStart(9)}ms/${unit}`,
+    `  ${label.padEnd(44)} ${total.toFixed(0).padStart(7)}ms total  ${per.padStart(9)}ms/${unit}`,
   );
 }
 
 console.log(`platform ${process.platform} node ${process.version} tmp ${root}`);
 
 console.log("\ncommit cost, one INSERT per transaction:");
-for (const synchronous of ["FULL", "NORMAL", "OFF"]) {
-  const { connection } = openDatabase(synchronous);
-  const insert = connection.prepare("INSERT INTO t (v) VALUES (?)");
-  const commit = connection.transaction((v) => insert.run(v));
-  // One warm commit outside the measurement: the first one pays for the WAL
-  // file's creation, which is the create arm's business rather than this one's.
-  commit("warmup");
-  report(
-    `synchronous = ${synchronous}`,
-    millis(() => {
-      for (let i = 0; i < COMMITS; i++) {
-        commit(`row-${i}`);
-      }
-    }),
-    COMMITS,
-    "commit",
-  );
-  connection.close();
+for (const journal of ["delete", "wal"]) {
+  for (const synchronous of ["FULL", "NORMAL", "OFF"]) {
+    const { connection } = openDatabase(journal, synchronous);
+    const insert = connection.prepare("INSERT INTO t (v) VALUES (?)");
+    const commit = connection.transaction((v) => insert.run(v));
+    // One warm commit outside the measurement: the first one pays for the
+    // journal file's creation, which is the create arm's business.
+    commit("warmup");
+    report(
+      `journal_mode = ${journal}, synchronous = ${synchronous}`,
+      millis(() => {
+        for (let i = 0; i < COMMITS; i++) {
+          commit(`row-${i}`);
+        }
+      }),
+      COMMITS,
+      "commit",
+    );
+    connection.close();
+  }
 }
 
 console.log("\ndatabase create + schema + close, the per-case fixture cost:");
-for (const synchronous of ["FULL", "OFF"]) {
-  report(
-    `synchronous = ${synchronous}`,
-    millis(() => {
-      for (let i = 0; i < CREATES; i++) {
-        openDatabase(synchronous).connection.close();
-      }
-    }),
-    CREATES,
-    "database",
-  );
+for (const journal of ["delete", "wal"]) {
+  for (const synchronous of ["FULL", "OFF"]) {
+    report(
+      `journal_mode = ${journal}, synchronous = ${synchronous}`,
+      millis(() => {
+        for (let i = 0; i < CREATES; i++) {
+          openDatabase(journal, synchronous).connection.close();
+        }
+      }),
+      CREATES,
+      "database",
+    );
+  }
 }
 
 console.log("\nplain file write + delete, no SQLite, for the scanner's share:");

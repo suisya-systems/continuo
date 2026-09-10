@@ -39,18 +39,28 @@ if (level !== undefined && level !== "") {
   type Hookable = Record<string, (this: object, ...args: unknown[]) => unknown>;
   const prototype = Database.prototype as unknown as Hookable;
   const forced = new WeakSet<object>();
+  const setLevel = /^\s*synchronous\s*=/i;
+  // Captured before anything is patched: the first-use hook has to reach the
+  // real pragma from inside a patched `prepare` or `exec` as well.
+  const applyPragma = prototype["pragma"] as (this: object, source: string) => unknown;
 
   for (const method of ["pragma", "prepare", "exec"] as const) {
     const original = prototype[method] as (this: object, ...args: unknown[]) => unknown;
     prototype[method] = function patched(this: object, ...args: unknown[]) {
       if (!forced.has(this)) {
-        // Before the guard is armed, not after: `pragma` is one of the hooked
+        // Before the pragma below, not after: `pragma` is one of the hooked
         // methods, so an unguarded call here would recurse forever.
         forced.add(this);
-        (prototype["pragma"] as (this: object, source: string) => unknown).call(
-          this,
-          `synchronous = ${level}`,
-        );
+        applyPragma.call(this, `synchronous = ${level}`);
+      }
+      // The first-use hook alone is not enough, and this is the half that is
+      // easy to leave out: `configureConnection` sets `synchronous = FULL`
+      // *after* the connection has been used, and so does the canary ledger,
+      // which would put durability back on in the arm that exists to take it
+      // off -- silently, because the arm's own log line would still say OFF.
+      // So a later assignment is rewritten rather than passed through.
+      if (method === "pragma" && typeof args[0] === "string" && setLevel.test(args[0])) {
+        args[0] = `synchronous = ${level}`;
       }
       return original.apply(this, args);
     };
