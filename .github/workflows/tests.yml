@@ -48,11 +48,16 @@ jobs:
     # builds its fixture by driving the real `db create` verb, and the endpoint
     # cases hand the migrator a wall-clock instant a fixed template cannot carry.
     #
-    # So this cap is no longer waiting on that change, and what dominates the
-    # remaining wall clock is child processes rather than SQLite: on the same
-    # measurement `gate_item11/suite-runs-unchanged.test.ts`, which re-runs the
-    # whole suite, is ~30% of test time by itself. The cap stays where D-1103
-    # measured it for the reason below; it is not tuned to hide anything.
+    # So this cap is no longer waiting on that change. The sentence that used to
+    # stand here -- that child processes rather than SQLite dominate the
+    # remaining wall clock -- was true of the Linux measurement it cited and is
+    # NOT true of the Windows cell, which is the one that sets the wait. Measured
+    # per file against ubuntu on the same commit, the Windows excess is
+    # concentrated in files that never spawn anything (`canary/audit.test.ts`
+    # 1.4s -> 87.9s), and removing durability takes those to 4-7% of their time.
+    # `docs/windows-ci-cost.md` holds the numbers, both halves of the split, and
+    # the candidates; read it before tuning anything here. The cap stays where
+    # D-1103 measured it for the reason below; it is not tuned to hide anything.
     #
     # 65 on Windows, not 40 (D-1103). The same slide happened again: run
     # 33781360734 (continuo#114, 2026-09-03) finished `windows-latest, node 24`
@@ -111,6 +116,46 @@ jobs:
         # the runner's worker bootstrap, and the runner's error names workers
         # rather than SQLite. This step makes the log name the real cause.
         run: npm run smoke:native
+
+      - name: Put the suite's temporary files on the runner's local disk
+        # Windows only, and the largest single thing measured about this cell.
+        #
+        # `test/helpers/tmp.ts` creates every test database under
+        # `os.tmpdir()`, which on the windows-latest image resolves to
+        # `C:\Users\RUNNER~1\AppData\Local\Temp` -- the network-attached OS
+        # disk -- while the workspace is checked out onto `D:`, the local
+        # ephemeral SSD. Measured in one job with nothing else varying
+        # (`docs/windows-ci-cost.md` 5a): one commit under the control plane's
+        # rollback journal costs 15.60ms on `C:` and 1.14ms on `D:`, and the
+        # nine heaviest files go from 129.24s to 43.78s of test time. A plain
+        # file create-and-delete moves only 1.6x over the same pair, so what
+        # `C:` is slow at is fsync, which is what `synchronous = FULL` (D-0012)
+        # spends its time on.
+        #
+        # This is the reason to prefer it over every other candidate: it moves
+        # a temporary directory. No durability claim, journal mode, timeout or
+        # test changes, and on the same measurement it beats abandoning
+        # durability outright (43.78s here against 70.9s at
+        # `synchronous = OFF` on `C:`).
+        #
+        # Written into the environment rather than set on the two suite steps
+        # so that one edit cannot move one run and not the other. Both names
+        # are set because Node's `os.tmpdir()` reads TEMP before TMP on win32
+        # and the choice should not depend on which one the image happens to
+        # define.
+        #
+        # ubuntu is untouched -- not by an `if:` on the value, but because the
+        # step itself does not run there. That matters: on POSIX `os.tmpdir()`
+        # falls back to TMP and TEMP after TMPDIR, so setting these globally
+        # would quietly move the Linux cells too, which nothing here has
+        # measured.
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "suite temporary directory -> $RUNNER_TEMP"
 
       - name: Derive two distinct seeds for this cell
         id: seeds
