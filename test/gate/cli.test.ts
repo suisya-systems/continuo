@@ -8,14 +8,14 @@ import {
   DELIVERY_LEASE_RESOURCE,
   deliveryResourceForRun,
 } from "../../src/control_plane/delivery_resource.js";
-import { openGate } from "../../src/control_plane/gates.js";
+import { CLOSE_OUTCOME_STAGES, GATE_STAGES, openGate } from "../../src/control_plane/gates.js";
 import { acquire } from "../../src/control_plane/lease.js";
 import {
   createProductionControlPlane,
   openProductionControlPlane,
 } from "../../src/control_plane/migrator.js";
 import { gateCliSeams } from "../../src/gate/cli.js";
-import { relayMessageId } from "../../src/gate/operator.js";
+import { OPERATOR_CLOSE_OUTCOMES, relayMessageId } from "../../src/gate/operator.js";
 import { caseRoot, suiteTemplate } from "../testkit/cases.js";
 import { patchSeam } from "../testkit/seams.js";
 
@@ -1953,5 +1953,102 @@ describe("D-1104: the delivery resource an operator names", () => {
           "own resource",
       },
     });
+  });
+});
+
+/**
+ * `continuo#186`: `gate close --outcome` advertised three outcomes and applied
+ * two preconditions its help did not mention.
+ *
+ * Rondo's second lap-1 dogfood walked all four outcomes and paid three
+ * refusals and one extra lap for it (`docs/operations/lap-1-dogfood.md` 10.9
+ * F-16, 10.12 issue 10): every message was correct, and none of them was
+ * readable before the command was typed. The rules are the domain's and are
+ * unchanged -- `test/control_plane/gates.test.ts` owns the reachable-from
+ * table and `test/gate/operator.test.ts` owns the deadline -- so what is
+ * asserted here is only that the flag's help states them, and that the two it
+ * states really do fire.
+ */
+describe("continuo#186: gate close's preconditions are on the help screen", () => {
+  /** How the help names one outcome's reachable-from stages. */
+  function reachableFromPhrase(outcome: string): string {
+    const reachable = CLOSE_OUTCOME_STAGES[outcome];
+    expect(reachable, `no CLOSE_OUTCOME_STAGES entry for '${outcome}'`).toBeDefined();
+    const stages = GATE_STAGES.filter((stage) => reachable?.has(stage));
+    if (stages.length === 1) {
+      return `'${outcome}' from ${String(stages[0])} alone`;
+    }
+    const last = String(stages[stages.length - 1]);
+    return `'${outcome}' from ${stages.slice(0, -1).join(", ")} or ${last}`;
+  }
+
+  test("--outcome's help names the stage each advertised outcome is reachable from", () => {
+    // Read out of `CLOSE_OUTCOME_STAGES` rather than spelled here, so a change
+    // to the table that the help does not follow turns this red. A hand-copied
+    // expectation would agree with a stale help screen forever, which is the
+    // state the issue is about.
+    const help = helpStrings(buildParser()).join("\n");
+    const at = help.indexOf("the terminal outcome");
+    expect(at, "the --outcome help is no longer findable").toBeGreaterThanOrEqual(0);
+    const text = help.slice(at, at + 1000);
+    for (const outcome of OPERATOR_CLOSE_OUTCOMES) {
+      expect(text, outcome).toContain(reachableFromPhrase(outcome));
+    }
+    // And the second precondition, which no stage table can carry: 'expired'
+    // is a fact about a deadline, and a deadline exists only if the gate was
+    // opened with one.
+    expect(text).toContain("the gate must carry a deadline and that deadline must have passed");
+    expect(text).toContain("lap perform --gate-deadline-at-ms");
+    // Where an operator reads both facts about the gate in hand, which is what
+    // turns the help from a warning into something to plan around.
+    expect(text).toContain("'gate show' prints both the stage and the deadline");
+  });
+
+  test("both preconditions the help now names are refused when they are not met", () => {
+    // The anti-vacuity half: a help screen describing preconditions that no
+    // longer fire would leave the case above green. Each of these is the
+    // refusal rondo paid for -- one per kind of precondition, at the surface
+    // the help belongs to.
+    const { path } = aDatabaseWithAGate("gate-cli-186-preconditions");
+    const streams = captureStreams();
+
+    // A stage that does not reach the outcome: the gate is at 'received'.
+    expect(
+      main([
+        "gate",
+        "close",
+        "--db",
+        path,
+        "--gate-id",
+        GATE_ID,
+        "--outcome",
+        "unanswerable",
+        "--actor-id",
+        ACTOR,
+        "--now-ms",
+        String(T0 + MINUTE),
+      ]),
+    ).toBe(2);
+    expect(streams.err()).toContain("outcome 'unanswerable' is reached from");
+
+    // And a gate opened without a deadline never closes as 'expired', however
+    // late it is.
+    expect(
+      main([
+        "gate",
+        "close",
+        "--db",
+        path,
+        "--gate-id",
+        GATE_ID,
+        "--outcome",
+        "expired",
+        "--actor-id",
+        ACTOR,
+        "--now-ms",
+        String(T0 + MINUTE),
+      ]),
+    ).toBe(2);
+    expect(streams.err()).toContain(`gate ${GATE_ID} has no deadline`);
   });
 });
