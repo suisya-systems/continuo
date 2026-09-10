@@ -48,11 +48,16 @@ jobs:
     # builds its fixture by driving the real `db create` verb, and the endpoint
     # cases hand the migrator a wall-clock instant a fixed template cannot carry.
     #
-    # So this cap is no longer waiting on that change, and what dominates the
-    # remaining wall clock is child processes rather than SQLite: on the same
-    # measurement `gate_item11/suite-runs-unchanged.test.ts`, which re-runs the
-    # whole suite, is ~30% of test time by itself. The cap stays where D-1103
-    # measured it for the reason below; it is not tuned to hide anything.
+    # So this cap is no longer waiting on that change. The sentence that used to
+    # stand here -- that child processes rather than SQLite dominate the
+    # remaining wall clock -- was true of the Linux measurement it cited and is
+    # NOT true of the Windows cell, which is the one that sets the wait. Measured
+    # per file against ubuntu on the same commit, the Windows excess is
+    # concentrated in files that never spawn anything (`canary/audit.test.ts`
+    # 1.4s -> 87.9s), and removing durability takes those to 4-7% of their time.
+    # `docs/windows-ci-cost.md` holds the numbers, both halves of the split, and
+    # the candidates; read it before tuning anything here. The cap stays where
+    # D-1103 measured it for the reason below; it is not tuned to hide anything.
     #
     # 65 on Windows, not 40 (D-1103). The same slide happened again: run
     # 33781360734 (continuo#114, 2026-09-03) finished `windows-latest, node 24`
@@ -257,61 +262,37 @@ jobs:
         # files -- months later, with the breaking diff long gone.
         run: npm run inventory
 
-  windows-profile:
-    # TEMPORARY, and deliberately outside `ci-gate`'s `needs`: this job measures
-    # rather than gates, and it is meant to be deleted once the question it was
-    # opened for is answered.
+  windows-tmpdir:
+    # TEMPORARY, and deliberately outside `ci-gate`'s `needs`: one A/B, and it
+    # is meant to be deleted once it has answered.
     #
-    # The question is where the Windows cell's 21-33 minutes go. Two thirds of
-    # that is already answered from the logs of runs that have happened: on run
-    # 34506576632 the `windows-latest, node 24` cell spent 32s on everything
-    # that is not the suite (checkout, install, type-check, both builds) and
-    # 1229s inside the two `npm test` steps, and vitest's own breakdown puts
-    # essentially all of that in `tests` rather than transform, import or setup.
-    # Per file, against the ubuntu cell on the same commit, the excess is 6.8x
-    # overall and is NOT concentrated in the child-process tests that D-0048
-    # serializes: `test/canary/audit.test.ts` is 61.7x (1.4s -> 87.9s),
-    # `test/canary/ledger.test.ts` 54.6x, `test/gate/operator.test.ts` 44.9x --
-    # files whose cases open a SQLite database and commit to it and do nothing
-    # else.
+    # The measurement in `docs/windows-ci-cost.md` says the Windows cell's wall
+    # clock is commit durability on a slow filesystem, and then says the
+    # filesystem is the surprising half: one commit under the control plane's
+    # rollback journal costs 82.4ms on `windows-latest` and 1.94ms on a
+    # developer's own Windows box -- 42x, between two Windows machines, which is
+    # also the spread D-0052 recorded and attributed to runner luck.
     #
-    # What a log cannot decide is *why* those commits cost what they do, because
-    # two mechanisms predict the same per-test number: an fsync that is
-    # genuinely slower on the runner's filesystem (`synchronous = FULL`,
-    # D-0012), and Defender scanning every file a commit touches. So this runs
-    # the same ten files four times -- durability on and off, crossed with the
-    # scanner excluded and not -- and a unit-cost benchmark to divide the result
-    # by. Ubuntu runs the same arms as the control.
-    name: windows-profile (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
+    # The candidate explanation is that the two are not on the same disk. The
+    # runner checks the workspace out onto `D:` -- vitest reports its root as
+    # `D:/a/continuo/continuo` -- but every test database is created under
+    # `os.tmpdir()` (`test/helpers/tmp.ts`), which on that image is
+    # `C:\Users\RUNNER~1\AppData\Local\Temp`. On an Azure VM `C:` is the
+    # network-attached OS disk and `D:` the local ephemeral SSD, and fsync is
+    # exactly the operation that separates them.
+    #
+    # So: the same unit benchmark and the same nine files, twice, differing only
+    # in which drive `os.tmpdir()` resolves to. Both benchmark runs print the
+    # directory they used, so the arms are self-labelling rather than trusted.
+    # If this is the cause it is worth more than every other candidate combined,
+    # because pointing a temporary directory somewhere else changes no
+    # durability claim, no journal mode, and no test.
+    name: windows-tmpdir
+    runs-on: windows-latest
+    timeout-minutes: 30
 
     env:
-      # The arms run at one worker so that a file's number is that file's cost
-      # rather than its share of the contention D-0048 measured separately, and
-      # at a fixed seed so the four arms shuffle identically.
       CONTINUO_TEST_SEED: "20260911"
-      # Nine files, chosen off run 34506576632 and covering both halves of the
-      # split, because the two halves are wall clock in different ways.
-      #
-      # The parallel pass is throughput-bound rather than tail-bound: mean
-      # concurrency 2.80 against a peak of 3, three seconds of the 284s span
-      # with a single file running, and a perfectly packed floor of 264s. So no
-      # single file there is the critical path -- what matters is total work,
-      # and the first seven are the largest windows-over-ubuntu excesses in it
-      # (`canary/audit.test.ts` 1.4s -> 87.9s), none of which spawns a child, so
-      # what is measured is the control plane's own file I/O.
-      #
-      # The serial pass is the opposite: D-0048 runs it at one worker, so its
-      # 368s IS the sum of its files and every file is on the critical path 1:1.
-      # The last two are its two heaviest, and they are here to answer a
-      # question the first seven cannot -- whether that half is expensive
-      # because of the children it spawns or because of the plane those
-      # children write to.
       PROFILE_FILES: >-
         test/canary/audit.test.ts
         test/canary/ledger.test.ts
@@ -335,63 +316,43 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Build the distribution
-        # The arms call vitest directly rather than `npm test`, so nothing else
-        # here runs `pretest`; a few of the profiled files assert against dist/.
         run: npm run build
 
-      - name: Unit cost of a commit and of a database
-        run: node scripts/profile-sqlite-cost.mjs
-
-      - name: Arm A -- durability on, scanner on
-        # Every arm runs even when an earlier one is red: this is one push on a
-        # runner that takes twenty minutes to answer, and a missing arm costs
-        # another whole round trip. `!cancelled()` rather than `always()` so a
-        # job the operator stops still stops.
-        if: ${{ !cancelled() }}
+      - name: Which drive is which
+        # Positive evidence rather than an assumption about the image: if the
+        # workspace and the temp directory turn out to be on the same drive,
+        # the two arms below are one arm run twice and the log says so here.
         shell: bash
-        run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
-
-      - name: Arm B -- durability off, scanner on
-        # The arm reaches this job's own workers, not the children the last two
-        # files spawn: a child gets the environment variable but loads no
-        # `setupFiles`, so it keeps `synchronous = FULL`. For those two the
-        # difference against arm A is therefore the *in-process* share only,
-        # which is what makes it an answer -- a file whose cost is its children
-        # will barely move here, and one whose cost is the plane will.
-        if: ${{ !cancelled() }}
-        shell: bash
-        env:
-          CONTINUO_PROFILE_SYNCHRONOUS: "OFF"
-        run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
-
-      - name: Exclude the workspace and the temp directory from Defender
-        # Windows only, and only from here on: arms A and B above are the
-        # scanner-on half of the cross. `runs-on: windows-latest` is
-        # administrator, so this needs no elevation.
-        if: ${{ !cancelled() && matrix.os == 'windows-latest' }}
-        shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE
-          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
-          Add-MpPreference -ExclusionProcess 'node.exe'
-          (Get-MpPreference).ExclusionPath
-          (Get-MpPreference).ExclusionProcess
+          echo "workspace   $GITHUB_WORKSPACE"
+          echo "RUNNER_TEMP $RUNNER_TEMP"
+          node -e "console.log('os.tmpdir()', require('node:os').tmpdir())"
 
-      - name: Arm C -- durability on, scanner excluded
+      - name: Unit cost on the default temp directory
+        if: ${{ !cancelled() }}
+        run: node scripts/profile-sqlite-cost.mjs
+
+      - name: Unit cost on RUNNER_TEMP
+        if: ${{ !cancelled() }}
+        # Node's `os.tmpdir()` on win32 reads TEMP first and then TMP, so both
+        # are set rather than whichever one happens to win.
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: node scripts/profile-sqlite-cost.mjs
+
+      - name: Arm 1 -- the suite's databases on the default temp directory
         if: ${{ !cancelled() }}
         shell: bash
         run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
 
-      - name: Arm D -- durability off, scanner excluded
+      - name: Arm 2 -- the suite's databases on RUNNER_TEMP
         if: ${{ !cancelled() }}
         shell: bash
         env:
-          CONTINUO_PROFILE_SYNCHRONOUS: "OFF"
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: node node_modules/vitest/vitest.mjs run --no-file-parallelism $PROFILE_FILES
-
-      - name: Unit cost again, with the scanner excluded
-        if: ${{ !cancelled() }}
-        run: node scripts/profile-sqlite-cost.mjs
 
   ci-gate:
     # THE REQUIRED CHECK. The default-branch ruleset references this literal

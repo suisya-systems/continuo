@@ -2,6 +2,8 @@
 
 Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0005`.
 Workflow: [`.github/workflows/tests.yml`](../.github/workflows/tests.yml).
+How long the cells take, and why the Windows one takes 21-33 minutes of it:
+[`windows-ci-cost.md`](windows-ci-cost.md).
 
 ## What "green twice under random ordering" means here
 
