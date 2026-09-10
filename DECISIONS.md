@@ -16872,6 +16872,14 @@ mistake -- the step prints the directory it selects, so a log says which. The me
 nine files holding 478s of the suite's 1149s of test work; the cell-level figure is the `double-green`
 Windows cell's own duration before and after, which is the number to check.
 
+**Checked, added 2026-09-11.** A note appended after the fact; nothing above it is edited. The
+number this entry asked for came in on runs `34515834981` (before) and `34521636568` (after), same
+`windows-latest, node 24` cell: **22m25s to 7m27s**, and 20m23s to 9m07s on the `node 22` cell, with
+ubuntu unmoved (4m18s to 3m45s, 3m31s to 3m42s). The `origin/main` merge between the two runs carries
+#199, which touches only the nested suite run `D-1003` skips on Windows -- both logs still report
+`24 passed | 2 skipped` -- so it is not in these figures. `docs/windows-ci-cost.md` 5b holds the
+per-pass split and what it changes about where the remaining wall clock now is.
+
 **Explicitly not claimed.** That this fixes the Windows flakiness. It may: the same `C:` measured
 82.4ms and 15.60ms per commit on two runs, 5.3x apart on one drive, which is what a network-attached
 disk with neighbours looks like, and continuo #83's roughly one-in-five Windows failures are two
