@@ -177,7 +177,16 @@ const DESTINATION_DIR_HELP =
   "plane already ran " +
   "against ('lap perform --endpoint-destination-dir'), under the same rule.";
 const OUTCOME_HELP =
-  "the terminal outcome. 'answered_and_forwarded' is not here on purpose: it " +
+  "the terminal outcome, and the stage each one is reachable from: " +
+  "'withdrawn' from received, presented or answered; 'expired' from " +
+  "presented or answered; 'unanswerable' from presented alone. An outcome " +
+  "named at a stage it does not list is refused. 'expired' asks one thing " +
+  "more: the gate must carry a deadline and that deadline must have passed. " +
+  "A deadline is given when the gate is opened ('lap perform " +
+  "--gate-deadline-at-ms') and cannot be added afterwards, so a gate opened " +
+  "without one never closes as 'expired'. 'gate show' prints both the stage " +
+  "and the deadline, so both preconditions can be read before this verb is " +
+  "typed. 'answered_and_forwarded' is not here on purpose: it " +
   "is the consequence of the forward relay's ack and is written by 'gate " +
   "ack'. 'subject_gone' is 'gate reconcile's sweep and 'superseded' is " +
   "written by the gate that supersedes this one.";
