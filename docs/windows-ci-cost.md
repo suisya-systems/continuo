@@ -9,9 +9,14 @@ of them. The short version of why this file exists: `double-green` runs its four
 cells in parallel, so the wait is the slowest cell, and that is always Windows --
 21 to 33 minutes against single digits for ubuntu.
 
-Every number below is dated and says which machine produced it, because the
-headline finding is that two machines running the same operating system disagree
-by a factor of 42.
+Every number below is dated and says which machine -- and, it turns out, which
+*drive* -- produced it. That is the headline: two machines running the same
+operating system disagreed by a factor of 42, and the reason was that the suite
+creates its databases on the runner's slow network-attached `C:` while the
+workspace sits on the fast local `D:`. Section 5a has the confirmation; sections
+1 to 4 are the narrowing that got there, and are worth keeping because two of
+them (which half of the split a fix lands in, and what is still unmeasured)
+outlive the finding.
 
 ## Method
 
@@ -22,7 +27,8 @@ Two sources, and it matters which is which.
    finish times, and vitest's default reporter already prints per-file durations
    and a layer breakdown into the job log. Run `34506576632` (main, 2026-09-10)
    is the one quoted here; its ubuntu cell on the same commit is the control.
-2. **A profiling run**, PR #200, run `34513292968`. `scripts/profile-sqlite-cost.mjs`
+2. **Two profiling runs**, PR #200: run `34513292968` (durability crossed with
+   Defender) and run `34515834981` (the temp directory's drive). `scripts/profile-sqlite-cost.mjs`
    times one commit and one database creation at each durability level and
    journal mode; `test/helpers/profile-pragmas.ts` forces every connection a
    worker opens to a chosen `synchronous` level, so the suite can be run with
@@ -152,14 +158,68 @@ dominant cost at all.
 runners (28ms linux, 321ms windows healthy, 13,556ms windows slow) and attributed
 to runner luck. It may not be luck.
 
-**The leading explanation is that the databases are on the wrong drive.** The
-runner checks the workspace out onto `D:` -- vitest reports its root as
-`D:/a/continuo/continuo` -- while `test/helpers/tmp.ts` creates every test
-database under `os.tmpdir()`, which on that image is
-`C:\Users\RUNNER~1\AppData\Local\Temp`. On an Azure VM `C:` is the
-network-attached OS disk and `D:` the local ephemeral SSD, and fsync is exactly
-the operation that separates them. **This is untested**; the `windows-tmpdir` job
-exists to test it.
+**The cause is that the databases are on the wrong drive**, and this one is no
+longer a hypothesis -- see section 5a. The runner checks the workspace out onto
+`D:` while `test/helpers/tmp.ts` creates every test database under
+`os.tmpdir()`, which on that image is `C:\Users\RUNNER~1\AppData\Local\Temp`.
+`C:` is the network-attached OS disk and `D:` the local ephemeral SSD, and fsync
+is exactly the operation that separates them.
+
+## 5a. Confirmed: the drive is the cause
+
+Run `34515834981`, job `windows-tmpdir`, 2026-09-10. One job, two arms, differing
+only in `TEMP`/`TMP`. The drives, printed rather than assumed:
+
+```
+workspace   D:\a\continuo\continuo
+RUNNER_TEMP D:\a\_temp
+os.tmpdir() C:\Users\RUNNER~1\AppData\Local\Temp   <- every test database
+```
+
+| | `C:` (default) | `D:` (`RUNNER_TEMP`) | ratio |
+|---|---|---|---|
+| commit, `delete` / `FULL` | 15.60 ms | **1.14 ms** | **13.7x** |
+| commit, `delete` / `OFF` | 1.80 ms | 0.46 ms | 3.9x |
+| database creation, `delete` / `FULL` | 13.61 ms | 1.60 ms | 8.5x |
+| plain 64KiB file create + delete | 0.559 ms | 0.347 ms | 1.6x |
+
+Plain file operations barely move while the fsync-bearing ones move by 8-14x, so
+what `C:` is slow at is specifically fsync, not file I/O generally.
+
+The same nine files, `tests` time: **129.24s on `C:`, 43.78s on `D:` -- 3.0x**.
+Every file improves, `workspace/materializer.test.ts` included (1.3x), because
+the git children it spawns use the temporary directory too.
+
+The comparison that settles the candidate list:
+
+| | `tests` time |
+|---|---|
+| `C:` with `synchronous = FULL` (today) | 129.2s |
+| `C:` with `synchronous = OFF` (D-0012 abandoned) | 70.9s |
+| **`D:` with `synchronous = FULL`** | **43.8s** |
+
+**Moving the temporary directory beats giving up durability, and gives up
+nothing.** No decision is reversed, no journal mode changes, no test changes.
+
+### It is also a flakiness finding, not only a speed one
+
+The same `C:`, same benchmark, two runs: **82.4 ms/commit and 15.60 ms/commit --
+5.3x apart on one drive.** That is a network-attached disk with neighbours. `D:`
+is local.
+
+So D-0052's 42x spread "across runners", continuo #83's roughly one-in-five
+Windows failures with two thirds of them timeouts rather than assertions, and
+D-1003's skip may all be the same single cause. If so, this changes how often the
+cell is *red*, not just how long it is *slow*. Untested as a flakiness claim --
+it would take a run of Windows cells on `D:` to support it.
+
+### What is still not measured
+
+The nine files are 478s of the suite's 1149s of test work. Applying the measured
+ratio puts a suite run at roughly 474s against 652s, so the cell at about 15
+minutes against 21 -- but **the parallel pass's other 463s of work is
+extrapolation, not measurement.** The way to settle it is one `double-green`
+Windows cell run with `TMP`/`TEMP` set, which is also the adoption test.
 
 Two other things this benchmark settles, both non-obvious:
 
@@ -184,7 +244,6 @@ measured.
 
 Still unmeasured, and named so that nobody re-derives them from a guess:
 
-- whether the temp directory's drive is the cause (section 5)
 - the Defender axis (section 4)
 - how many commits the suite actually performs
 - WAL's net effect across the whole suite, creation cost included
@@ -195,10 +254,10 @@ Still unmeasured, and named so that nobody re-derives them from a guess:
 
 | | effort | what it costs | status |
 |---|---|---|---|
-| Point the suite's temp directory at `RUNNER_TEMP` (`D:`) | one env var | nothing: no durability claim, journal mode or test changes | **untested, and worth more than the rest combined if section 5 is right** |
-| Defender exclusion in CI | 3 lines | nothing on a disposable runner | blocked on a re-measurement that fixes the arm ordering |
-| `journal_mode = WAL` for test planes only | medium | test and production planes stop sharing a journal mode; `connection.ts` declines WAL for three stated reasons; creation gets 3x dearer | needs its own measurement |
-| Reduce commits per case | large | nothing semantic | commit count unmeasured |
-| Raise `maxWorkers` past the vCPU count | small | memory, and contention that D-0048 assumed away | unmeasured |
+| Point the suite's temp directory at `RUNNER_TEMP` (`D:`) | one env var | nothing: no durability claim, journal mode or test changes | **measured, 3.0x (section 5a)** |
+| Defender exclusion in CI | 3 lines | nothing on a disposable runner | still unmeasured, and now lower value: the fsync cost was the drive |
+| `journal_mode = WAL` for test planes only | medium | test and production planes stop sharing a journal mode; `connection.ts` declines WAL for three stated reasons; creation gets 3x dearer | **not needed** -- `D:` is faster and costs nothing |
+| Reduce commits per case | large | nothing semantic | commit count unmeasured; less pressing at 1.14ms a commit |
+| Raise `maxWorkers` past the vCPU count | small | memory, and contention that D-0048 assumed away | unmeasured, and worth re-asking after the move |
 | Revisit the serial pass (D-0048) | large | the contention relief D-0048 measured | a separate problem: `materializer`'s 98% says this half is child processes, so nothing above touches it |
-| Weaken durability under test | small | D-0012's claim stops being exercised | **not recommended** -- it deletes the property rather than the cost |
+| Weaken durability under test | small | D-0012's claim stops being exercised | **not needed** -- `D:` at `FULL` beats `C:` at `OFF` |
