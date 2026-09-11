@@ -513,6 +513,11 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
       topic_branch: "fix/leak",
       prompt: "close the handle",
       cli_args: [],
+      // `D-1110`. Empty because this intent declares nothing, and PRESENT for
+      // `cli_args`'s reason: a reader of the spine cannot tell "declared
+      // nothing" from "this producer did not write the key" unless the writer
+      // always writes it.
+      allowed_bash: [],
     });
     // The run identifier is deliberately NOT in it. `run_created`'s payload
     // names no run either: `subject_id` and `run_id` are the columns the
@@ -542,7 +547,7 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     const text = String(eventRows(connection)[1]?.["payload"]);
     expect(text).toContain('"prompt": "\\u65e5\\u672c\\u8a9e"');
     // Keys sorted, separators with their spaces, and the whole thing ASCII.
-    expect(text.startsWith('{"base_branch": ')).toBe(true);
+    expect(text.startsWith('{"allowed_bash": [], "base_branch": ')).toBe(true);
     expect(text).toMatch(/^[\x20-\x7e]*$/);
   });
 
@@ -1291,6 +1296,60 @@ describe("continuo run admit", () => {
     expect(runRows(connection)).toEqual([]);
   });
 
+  test("takes --allow-bash any number of times, in order, and none by default", () => {
+    // `D-1110`, and unlike `--cli-arg` above this one can be read off the
+    // SPINE: a declaration is authorised by the role document's global
+    // forbidden-allow rules at render time, not by a document consulted at
+    // admission, so an ordinary verification declaration is admitted and
+    // persisted. Order is asserted for `--cli-arg`'s reason -- the record is a
+    // list, and a set here would be a different record.
+    const withNone = productionTemplate.copyInto(caseRoot("run-admit-no-allow"));
+    const withSome = productionTemplate.copyInto(caseRoot("run-admit-allow"));
+
+    expect(main(admitArgv(withNone, { "--now-ms": String(T0) }))).toBe(0);
+    expect(delegationPayload(withNone)["allowed_bash"]).toEqual([]);
+
+    expect(
+      main([
+        ...admitArgv(withSome, { "--now-ms": String(T0) }),
+        "--allow-bash=npm ci --ignore-scripts",
+        "--allow-bash=npm run:*",
+      ]),
+    ).toBe(0);
+    // The `=` form for the same reason the case above gives: a value beginning
+    // with a dash cannot be consumed as a following token, and a verification
+    // command frequently carries one.
+    expect(delegationPayload(withSome)["allowed_bash"]).toEqual([
+      "npm ci --ignore-scripts",
+      "npm run:*",
+    ]);
+  });
+
+  test("refuses a declaration that authorises everything, and admits no run", () => {
+    // The rule arrives while the operator is still at a prompt and the run
+    // identifier is still free, rather than three verbs later as a
+    // materialisation refusal -- `Bash(*)` is on the shipped document's
+    // forbidden list, so the render would refuse it either way.
+    //
+    // It escapes as a `LapRunIntentUsageError` rather than as one `error: `
+    // line, which is this module's own deliberate placement for every field
+    // rule of this record (`D-0051`, kept by `D-0055`) and is asserted here the
+    // way the two cases above assert it -- not re-litigated for one new field.
+    const path = productionTemplate.copyInto(caseRoot("run-admit-allow-star"));
+    const streams = captureStreams();
+
+    expect(() => main([...admitArgv(path, { "--now-ms": String(T0) }), "--allow-bash=*"])).toThrow(
+      LapRunIntentUsageError,
+    );
+    expect(streams.out()).toBe("");
+
+    const connection = openProductionControlPlane(path);
+    onTestFinished(() => {
+      connection.close();
+    });
+    expect(runRows(connection)).toEqual([]);
+  });
+
   test("is reachable from the top-level parser, and says what it does", () => {
     const strings = helpStrings(buildParser());
     expect(strings.some((text) => text.startsWith("Admit a run:"))).toBe(true);
@@ -1714,6 +1773,12 @@ describe("reading the delegation record back (D-0063)", () => {
     // added to `LapRunIntent` without being added to the reader's check fails
     // here instead of being silently tolerated.
     for (const key of Object.values(PAYLOAD_KEYS)) {
+      // The one exemption, and the case below is what stands in its place
+      // (`D-1110`). It is listed here by name rather than skipped by a
+      // predicate so that a second exempt key has to be written down here too.
+      if (key === PAYLOAD_KEYS.allowedBash) {
+        continue;
+      }
       const payload = wellFormedPayload();
       delete payload[key];
       const connection = craftedRun(JSON.stringify(payload));
@@ -1725,6 +1790,30 @@ describe("reading the delegation record back (D-0063)", () => {
       );
       expect(refusal.message, `the refusal does not name ${key}`).toContain(key);
     }
+  });
+
+  test("a payload written before allowed_bash existed is still readable", () => {
+    // `D-1110` added a key to a record that already had runs admitted against
+    // it, and the missing-key rule above would have made every one of those
+    // unperformable -- and unreadable, so unreportable and unclosable too,
+    // which is the stranding `D-0088` decision D5 refuses. Raised by review.
+    //
+    // The exemption is sound for this key and would not be for another: an
+    // absent `allowed_bash` can only mean "declared nothing", and that renders
+    // exactly the allow list the role document authored, which is what every
+    // run before the key existed got. It takes permission away rather than
+    // granting it, which is the opposite direction from the absent `cli_args`
+    // the rule above exists for.
+    const payload = wellFormedPayload();
+    delete payload["allowed_bash"];
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const read = readLapRunIntent(connection, CRAFTED_RUN_ID);
+
+    expect(read.allowedBash).toEqual([]);
+    // And nothing else about the old record was absorbed along with it.
+    expect(read.cliArgs).toEqual(["--verbose"]);
+    expect(read.role).toBe("worker");
   });
 
   test("an unknown key is refused rather than silently discarded", () => {

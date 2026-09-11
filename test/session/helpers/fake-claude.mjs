@@ -476,6 +476,17 @@ async function main() {
       // did. A `result` with no body is what the real CLI writes for a turn
       // that said nothing, and the provider reports it as a definite nothing.
       ...(env.FAKE_RESULT_TEXT === undefined ? {} : { result: env.FAKE_RESULT_TEXT }),
+      // What the child was refused, as the real CLI reports it (`D-1110`).
+      // Spread and absent by default for `FAKE_RESULT_TEXT`'s reason -- a
+      // current CLI always writes this key and an older one never does, and
+      // the two are different answers, so a case that does not ask for it must
+      // emit the line it always did. The value is the JSON document a case
+      // wants verbatim, not a flag: the shape a denial arrives in is what is
+      // under test, and an encoding built here would be this file's shape
+      // rather than the CLI's.
+      ...(env.FAKE_PERMISSION_DENIALS === undefined
+        ? {}
+        : { permission_denials: JSON.parse(env.FAKE_PERMISSION_DENIALS) }),
       session_id: reported,
       another_unknown_field: true,
     });

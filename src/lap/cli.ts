@@ -80,6 +80,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   addJsonArgument,
+  type JsonValue,
   jsonRequested,
   type RefusalMetadata,
   refusalLine,
@@ -501,6 +502,37 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
         // on. `null` says the choice was the worker CLI's, which is a different
         // fact from any model name and is reported as such.
         model: outcome.model,
+        // **The fence's refusals, carried out of the child** (`D-1110`, and
+        // continuo #207's third requirement). Present under the same `/1` and
+        // for `model`'s reason: an unread key is one every JSON reader already
+        // handles. `null` is the answer when the backend cannot say -- an older
+        // worker CLI, or a field in a shape this build does not read -- and it
+        // is NOT the same answer as `[]`, which is the backend saying nothing
+        // was refused. A host collapsing the two would read "we cannot tell
+        // whether the verification ran" as "nothing was refused", which is the
+        // mistake that put a fence with no way to run a build in front of a
+        // person as finished work.
+        permission_denials:
+          outcome.report.permissionDenials === null
+            ? null
+            : outcome.report.permissionDenials.map((denial) => ({
+                tool_name: denial.toolName,
+                // The call's own input, verbatim -- for `Bash` that is the
+                // `command` the child wanted to run, which is the whole of what
+                // a reader acts on. It is the child's text and it reaches a
+                // console, so it goes out through `asciiJsonLine` like every
+                // other value here; see this function's note on why `pythonRepr`
+                // is not applied on the JSON path.
+                //
+                // The cast is the one place this file asserts something the
+                // type system cannot see, and it is sound for a stated reason
+                // rather than a convenience: the value was produced by
+                // `JSON.parse` over a line the child wrote, so it is JSON by
+                // construction -- `unknown` is what a `Record` off a parse is
+                // typed as, not a claim that it might be a function or a
+                // `BigInt`. `asciiJsonLine` would refuse a value that was not.
+                tool_input: denial.toolInput as { readonly [key: string]: JsonValue },
+              })),
       }),
     );
     return;
@@ -548,6 +580,35 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
       `note: the endpoint's delivery lease was lost while the turn ran, so the worker's ` +
         `endpoint could no longer write: ${outcome.endpointLeaseFailure.message}\n`,
     );
+  }
+  if (outcome.report.permissionDenials !== null && outcome.report.permissionDenials.length > 0) {
+    // Its own line, on stdout beside the success it qualifies, exactly as the
+    // two notes around it are -- and this is the one of the three that changes
+    // what the operator should do with the result. The turn ended and the gate
+    // is open, and the child asked for something the fence did not let it have:
+    // if that was the project's verification, what is on the branch has not
+    // been built or tested and the gate's rationale cannot say so, because the
+    // worker's own prose is what the gate carries.
+    //
+    // `pythonRepr` on BOTH values, for the reason every other external value on
+    // this path gets it: each is text that came off the child's transcript, on
+    // its way into a one-line report a newline would forge a second line of.
+    //
+    // The tool name is quoted as well as the command, and that half was missing
+    // on the first pass. `permissionDenialsOf` takes any string as a
+    // `tool_name` -- it has to, since the vocabulary belongs to a CLI this
+    // repository does not own and refusing an unfamiliar name would drop a
+    // denial rather than report it -- so the name is exactly as
+    // operator-untrusted as the command beside it. Quoting one and interpolating
+    // the other is the shape of a guard that reads as applied and is not.
+    for (const denial of outcome.report.permissionDenials) {
+      const command = denial.toolInput["command"];
+      lapCliSeams.write(
+        `note: the fence refused the child's ${pythonRepr(denial.toolName)} call` +
+          `${typeof command === "string" ? ` ${pythonRepr(command)}` : ""}; ` +
+          "whatever that call was for did not happen\n",
+      );
+    }
   }
   if (outcome.elapsedDeadlineAtMs !== null) {
     // Its own line, and on stdout beside the success it qualifies rather than on

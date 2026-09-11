@@ -370,6 +370,18 @@ export interface MaterializationRequest {
    * refused here until that document is edited.
    */
   readonly cliArgs?: readonly string[];
+  /**
+   * The Bash subjects the admitted run declared its child may run (`D-1110`),
+   * in order. Empty or absent when it declared none, which renders the role's
+   * authored allow list unchanged.
+   *
+   * Subjects, never permission specs: the renderer wraps each into
+   * `Bash(<subject>)`, so nothing that arrives here can name a tool. The
+   * shape rules ran at admission (`LapRunIntent`), and the role document's
+   * `global.forbidden_allow_*` runs at render -- a declaration it forbids
+   * refuses the fence, and a refused fence materialises no workspace.
+   */
+  readonly allowedBash?: readonly string[];
   /** The caller's clock, taken once. Epoch milliseconds. */
   readonly nowMs: number;
   /** Carried verbatim into the returned `SessionOrchestratorOptions`. */
@@ -1353,6 +1365,14 @@ export function materializeWorkspace(
     // there is no path through this step that produces an interactive one. So
     // the fence is rendered for a spawn with nobody at its prompt (`D-0081`).
     nonInteractive: true,
+    // What the admitting side declared this child may run (`D-1110`), straight
+    // off the record `run admit` wrote. Not filtered, not defaulted and not
+    // re-derived here: this step renders the fence the admitted run asked for,
+    // and the two places entitled to narrow it have already run -- the intent's
+    // own constructor at admission, and the role document's forbidden-allow
+    // rules inside `prepare`, which refuse the render rather than dropping an
+    // entry.
+    allowedBash: request.allowedBash ?? [],
   });
   const admission = spawner.prepare(role, context);
   if (!admission.admitted || admission.plan === null) {

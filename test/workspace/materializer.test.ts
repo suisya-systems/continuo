@@ -392,6 +392,63 @@ describe("M1: the base branch must be a branch", () => {
   });
 });
 
+describe("D-1110: the admitted run's declaration", () => {
+  test("reaches the settings file the child is started with", () => {
+    // The wiring continuo #207 measured as missing: `FencedSpawner` has had a
+    // `document` injection point all along and this step never used it, so no
+    // input on any surface reached an allow rule and a child could commit code
+    // it could not build. This is the case that would go red if the declaration
+    // stopped being threaded from the record to the fence -- everything else
+    // about the materialisation would still pass, which is exactly how the gap
+    // went unnoticed.
+    const f = fixture("materialize-declared-allow");
+
+    materializeWorkspace(f.connection, {
+      ...f.request,
+      allowedBash: ["npm ci --ignore-scripts", "npm run verify"],
+    });
+
+    const settings = JSON.parse(
+      readFileSync(join(f.artifactDir, "settings.local.json"), "utf8"),
+    ) as Record<string, unknown>;
+    const permissions = settings["permissions"] as Record<string, unknown>;
+
+    expect(permissions["allow"]).toEqual([
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(npm ci --ignore-scripts)",
+      "Bash(npm run verify)",
+    ]);
+    // The deny list is what it always was. A declaration widens one layer and
+    // is carried into no other, which is the property `D-1110` rests on.
+    expect(permissions["deny"]).toContain("Bash(git push)");
+  });
+
+  test("a run that declares nothing publishes the allow list the document authored", () => {
+    const f = fixture("materialize-no-declaration");
+
+    materializeWorkspace(f.connection, f.request);
+
+    const settings = JSON.parse(
+      readFileSync(join(f.artifactDir, "settings.local.json"), "utf8"),
+    ) as Record<string, unknown>;
+    const permissions = settings["permissions"] as Record<string, unknown>;
+
+    expect(permissions["allow"]).toEqual([
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+    ]);
+  });
+});
+
 describe("the artifacts", () => {
   test("fence, settings and MCP configuration are all published, outside the worktree", () => {
     const f = fixture("materialize-artifacts");

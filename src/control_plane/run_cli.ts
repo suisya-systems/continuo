@@ -163,6 +163,17 @@ const CLI_ARG_HELP =
   "that order, for this --role: the shipped document authorises none, so any " +
   "argument at all is refused until it is edited. Widening is an edit to that " +
   "document, reviewed and with a written reason, not a per-run decision.";
+const ALLOW_BASH_HELP =
+  "one Bash command this run's child may run, as the subject of a permission " +
+  "rule -- 'npm run:*', not 'Bash(npm run:*)'. Repeat the flag to give " +
+  "several; omit it for none, which is what every run got before D-1110. Each " +
+  "subject becomes one Bash(...) entry in this --role's permissions.allow for " +
+  "this run only, and the role document's global forbidden-allow rules refuse " +
+  "the render if one of them collides. The declaration cannot reach the " +
+  "fence's deny rules, its sandbox deny paths or its PreToolUse hook: those " +
+  "are built from permissions.deny and the sandbox axes, which no allow entry " +
+  "is carried into. Declare 'npm ci --ignore-scripts' rather than 'npm ci:*': " +
+  "npm's lifecycle scripts run in a subprocess the hook cannot see.";
 
 const DELEGATION_RECORD_HELP =
   "path to a file holding this run's delegation record: the values the run is " +
@@ -361,6 +372,12 @@ function cliArgsOf(args: Namespace): readonly string[] {
   return Array.isArray(supplied) ? supplied.map(String) : [];
 }
 
+/** `--allow-bash`, repeated, read the way {@link cliArgsOf} reads its twin. */
+function allowedBashOf(args: Namespace): readonly string[] {
+  const supplied = args["allowed_bash"];
+  return Array.isArray(supplied) ? supplied.map(String) : [];
+}
+
 /**
  * The intent, built from the parsed arguments and validated by its own
  * constructor.
@@ -380,6 +397,7 @@ function intentOf(args: Namespace): LapRunIntent {
     topicBranch: String(args["topic_branch"]),
     prompt: String(args["prompt"]),
     cliArgs: cliArgsOf(args),
+    allowedBash: allowedBashOf(args),
   });
 }
 
@@ -960,6 +978,13 @@ export function addSubparsers(sub: Subparsers): void {
     append: true,
     metavar: "CLI_ARG",
     help: CLI_ARG_HELP,
+  });
+  admit.addArgument({
+    optionStrings: ["--allow-bash"],
+    dest: "allowed_bash",
+    append: true,
+    metavar: "ALLOW_BASH",
+    help: ALLOW_BASH_HELP,
   });
   admit.addArgument({
     optionStrings: ["--now-ms"],

