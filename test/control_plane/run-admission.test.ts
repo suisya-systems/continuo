@@ -1773,6 +1773,12 @@ describe("reading the delegation record back (D-0063)", () => {
     // added to `LapRunIntent` without being added to the reader's check fails
     // here instead of being silently tolerated.
     for (const key of Object.values(PAYLOAD_KEYS)) {
+      // The one exemption, and the case below is what stands in its place
+      // (`D-1110`). It is listed here by name rather than skipped by a
+      // predicate so that a second exempt key has to be written down here too.
+      if (key === PAYLOAD_KEYS.allowedBash) {
+        continue;
+      }
       const payload = wellFormedPayload();
       delete payload[key];
       const connection = craftedRun(JSON.stringify(payload));
@@ -1784,6 +1790,30 @@ describe("reading the delegation record back (D-0063)", () => {
       );
       expect(refusal.message, `the refusal does not name ${key}`).toContain(key);
     }
+  });
+
+  test("a payload written before allowed_bash existed is still readable", () => {
+    // `D-1110` added a key to a record that already had runs admitted against
+    // it, and the missing-key rule above would have made every one of those
+    // unperformable -- and unreadable, so unreportable and unclosable too,
+    // which is the stranding `D-0088` decision D5 refuses. Raised by review.
+    //
+    // The exemption is sound for this key and would not be for another: an
+    // absent `allowed_bash` can only mean "declared nothing", and that renders
+    // exactly the allow list the role document authored, which is what every
+    // run before the key existed got. It takes permission away rather than
+    // granting it, which is the opposite direction from the absent `cli_args`
+    // the rule above exists for.
+    const payload = wellFormedPayload();
+    delete payload["allowed_bash"];
+    const connection = craftedRun(JSON.stringify(payload));
+
+    const read = readLapRunIntent(connection, CRAFTED_RUN_ID);
+
+    expect(read.allowedBash).toEqual([]);
+    // And nothing else about the old record was absorbed along with it.
+    expect(read.cliArgs).toEqual(["--verbose"]);
+    expect(read.role).toBe("worker");
   });
 
   test("an unknown key is refused rather than silently discarded", () => {

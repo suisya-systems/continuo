@@ -741,7 +741,28 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
   // the shape this function's docstring promises to refuse, and it was the one
   // shape it did not.
   const known = new Set<string>(Object.values(PAYLOAD_KEYS));
-  const missing = [...known].filter((key) => !Object.hasOwn(payload, key));
+  const missing = [...known]
+    // **One key is exempt from the requirement above, and only one** (`D-1110`).
+    // `allowed_bash` was added to this record after runs had been admitted
+    // without it, and the check as written would make every one of those
+    // unperformable -- and unreadable, so unreportable and unclosable too,
+    // which is the stranding `D-0088` decision D5 refuses.
+    //
+    // It is exempt because its absence cannot mean anything but "declared
+    // nothing", and "declared nothing" is the direction that takes permission
+    // AWAY. That is the whole of the asymmetry with `cli_args` the paragraph
+    // above describes: an absent `cli_args` read as `[]` runs the worker
+    // WITHOUT arguments the durable record required, so the absorbed absence
+    // changes what the run does; an absent `allowed_bash` read as `[]` renders
+    // exactly the allow list the role document authored, which is what every
+    // run before this key existed got. A producer that forgot to write it
+    // therefore cannot widen anything by forgetting.
+    //
+    // A second such key does not get in on this precedent: the test is not "it
+    // is new", it is "its absence is the narrow reading", and a field whose
+    // absence permits something has to be required.
+    .filter((key) => key !== PAYLOAD_KEYS.allowedBash)
+    .filter((key) => !Object.hasOwn(payload, key));
   // **And no key this build does not know.** The two directions are one check
   // with one meaning -- "this payload is the record this build writes" -- and
   // checking only one of them leaves the other half of the same hazard open. An

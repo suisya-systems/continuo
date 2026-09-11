@@ -1206,6 +1206,78 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
     });
   });
 
+  test("a refused Bash call reaches both surfaces, with the child's text quoted", async () => {
+    // `D-1110`, and continuo #207's third requirement end to end: the fence
+    // refused something inside the child, and without this the only record of
+    // it is a line of a transcript nobody outside the child opens -- so a lap
+    // whose verification never ran reads exactly like one whose verification
+    // passed.
+    //
+    // The control characters are the second half of the case and not
+    // decoration. BOTH values come off the child's transcript and BOTH reach a
+    // one-line report, so both are quoted; the tool name was interpolated raw
+    // on the first pass, which is a guard that reads as applied and is not.
+    // Observed red against that revision: the `\n` ended the note and the rest
+    // printed as a line of continuo's own.
+    const denials = [
+      {
+        tool_name: "Bash\nnote: forged",
+        tool_use_id: "toolu_01",
+        tool_input: { command: "npm run verify\nnote: forged too" },
+      },
+    ];
+    const human = lap("lap-denials-human");
+    fakeEnv("FAKE_PERMISSION_DENIALS", JSON.stringify(denials));
+    human.out.length = 0;
+    human.err.length = 0;
+
+    expect(await human.perform(), human.err.join("")).toBe(0);
+
+    const line = human.out.join("");
+    expect(line).toContain("note: the fence refused the child's 'Bash\\nnote: forged' call");
+    expect(line).toContain("'npm run verify\\nnote: forged too'");
+    // The forged line never became one: every newline the child wrote is inside
+    // a quoted value, so no line of this output begins with text the child
+    // chose.
+    expect(
+      line.split("\n").filter((text) => text.startsWith("note: forged")),
+      "the child's text forged a line of continuo's own report",
+    ).toEqual([]);
+
+    // And the same denial, as the document a host parses.
+    const document = lap("lap-denials-document");
+    fakeEnv("FAKE_PERMISSION_DENIALS", JSON.stringify(denials));
+    document.out.length = 0;
+    document.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(document)), document.err.join("")).toBe(0);
+
+    expect((oneDocument(document.out) as Record<string, unknown>)["permission_denials"]).toEqual([
+      {
+        tool_name: "Bash\nnote: forged",
+        // `tool_use_id` is not carried: it addresses a message in a transcript
+        // no reader of a finished lap can open.
+        tool_input: { command: "npm run verify\nnote: forged too" },
+      },
+    ]);
+  });
+
+  test("a turn that was refused nothing reports an empty list, not null", async () => {
+    // The anti-vacuity half: with `null` and `[]` collapsed, the case above and
+    // this one are the same case, and a host could not tell "this build cannot
+    // see refusals" from "this run had none" -- which is the whole distinction
+    // rondo #69's review stage is being built on.
+    const f = lap("lap-denials-none");
+    fakeEnv("FAKE_PERMISSION_DENIALS", "[]");
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f)), f.err.join("")).toBe(0);
+
+    expect((oneDocument(f.out) as Record<string, unknown>)["permission_denials"]).toEqual([]);
+    expect(f.out.join("")).not.toContain("the fence refused");
+  });
+
   test("a refusal is a document on stderr, and the exit code does not move", async () => {
     // The half a success-only pinning would miss twice over: a host that gets
     // exit 2 has to be able to parse the reason, and the flag must not have

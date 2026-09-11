@@ -590,13 +590,21 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
     // been built or tested and the gate's rationale cannot say so, because the
     // worker's own prose is what the gate carries.
     //
-    // `pythonRepr` on the command, for the reason every other external value on
-    // this path gets it: it is text the child wrote, on its way into a one-line
-    // report a newline would forge a second line of.
+    // `pythonRepr` on BOTH values, for the reason every other external value on
+    // this path gets it: each is text that came off the child's transcript, on
+    // its way into a one-line report a newline would forge a second line of.
+    //
+    // The tool name is quoted as well as the command, and that half was missing
+    // on the first pass. `permissionDenialsOf` takes any string as a
+    // `tool_name` -- it has to, since the vocabulary belongs to a CLI this
+    // repository does not own and refusing an unfamiliar name would drop a
+    // denial rather than report it -- so the name is exactly as
+    // operator-untrusted as the command beside it. Quoting one and interpolating
+    // the other is the shape of a guard that reads as applied and is not.
     for (const denial of outcome.report.permissionDenials) {
       const command = denial.toolInput["command"];
       lapCliSeams.write(
-        `note: the fence refused the child's ${denial.toolName} call` +
+        `note: the fence refused the child's ${pythonRepr(denial.toolName)} call` +
           `${typeof command === "string" ? ` ${pythonRepr(command)}` : ""}; ` +
           "whatever that call was for did not happen\n",
       );
