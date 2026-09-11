@@ -786,6 +786,7 @@ export function readLapRunIntent(connection: SqliteDatabase, runId: string): Lap
       topicBranch: payload["topic_branch"] as string,
       prompt: payload["prompt"] as string,
       cliArgs: payload["cli_args"] as readonly string[],
+      allowedBash: payload["allowed_bash"] as readonly string[],
     });
   } catch (error) {
     throw new RunNotAdmitted(

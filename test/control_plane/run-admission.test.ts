@@ -513,6 +513,11 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
       topic_branch: "fix/leak",
       prompt: "close the handle",
       cli_args: [],
+      // `D-1110`. Empty because this intent declares nothing, and PRESENT for
+      // `cli_args`'s reason: a reader of the spine cannot tell "declared
+      // nothing" from "this producer did not write the key" unless the writer
+      // always writes it.
+      allowed_bash: [],
     });
     // The run identifier is deliberately NOT in it. `run_created`'s payload
     // names no run either: `subject_id` and `run_id` are the columns the
@@ -542,7 +547,7 @@ describe("admitRun records the lap's execution intent alongside the run", () => 
     const text = String(eventRows(connection)[1]?.["payload"]);
     expect(text).toContain('"prompt": "\\u65e5\\u672c\\u8a9e"');
     // Keys sorted, separators with their spaces, and the whole thing ASCII.
-    expect(text.startsWith('{"base_branch": ')).toBe(true);
+    expect(text.startsWith('{"allowed_bash": [], "base_branch": ')).toBe(true);
     expect(text).toMatch(/^[\x20-\x7e]*$/);
   });
 
@@ -1285,6 +1290,60 @@ describe("continuo run admit", () => {
     expect(streams.err()).toContain("['--verbose', '--model=sonnet']");
 
     const connection = openProductionControlPlane(withSome);
+    onTestFinished(() => {
+      connection.close();
+    });
+    expect(runRows(connection)).toEqual([]);
+  });
+
+  test("takes --allow-bash any number of times, in order, and none by default", () => {
+    // `D-1110`, and unlike `--cli-arg` above this one can be read off the
+    // SPINE: a declaration is authorised by the role document's global
+    // forbidden-allow rules at render time, not by a document consulted at
+    // admission, so an ordinary verification declaration is admitted and
+    // persisted. Order is asserted for `--cli-arg`'s reason -- the record is a
+    // list, and a set here would be a different record.
+    const withNone = productionTemplate.copyInto(caseRoot("run-admit-no-allow"));
+    const withSome = productionTemplate.copyInto(caseRoot("run-admit-allow"));
+
+    expect(main(admitArgv(withNone, { "--now-ms": String(T0) }))).toBe(0);
+    expect(delegationPayload(withNone)["allowed_bash"]).toEqual([]);
+
+    expect(
+      main([
+        ...admitArgv(withSome, { "--now-ms": String(T0) }),
+        "--allow-bash=npm ci --ignore-scripts",
+        "--allow-bash=npm run:*",
+      ]),
+    ).toBe(0);
+    // The `=` form for the same reason the case above gives: a value beginning
+    // with a dash cannot be consumed as a following token, and a verification
+    // command frequently carries one.
+    expect(delegationPayload(withSome)["allowed_bash"]).toEqual([
+      "npm ci --ignore-scripts",
+      "npm run:*",
+    ]);
+  });
+
+  test("refuses a declaration that authorises everything, and admits no run", () => {
+    // The rule arrives while the operator is still at a prompt and the run
+    // identifier is still free, rather than three verbs later as a
+    // materialisation refusal -- `Bash(*)` is on the shipped document's
+    // forbidden list, so the render would refuse it either way.
+    //
+    // It escapes as a `LapRunIntentUsageError` rather than as one `error: `
+    // line, which is this module's own deliberate placement for every field
+    // rule of this record (`D-0051`, kept by `D-0055`) and is asserted here the
+    // way the two cases above assert it -- not re-litigated for one new field.
+    const path = productionTemplate.copyInto(caseRoot("run-admit-allow-star"));
+    const streams = captureStreams();
+
+    expect(() => main([...admitArgv(path, { "--now-ms": String(T0) }), "--allow-bash=*"])).toThrow(
+      LapRunIntentUsageError,
+    );
+    expect(streams.out()).toBe("");
+
+    const connection = openProductionControlPlane(path);
     onTestFinished(() => {
       connection.close();
     });

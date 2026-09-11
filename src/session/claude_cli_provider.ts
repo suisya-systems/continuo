@@ -1004,6 +1004,72 @@ function identityIncidentText(
 }
 
 /**
+ * One tool call the child asked to make and was not permitted to make.
+ *
+ * The child's own CLI reports these on its `result` event as
+ * `permission_denials`, and its source calls that field the authoritative
+ * record of them. This is that entry, renamed into this repository's spelling
+ * and otherwise unchanged: `tool_use_id` is dropped because it addresses a
+ * message in a transcript nobody outside the child can open, and what a reader
+ * of a finished lap needs is which tool was asked for and with what.
+ */
+export interface DeniedToolCall {
+  /** `Bash`, `Read`, ... -- the tool the child asked for. */
+  readonly toolName: string;
+  /** The call's input, verbatim: for `Bash`, the `command` the child wanted to run. */
+  readonly toolInput: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The denials a `result` event reports, or `null` when it reports none readably.
+ *
+ * **`null` and `[]` are different answers and are kept apart** (`D-1110`).
+ * `[]` is the child's CLI saying nothing was refused; `null` is this build
+ * saying it cannot see -- an older CLI without the field, or a field in a shape
+ * this does not read. Collapsing them would let "we cannot tell whether the
+ * verification ran" be reported as "nothing was refused", which is the failure
+ * continuo #207 exists to remove: a child that cannot build what it wrote, and
+ * a person reading a finished run who cannot tell.
+ *
+ * The whole field is refused rather than partially read, for that reason. An
+ * entry this build cannot interpret is a denial it cannot report, and reporting
+ * the others as if they were all of them would be an undercount presented as a
+ * count.
+ */
+function permissionDenialsOf(
+  resultEvent: Readonly<Record<string, unknown>>,
+): readonly DeniedToolCall[] | null {
+  const raw = getOwn(resultEvent, "permission_denials");
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  const denials: DeniedToolCall[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return null;
+    }
+    const toolName = getOwn(entry as Record<string, unknown>, "tool_name");
+    if (typeof toolName !== "string") {
+      return null;
+    }
+    const toolInput = getOwn(entry as Record<string, unknown>, "tool_input");
+    denials.push({
+      toolName,
+      // An absent or non-object input is carried as the empty mapping rather
+      // than refusing the field: the denial itself is still legible -- this
+      // tool was asked for and refused -- and which tool it was is the part a
+      // reader acts on. A missing `tool_name` is different in kind, because
+      // then there is no denial to report at all.
+      toolInput:
+        typeof toolInput === "object" && toolInput !== null && !Array.isArray(toolInput)
+          ? (toolInput as Record<string, unknown>)
+          : {},
+    });
+  }
+  return Object.freeze(denials);
+}
+
+/**
  * A finished turn's own prose report, read off the transcript it was written to.
  *
  * This is the L4 fact the report ingress turns into a `worker_escalation_raised`
@@ -1035,6 +1101,11 @@ export interface TerminalReport {
   readonly isError: boolean;
   /** The process disposition, `null` for a session this instance did not spawn. */
   readonly returncode: number | null;
+  /**
+   * The tool calls the child was refused, or `null` when that is not readable
+   * (`D-1110`). @see {@link permissionDenialsOf} for why the two are not one.
+   */
+  readonly permissionDenials: readonly DeniedToolCall[] | null;
 }
 
 /**
@@ -3108,6 +3179,12 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         // `is_error: 0` and `is_error: ""` are the CLI saying no.
         isError: pyTruthy(getOwn(resultEvent, "is_error")),
         returncode: this.#returncode(session),
+        // Off the same event as everything above it, and the reason it is read
+        // here rather than by a second pass over the transcript: this is the
+        // line the turn's identity was already reconciled on, so a denial
+        // reported with it is a denial from the turn that was verified, not
+        // from whatever else is on disk (`D-1110`).
+        permissionDenials: permissionDenialsOf(resultEvent),
       });
     });
   }

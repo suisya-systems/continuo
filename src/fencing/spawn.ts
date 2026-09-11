@@ -704,18 +704,38 @@ export class FencedSpawner {
    */
   readonly sandboxWritableRoots: readonly string[];
 
+  /**
+   * The Bash subjects the admitting side declared this spawner's children may
+   * run (`D-1110`), wrapped into `Bash(...)` allow entries by the renderer.
+   *
+   * Held here for the reason {@link FencedSpawner.nonInteractive} and
+   * {@link FencedSpawner.sandboxWritableRoots} are, and here it is the one of
+   * the three that would matter most: a caller free to vary the declaration per
+   * `prepare` could admit a plan under one declaration, have the battery and
+   * the ledger record that fence, and execute it under another. The fence the
+   * ledger recorded would not be the fence the child ran under, which is the
+   * whole of what an admission record is for.
+   *
+   * Empty by default, so a spawner that declares nothing renders exactly the
+   * allow list its role document authored -- byte-identical to every spawn
+   * before this field existed.
+   */
+  readonly allowedBash: readonly string[];
+
   constructor(init: {
     ledger: FenceLedger;
     document?: RoleDocument | undefined;
     settingsName?: string;
     nonInteractive?: boolean;
     sandboxWritableRoots?: readonly string[];
+    allowedBash?: readonly string[];
   }) {
     this.ledger = init.ledger;
     this.document = init.document;
     this.settingsName = init.settingsName ?? "settings.local.json";
     this.nonInteractive = init.nonInteractive ?? false;
     this.sandboxWritableRoots = Object.freeze([...(init.sandboxWritableRoots ?? [])]);
+    this.allowedBash = Object.freeze([...(init.allowedBash ?? [])]);
   }
 
   /**
@@ -779,11 +799,13 @@ export class FencedSpawner {
             ? renderFence(role, ctx, {
                 nonInteractive: this.nonInteractive,
                 sandboxWritableRoots: this.sandboxWritableRoots,
+                allowedBash: this.allowedBash,
               })
             : renderFence(role, ctx, {
                 document: this.document,
                 nonInteractive: this.nonInteractive,
                 sandboxWritableRoots: this.sandboxWritableRoots,
+                allowedBash: this.allowedBash,
               });
       } catch (exc) {
         if (exc instanceof FenceRefusal) {

@@ -168,6 +168,11 @@ describe("a finished turn that wrote prose", () => {
       isError: false,
       // Nothing this provider spawned, so there is no process disposition.
       returncode: null,
+      // `null`, because this `result` line carries no `permission_denials`
+      // field at all -- which is what an older worker CLI looks like, and is a
+      // different answer from the `[]` a current one writes when it refused
+      // nothing (`D-1110`).
+      permissionDenials: null,
     });
   });
 
@@ -447,5 +452,99 @@ describe("sessions this provider cannot answer for", () => {
     expect(refusalOf(await provider.readTerminalReport("broken")).kind).toBe(
       FailureKind.UNINTERPRETABLE_RESPONSE,
     );
+  });
+});
+
+// --------------------------------------------------------------------------
+// D-1110: the refusals leave the transcript
+// --------------------------------------------------------------------------
+
+describe("D-1110: what the child was refused", () => {
+  test("the denials the result line reports come back with the report", async () => {
+    // continuo #207's third requirement, read at the only place it exists: the
+    // child's own CLI writes what it refused onto the `result` event, and
+    // without this the value stops inside a transcript nobody outside the child
+    // opens. What would be silently wrong without this case is the failure the
+    // issue was filed over -- a lap whose verification never ran, handed to a
+    // person as a finished turn with a gate standing over it.
+    const { provider, sessionId } = planted("denied", [
+      initLine("denied"),
+      resultLine("denied", {
+        permission_denials: [
+          {
+            tool_name: "Bash",
+            tool_use_id: "toolu_01",
+            tool_input: { command: "npm run verify", description: "run the suite" },
+          },
+        ],
+      }),
+    ]);
+
+    const report = reportOf(await provider.readTerminalReport(sessionId));
+
+    expect(report.permissionDenials).toEqual([
+      // `tool_use_id` is dropped: it addresses a message inside a transcript no
+      // reader of a finished lap can open. The input is carried whole, because
+      // for a `Bash` call the `command` is the whole of what a reader acts on.
+      { toolName: "Bash", toolInput: { command: "npm run verify", description: "run the suite" } },
+    ]);
+  });
+
+  test("a turn that was refused nothing answers with an empty list, not with null", async () => {
+    // The half that makes the field worth having. A current CLI always writes
+    // the key, so `[]` is it saying "nothing was refused" -- a positive fact,
+    // and the one a host acts on when it decides a lap is clean.
+    const { provider, sessionId } = planted("allowed", [
+      initLine("allowed"),
+      resultLine("allowed", { permission_denials: [] }),
+    ]);
+
+    expect(reportOf(await provider.readTerminalReport(sessionId)).permissionDenials).toEqual([]);
+  });
+
+  test("a result line with no such field answers null, which is not an empty list", async () => {
+    // Observed red before the distinction existed: with `null` and `[]`
+    // collapsed into one value, this case and the one above are the same case,
+    // and a host reading an older worker CLI's transcript would be told nothing
+    // was refused by a build that cannot see refusals at all. That is "the
+    // verification never ran" reported as "the verification passed", which is
+    // precisely what #207 asks to be made impossible.
+    const { provider, sessionId } = planted("silent", [initLine("silent"), resultLine("silent")]);
+
+    expect(reportOf(await provider.readTerminalReport(sessionId)).permissionDenials).toBeNull();
+  });
+
+  test("a field this build cannot read is null rather than a partial count", async () => {
+    // A denial that cannot be interpreted is a denial that cannot be reported,
+    // and reporting the others as though they were all of them would be an
+    // undercount presented as a count. The whole field is refused instead, into
+    // the value that already means "cannot say".
+    const { provider, sessionId } = planted("garbled", [
+      initLine("garbled"),
+      resultLine("garbled", {
+        permission_denials: [
+          { tool_name: "Bash", tool_input: { command: "npm run verify" } },
+          { tool_use_id: "toolu_02" },
+        ],
+      }),
+    ]);
+
+    expect(reportOf(await provider.readTerminalReport(sessionId)).permissionDenials).toBeNull();
+  });
+
+  test("a denial with no readable input is still reported, with an empty input", async () => {
+    // The asymmetry with the case above, and it is deliberate: an absent
+    // `tool_input` still leaves a legible fact -- this tool was asked for and
+    // refused -- whereas an entry with no `tool_name` names no denial at all.
+    const { provider, sessionId } = planted("nameless-input", [
+      initLine("nameless-input"),
+      resultLine("nameless-input", {
+        permission_denials: [{ tool_name: "WebFetch" }],
+      }),
+    ]);
+
+    expect(reportOf(await provider.readTerminalReport(sessionId)).permissionDenials).toEqual([
+      { toolName: "WebFetch", toolInput: {} },
+    ]);
   });
 });

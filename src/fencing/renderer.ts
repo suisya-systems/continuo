@@ -642,6 +642,19 @@ export function checkRenderedSandboxDenyStrings(
  * would make every render depend on a repository being there. See
  * {@link repairSandbox} for what is done with it and why it is not the fix it
  * looks like.
+ *
+ * `allowedBash` is the admitting side's declaration of what this run's child
+ * may run (`D-1110`): Bash **subjects**, not permission specs. Each becomes one
+ * `Bash(<subject>)` entry in the role's `permissions.allow`, and the wrapping is
+ * done here rather than by the caller so that no declaration can name a tool --
+ * a subject reaching `Read`, `Edit` or an MCP tool is not a validation this has
+ * to get right, it is a spelling nobody can write. The merged list is then
+ * checked against the document's `global.forbidden_allow_*` like any other, so
+ * the document keeps the last word. What the option cannot do is the reason it
+ * is not a bypass: an allow entry is carried into the settings payload and into
+ * nothing else, while {@link Fence.rules} -- the list the deny hook and
+ * {@link decide} enforce -- is built from `permissions.deny` and the sandbox
+ * deny axes alone.
  */
 export function renderFence(
   role: string,
@@ -650,6 +663,7 @@ export function renderFence(
     readonly document?: RoleDocument;
     readonly nonInteractive?: boolean;
     readonly sandboxWritableRoots?: readonly string[];
+    readonly allowedBash?: readonly string[];
   },
 ): Fence {
   const doc = options?.document ?? loadDocument();
@@ -760,6 +774,39 @@ export function renderFence(
   } else {
     reasons.push([RefusalReason.RULE_SYNTAX, "permissions must be an object"]);
     permissions = {};
+  }
+  // The admitting side's declaration, merged in BEFORE the forbidden-allow
+  // check below and never after it (`D-1110`). Merged after it the declaration
+  // would be the one entry in the rendered allow list that the document's own
+  // `global.forbidden_allow_exact` / `forbidden_allow_regex` never saw -- which
+  // is the whole of what keeps a declaration from being a bypass on the
+  // document's side. Its structural half is elsewhere and is not restated here:
+  // `Fence.rules` below is built from `permissions.deny` and the two sandbox
+  // deny axes only, so nothing added to `allow` can reach a rule the hook or
+  // `decide` enforces.
+  const declaredAllow = (options?.allowedBash ?? []).map((subject) => `Bash(${subject})`);
+  if (declaredAllow.length > 0) {
+    const authored = Object.hasOwn(permissions, "allow") ? getOwn(permissions, "allow") : [];
+    // Only onto a list. A role whose `permissions.allow` is present and is
+    // something else is already being refused by `checkForbiddenAllow`, and
+    // appending to it here would replace the author's value with this
+    // function's -- the silent substitution this module refuses everywhere
+    // else. `carryNumberSpellings`, because a rebuilt container that drops the
+    // index-keyed record renders a document number differently from CPython
+    // (`D-0211`); the appended entries occupy new indices, so the record the
+    // authored entries carry still addresses the same elements.
+    if (Array.isArray(authored)) {
+      setOwn(permissions, "allow", carryNumberSpellings(authored, [...authored, ...declaredAllow]));
+      // A role that authored no `permissions` block at all renders in interlock
+      // (see the `{}` default above), and the local `{}` this function built for
+      // it is not reachable from `rendered` -- so the declaration would be
+      // checked and then dropped on the floor, and the child would be spawned
+      // without it. Attaching it is what makes the merged list the one the
+      // settings payload carries.
+      if (!Object.hasOwn(rendered, "permissions")) {
+        setOwn(rendered, "permissions", permissions);
+      }
+    }
   }
   // `permissions.get("allow", [])` (renderer.py:214): the default applies only
   // when the KEY IS ABSENT. An explicit `"allow": null` yields `None`, which is

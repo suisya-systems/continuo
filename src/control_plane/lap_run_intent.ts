@@ -6,8 +6,16 @@ import { pythonRepr } from "./python_repr.js";
 /**
  * What one lap of work was asked for, fixed at the moment the run is admitted.
  *
- * **This is an intent, not an authority.** Nothing in this record grants a
- * permission, proves an identity, or names a party entitled to anything. It is
+ * **This is an intent, not an authority.** Nothing in this record proves an
+ * identity or names a party entitled to anything.
+ *
+ * One field does grant something, and it is stated here rather than excused:
+ * {@link LapRunIntent.allowedBash} says which Bash commands this lap's child
+ * may run (`D-1110`), and that is a permission in the ordinary sense of the
+ * word. What it is not is an *authority* as the paragraph below means it -- it
+ * names no principal, no scope over a resource, and nobody who holds it. It is
+ * a statement about the work, lap-scoped like every other field here, and it is
+ * spent when the lap is. It is
  * the statement of a job: which run, who will claim its lease, where the work
  * will be materialised, in which role, from which branch onto which, and what
  * the worker is being asked to do. A reader who takes a field here as evidence
@@ -227,6 +235,7 @@ export interface LapRunIntentFields {
   readonly topicBranch: string;
   readonly prompt: string;
   readonly cliArgs?: readonly string[] | undefined;
+  readonly allowedBash?: readonly string[] | undefined;
 }
 
 /** Non-empty text, or a refusal naming the field and quoting what arrived. */
@@ -314,6 +323,7 @@ export const PAYLOAD_KEYS = {
   topicBranch: "topic_branch",
   prompt: "prompt",
   cliArgs: "cli_args",
+  allowedBash: "allowed_bash",
 } as const;
 
 /**
@@ -380,6 +390,25 @@ export class LapRunIntent {
    * "this producer did not write the key".
    */
   readonly cliArgs: readonly string[];
+  /**
+   * The Bash **subjects** this run's child is declared able to run (`D-1110`),
+   * in order. Empty when the admitting side declared nothing, which is every
+   * run admitted before that entry and every run that asks for nothing.
+   *
+   * A subject, never a permission spec: `npm run:*`, not `Bash(npm run:*)`.
+   * The fence wraps each one into `Bash(<subject>)` itself, so a declaration
+   * cannot name a tool -- reaching `Read`, `Edit`, `WebFetch` or an MCP tool is
+   * not something this record has to refuse, it is a spelling that cannot be
+   * written. What a subject can do is widen one role's `permissions.allow` for
+   * one run, and it is checked against the role document's own
+   * `global.forbidden_allow_*` where the fence is rendered.
+   *
+   * An empty array rather than `undefined` once constructed, for the reason
+   * {@link LapRunIntent.cliArgs} gives: the payload has one shape, and a reader
+   * does not have to tell "declared nothing" from "this producer did not write
+   * the key".
+   */
+  readonly allowedBash: readonly string[];
 
   /**
    * The event payload, rendered once at construction.
@@ -491,6 +520,69 @@ export class LapRunIntent {
     }
     this.cliArgs = Object.freeze([...cliArgs]);
 
+    // `D-1110`. The rules here are the SHAPE of a subject and nothing else --
+    // the same division `D-0088` drew for `cli_args` and for the same reason.
+    // This constructor runs a second time at `lap perform`, through
+    // `readLapRunIntent`, so a rule that consulted the role document would make
+    // an already admitted run unreadable the moment the document changed, and
+    // unreadable means the run cannot be reported or closed either. Whether a
+    // subject is one this role may be granted is the document's answer, given
+    // where the run is about to act.
+    const allowedBash = fields.allowedBash ?? [];
+    if (!Array.isArray(allowedBash)) {
+      throw new LapRunIntentUsageError(
+        `allowed_bash must be a list of strings, got ${pythonRepr(allowedBash)}`,
+      );
+    }
+    for (const [index, subject] of allowedBash.entries()) {
+      if (typeof subject !== "string") {
+        throw new LapRunIntentUsageError(
+          `allowed_bash[${index}] must be a string, got ${pythonRepr(subject)}`,
+        );
+      }
+      // NOT the `cli_args` rule, which admits the empty string because an empty
+      // argv element is a legal thing to pass. An empty or whitespace-only
+      // subject renders `Bash()` or `Bash(   )`, which authorises nothing and
+      // says nothing -- a declaration that reads as a grant and is not one.
+      if (subject.trim() === "") {
+        throw new LapRunIntentUsageError(
+          `allowed_bash[${index}] must be a non-empty subject, got ${pythonRepr(subject)}`,
+        );
+      }
+      if (CONTROL_CHARACTERS.test(subject)) {
+        throw new LapRunIntentUsageError(
+          `allowed_bash[${index}] must not contain a control character, got ` + pythonRepr(subject),
+        );
+      }
+      // The spec grammar's own delimiters. A subject is interpolated into
+      // `Bash(<subject>)`, so a parenthesis inside it is an operator writing
+      // half of somebody else's spec: `x) Read(**` renders
+      // `Bash(x) Read(**)`. That is one malformed spec rather than two rules
+      // today, because the rendered `permissions.allow` is a list and each
+      // element is parsed whole -- but it is a spelling whose meaning belongs
+      // to a CLI this repository does not own, which is `D-0086`'s reason for
+      // refusing rather than modelling.
+      if (subject.includes("(") || subject.includes(")")) {
+        throw new LapRunIntentUsageError(
+          `allowed_bash[${index}] must not contain '(' or ')', got ${pythonRepr(subject)}; ` +
+            "a subject is interpolated into Bash(<subject>), so a parenthesis inside it " +
+            "spells part of a rule this record did not authorise",
+        );
+      }
+      // `Bash(*)` is on the shipped document's `forbidden_allow_exact` and
+      // would be refused at render; this refuses the family at admission, where
+      // the operator is still at a prompt and a corrected retry is free. The
+      // test is "nothing but wildcard punctuation", so `*`, `**`, `:*` and
+      // `* *` are all refused and `npm run:*` is not.
+      if (/^[*:\s]+$/.test(subject)) {
+        throw new LapRunIntentUsageError(
+          `allowed_bash[${index}] is ${pythonRepr(subject)}, which authorises every command ` +
+            "-- a declaration has to be narrower than 'anything' (D-1110)",
+        );
+      }
+    }
+    this.allowedBash = Object.freeze([...allowedBash]);
+
     this.#payload = pythonJsonDocumentSorted({
       [PAYLOAD_KEYS.leaseClaimantId]: this.leaseClaimantId,
       [PAYLOAD_KEYS.workspace]: this.workspace,
@@ -499,6 +591,7 @@ export class LapRunIntent {
       [PAYLOAD_KEYS.topicBranch]: this.topicBranch,
       [PAYLOAD_KEYS.prompt]: this.prompt,
       [PAYLOAD_KEYS.cliArgs]: this.cliArgs,
+      [PAYLOAD_KEYS.allowedBash]: this.allowedBash,
     });
 
     Object.freeze(this);

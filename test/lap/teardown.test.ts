@@ -144,6 +144,7 @@ const REPORT = {
   subtype: "success",
   isError: false,
   returncode: 0,
+  permissionDenials: null,
 } as const;
 
 /**

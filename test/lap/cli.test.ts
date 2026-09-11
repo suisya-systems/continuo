@@ -1100,6 +1100,13 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // was the worker CLI's own default and this build does not know which one
       // that was. A host accounting for what a lap cost reads the choice here.
       model: null,
+      // Present, and `null` rather than `[]` (`D-1110`). The stub backend this
+      // fixture drives is not the Claude CLI and reports no `permission_denials`
+      // field at all, so the honest answer is "cannot say" -- which is a
+      // different fact from "nothing was refused", and the whole reason the two
+      // are not one value. A host reading `null` as an empty list would read a
+      // lap whose verification never ran as a lap whose verification passed.
+      permission_denials: null,
     });
   });
 
@@ -1195,6 +1202,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // was too tight" from "the worker ran long".
       elapsed_deadline_at_ms: deadline,
       model: null,
+      permission_denials: null,
     });
   });
 

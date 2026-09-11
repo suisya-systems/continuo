@@ -122,6 +122,32 @@ export interface LapTerminalReport {
   readonly subtype: string | null;
   readonly isError: boolean;
   readonly returncode: number | null;
+  /**
+   * The tool calls the child asked for and was refused, or `null` when the
+   * backend cannot say (`D-1110`).
+   *
+   * Re-declared here like the rest of this shape, and structural for the same
+   * reason -- a backend that reports denials satisfies it, and one that does
+   * not answers `null` rather than being unable to satisfy the type at all.
+   *
+   * This is the field continuo #207's third requirement is about. A fence that
+   * refuses the project's verification refuses it inside the child, where the
+   * refusal is one line of a transcript nobody opens; carried here it reaches
+   * the verb's own answer, so a reader cannot mistake "the verification never
+   * ran" for "the verification passed".
+   */
+  readonly permissionDenials: readonly DeniedToolCallFact[] | null;
+}
+
+/**
+ * One refused tool call, structurally as the backend hands it over.
+ *
+ * `ClaudeCliSessionProvider`'s `DeniedToolCall`, re-declared for the reason
+ * this module's docstring gives about every other shape it re-declares.
+ */
+export interface DeniedToolCallFact {
+  readonly toolName: string;
+  readonly toolInput: Readonly<Record<string, unknown>>;
 }
 
 /** A turn with no report to read yet, or none it will ever have. */
@@ -1384,6 +1410,12 @@ async function performLapHoldingTheEndpointLease(
     artifactDir: lapArtifactDir(request.artifactRoot, intent.runId),
     prompt: intent.prompt,
     cliArgs: intent.cliArgs,
+    // Off the admitted record and nowhere else (`D-1110`). The lap has no flag
+    // of its own for this and deliberately does not grow one: the declaration
+    // is an authorisation, so it belongs to the side that admitted the run and
+    // to the payload that records it -- unlike `--model`, which `D-0099` places
+    // at this composition root precisely because it authorises nothing.
+    allowedBash: intent.allowedBash,
     nowMs: request.nowMs(),
     sessionUuidFactory: request.sessionUuidFactory,
     // Neither field is the caller's any more (`D-0074`): the holder is the

@@ -118,6 +118,7 @@ function finished(report = "please review"): Ok<LapTerminalReadout> {
     subtype: "success",
     isError: false,
     returncode: 0,
+    permissionDenials: null,
   });
 }
 
@@ -529,6 +530,7 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
         subtype: "success",
         isError: false,
         returncode: 0,
+        permissionDenials: null,
       }),
     ]);
     await expectRefusalAsync(
@@ -693,6 +695,7 @@ describe("D-1102: a post-walk refusal names the session it is about", () => {
               subtype: "success",
               isError: false,
               returncode: 0,
+              permissionDenials: null,
             }),
           ]),
           SESSION,
