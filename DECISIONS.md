@@ -213,6 +213,7 @@ spaces distinct.
 | D-1107 | The delegation record lives in continuo, is written in the transaction that admits the run, and is stored opaquely | accepted |
 | D-1108 | `D-1003`'s nested `fileParallelism: false` is removed: it only ever ran where the contention it guarded against never was | accepted |
 | D-1109 | The Windows cells put the suite's temporary directory on the runner's local disk, because that is where the cell's wall clock was going | accepted |
+| D-1110 | The admitting side declares the Bash commands a child may run, and the declaration cannot reach the fence's deny layers | accepted |
 
 ---
 
@@ -16889,3 +16890,165 @@ nothing here has run enough Windows cells to support it. `D-1003`'s skip and `D-
 serialization therefore stay exactly as they are until someone measures that separately -- and
 `workspace/materializer.test.ts`, which improves only 1.3x here, is evidence that the serial half is
 a different problem.
+
+## D-1110 -- The admitting side declares the Bash commands a child may run, and the declaration cannot reach the fence's deny layers
+
+**Context.** A child spawned through the worker fence may edit a repository and may commit to it,
+and cannot build or test what it wrote. continuo #207 is the escalation that measured it, on
+2026-09-12, against continuo `38c667b5` while rondo drove a lap against rondo itself: `npm ci
+--ignore-scripts`, `npm run verify`, `npm --version` and `node vendor/pin.mjs check` each came back
+`This command requires approval`, and the child is a `claude -p` session, so there is nobody the
+approval can reach. For a repository whose contributor rules require the suite green before a
+commit, no run could comply.
+
+The cause is not a missing permission; it is a missing *input*. `roles.worker.permissions.allow` is
+six git specs in `src/fencing/roles.json`, the document is selected by role name alone, and nothing
+a host submits reaches an allow rule: `FenceContext` carries `interlock_root`, `worker_dir`,
+`claude_org_path`, `hook_script`, `fence_path` and the interpreter substitution, and nothing else.
+`renderFence`'s other two options (`nonInteractive`, `sandboxWritableRoots`) describe the spawner's
+own environment, not the work. `D-0081`'s promotion to `acceptEdits` covers Edit and not Bash, which
+is exactly why a child can write code it cannot run.
+
+The host's one existing input to a child's tool permissions is `run admit --cli-arg ...
+--allowedTools`, and rondo refuses it by a ratified decision of its own (rondo `D-0011` rule 3,
+which keeps its human gate from becoming advisory). That decision's first stated falsifier is this
+case, and it names the response: escalate to continuo about the fence rather than widen the host. So
+any answer here that works by having the host pass `--allowedTools` is not an answer; it is the
+refused thing with a longer path to it.
+
+**Measurements.**
+
+1. **An allow entry cannot reach any of the fence's three layers.** `renderFence` builds
+   `Fence.rules` from `permissions.deny` and from `sandbox.filesystem.denyRead` / `denyWrite`, and
+   from nothing else; `decide` in `src/fencing/rules.ts` walks that list and is deny-only, with
+   `denied: false` documented as *no opinion, not approval*. The `PreToolUse` deny hook enforces the
+   same rule list. An allow entry is therefore carried into one place only -- the `permissions` block
+   of the settings payload the child's own CLI reads -- and it is structurally unable to remove a
+   deny rule, a sandbox deny path, or a hook decision. This is the property that makes a declared
+   allow list something other than a bypass, and it is a fact about the code rather than a promise
+   about how the input will be used.
+
+2. **The document's `global.forbidden_allow_exact` / `forbidden_allow_regex` already refuse the
+   widest spellings**, and refuse them by *refusing the render* rather than by dropping the entry
+   (`checkForbiddenAllow`, and section 4 of `docs/per-role-fencing.md`). `Bash`, `Bash(*)`,
+   `Bash(git *)`, `Bash(gh *)`, `Bash(rm -rf *)` and `Read(*)` are on that list today. A declaration
+   that merges into `permissions.allow` before that check passes through a gate that already exists
+   and already fails closed.
+
+3. **The record that answers "what was permitted" already exists and already reaches a reader.**
+   `run admit` writes the intent as the `run_delegation_recorded` event payload inside the
+   transaction that creates the run (`D-1107`), and `run show --json` carries every event row's
+   `payload` verbatim (`src/control_plane/run_view.ts`). A field on `LapRunIntent` is therefore
+   readable from a finished run with no new schema, no new reader and no new verb.
+
+4. **The refusal is already reported by the child's CLI as structured data.** Measured against
+   Claude Code 2.1.269: the stream-json `result` event carries `permission_denials`, an array of
+   `{tool_name, tool_use_id, tool_input}`, and the CLI's own source calls it "the authoritative
+   record" of denials. continuo already parses that event -- `lastResultEvent` in
+   `src/session/claude_cli_provider.ts` is what `readTerminalReport` is built on -- so the producing
+   side of #207's third requirement is a field read off a line already being read, not a new
+   transcript pass and not a match against the sentence `This command requires approval`.
+
+**Decision.**
+
+1. **`run admit --allow-bash SUBJECT`, repeatable, is the declaration.** Its values are carried on
+   `LapRunIntent` as `allowedBash` and persisted under the payload key `allowed_bash`, beside
+   `cli_args`. The admitting side is the side that states what the child may run, per run, and the
+   statement is part of the record that admits it.
+
+2. **The operator declares a Bash *subject*, never a permission spec.** continuo renders
+   `Bash(<subject>)` itself and merges the result into the role's `permissions.allow`. The tool name
+   is not the operator's to choose, so no declaration can reach `Read`, `Edit`, `WebFetch` or an MCP
+   tool, and "narrower than anything" is a property of the shape rather than a validation that could
+   be written with a hole in it. A subject may carry the CLI's own `:*` prefix form (`npm run:*`),
+   because that is part of the subject the operator types.
+
+3. **The shape rules live in `LapRunIntent`'s constructor and the fence rules live in the
+   renderer**, which is `D-0088`'s split applied unchanged. The constructor refuses a non-string, an
+   empty or whitespace-only subject, a control character (the rule `cli_args` already has, for the
+   reason it already has), a `(` or `)` -- the spec grammar's own delimiters, which an operator has
+   no reason to spell inside a subject -- and a subject that is only wildcard characters. It reads no
+   document, so an already admitted run stays readable, reportable and closable whatever the
+   document later says: that is the same hazard `D-0088` decision D5 closed, and it is closed here
+   the same way.
+
+4. **The document keeps the last word, at the moment of the spawn.** The merged allow list goes
+   through `checkForbiddenAllow` against the role document's `global` block, so a declaration the
+   document forbids refuses the render, which refuses the spawn -- no partial fence, no dropped
+   entry. `renderFence` gains one option, `allowedBash`, and `FencedSpawner` holds it the way it
+   holds `sandboxWritableRoots`: on the spawner rather than per `prepare`, so a caller cannot admit
+   a plan under one declaration and execute it under another.
+
+5. **`roles.json` is not edited.** No role gains an allow entry, and no role is added. The document
+   is carried from interlock at `65f36c5` and pinned by digest
+   (`test/contract/carried-documents.test.ts`), and its three recorded deviations are all
+   respellings or removals of interlock's own rules; this entry adds none.
+
+6. **A denied Bash call leaves the transcript as structured data.** `TerminalReport` gains
+   `permissionDenials`, read off the `result` event's `permission_denials`, and `lap perform --json`
+   reports it. **Absent and empty are different values and stay different:** `null` means the child's
+   CLI reported no such field -- an older CLI, or a turn that ended before the result line -- and `[]`
+   means it reported none. Collapsing the two would let "we cannot see whether anything was refused"
+   read as "nothing was refused", which is the failure this requirement exists to remove.
+
+**Alternatives.**
+
+- **A second worker-kind role in `roles.json`, carrying the wider allow list, selected by `run admit
+  --role`** -- the shape rondo recommended, on the ground that it is the existing extension point and
+  that `(2)` then needs no new schema because the role name is already on the run row. Rejected, for
+  three reasons and not one. First, it answers the issue's first requirement by doing the thing that
+  requirement names: the commands stay *fixed by role name*, and the admitting side chooses between
+  prepared profiles rather than stating what this run may run. Second, continuo has already declined
+  a `roles.json` key for a per-run choice, for a reason that applies here verbatim -- `D-0099`
+  measurement 4: a role is what a worker *is*, not what runs it, and the same roles are meant to be
+  performable differently. A role that means "worker, with a build" makes the `role` column answer
+  two questions, which rondo named as the cost of its own proposal. Third, a document-authored list
+  is fixed for every repository the fence is ever used against and cannot be narrowed for a lap that
+  does not build: it would grow to the union of every project's verification commands, reviewed once
+  at authoring time and never again per run, whereas a declaration is reviewable in the record of
+  the run that made it.
+- **A `cli_args_allow.json`-shaped document that the declaration is matched against.** Rejected as
+  the machinery `D-0088` built for a different question. That document exists because an admitted
+  run's `cli_args` reach a CLI's option parser, which this repository does not own and cannot model;
+  a Bash subject reaches `permissions.allow`, which is gated by `global.forbidden_allow_*` in the
+  document already. Adding a second allowlist would be a second answer to "what may this role be
+  granted", and two answers eventually disagree.
+- **Passing `--allowedTools` through `cli_args`.** Refused upstream by rondo `D-0011` rule 3 and
+  refused here too: it is the one input that reaches the child's permissions while bypassing every
+  check in measurement 1 and 2, and it is what this entry exists to make unnecessary.
+- **Reading the refusal out of the child's prose.** Rejected: matching `This command requires
+  approval` is a match against a sentence the CLI may rewrite, and `permission_denials` is the same
+  CLI's own structured answer to the same question.
+
+**Consequences.** A run admitted with no `--allow-bash` is byte-identical to every run before this
+entry: no key is added to the rendered `permissions.allow`, and the empty declaration is the
+default. A declaration widens exactly one layer of one role's fence for exactly one run, cannot
+narrow or remove a deny rule, a sandbox path or a hook, and is refused outright if it collides with
+the document's global forbidden list. The fence's stated limitation is unchanged and is not narrowed
+by this entry: `docs/per-role-fencing.md` section 5 still holds, and nothing here observes what the
+provider actually loaded.
+
+Two costs are taken deliberately. A declared subject like `npm run:*` authorises whatever the
+repository's own `package.json` says that script is, which is text the child may itself have
+written -- so the boundary this entry draws is "the project's own scripts", not "a fixed command".
+That is the boundary #207 asks for, and the alternative (an exact command list) cannot be stated
+once for two repositories. And `npm ci` without `--ignore-scripts` executes package lifecycle
+scripts, which the hook cannot observe because it sees tool calls and not the subprocesses a tool
+starts; a declaration should therefore name `npm ci --ignore-scripts` exactly rather than `npm ci:*`,
+and `D-0009` is the reason.
+
+**What would falsify this.** Measurement 1 is the load-bearing one: if an allow entry ever became
+able to suppress a deny rule, a sandbox deny path or a hook decision -- in continuo's own renderer,
+or in the CLI that reads the settings payload -- the declaration would stop being narrower than a
+bypass and this entry would have to be superseded rather than amended. Measurement 4 is the fragile
+one: `permission_denials` is a field of a CLI this repository does not own, and a release that
+removes or renames it makes the reported value `null` rather than wrong -- which is why absent and
+empty are kept apart. And the acceptance is a measurement, not an argument: a run admitted with
+`--allow-bash 'npm ci --ignore-scripts' --allow-bash 'npm run:*'` whose child cannot reach green on
+`npm ci --ignore-scripts && npm run verify` falsifies the whole entry.
+
+**Status.** accepted
+
+**Source.** continuo #207, filed from rondo as rondo#67, against continuo `38c667b5`; rondo `D-0011`
+rule 3 and its falsifier; rondo `D-0039`, which states the host-side requirement and recommends the
+second-role shape this entry declines; `permission_denials` measured against Claude Code 2.1.269.
