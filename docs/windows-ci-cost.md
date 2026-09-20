@@ -11,6 +11,19 @@ cells in parallel, so the wait is the slowest cell, and that was always Windows 
 21 to 33 minutes against single digits for ubuntu. Past tense since `D-1109`: it
 is now 7 to 9 minutes, and section 5b is the measurement of that.
 
+**What the numbers are now a fact about has changed.** Every measurement below was
+taken while the Windows cells ran on the pull-request path, so "the wait" meant
+the wait before a merge, and that is the quantity this file was written to shrink.
+`D-1111` moved those cells off that path: they now run on the nightly schedule and
+on `workflow_dispatch`, and no pull request waits for them at all. The
+measurements themselves are unaffected -- they are measurements of the cell, not
+of the trigger -- but the thing they are an argument about is different. A minute
+saved here is a minute off a nightly that nobody is sitting in front of, not a
+minute off a merge; read the cost table in section 7 with that in mind, and read
+`DECISIONS.md` `D-1111` for why the trade was taken. What has *not* changed is the
+reason to keep the cells fast: `D-1103`'s 65-minute cap still cancels a cell that
+outgrows it, and a cancelled cell is still a red `ci-gate` that no log explains.
+
 Every number below is dated and says which machine -- and, it turns out, which
 *drive* -- produced it. That is the headline: two machines running the same
 operating system disagreed by a factor of 42, and the reason was that the suite
@@ -313,6 +326,11 @@ Still unmeasured, and named so that nobody re-derives them from a guess:
   fsync-bound
 
 ## 7. Candidates, costed, one adopted
+
+Costed against the pull-request wait, which since `D-1111` is not what these cells
+set (see the note at the top). The effort column is unchanged; what each row buys
+is now nightly wall clock and headroom under `D-1103`'s cap, which is a weaker
+reason to spend the effort than the one the column was filled in for.
 
 | | effort | what it costs | status |
 |---|---|---|---|

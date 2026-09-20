@@ -15,8 +15,11 @@ enough to crash `--help` with `UnicodeEncodeError` -- and the crash is invisible
 because the harness captures stdout as UTF-8 and never touches the console encoder. It appears only
 on a real terminal, on a user's machine, usually at the least convenient moment.
 
-Windows is a **required** CI cell (`D-0003`), so the platform where this matters is on the merge
-path rather than in a nightly job.
+The Windows cells run nightly and on `workflow_dispatch` rather than on every pull request
+(`D-1111`), so the platform where this matters is checked once a day rather than once a commit. The
+policy is unchanged and so is the check that enforces it: what moved is when a violation surfaces,
+which is the cost `D-1111` costed and accepted. A change that deliberately touches CLI output is a
+`workflow_dispatch` away from the same evidence it used to get on the pull request.
 
 ## Scope
 

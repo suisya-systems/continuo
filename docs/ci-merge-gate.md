@@ -1,8 +1,9 @@
 # The merge gate: double-green under random ordering
 
-Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0005`.
+Authority: [`DECISIONS.md`](../DECISIONS.md) `D-0005`, and `D-1111` for which triggers the Windows
+cells run on.
 Workflow: [`.github/workflows/tests.yml`](../.github/workflows/tests.yml).
-How long the cells take, and why the Windows one takes 21-33 minutes of it:
+How long the cells take, and why the Windows one used to take 21-33 minutes of it:
 [`windows-ci-cost.md`](windows-ci-cost.md).
 
 ## What "green twice under random ordering" means here
@@ -50,6 +51,39 @@ CONTINUO_TEST_SEED=<n> npm test
 
 The order is reproducible for a **fixed set of discovered test files**. Adding or removing a test
 file changes the resulting order at the same seed, so reproduce before you edit.
+
+## Which cells exist depends on the trigger
+
+`ubuntu-latest` x Node 22/24 runs on every push and every pull request. `windows-latest` x Node
+22/24 is added on the nightly `schedule` and on a manual `workflow_dispatch`, and on nothing else
+(`D-1111`). So a pull request's gate is two cells and a nightly's is four.
+
+The rule above is unchanged by that: it is stated over *each required matrix cell*, and which cells
+the matrix produces is what the trigger decides. Every cell that runs, whenever it runs, still runs
+the suite twice, serially, in two processes, at two distinct seeds -- including both Windows cells
+on the nightly.
+
+`ci-gate` is also unchanged, and still fail-closed over whatever ran: it reads
+`needs.double-green.result`, not a list of cell names, so a matrix that produces two cells is gated
+exactly as strictly as one that produces four. What it cannot do is report on a cell that did not
+run. That is the trade `D-1111` makes, and the thing that notices it is
+[`nightly-failure-issue`](#the-nightly-has-a-reader).
+
+## The nightly has a reader
+
+A pull-request run is read by whoever opened it. A scheduled run is read by nobody unless something
+says so -- GitHub's own notification for a failing scheduled workflow goes to the account that last
+touched the cron line, not to the repository. So the workflow's last job, `nightly-failure-issue`,
+opens an issue titled **`Nightly tests are red`** when `ci-gate` comes back anything but `success`
+on a scheduled run. If that issue is already open it adds a comment instead, so a week of red
+nightlies is one thread rather than seven issues. Closing the issue is the acknowledgement.
+
+It is scoped as narrowly as it can be: `if:` restricts it to `github.event_name == 'schedule'`, and
+`permissions: issues: write` sits on that one job while every other job keeps the workflow-level
+`contents: read`.
+
+This is a receiving surface, not a notification design. When a notification layer exists, this job
+is what it replaces.
 
 ## The required check is `ci-gate`, and it is fail-closed
 
