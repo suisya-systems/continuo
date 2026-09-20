@@ -426,10 +426,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # One fixed title, matched literally against `gh issue list` rather
+          # One fixed title, matched literally against the issues API rather
           # than against `--search`: the search index lags by minutes, which is
           # long enough for two consecutive nightlies to each open their own
-          # issue. `gh issue list` reads the issues API directly.
+          # issue.
           title="Nightly tests are red"
           body=$(printf '%s\n' \
             "The \`ci-gate\` job came back \`${GATE_RESULT}\` on the nightly run for \`${GITHUB_SHA}\`." \
@@ -439,8 +439,17 @@ jobs:
             "The Windows cells run on this schedule and on \`workflow_dispatch\` only (D-1111), so a red cell here is where a Windows-only regression first becomes visible." \
             "" \
             "Closing this issue is the acknowledgement; while it is open, later nightly failures are added as comments rather than as new issues.")
-          existing=$(gh issue list --state open --limit 100 --json number,title \
-            --jq "[.[] | select(.title == \"${title}\")] | first | .number // empty")
+          # `--paginate` rather than a `--limit`: any bound is the wrong one
+          # here. The issue this looks for is the OLDEST matching open issue,
+          # and every bounded listing is newest-first, so a repository with more
+          # open issues than the bound would stop finding it and open a second
+          # one every night -- the exact failure this lookup exists to prevent.
+          # `pull_request == null` because this REST endpoint returns pull
+          # requests as issues; `sed -n 1p` rather than `head -1` so that `gh`
+          # is never killed by SIGPIPE under `pipefail`.
+          existing=$(gh api --paginate "repos/{owner}/{repo}/issues?state=open&per_page=100" \
+            --jq ".[] | select(.pull_request == null and .title == \"${title}\") | .number" \
+            | sed -n 1p)
           if [ -n "${existing}" ]; then
             echo "commenting on open issue #${existing}"
             gh issue comment "${existing}" --body "${body}"

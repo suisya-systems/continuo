@@ -17162,8 +17162,11 @@ Issue #215 asks for the trade to be taken. This entry takes it.
    `schedule` run, the workflow opens an issue titled `Nightly tests are red` against itself. If
    that issue is already open it comments instead, so a week of red nightlies is one thread rather
    than seven issues; closing the issue is the acknowledgement. Deduplication matches the title
-   literally against `gh issue list` rather than `--search`, because the search index lags by
-   minutes -- long enough for two consecutive nightlies to each open their own issue.
+   literally against a fully paginated listing of open issues. Not against `--search`, because the
+   search index lags by minutes -- long enough for two consecutive nightlies to each open their own
+   issue -- and not against a bounded listing, because every such listing is newest-first, so a
+   repository with more open issues than the bound would stop finding the thread it is supposed to
+   be appending to and would open a fresh issue every night instead.
 
 5. **`permissions: issues: write` is on that job and nowhere else.** The workflow-level grant stays
    `contents: read`; a job-level block replaces the workflow-level one outright, so the issue job
