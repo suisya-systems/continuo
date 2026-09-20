@@ -214,6 +214,7 @@ spaces distinct.
 | D-1108 | `D-1003`'s nested `fileParallelism: false` is removed: it only ever ran where the contention it guarded against never was | accepted |
 | D-1109 | The Windows cells put the suite's temporary directory on the runner's local disk, because that is where the cell's wall clock was going | accepted |
 | D-1110 | The admitting side declares the Bash commands a child may run, and the declaration cannot reach the fence's deny layers | accepted |
+| D-1111 | The Windows `double-green` cells leave the pull-request path for a nightly schedule and `workflow_dispatch`, and the nightly files its own failure issue | accepted |
 
 ---
 
@@ -373,6 +374,13 @@ Blocker 3. Facts verified 2026-08-22 against `WiseLibs/better-sqlite3` v13.0.3 (
 at `nodejs.org/api/n-api.html`. Local measurement on Node v22.17.0 / linux-x64: prebuilt binary
 loads, `sqlite_version()` = 3.53.4.
 
+**Note (`D-1111`).** The required matrix named above is now the pull-request matrix minus its
+Windows half: `windows-latest` x Node 22/24 runs on the nightly schedule and on `workflow_dispatch`,
+not on every commit (`D-1111`). Everything this entry decides is untouched -- the pin, the `engines`
+range, the exclusion of Node 23 and 26, and the native-load smoke, which still runs in every cell
+that runs, before the suite. What changed is how often the Windows half of the matrix reports, not
+what it reports.
+
 ---
 
 ## D-0004 — TypeScript strictness beyond `strict`
@@ -456,6 +464,14 @@ review 2026-08-22, Blocker 2 and Blocker 4. GitHub behaviours verified 2026-08-2
 docs.github.com "Troubleshooting required status checks" (skipped-reports-as-success), the `needs`
 context reference, and the rulesets REST reference.
 
+**Note (`D-1111`).** "Within each required matrix cell" is unchanged as the rule; which cells the
+matrix produces is now a function of the trigger (`D-1111`): ubuntu on every push and pull request,
+plus Windows on the nightly schedule and on `workflow_dispatch`. Every cell that runs still runs the
+suite twice, serially, in two processes, at two distinct seeds, and `ci-gate` still reads
+`needs.double-green.result` rather than a list of cell names -- which is why the change was a
+one-line edit to the matrix and no edit at all to the ruleset. That this entry refused to require
+the matrix legs by name is what made that possible.
+
 ---
 
 ## D-0006 — ASCII-only for anything continuo prints
@@ -488,6 +504,12 @@ written verbatim.
 
 **Source.** interlock#74 open question 3 and its 2026-08-22 refinement comment; Codex design review
 2026-08-22, Major 6.
+
+**Note (`D-1111`).** The cp932 console is still where this policy is observed, and it is still
+observed in CI -- on the nightly schedule and on `workflow_dispatch` rather than on every pull
+request (`D-1111`). A violation now surfaces up to a day after it merges. That latency is
+`D-1111`'s accepted cost, not a change to this entry: the policy, its scope table and its
+enforcement are exactly as written.
 
 ---
 
@@ -626,6 +648,12 @@ created, then loads the addon and queries it.
 `double-green (windows-latest, node 22)` red at `npm ci`, the other three cells green, and `ci-gate`
 correctly red as a result. Root cause measured locally against better-sqlite3 13.0.3
 (`binding.gyp`, `lib/binding.js`, and an empty `build/Release/`), 2026-08-22.
+
+**Note (`D-1111`).** The `windows-latest` / Node 22 install failure this entry is built on is
+observed nightly rather than on every pull request (`D-1111`). `--ignore-scripts` stays load-bearing
+for precisely the reason stated above; what moved is when a regression against it is caught. The
+rejected alternative "keep scripts enabled and tolerate the failure on one cell" is if anything less
+tempting now, since the cell that would carry the failure is the one nobody is watching live.
 
 ---
 
@@ -3282,6 +3310,11 @@ translation has earned. Two questions catch both instances:
 The corollary for review: **a fix is not finished when the original finding stops reproducing -- ask
 what the fix itself now admits.**
 
+**Note (`D-1111`).** Windows is no longer a per-pull-request CI cell: it runs on the nightly
+schedule and on `workflow_dispatch` (`D-1111`). The argument here is unaffected in substance -- a
+check that is sound on POSIX and unsound on Windows is still a hole, and that is still why this
+entry refuses the `X_OK` shape. It is confirmed a day later than it used to be.
+
 ---
 
 ## D-0209 — `npm test` builds first, because the deny hook's dependencies come from `dist/`
@@ -4592,6 +4625,11 @@ handed a path where 8.3 expansion or the `\\?\` prefix round-trip decides a supp
 point the adaptation stops being a spelling difference and becomes a behavioural one; the settings
 suite's tmp-directory cases realpath their `worker_dir` up front precisely because that expansion is
 observable on the Windows cells.
+
+**Note (`D-1111`).** The Windows cells that exercise this entry's `os.path` transcription now run
+on the nightly schedule and on `workflow_dispatch` rather than on every pull request (`D-1111`). The
+Windows half of the port is still executed in CI, so the falsifiers stated above remain reachable;
+they are reached on the nightly.
 
 ---
 
@@ -15773,6 +15811,14 @@ corroborating evidence for the headroom this entry adds). Decision id `D-1103`, 
 `D-11xx` shared cross-belt band opened by `D-1101` (Issue #179); `D-1102` was reserved for a
 concurrent task at the time this entry was drafted, so this entry takes the next free id after it.
 
+**Note (`D-1111`).** This cap no longer sets anyone's wait for a merge: `D-1111` moved the Windows
+cells to the nightly schedule and `workflow_dispatch`. The number stays at 65 regardless, and the
+reason is the failure shape rather than the wait -- a cell that outgrows its cap is *cancelled*,
+which is `ci-gate` red on a `cancelled` result with nothing a log explains, and that is worse on a
+run nobody is watching than on a pull request. Point 4 above ("`ci-gate` is unchanged") also still
+holds under `D-1111`, which changed which cells the matrix produces and nothing about how the gate
+reads them. The falsifier is unchanged and is now observed on the nightly.
+
 ---
 
 ## D-1104 -- The outbox row records WHICH lease minted its `writer_epoch`, and a lap holds its own run's delivery resource
@@ -16891,6 +16937,13 @@ serialization therefore stay exactly as they are until someone measures that sep
 `workspace/materializer.test.ts`, which improves only 1.3x here, is evidence that the serial half is
 a different problem.
 
+**Note (`D-1111`).** The wait this entry shortened was the wait before a merge. Since `D-1111` the
+Windows cells are not on the pull-request path at all, so what the 3.0x buys now is nightly wall
+clock and headroom under `D-1103`'s cap. The measurement, the mechanism, and the reason to prefer
+this fix over the other candidates are unchanged, and the step itself is untouched;
+`docs/windows-ci-cost.md` carries the same note at the top of the file and over its candidate
+table.
+
 ## D-1110 -- The admitting side declares the Bash commands a child may run, and the declaration cannot reach the fence's deny layers
 
 **Context.** A child spawned through the worker fence may edit a repository and may commit to it,
@@ -17052,3 +17105,131 @@ empty are kept apart. And the acceptance is a measurement, not an argument: a ru
 **Source.** continuo #207, filed from rondo as rondo#67, against continuo `38c667b5`; rondo `D-0011`
 rule 3 and its falsifier; rondo `D-0039`, which states the host-side requirement and recommends the
 second-role shape this entry declines; `permission_denials` measured against Claude Code 2.1.269.
+
+---
+
+## D-1111 -- The Windows `double-green` cells leave the pull-request path for a nightly schedule and `workflow_dispatch`, and the nightly files its own failure issue
+
+**Context.** `D-0003` put `windows-latest` in the required matrix from day one, and `D-0005` made
+`double-green` run every cell of that matrix twice. The Windows half of the matrix has been the
+slowest thing on the merge path ever since: 21 to 33 minutes against single digits for ubuntu
+(`docs/windows-ci-cost.md`), and after `D-1109` moved the suite's temporary directory onto the
+runner's local disk, 7 to 9 minutes against 3 to 4. Better, but still the cell that decides when a
+pull request can merge, and still the cell whose cap has had to be raised twice (20 to 40, then
+`D-1103`'s 40 to 65) because a cancelled cell fails `ci-gate` on a `cancelled` result that no log
+explains.
+
+What the Windows cells actually buy is a platform check: the cp932 console `D-0006`'s output policy
+is written for, the `npm ci --ignore-scripts` failure mode `D-0009` is built on, the Windows branch
+of the path transcription in `D-0213`, and the `X_OK`-is-not-executable hole in `D-0208`. None of
+those is a per-commit risk. They are properties of the port that change rarely and break loudly,
+and a check that answers about them once a day answers about them often enough. Paying for that
+answer on every pull request buys latency, not coverage.
+
+Issue #215 asks for the trade to be taken. This entry takes it.
+
+**Decision.**
+
+1. **`double-green`'s matrix is trigger-dependent.** `ubuntu-latest` x Node 22/24 on every `push`
+   to `main` and every `pull_request`; `windows-latest` x Node 22/24 added on a new nightly
+   `schedule` (`17 3 * * *`, deliberately off the hour because GitHub queues scheduled workflows
+   globally) and on `workflow_dispatch`. It is one expression on `matrix.os`:
+
+   ```yaml
+   os: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+   ```
+
+   Not `matrix.exclude`, which cannot be made conditional, and not a second job, which would need
+   its own copy of every step and its own entry in `ci-gate`'s `needs`.
+
+2. **Double-green is unchanged, and so is `ci-gate`.** `D-0005`'s rule is stated over *each
+   required matrix cell*; which cells the matrix produces is what the trigger decides. Every cell
+   that runs -- including both Windows cells on the nightly -- still runs the suite twice, serially,
+   in two processes, at two distinct seeds derived per cell. `ci-gate` reads
+   `needs.double-green.result` and no cell names, so it gates a two-cell matrix exactly as strictly
+   as a four-cell one, and the branch ruleset (`docs/ci-merge-gate.md`) needs no edit at all. That
+   is `D-0005`'s refusal to require matrix legs by name paying for itself.
+
+3. **`workflow_dispatch` is the escape hatch, and it is the answer to "but my change is
+   Windows-shaped".** A change that deliberately touches CLI output, path handling, native loading
+   or the installer can have the same evidence it used to get automatically, on request, before the
+   merge rather than after it.
+
+4. **The nightly gets a reader: a final `nightly-failure-issue` job.** A pull-request run is read by
+   whoever opened it; a scheduled run is read by nobody unless something says so, and GitHub's own
+   notification for a failing scheduled workflow goes to the account that last touched the cron line
+   rather than to the repository. So when `ci-gate` comes back anything but `success` on a
+   `schedule` run, the workflow opens an issue titled `Nightly tests are red` against itself. If
+   that issue is already open it comments instead, so a week of red nightlies is one thread rather
+   than seven issues; closing the issue is the acknowledgement. Deduplication matches the title
+   literally against a fully paginated listing of open issues. Not against `--search`, because the
+   search index lags by minutes -- long enough for two consecutive nightlies to each open their own
+   issue -- and not against a bounded listing, because every such listing is newest-first, so a
+   repository with more open issues than the bound would stop finding the thread it is supposed to
+   be appending to and would open a fresh issue every night instead.
+
+5. **`permissions: issues: write` is on that job and nowhere else.** The workflow-level grant stays
+   `contents: read`; a job-level block replaces the workflow-level one outright, so the issue job
+   holds `issues: write` and nothing else, and no other job in the file can write anything. The job
+   also needs no checkout: `gh` takes the repository from `GH_REPO`.
+
+6. **This is a receiving surface, not a notification design.** It exists so that a red nightly is
+   *visible somewhere* until there is a layer whose job that is. When that layer exists, this job is
+   what it replaces, not something it is built on top of.
+
+7. **The nightly gets its own concurrency group.** `github.event_name` joins the group key, so a
+   push to `main` cannot cancel an in-flight nightly. Before this entry that would have cost a
+   duplicate run; now it would discard the day's only Windows coverage silently, since a cancelled
+   run does not reach `nightly-failure-issue` either.
+
+**Alternatives.**
+
+- **Leave the Windows cells on the pull-request path (rejected).** It is the status quo and it is
+  defensible on coverage. It is rejected on what that coverage costs per unit of risk: the
+  properties Windows checks change rarely, and every pull request pays for the answer.
+- **Drop the Windows cells entirely (rejected, and out of scope).** Whether continuo should support
+  Windows is a different question from when CI should check that it does; #215 asks only the second.
+  `D-0003` still names `windows-latest`, and the port still runs there.
+- **A separate nightly workflow file (rejected).** A second file would duplicate every step, the
+  seed derivation, the install posture and the `D-1109` temporary-directory step, and the two copies
+  would drift. One expression on `matrix.os` keeps a single definition of what a cell does.
+- **Notify a person or a channel instead of filing an issue (deferred, not rejected).** That is the
+  notification layer rule 6 defers. An issue needs no secret, no external service and no per-person
+  configuration, which is what makes it the right receiving surface for the interval before that
+  layer exists.
+- **A label instead of a fixed title for deduplication (rejected).** `gh issue create --label` fails
+  when the label does not exist, which turns a red nightly into a red nightly plus a silent failure
+  to report it. A literal title needs nothing to be provisioned.
+
+**Consequences.** A Windows-only regression can merge and stay merged for up to a day; the nightly
+is what finds it, and the issue is what says so. `D-1103`'s 65-minute cap stops being anyone's wait
+for a merge but keeps its value for the reason in its own note: a cell that outgrows the cap is
+cancelled, which is red with no explanation, and that is worse unattended. `docs/windows-ci-cost.md`
+keeps every number it recorded, but what those numbers are an argument about changes -- a minute
+saved there is now a minute off a nightly rather than off a merge, which is a weaker reason to spend
+effort on the remaining candidates in its section 7. A pull request's `double-green` is two cells
+rather than four, which also means roughly half the runner minutes per pull request.
+
+**Falsification.** If a Windows-only regression reaches a release because a day of latency was too
+much, the risk assessment in Context was wrong and the Windows cells belong back on the
+pull-request path (or on a per-path trigger). If red nightlies accumulate unacknowledged -- issues
+opened, commented on, and never closed or acted on -- then rule 4's receiving surface is not
+actually being read, and the answer is the notification layer rule 6 defers rather than a second
+variant of the same job. If `nightly-failure-issue` is ever observed opening a second issue while
+one is already open, the literal-title match in rule 4 is insufficient and deduplication needs a
+stronger key.
+
+**Status.** accepted
+
+**Falsifier.** A Windows-only defect shipped in a release whose regression window includes at least
+one green-on-the-pull-request, red-on-the-nightly interval. A `Nightly tests are red` issue open for
+longer than a week with no comment or close. Two simultaneously open issues with that title.
+
+**Source.** Issue #215. `D-0003` (the matrix `windows-latest` came from), `D-0005` (the double-green
+rule and `ci-gate`'s shape, both unchanged here, and its refusal to require matrix legs by name,
+which is what made this a one-line matrix edit), `D-0006`, `D-0009`, `D-0208` and `D-0213` (the four
+properties the Windows cells actually check; each carries a note pointing here), `D-1103` (the
+65-minute cap, which stays), `D-1109` (the temporary-directory move, whose 3.0x now buys nightly
+wall clock). `docs/windows-ci-cost.md` for the measurements and `docs/ci-merge-gate.md` for the gate
+and the ruleset. Decision id `D-1111`, the next free id in the `D-11xx` shared cross-belt band
+opened by `D-1101` (Issue #179).

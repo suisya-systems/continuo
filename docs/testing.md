@@ -31,8 +31,8 @@ does it slightly differently" is the failure mode the discipline exists to preve
 
 Every run shuffles both file order and, within a file, test order. A suite that only passes in one
 order has hidden coupling between tests, and that coupling is a property of the suite worth failing
-over. CI runs each required cell twice at two distinct seeds
-([`docs/ci-merge-gate.md`](./ci-merge-gate.md)).
+over. CI runs each cell the trigger produces twice at two distinct seeds -- ubuntu on every pull request,
+Windows nightly (`D-1111`); see [`docs/ci-merge-gate.md`](./ci-merge-gate.md).
 
 Consequences for how tests are written:
 

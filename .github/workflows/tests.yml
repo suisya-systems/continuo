@@ -9,12 +9,27 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The Windows cells run here and nowhere else (D-1111). Everything else about
+  # `double-green` is unchanged on every trigger: whichever cells the matrix
+  # produces still run the suite twice, serially, at two distinct seeds.
+  schedule:
+    # 03:17 UTC, daily. Deliberately off the hour: GitHub queues scheduled
+    # workflows globally and the top of the hour is the worst slot to ask for.
+    - cron: "17 3 * * *"
+  # The escape hatch for "I am touching something platform-shaped and do not
+  # want to wait for tonight". Runs the same matrix the schedule does.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
+  # `github.event_name` is part of the group so that a push to `main` cannot
+  # cancel the nightly run that happens to be in flight. Before the Windows
+  # cells moved here that only cost a duplicate run; now it would silently
+  # discard the day's only Windows coverage -- and a cancelled run does not
+  # reach `nightly-failure-issue` either, so nothing would say so.
+  group: tests-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -71,16 +86,32 @@ jobs:
     # keeps this a one-line expression on one job-level key rather than two
     # jobs or a `matrix.include` block, so the seed derivation above (per-cell,
     # keyed on `matrix.os`/`matrix.node`) stays exactly as it is.
+    #
+    # D-1111 moved the Windows cells off the pull-request path, so this cap no
+    # longer sets anyone's wait for a merge. It still sets how long a nightly
+    # cell may run before it is cancelled, and a cancelled cell still fails
+    # `ci-gate` with nothing a log explains -- so the number stays where D-1103
+    # measured it.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 65 || 40 }}
     strategy:
       # A red cell must not hide the state of the others: which cells failed is
       # the diagnosis, and cancelling them destroys it.
       fail-fast: false
       matrix:
-        # Windows is a required cell from day one, not a nightly extra. The
-        # cp932 console is where the ASCII-only output policy is actually
-        # observed (docs/cli-output-policy.md, D-0006).
-        os: [ubuntu-latest, windows-latest]
+        # ubuntu on every trigger; Windows on the nightly schedule and on a
+        # manual dispatch only (D-1111). The cp932 console is still where the
+        # ASCII-only output policy is actually observed
+        # (docs/cli-output-policy.md, D-0006) -- it is observed one night later
+        # than a pull request, not less often than a commit.
+        #
+        # An expression over the whole list rather than `matrix.exclude` or a
+        # second job: `exclude` cannot be made conditional, and a second job
+        # would need its own copy of every step and its own entry in
+        # `ci-gate`'s `needs`.
+        # Kept on one line on purpose: a folded scalar would put newlines
+        # inside the `${{ }}`, and an expression is not guaranteed to survive
+        # them.
+        os: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
         # Node 22 (Maintenance LTS) and Node 24 (Active LTS). Node 26 Current is
         # deliberately absent from the required set (D-0003).
         node: ["22", "24"]
@@ -355,3 +386,74 @@ jobs:
         run: |
           echo "::error::A required job failed, was cancelled, or was skipped."
           exit 1
+
+  nightly-failure-issue:
+    # The nightly's reader. A pull-request run is read by whoever opened it; a
+    # scheduled run is read by nobody unless something says so, and GitHub's own
+    # notification for a failing scheduled workflow goes to the last account to
+    # touch the cron line rather than to the repository. So the run files an
+    # issue against itself.
+    #
+    # This is a receiving surface until a notification layer exists, not the
+    # design for one (D-1111).
+    name: nightly-failure-issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [ci-gate]
+    # Scheduled runs only: a `workflow_dispatch` run has a human watching it,
+    # and a pull-request run already has `ci-gate` holding the merge.
+    #
+    # `always()` for the same reason `ci-gate` carries it -- without it this job
+    # is *skipped* whenever `ci-gate` fails, which is the only case it exists
+    # for. The result is compared as an allow-list (`!= 'success'`) so that a
+    # cancelled or skipped gate also files, for the same reason `ci-gate` itself
+    # refuses those values.
+    if: ${{ always() && github.event_name == 'schedule' && needs.ci-gate.result != 'success' }}
+    # Scoped to this job rather than raised at the top of the file: no other job
+    # here writes anything, and they all keep the workflow-level `contents:
+    # read`. A job-level block replaces the workflow-level one outright, so this
+    # job has `issues: write` and nothing else.
+    permissions:
+      issues: write
+    steps:
+      - name: Open the nightly failure issue, or comment on the open one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # `gh` takes the repository from this, so this job needs no checkout.
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GATE_RESULT: ${{ needs.ci-gate.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One fixed title, matched literally against the issues API rather
+          # than against `--search`: the search index lags by minutes, which is
+          # long enough for two consecutive nightlies to each open their own
+          # issue.
+          title="Nightly tests are red"
+          body=$(printf '%s\n' \
+            "The \`ci-gate\` job came back \`${GATE_RESULT}\` on the nightly run for \`${GITHUB_SHA}\`." \
+            "" \
+            "Run: ${RUN_URL}" \
+            "" \
+            "The Windows cells run on this schedule and on \`workflow_dispatch\` only (D-1111), so a red cell here is where a Windows-only regression first becomes visible." \
+            "" \
+            "Closing this issue is the acknowledgement; while it is open, later nightly failures are added as comments rather than as new issues.")
+          # `--paginate` rather than a `--limit`: any bound is the wrong one
+          # here. The issue this looks for is the OLDEST matching open issue,
+          # and every bounded listing is newest-first, so a repository with more
+          # open issues than the bound would stop finding it and open a second
+          # one every night -- the exact failure this lookup exists to prevent.
+          # `pull_request == null` because this REST endpoint returns pull
+          # requests as issues; `sed -n 1p` rather than `head -1` so that `gh`
+          # is never killed by SIGPIPE under `pipefail`.
+          existing=$(gh api --paginate "repos/{owner}/{repo}/issues?state=open&per_page=100" \
+            --jq ".[] | select(.pull_request == null and .title == \"${title}\") | .number" \
+            | sed -n 1p)
+          if [ -n "${existing}" ]; then
+            echo "commenting on open issue #${existing}"
+            gh issue comment "${existing}" --body "${body}"
+          else
+            echo "opening a new issue"
+            gh issue create --title "${title}" --body "${body}"
+          fi
