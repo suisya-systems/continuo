@@ -20,7 +20,11 @@ import { describe, expect, onTestFinished, test } from "vitest";
 
 import { main } from "../../src/cli.js";
 import { ciCliSeams } from "../../src/control_plane/ci_cli.js";
-import { recordCiObservation, scopeVerdicts } from "../../src/control_plane/ci_ingest.js";
+import {
+  pullRequestCi,
+  recordCiObservation,
+  scopeVerdicts,
+} from "../../src/control_plane/ci_ingest.js";
 import {
   createProductionControlPlane,
   MIGRATIONS_DIR,
@@ -318,6 +322,134 @@ describe("ci observe, then ci show", () => {
         `scope check_run "a\\nforged line" passed detail=success attempt=1 occurred=${T0 + 1}\n`,
     );
   });
+});
+
+describe("a check the forge stops listing stops counting (D-1113 gate answer 5)", () => {
+  const red = { name: "old-ci", status: "completed", conclusion: "failure", at: 1000, id: 1 };
+  const green = { name: "lint", status: "completed", conclusion: "success", at: 1000, id: 2 };
+
+  test("a check missing from the latest observation is out of the verdict, and its rows stay", () => {
+    const cp = fixture("gone");
+    cp.observe({ runs: checkRuns(red, green) });
+    expect(cp.show()).toMatchObject({ verdict: "failed" });
+    cp.observe({ runs: checkRuns(green) });
+    expect(JSON.parse(cp.out.join(""))).toMatchObject({ scopes_changed: true });
+    expect(cp.show()).toMatchObject({
+      verdict: "passed",
+      scopes: [{ scope_id: "lint", verdict: "passed" }],
+    });
+    // Evidence is never deleted: the red row is still there, it just no longer counts.
+    expect(rowsOf(cp.path, "ci_observation").map((row) => row["scope_id"])).toContain("old-ci");
+  });
+
+  test("a list that comes back to an earlier one counts that one again (A -> B -> A)", () => {
+    const cp = fixture("list-cycle");
+    cp.observe({ runs: checkRuns(red, green) });
+    cp.observe({ runs: checkRuns(green) });
+    expect(cp.show()).toMatchObject({ verdict: "passed" });
+    cp.observe({ runs: checkRuns(red, green) });
+    expect(JSON.parse(cp.out.join(""))).toMatchObject({ recorded: 0, scopes_changed: true });
+    expect(cp.show()).toMatchObject({ verdict: "failed" });
+  });
+
+  test("an unchanged list appends no snapshot", () => {
+    const cp = fixture("list-unchanged");
+    cp.observe({ runs: checkRuns(green) });
+    cp.observe({ runs: checkRuns(green) });
+    expect(JSON.parse(cp.out.join(""))).toMatchObject({ scopes_changed: false });
+    expect(rowsOf(cp.path, "ci_scope_snapshot")).toHaveLength(1);
+  });
+
+  test("an empty answer after checks were listed leaves nothing counting: no_run", () => {
+    const cp = fixture("list-emptied");
+    cp.observe({ runs: checkRuns(red) });
+    cp.observe({ runs: checkRuns() });
+    expect(cp.show()).toMatchObject({ head_sha: HEAD, verdict: "no_run", scopes: [] });
+  });
+});
+
+test("a pending ingested after its own completion at the same instant does not win", () => {
+  // started_at == completed_at: the run began and finished within one millisecond.
+  const cp = fixture("pending-tie");
+  cp.observe({
+    runs: checkRuns({ name: "t", status: "completed", conclusion: "success", at: 1000, id: 5 }),
+  });
+  cp.observe({ runs: checkRuns({ name: "t", status: "in_progress", at: 1000, id: 5 }) });
+  expect(JSON.parse(cp.out.join(""))).toMatchObject({ recorded: 1 });
+  expect(cp.show()).toMatchObject({ verdict: "passed" });
+});
+
+test("ci show reads one state even when a write commits between its statements", () => {
+  // The read goes through a connection that, after the FIRST statement it runs,
+  // lets a second connection commit a failure for the same scope. Read in one
+  // statement, the answer is the state before that write, whole: verdict and
+  // scope agree. Read in several, the later ones would see the failure and the
+  // earlier ones would not. Raised by Codex review of this change.
+  const cp = fixture("one-snapshot");
+  cp.observe({ runs: checkRuns({ name: "t", status: "in_progress", at: 1000, id: 1 }) });
+  const reader = openProductionControlPlane(cp.path);
+  const writer = openProductionControlPlane(cp.path);
+  onTestFinished(() => {
+    reader.close();
+    writer.close();
+  });
+  let fired = false;
+  const interleave = (): void => {
+    if (fired) {
+      return;
+    }
+    fired = true;
+    recordCiObservation(writer, {
+      observationId: "late-failure",
+      repoId: REPO_ID,
+      prNumber: PR,
+      headSha: HEAD,
+      checkScope: "check_run",
+      scopeId: "t",
+      attempt: 1,
+      verdict: "failed",
+      observer: "test",
+      observerEpoch: 1,
+      occurredAtMs: T0 + 9000,
+      ingestedAtMs: T0 + 9000,
+    });
+  };
+  const connection = new Proxy(reader, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target);
+      if (property !== "prepare") {
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return (sql: string) => {
+        const statement = target.prepare(sql);
+        const wrapped: object = new Proxy(statement, {
+          get(inner, name) {
+            const member = Reflect.get(inner, name, inner);
+            if (typeof member !== "function") {
+              return member;
+            }
+            return (...args: unknown[]) => {
+              const result = member.apply(inner, args);
+              if (name === "all" || name === "get") {
+                interleave();
+              }
+              return result === inner ? wrapped : result;
+            };
+          },
+        });
+        return wrapped;
+      };
+    },
+  });
+  const read = pullRequestCi(connection, { repoId: REPO_ID, prNumber: PR });
+  expect(fired).toBe(true);
+  expect(read).toMatchObject({
+    headSha: HEAD,
+    verdict: "pending",
+    scopes: [{ scopeId: "t", verdict: "pending" }],
+  });
+  // And the write did land: a fresh read sees it.
+  expect(pullRequestCi(reader, { repoId: REPO_ID, prNumber: PR }).verdict).toBe("failed");
 });
 
 describe("ci observe refuses a document about something else, writing nothing", () => {

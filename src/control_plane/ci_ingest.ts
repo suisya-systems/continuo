@@ -3,6 +3,7 @@ import type { AppendedEvent } from "./events.js";
 import { appendEvent } from "./events.js";
 import { pythonList, pythonRepr } from "./python_repr.js";
 import { ControlPlaneRefusal } from "./refusals.js";
+import { transaction } from "./txn.js";
 
 /**
  * G3 -- CI outcome ingestion: one identity, evidence that is never overwritten.
@@ -108,6 +109,9 @@ export const CHECK_SCOPES: ReadonlySet<string> = new Set([
  * constraint.
  */
 export const CI_OBSERVED_EVENT_TYPE = "ci_observed";
+
+/** The event type {@link recordCiScopeSnapshot} appends. */
+export const CI_SCOPES_OBSERVED_EVENT_TYPE = "ci_scopes_observed";
 
 /**
  * The severity fold of section 6.3 rule 5: `failed > timed_out > cancelled >
@@ -583,6 +587,119 @@ export function recordCiObservation(
   });
 }
 
+/** One `(checkScope, scopeId)` pair the forge listed for a head. */
+export interface ScopeKey {
+  readonly checkScope: string;
+  readonly scopeId: string;
+}
+
+/**
+ * Record which scopes the forge listed for a head, when that list changed
+ * (`D-1113` gate answer 5).
+ *
+ * Evidence is never deleted, so without this a check GitHub stops listing --
+ * a workflow renamed or removed -- would keep its last verdict in the fold for
+ * that head for ever. `ci_current_verdict` counts only the scopes in a head's
+ * latest snapshot, so the check stops counting and its rows stay. An empty
+ * `scopes` is a real answer -- the forge listed nothing -- and records a
+ * snapshot with no members, after which nothing counts for that head.
+ *
+ * **Written only when the list differs from the latest snapshot**, so a watcher
+ * polling an unchanged head appends nothing. The dedup key names the snapshot
+ * it follows (`.../after/<seq>`), not the set: keyed by the set, a list that
+ * went A -> B -> A would find A's key already on the spine and be absorbed,
+ * leaving B standing -- the same trap a constant `attempt` sets for
+ * observations. Two writers racing from the same predecessor collide on that
+ * key, and the loser is an idempotent no-op that the next observation repairs.
+ *
+ * The read of the latest snapshot and the append are one transaction (joined,
+ * if the caller already holds one), so the comparison cannot go stale between
+ * them. Returns whether a snapshot was written.
+ */
+export function recordCiScopeSnapshot(
+  connection: SqliteDatabase,
+  options: {
+    readonly repoId: string;
+    readonly prNumber: number;
+    readonly headSha: string;
+    readonly scopes: readonly ScopeKey[];
+    readonly eventId: string;
+    readonly observer: string;
+    readonly observerEpoch: number;
+    readonly ingestedAtMs: number;
+  },
+): boolean {
+  const { repoId, prNumber, headSha, scopes, eventId, observer, observerEpoch, ingestedAtMs } =
+    options;
+  for (const scope of scopes) {
+    // Validated through the identity so a snapshot names only scopes an
+    // observation could have; the verdict is irrelevant here and any valid one
+    // will do.
+    new ObservationIdentity({
+      provider: "github",
+      repoId,
+      prNumber,
+      headSha,
+      checkScope: scope.checkScope,
+      scopeId: scope.scopeId,
+      attempt: 1,
+      verdict: "passed",
+    });
+  }
+  const render = (scope: ScopeKey): string => JSON.stringify([scope.checkScope, scope.scopeId]);
+  const wanted = [...new Set(scopes.map(render))].sort();
+  return transaction(connection, (tx) => {
+    const latest = tx
+      .prepare<[string, number, string], number>(
+        "SELECT max(event_seq) FROM ci_scope_snapshot" +
+          " WHERE repo_id = ? AND pr_number = ? AND head_sha = ?",
+      )
+      .pluck()
+      .get(repoId, prNumber, headSha);
+    if (latest !== null && latest !== undefined) {
+      const held = tx
+        .prepare<[number], { check_scope: string; scope_id: string }>(
+          "SELECT check_scope, scope_id FROM ci_scope_snapshot_member WHERE event_seq = ?",
+        )
+        .all(latest)
+        .map((row) => render({ checkScope: row.check_scope, scopeId: row.scope_id }))
+        .sort();
+      if (held.length === wanted.length && held.every((key, index) => key === wanted[index])) {
+        return false;
+      }
+    }
+    const appended = appendEvent(tx, {
+      eventId,
+      eventType: CI_SCOPES_OBSERVED_EVENT_TYPE,
+      subjectKind: "pull_request",
+      subjectId: `${repoId}#${prNumber}`,
+      dedupKey: `ci_scopes/${repoId}/${prNumber}/${headSha}/after/${String(latest ?? 0)}`,
+      producer: observer,
+      producerEpoch: observerEpoch,
+      occurredAtMs: ingestedAtMs,
+      ingestedAtMs,
+      payload: null,
+      sideEffect: (inner, seq) => {
+        inner
+          .prepare<[number, string, number, string]>(
+            "INSERT INTO ci_scope_snapshot (event_seq, repo_id, pr_number, head_sha)" +
+              " VALUES (?, ?, ?, ?)",
+          )
+          .run(seq, repoId, prNumber, headSha);
+        const member = inner.prepare<[number, string, string]>(
+          "INSERT INTO ci_scope_snapshot_member (event_seq, check_scope, scope_id)" +
+            " VALUES (?, ?, ?)",
+        );
+        for (const key of wanted) {
+          const [checkScope, scopeId] = JSON.parse(key) as [string, string];
+          member.run(seq, checkScope, scopeId);
+        }
+      },
+    });
+    return !appended.duplicate;
+  });
+}
+
 /** One row of {@link scopeVerdicts}'s eligible per-scope projection. */
 export interface ScopeVerdict {
   readonly repoId: string;
@@ -671,9 +788,19 @@ export function prVerdict(
   connection: SqliteDatabase,
   options: { readonly repoId: string; readonly prNumber: number },
 ): string {
-  const verdicts = scopeVerdicts(connection, options)
-    .filter((row) => row.verdict !== NO_ELIGIBLE_EVIDENCE)
-    .map((row) => row.verdict);
+  return foldVerdicts(scopeVerdicts(connection, options).map((row) => row.verdict));
+}
+
+/**
+ * {@link prVerdict}'s fold, over verdicts already read.
+ *
+ * Its own function so that a caller holding the projected rows -- `ci show`,
+ * which reads them in one statement ({@link pullRequestCi}) -- folds them by the
+ * same rule rather than by a copy of it, and without a second read that could
+ * see a different database.
+ */
+export function foldVerdicts(all: readonly string[]): string {
+  const verdicts = all.filter((verdict) => verdict !== NO_ELIGIBLE_EVIDENCE);
   if (verdicts.length === 0) {
     return NO_ELIGIBLE_EVIDENCE;
   }
@@ -693,5 +820,91 @@ export function prVerdict(
       throw new TypeError(`verdict '${best}' has no entry in VERDICT_SEVERITY`);
     }
     return currentSeverity > bestSeverity ? current : best;
+  });
+}
+
+/** One projected scope, as {@link pullRequestCi} reads it. */
+export interface PullRequestCiScope {
+  readonly checkScope: string;
+  readonly scopeId: string;
+  readonly verdict: string;
+  /** The forge's own word for the row (`verdict_detail`), or null when none was recorded. */
+  readonly detail: string | null;
+  readonly attempt: number;
+  readonly occurredAtMs: number;
+}
+
+/** A pull request's current head, its verdict and the scopes it was folded from. */
+export interface PullRequestCi {
+  /** Null when no head was ever recorded for the pull request. */
+  readonly headSha: string | null;
+  readonly verdict: string;
+  readonly scopes: readonly PullRequestCiScope[];
+}
+
+/**
+ * The head, the projected scopes and the verdict, read as **one statement**.
+ *
+ * `ci show` reports all three side by side, and three reads could each see a
+ * different database when an `observe` commits between them: a verdict folded
+ * before a failure landed printed beside a scope list that includes it, or a
+ * verdict attributed to a head that has since moved. SQLite runs one `SELECT`
+ * against one snapshot, so reading everything in one and folding the rows it
+ * returned with {@link foldVerdicts} makes the answer describe one state.
+ *
+ * **Not a transaction, deliberately.** `txn.ts`'s `transaction` is `BEGIN
+ * IMMEDIATE`, and `run_view.ts` records why a read verb does not take the
+ * write lock out from under a running lap, and why there is no second,
+ * deferred helper; one statement needs neither (`D-1113`).
+ */
+export function pullRequestCi(
+  connection: SqliteDatabase,
+  options: { readonly repoId: string; readonly prNumber: number },
+): PullRequestCi {
+  const rows = connection
+    .prepare<
+      [string, number],
+      {
+        head_sha: string;
+        check_scope: string | null;
+        scope_id: string | null;
+        verdict: string | null;
+        verdict_detail: string | null;
+        attempt: number | null;
+        occurred_at_ms: number | null;
+      }
+    >(
+      `
+        SELECT p.head_sha, v.check_scope, v.scope_id, v.verdict, o.verdict_detail,
+               v.attempt, v.occurred_at_ms
+          FROM pull_request p
+          LEFT JOIN ci_current_verdict v
+            ON v.repo_id = p.repo_id AND v.pr_number = p.pr_number
+          LEFT JOIN ci_observation o ON o.event_seq = v.event_seq
+         WHERE p.repo_id = ? AND p.pr_number = ?
+         ORDER BY v.check_scope, v.scope_id
+        `,
+    )
+    .all(options.repoId, options.prNumber);
+  const scopes: PullRequestCiScope[] = [];
+  for (const row of rows) {
+    if (row.check_scope === null || row.scope_id === null || row.verdict === null) {
+      continue;
+    }
+    scopes.push(
+      Object.freeze({
+        checkScope: row.check_scope,
+        scopeId: row.scope_id,
+        verdict: row.verdict,
+        detail: row.verdict_detail,
+        attempt: Number(row.attempt),
+        occurredAtMs: Number(row.occurred_at_ms),
+      }),
+    );
+  }
+  return Object.freeze({
+    headSha: rows[0]?.head_sha ?? null,
+    verdict: foldVerdicts(scopes.map((scope) => scope.verdict)),
+    scopes: Object.freeze(scopes),
   });
 }

@@ -24,6 +24,16 @@
 --        (scope_id = the status's context), and a rerun is a later observation
 --        of the SAME scope, ordered by the provider's clock like every other.
 --
+--    (c) a check that STOPS BEING REPORTED. Evidence is never deleted, so a
+--        check GitHub no longer lists for a head (a workflow renamed or
+--        removed) would keep its last verdict in the fold for ever -- and a
+--        renamed check whose last word was 'pending' would hold the pull
+--        request at 'pending' until the head moved. The owner's answer
+--        (D-1113 gate answer 5) is that such a check does not count. So each
+--        observation of a head also records WHICH scopes the forge listed
+--        (ci_scope_snapshot / ci_scope_snapshot_member), and the view counts
+--        only the scopes in the latest one. The evidence rows stay.
+--
 --  WHY A TABLE REBUILD. Both vocabularies are CHECK constraints, and SQLite has
 --  no ALTER TABLE that replaces one; 0003 states the procedure and why nothing
 --  cheaper is acceptable. Nothing REFERENCES ci_observation and no trigger is
@@ -33,6 +43,38 @@
 -- ==========================================================================
 
 DROP VIEW ci_current_verdict;
+
+-- --------------------------------------------------------------------------
+-- NEW: which scopes the forge listed for a head, at each observation that
+-- changed the list (D-1113). One row per snapshot, keyed by the spine event
+-- that recorded it, so "latest" is the spine's own append order; members are
+-- the (check_scope, scope_id) pairs listed. A snapshot with NO members is a
+-- real answer -- the forge listed nothing for this head -- and it is what makes
+-- every earlier scope stop counting. Evidence, never updated or deleted.
+-- --------------------------------------------------------------------------
+CREATE TABLE ci_scope_snapshot (
+    event_seq   INTEGER PRIMARY KEY REFERENCES event(seq),
+    repo_id     TEXT    NOT NULL REFERENCES repository(repo_id),
+    pr_number   INTEGER NOT NULL,
+    head_sha    TEXT    NOT NULL,
+
+    CHECK (typeof(pr_number) = 'integer' AND pr_number > 0),
+    CHECK (length(head_sha) = 40 AND head_sha = lower(head_sha))
+);
+
+CREATE INDEX ci_scope_snapshot_by_head
+    ON ci_scope_snapshot(repo_id, pr_number, head_sha, event_seq DESC);
+
+CREATE TABLE ci_scope_snapshot_member (
+    event_seq    INTEGER NOT NULL REFERENCES ci_scope_snapshot(event_seq),
+    check_scope  TEXT    NOT NULL,
+    scope_id     TEXT    NOT NULL,
+
+    PRIMARY KEY (event_seq, check_scope, scope_id),
+    CHECK (check_scope IN ('check_suite', 'workflow_run', 'rollup',
+                           'check_run', 'commit_status')),
+    CHECK (length(scope_id) > 0)
+);
 
 -- --------------------------------------------------------------------------
 -- The new shape. Carried character for character from 0001 except for the two
@@ -112,7 +154,14 @@ SELECT o.repo_id, o.pr_number, o.head_sha, o.check_scope, o.scope_id,
          WHERE o2.repo_id = o.repo_id AND o2.pr_number = o.pr_number
            AND o2.head_sha = o.head_sha AND o2.check_scope = o.check_scope
            AND o2.scope_id = o.scope_id
-         ORDER BY o2.attempt DESC, o2.occurred_at_ms DESC, o2.event_seq DESC
+         -- CHANGED: at an equal (attempt, occurred_at_ms) a 'pending' orders
+         -- below any outcome. A run that starts and finishes within one
+         -- millisecond carries equal started_at and completed_at, and if its
+         -- pending observation is ingested AFTER its completion, event_seq
+         -- alone would let the pending win -- permanently, because re-observing
+         -- the completion is a duplicate identity and appends nothing.
+         ORDER BY o2.attempt DESC, o2.occurred_at_ms DESC,
+                  (o2.verdict = 'pending') ASC, o2.event_seq DESC
          LIMIT 1)
    AND (o.check_scope <> 'rollup'
         OR NOT EXISTS (SELECT 1 FROM ci_observation f
@@ -120,4 +169,16 @@ SELECT o.repo_id, o.pr_number, o.head_sha, o.check_scope, o.scope_id,
                           AND f.head_sha = o.head_sha
                           -- CHANGED: + check_run, commit_status.
                           AND f.check_scope IN ('check_suite', 'workflow_run',
-                                                'check_run', 'commit_status')));
+                                                'check_run', 'commit_status')))
+   -- NEW: once a head has a scope snapshot, only the scopes in its latest
+   -- snapshot count. A head with no snapshot at all -- evidence recorded by
+   -- anything other than `ci observe` -- is not narrowed.
+   AND (NOT EXISTS (SELECT 1 FROM ci_scope_snapshot s
+                     WHERE s.repo_id = o.repo_id AND s.pr_number = o.pr_number
+                       AND s.head_sha = o.head_sha)
+        OR EXISTS (SELECT 1 FROM ci_scope_snapshot_member m
+                    WHERE m.check_scope = o.check_scope AND m.scope_id = o.scope_id
+                      AND m.event_seq = (SELECT max(s.event_seq) FROM ci_scope_snapshot s
+                                          WHERE s.repo_id = o.repo_id
+                                            AND s.pr_number = o.pr_number
+                                            AND s.head_sha = o.head_sha)));

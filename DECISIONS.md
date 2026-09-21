@@ -17371,6 +17371,11 @@ because the rules below are built on them:
    head's statuses. The head is the pull request document's `head.sha`, and check runs or statuses
    about any other commit are refused. The repository row and the pull request's head projection
    are written by the same verb.
+5. A check the forge no longer lists for the pull request's current head does not count in the
+   verdict (the owner, 2026-09-22). Its evidence rows are kept; it is only left out of the fold.
+6. (Codex review, round 3, answered by the owner the same day.) `ci show` answers from one
+   consistent state of the database, and a `pending` never outranks its own run's completion
+   recorded at the same instant.
 
 **Decision.**
 
@@ -17398,8 +17403,10 @@ because the rules below are built on them:
    that comes back to an earlier verdict (`pending -> passed -> pending`, or `failed -> passed ->
    failed`) collide with the first row, and the stale middle verdict would stand. Within one id,
    `occurred_at_ms` orders a run's `pending` before its completion. `observer_epoch` is `1`: the
-   host that ran `gh` holds no lease, so there is no epoch to carry. Every write is keyed, so a
-   repeat is an idempotent no-op and an interrupted run is repaired by running it again.
+   host that ran `gh` holds no lease, so there is no epoch to carry. The repository, the head,
+   every observation and the scope snapshot (rule 7) are written in **one transaction**
+   (`transaction()` joins nested calls, so each writer runs inside it): an `observe` commits whole
+   or not at all. Every write is keyed, so a repeat is an idempotent no-op.
 3. **The mapping, per gate answer 1.** A check run that is not `completed` is `pending`, whatever
    conclusion it still carries, stamped at `started_at`. A completed one: `success`, `neutral`,
    `skipped` -> `passed`; `cancelled` -> `cancelled`; `timed_out` -> `timed_out`; everything else,
@@ -17412,14 +17419,38 @@ because the rules below are built on them:
    scopes extended by the two new ones -- left out, a stale rollup would stay in the fold beside real
    check runs. `CI_VERDICTS`, `CHECK_SCOPES` and `VERDICT_SEVERITY` follow; `pending` ranks between
    `indeterminate` and `passed`, because a check still running cannot un-fail one that already did.
+   Within a scope the view's order gains one key, per gate answer 6: `attempt DESC, occurred_at_ms
+   DESC, (verdict = 'pending') ASC, event_seq DESC`. A run that starts and finishes within one
+   millisecond carries equal `started_at` and `completed_at`; if its `pending` is ingested after its
+   completion, `event_seq` alone would let the `pending` win, and for good, because re-observing
+   the completion is a duplicate identity and appends nothing.
 5. **`ci show --db --repo OWNER/NAME --pr N` is a read.** It answers `prVerdict` over the pull
    request's current head (`no_run` when nothing was observed for it, with `head_sha` null when no
    head was ever recorded), and one row per projected scope with its verdict, the forge's `detail`,
    `attempt` and `occurred_at_ms`. `detail` is carried because gate answer 1 puts `skipped` and
    `neutral` inside `passed`, and a reader that reports "passed, N of them skipped" (rondo#376)
-   needs them told apart. Green, for a caller, is `verdict == "passed"`.
+   needs them told apart. Green, for a caller, is `verdict == "passed"`. Per gate answer 6 the
+   head, the scopes and their details are read in **one `SELECT`** (`pullRequestCi`), and the
+   verdict is folded from those same rows by `foldVerdicts`, the fold `prVerdict` itself now calls.
+   SQLite runs one statement against one snapshot, so the answer cannot pair a verdict from before
+   an `observe` committed with scopes from after it. It is deliberately not a transaction:
+   `txn.ts`'s `transaction()` is `BEGIN IMMEDIATE`, and `run_view.ts` records that a read verb must
+   not take the write lock from under a running lap and that no second, deferred transaction helper
+   is added (the commit lives in `txn.ts` once). One statement needs neither.
 6. **rondo's side is a separate change.** rondo keeps `gh` and maps its output onto `ci observe`,
    and deletes `joinChecks`. This entry does not touch rondo.
+7. **The latest list of checks bounds the fold (gate answer 5).** Each `observe` also records which
+   `(check_scope, scope_id)` pairs the forge listed for the head -- `ci_scope_snapshot` and
+   `ci_scope_snapshot_member`, added by the same `0007`, written as the side effect of a
+   `ci_scopes_observed` event so "latest" is the spine's append order -- and `ci_current_verdict`
+   counts, for a head that has a snapshot, only the scopes in its latest one. The evidence rows
+   are never touched. A snapshot is written only when the list differs from the latest one, so an
+   unchanged poll appends nothing; its dedup key names the snapshot it follows rather than the set,
+   so a list that goes A -> B -> A records the second A instead of being absorbed as a repeat of
+   the first. An empty answer (no check run, no status) is a snapshot with no members, after which
+   nothing counts for that head and `ci show` answers `no_run`. A head with no snapshot at all --
+   evidence recorded by something other than `ci observe` -- is not narrowed, so every existing
+   caller of `recordCiObservation` keeps its behaviour.
 
 **Alternatives.**
 
@@ -17435,21 +17466,23 @@ because the rules below are built on them:
 - **Fetch inside continuo (rejected).** It would make continuo a holder of the forge credential,
   which rondo `D-0010` keeps with the operator.
 
-**Consequences.** `observe` writes in several transactions -- one per observation, as
-`recordCiObservation` already did -- so a run interrupted half way leaves some checks recorded and the
-rest not; the next run records the rest. A check that disappears from GitHub's latest list (a
-workflow renamed or deleted) keeps its last observation in the fold for that head, because evidence
-is never deleted; a renamed check whose last word was `pending` holds the pull request at `pending`
-until the head moves. An empty answer (no check run, no status) records nothing, so `ci show` says
-`no_run` exactly as it does for a head never observed; the two are not distinguished.
+**Consequences.** A check that disappears from GitHub's latest list (a workflow renamed or
+deleted) stops counting at the first `observe` that no longer lists it (rule 7); its rows stay, so
+the history of what it said is still readable, but it cannot hold a pull request red or `pending`.
+"Latest" is ingestion order, not the forge's clock: an `observe` of documents fetched earlier but
+recorded later replaces the list all the same, and the next `observe` corrects it. An empty answer
+records an empty snapshot, so `ci show` says `no_run` for it exactly as for a head never observed;
+the verdict does not distinguish the two, and the snapshot table does.
 
 What changes for rondo when it moves onto these verbs, against `joinChecks` at `87e62f0`:
 it reads by pull request head rather than by the tip commit `publish` pushed, so it has to hold the
 pull request number and make one more `GET`; `cancelled` and `timed_out` keep their own names rather
 than being `red`; a fetch failure or short page is no longer a recorded `undetermined` but an exit 2
 with nothing written, and `ci show` keeps answering the last recorded verdict; two check runs with
-one name (from two apps) are one scope, where `joinChecks` counted both; and the answer accumulates
-across reads rather than being recomputed from each read.
+one name (from two apps) are one scope, where `joinChecks` counted both; and the answer is kept
+across reads rather than recomputed from each -- bounded to the scopes the latest read listed, as
+`joinChecks`' recomputation was, but with each scope's verdict the latest recorded for it rather
+than whatever the latest read happened to say.
 
 **Status.** accepted
 
@@ -17459,10 +17492,13 @@ replaced was not). A rerun check run, or a re-posted status, carrying a *smaller
 it replaces -- rule 2 relies on GitHub's ids growing, and one that did not would let the replaced
 verdict stand. A rerun that GitHub reports under a *different* name from the run it replaces --
 which would leave the old red scope in the fold. A check-runs document for a real commit that
-carries no `started_at` on a queued run, which this build refuses as unreadable.
+carries no `started_at` on a queued run, which this build refuses as unreadable. A check GitHub
+still lists for the head that `ci show` leaves out, or one it no longer lists that `ci show` still
+counts, after one `observe` of that head (rule 7 is not doing what gate answer 5 asks). An answer
+from `ci show` whose verdict is not the fold of the scopes it printed beside it.
 
 **Source.** rondo placement audit (2026-09-22); the owner's gate answers relayed by the window the
-same day; rondo `87e62f0` `src/access/forge.ts` (`readChecks`, `joinChecks`) and
+same day; Codex review of this change, rounds 1 to 3; rondo `87e62f0` `src/access/forge.ts` (`readChecks`, `joinChecks`) and
 `src/access/checks-host.ts`; rondo `D-0010`, `D-0015`, `D-0064`. continuo `D-0006`, `D-0033`,
 `D-0090`; `docs/production-schema.md` sections 6.2, 6.3 and 7.1. Decision id `D-1113`: `D-1112`
 is the concurrent lap-spend change's (#217), and this is the next free id in the `D-11xx` shared

@@ -30,11 +30,11 @@
  *
  * **Thin, in the way the other subtrees are thin.** The repository row is
  * `upsertRepository`'s, the head projection `observePullRequest`'s, each check
- * `recordCiObservation`'s and the verdict `prVerdict`'s; this module parses,
- * calls them, and reports. It writes in several transactions -- one per
- * observation, as `recordCiObservation` does -- and that is safe to repeat: every
- * write is keyed by an identity that makes a re-run an idempotent no-op, so an
- * `observe` interrupted half way is repaired by running it again.
+ * `recordCiObservation`'s, the list of checks `recordCiScopeSnapshot`'s and the
+ * verdict `pullRequestCi`'s; this module parses, calls them, and reports.
+ * `observe` runs them all in one transaction (each joins it), so it commits
+ * whole or not at all, and a repeat is safe: every write is keyed by an identity
+ * that makes a re-run an idempotent no-op.
  *
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives. A check's
  * name is forge text and is printed escaped when it could break a line or a
@@ -63,11 +63,12 @@ import {
   readGithubChecks,
   readGithubPullRequest,
 } from "./ci_github.js";
-import { prVerdict, recordCiObservation, scopeVerdicts } from "./ci_ingest.js";
+import { pullRequestCi, recordCiObservation, recordCiScopeSnapshot } from "./ci_ingest.js";
 import { openProductionControlPlane } from "./migrator.js";
 import { pythonJsonString } from "./python_json.js";
 import { ControlPlaneRefusal } from "./refusals.js";
 import { observePullRequest, resolveRepository, upsertRepository } from "./repo_link.js";
+import { transaction } from "./txn.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DB_HELP =
@@ -253,34 +254,55 @@ export function cmdCiObserve(args: Namespace): number {
     const nowMs =
       typeof args["now_ms"] === "number" ? (args["now_ms"] as number) : ciCliSeams.nowMs();
 
-    withDatabase(path, (connection) => {
-      const repoId = upsertRepository(connection, {
-        // A new repository's identity is its immutable node id, so a later
-        // rename or transfer lands on this row rather than beside it.
-        repoId: `github:${pr.providerRepoId}`,
-        owner: pr.owner,
-        name: pr.name,
-        providerRepoId: pr.providerRepoId,
-        nowMs,
+    // One transaction for the whole observation: the repository, the head, every
+    // check and the scope snapshot commit together or not at all, so an observe
+    // interrupted half way leaves nothing to reconcile. Each writer below joins
+    // it (`txn.ts`).
+    withDatabase(path, (outer) => {
+      const written = transaction(outer, (connection) => {
+        const repoId = upsertRepository(connection, {
+          // A new repository's identity is its immutable node id, so a later
+          // rename or transfer lands on this row rather than beside it.
+          repoId: `github:${pr.providerRepoId}`,
+          owner: pr.owner,
+          name: pr.name,
+          providerRepoId: pr.providerRepoId,
+          nowMs,
+        });
+        const projected = observePullRequest(connection, {
+          repoId,
+          prNumber,
+          headSha: pr.headSha,
+          state: pr.state,
+          observedAtMs: pr.updatedAtMs,
+          ingestedAtMs: nowMs,
+          eventId: ciCliSeams.newId(),
+          producer: observer,
+          producerEpoch: OBSERVER_EPOCH,
+          providerPrId: pr.providerPrId,
+          mergeCommitSha: pr.mergeCommitSha,
+          mergedAtMs: pr.mergedAtMs,
+          closedAtMs: pr.closedAtMs,
+        });
+        const recorded = checks.entries.filter((entry) =>
+          record(connection, { repoId, prNumber, headSha: pr.headSha, entry, observer, nowMs }),
+        ).length;
+        // Which scopes the forge listed, so a check it no longer lists stops
+        // counting (`D-1113` gate answer 5). After the observations, in the same
+        // transaction.
+        const scopesChanged = recordCiScopeSnapshot(connection, {
+          repoId,
+          prNumber,
+          headSha: pr.headSha,
+          scopes: checks.entries.map((entry) => ({ checkScope: entry.kind, scopeId: entry.name })),
+          eventId: ciCliSeams.newId(),
+          observer,
+          observerEpoch: OBSERVER_EPOCH,
+          ingestedAtMs: nowMs,
+        });
+        return { repoId, projected, recorded, scopesChanged };
       });
-      const projected = observePullRequest(connection, {
-        repoId,
-        prNumber,
-        headSha: pr.headSha,
-        state: pr.state,
-        observedAtMs: pr.updatedAtMs,
-        ingestedAtMs: nowMs,
-        eventId: ciCliSeams.newId(),
-        producer: observer,
-        producerEpoch: OBSERVER_EPOCH,
-        providerPrId: pr.providerPrId,
-        mergeCommitSha: pr.mergeCommitSha,
-        mergedAtMs: pr.mergedAtMs,
-        closedAtMs: pr.closedAtMs,
-      });
-      const recorded = checks.entries.filter((entry) =>
-        record(connection, { repoId, prNumber, headSha: pr.headSha, entry, observer, nowMs }),
-      ).length;
+      const { repoId, projected, recorded, scopesChanged } = written;
       const duplicate = checks.entries.length - recorded;
       ciCliSeams.write(
         json
@@ -292,10 +314,12 @@ export function cmdCiObserve(args: Namespace): number {
               observed: checks.entries.length,
               recorded,
               duplicate,
+              scopes_changed: scopesChanged,
             })
           : `observed ${pr.owner}/${pr.name}#${prNumber} head ${pr.headSha} in ${path}: ` +
               `${checks.entries.length} checks, ${recorded} recorded, ${duplicate} already ` +
-              `recorded; pull request ${projected.eventType ?? "unchanged"}\n`,
+              `recorded; pull request ${projected.eventType ?? "unchanged"}; ` +
+              `check list ${scopesChanged ? "changed" : "unchanged"}\n`,
       );
     });
   });
@@ -351,24 +375,10 @@ export function cmdCiShow(args: Namespace): number {
     const prNumber = Number(args["pr"]);
     withDatabase(path, (connection) => {
       const repoId = resolveRepository(connection, slug);
-      const head = connection
-        .prepare<[string, number], string>(
-          "SELECT head_sha FROM pull_request WHERE repo_id = ? AND pr_number = ?",
-        )
-        .pluck()
-        .get(repoId, prNumber);
-      const verdict = prVerdict(connection, { repoId, prNumber });
-      const scopes = scopeVerdicts(connection, { repoId, prNumber });
-      // The forge's own word for each projected row -- `skipped` and `neutral`
-      // are `passed` in the verdict, and a reader counting "passed, of which N
-      // were skipped" (rondo#376) needs them told apart. Read by the row's
-      // `event_seq`, which the view carries and which is unique, rather than by
-      // widening the view: the fold never reads it.
-      const detailOf = connection
-        .prepare<[number], string | null>(
-          "SELECT verdict_detail FROM ci_observation WHERE event_seq = ?",
-        )
-        .pluck();
+      // One statement for the head, the scopes and their details, folded here by
+      // `prVerdict`'s own rule: an `observe` committing mid-read cannot make this
+      // answer describe two databases (`pullRequestCi`, `D-1113`).
+      const { headSha: head, verdict, scopes } = pullRequestCi(connection, { repoId, prNumber });
       if (json) {
         const payload: { readonly [key: string]: JsonValue } = {
           repo_id: repoId,
@@ -381,7 +391,7 @@ export function cmdCiShow(args: Namespace): number {
             check_scope: scope.checkScope,
             scope_id: scope.scopeId,
             verdict: scope.verdict,
-            detail: detailOf.get(scope.eventSeq) ?? null,
+            detail: scope.detail,
             attempt: scope.attempt,
             occurred_at_ms: scope.occurredAtMs,
           })),
@@ -396,7 +406,7 @@ export function cmdCiShow(args: Namespace): number {
       for (const scope of scopes) {
         ciCliSeams.write(
           `scope ${scope.checkScope} ${printable(scope.scopeId)} ${scope.verdict} ` +
-            `detail=${printable(detailOf.get(scope.eventSeq) ?? "-")} ` +
+            `detail=${printable(scope.detail ?? "-")} ` +
             `attempt=${scope.attempt} occurred=${scope.occurredAtMs}\n`,
         );
       }
