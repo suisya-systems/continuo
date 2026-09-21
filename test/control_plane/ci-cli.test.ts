@@ -62,13 +62,21 @@ function pullRequest(fields: { head?: string; updated?: number; number?: number 
   });
 }
 
-type Run = { name: string; status: string; conclusion?: string; at: number; head?: string };
+type Run = {
+  name: string;
+  status: string;
+  conclusion?: string;
+  at: number;
+  head?: string;
+  id?: number;
+};
 
 function checkRuns(...runs: Run[]): string {
   return JSON.stringify([
     {
       total_count: runs.length,
       check_runs: runs.map((one) => ({
+        id: one.id ?? 1,
         name: one.name,
         head_sha: one.head ?? HEAD,
         status: one.status,
@@ -219,9 +227,42 @@ describe("ci observe, then ci show", () => {
     });
     expect(cp.show()).toMatchObject({ verdict: "failed" });
     cp.observe({
-      runs: checkRuns({ name: "test", status: "completed", conclusion: "success", at: 9000 }),
+      runs: checkRuns({
+        name: "test",
+        status: "completed",
+        conclusion: "success",
+        at: 9000,
+        id: 2,
+      }),
     });
     expect(cp.show()).toMatchObject({ verdict: "passed" });
+  });
+
+  test("a rerun that comes back to an earlier verdict is recorded, not absorbed", () => {
+    // pending -> passed -> (rerun) pending, then failed -> passed -> (rerun) failed:
+    // the third observation repeats the first one's verdict, and it must still
+    // move the answer. Raised by Codex review of this change.
+    const cp = fixture("rerun-cycle");
+    const at = (id: number, status: string, conclusion: string | undefined, when: number) =>
+      cp.observe({
+        runs: checkRuns({
+          name: "test",
+          status,
+          ...(conclusion === undefined ? {} : { conclusion }),
+          at: when,
+          id,
+        }),
+      });
+    at(1, "in_progress", undefined, 1000);
+    at(1, "completed", "success", 2000);
+    expect(cp.show()).toMatchObject({ verdict: "passed" });
+    at(2, "queued", undefined, 3000);
+    expect(cp.show()).toMatchObject({ verdict: "pending" });
+    at(2, "completed", "failure", 4000);
+    at(3, "completed", "success", 5000);
+    expect(cp.show()).toMatchObject({ verdict: "passed" });
+    at(4, "completed", "failure", 6000);
+    expect(cp.show()).toMatchObject({ verdict: "failed" });
   });
 
   test("observing the same documents twice records nothing the second time", () => {

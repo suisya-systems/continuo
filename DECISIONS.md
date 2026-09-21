@@ -17384,14 +17384,21 @@ because the rules below are built on them:
    --slurp repos/O/N/commits/<head>/{check-runs,status}?per_page=100` printed. `--repo` and `--pr`
    are required and must agree with the pull request document (its *base* repository, never a
    fork's head repository), and both check documents must be about the document's `head.sha`; any
-   disagreement, any document that is not the endpoint's shape, and any page short of the forge's
-   own `total_count` is a `ControlPlaneRefusal` (exit 2) raised before the database is opened, so
+   disagreement, any document that is not the endpoint's shape, a document holding no page at
+   all, and any page short of the forge's own `total_count` is a `ControlPlaneRefusal` (exit 2) raised before the database is opened, so
    nothing is written. The repository is upserted with `repo_id = github:<node_id>` and
    `provider_repo_id = <node_id>`, so a rename lands on the same row; the head is projected by
    `observePullRequest` at the document's `updated_at`; each check becomes one
-   `recordCiObservation` with `attempt = 1` (the endpoint carries none; a rerun is a later
-   observation of the same scope, ordered by the forge's own clock) and `verdict_detail` = the
-   forge's word (`success`, `skipped`, `neutral`, `in_progress`, ...). `observer_epoch` is `1`: the
+   `recordCiObservation` with `verdict_detail` = the forge's word (`success`, `skipped`,
+   `neutral`, `in_progress`, ...) and **`attempt` = the forge's own `id` for the check run or
+   status**, also kept in `source_id`. The endpoints carry no attempt number, and the id is what
+   one is needed for: a rerun is a new check run, and a status posted again is a new status, each
+   with a larger id, so it leads the view's `attempt DESC` ordering and replaces what it reran,
+   while a re-poll of one run keeps its id and repeats its identity. A constant `attempt` would
+   make a rerun that comes back to an earlier verdict (`pending -> passed -> pending`, or
+   `failed -> passed -> failed`) collide with the first row, and the stale middle verdict would
+   stand. Within one id, `occurred_at_ms` orders a run's `pending` before its completion.
+   `observer_epoch` is `1`: the
    host that ran `gh` holds no lease, so there is no epoch to carry. Every write is keyed, so a
    repeat is an idempotent no-op and an interrupted run is repaired by running it again.
 3. **The mapping, per gate answer 1.** A check run that is not `completed` is `pending`, whatever
@@ -17448,7 +17455,9 @@ across reads rather than being recomputed from each read.
 
 **Falsifier.** A pull request whose checks are all green on GitHub for its head that `ci show`
 reports as anything but `passed` after one `observe` of that head (a scope that should have been
-replaced was not). A rerun that GitHub reports under a *different* name from the run it replaces --
+replaced was not). A rerun check run, or a re-posted status, carrying a *smaller* `id` than the one
+it replaces -- rule 2 relies on GitHub's ids growing, and one that did not would let the replaced
+verdict stand. A rerun that GitHub reports under a *different* name from the run it replaces --
 which would leave the old red scope in the fold. A check-runs document for a real commit that
 carries no `started_at` on a queued run, which this build refuses as unreadable.
 

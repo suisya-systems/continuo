@@ -20,7 +20,7 @@ const AT = "2026-09-22T01:00:00Z";
 const LATER = "2026-09-22T01:05:00Z";
 
 function run(fields: Record<string, unknown>): Record<string, unknown> {
-  return { name: "build", head_sha: SHA, started_at: AT, ...fields };
+  return { id: 1, name: "build", head_sha: SHA, started_at: AT, ...fields };
 }
 
 function runs(...entries: Record<string, unknown>[]): string {
@@ -70,6 +70,7 @@ describe("readGithubChecks", () => {
       state: "passed",
       detail: "neutral",
       occurredAtMs: Date.parse(LATER),
+      sourceId: 1,
     });
   });
 
@@ -85,6 +86,7 @@ describe("readGithubChecks", () => {
         state: "pending",
         detail: "in_progress",
         occurredAtMs: Date.parse(AT),
+        sourceId: 1,
       },
     ]);
   });
@@ -94,6 +96,7 @@ describe("readGithubChecks", () => {
       runs(),
       statuses(
         ...["success", "pending", "failure", "error"].map((state) => ({
+          id: 10,
           context: `ci/${state}`,
           state,
           updated_at: AT,
@@ -154,6 +157,9 @@ describe("readGithubChecks", () => {
     ["no timestamp", runs(run({ status: "completed", conclusion: "success" })), statuses()],
     ["a bad timestamp", runs(run({ status: "queued", started_at: "soon" })), statuses()],
     ["no status sha", runs(), JSON.stringify([{ statuses: [] }])],
+    ["no check-run id", runs(run({ id: null, status: "queued" })), statuses()],
+    ["no page of check runs", "[]", statuses()],
+    ["no page of statuses", runs(run({ status: "queued" })), "[]"],
   ])("%s is refused as unreadable", (_label, checkRuns, status) => {
     expect(() => readGithubChecks(checkRuns, status)).toThrow(GithubChecksUnreadable);
   });

@@ -52,6 +52,12 @@ export interface GithubCheckEntry {
    * `started_at` for one in flight, `updated_at` for a status.
    */
   readonly occurredAtMs: number;
+  /**
+   * The forge's own `id` for this check run or status. A rerun is a new check
+   * run, and a status posted again is a new status, each with a new and larger
+   * id -- so this is what tells a rerun apart from a re-poll (`D-1113`).
+   */
+  readonly sourceId: number;
 }
 
 /** Both documents read, and the one commit they are about. */
@@ -98,6 +104,7 @@ export function readGithubChecks(checkRuns: string, status: string): GithubCheck
   const entries: GithubCheckEntry[] = [];
   for (const run of runs) {
     const name = requiredString(run, "name", "a check run");
+    const sourceId = positiveInteger(run, "id", `check run ${pythonJsonString(name)}`);
     shas.add(requiredString(run, "head_sha", `check run ${pythonJsonString(name)}`));
     const inFlight = stringAt(run, "status") !== "completed";
     const detail = inFlight
@@ -105,6 +112,7 @@ export function readGithubChecks(checkRuns: string, status: string): GithubCheck
       : (stringAt(run, "conclusion") ?? "none");
     entries.push({
       kind: "check_run",
+      sourceId,
       name,
       state: inFlight ? "pending" : conclusionState(detail),
       detail,
@@ -117,9 +125,11 @@ export function readGithubChecks(checkRuns: string, status: string): GithubCheck
   }
   for (const one of statuses) {
     const name = requiredString(one, "context", "a commit status");
+    const sourceId = positiveInteger(one, "id", `status ${pythonJsonString(name)}`);
     const detail = requiredString(one, "state", `status ${pythonJsonString(name)}`);
     entries.push({
       kind: "commit_status",
+      sourceId,
       name,
       state: statusState(detail),
       detail,
@@ -184,7 +194,14 @@ function pages(printed: string): readonly unknown[] {
     // input is forge text that may hold what an ASCII console cannot print.
     throw new GithubChecksUnreadable("the forge's answer was not JSON", { cause: error });
   }
-  return Array.isArray(json) ? json : [json];
+  const all = Array.isArray(json) ? json : [json];
+  // `--slurp` over an endpoint that answered prints at least one page, and that
+  // page carries its list and its count even when both are empty. No page at
+  // all is not "no checks": it is no answer, and it must not pass as one.
+  if (all.length === 0) {
+    throw new GithubChecksUnreadable("the forge's answer held no page");
+  }
+  return all;
 }
 
 /**
@@ -231,6 +248,14 @@ function requiredString(json: unknown, key: string, what: string): string {
   const value = stringAt(json, key);
   if (value === null) {
     throw new GithubChecksUnreadable(`${what} carried no '${key}'`);
+  }
+  return value;
+}
+
+function positiveInteger(json: unknown, key: string, what: string): number {
+  const value = at(json, key);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new GithubChecksUnreadable(`${what} carried no positive integer '${key}'`);
   }
   return value;
 }

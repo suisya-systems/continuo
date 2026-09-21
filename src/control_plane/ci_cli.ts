@@ -319,10 +319,17 @@ function record(
     headSha,
     checkScope: entry.kind,
     scopeId: entry.name,
-    // The check-runs endpoint answers the latest run of each name and carries no
-    // attempt; a rerun is a later observation of the same scope, ordered by the
-    // forge's clock (`occurred_at_ms`), which is the view's second key.
-    attempt: 1,
+    // The forge's id for the check run or status, not a count of reruns: the
+    // endpoints carry no attempt, and the id is what one needs. A rerun is a
+    // new check run with a larger id, so it leads the view's ordering and
+    // replaces the run it reran; a re-poll of one run keeps its id, so the same
+    // verdict is the same identity and a no-op. With a constant here instead, a
+    // rerun that came back to an earlier verdict (pending -> passed -> pending)
+    // would collide with the first row and the stale `passed` would stand
+    // (Codex review of this change). Within one id, `occurred_at_ms` orders
+    // pending before its completion.
+    attempt: entry.sourceId,
+    sourceId: String(entry.sourceId),
     verdict: entry.state,
     verdictDetail: entry.detail,
     observer,
