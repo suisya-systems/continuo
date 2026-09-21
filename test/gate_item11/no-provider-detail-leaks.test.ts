@@ -69,6 +69,7 @@ const SRC_NON_MODULE_FILES: readonly string[] = [
   "control_plane/migrations/0007_ci_check_run_scope_and_pending.sql",
   "control_plane/spike_schema.sql",
   "fencing/cli_args_allow.json",
+  "fencing/codex_hook.mjs",
   "fencing/hook.mjs",
   "fencing/roles.json",
   "settings/role_configs_schema.json",

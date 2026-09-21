@@ -229,6 +229,20 @@ export interface ProbeResult {
 }
 
 /**
+ * `subprocess.run(env=, cwd=)` for a probe, both optional (continuo D-1114).
+ *
+ * Absent keys leave the probe exactly as it was before this existed: the
+ * parent's environment and working directory, inherited. The Claude probe
+ * passes neither; a provider whose CLI keeps its state under a home directory
+ * named by an environment variable needs `env` to point a self-test at the
+ * per-session home rather than the operator's.
+ */
+export interface ProbeOptions {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly cwd?: string;
+}
+
+/**
  * `subprocess.TimeoutExpired`.
  *
  * A distinct type rather than an errno-bearing `Error`, because the source
@@ -291,7 +305,7 @@ export interface SessionRuntime {
    * for `OSError`. A non-zero exit is **not** an exception -- it is returned,
    * because `_run_probe` classifies it itself.
    */
-  runProbe(argv: readonly string[], timeoutMs: number): ProbeResult;
+  runProbe(argv: readonly string[], timeoutMs: number, options?: ProbeOptions): ProbeResult;
 
   // -- exit ---------------------------------------------------------------
 
@@ -859,13 +873,17 @@ export const sessionRuntime: SessionRuntime = {
     });
   },
 
-  runProbe(argv: readonly string[], timeoutMs: number): ProbeResult {
+  runProbe(argv: readonly string[], timeoutMs: number, options: ProbeOptions = {}): ProbeResult {
     const file = argv[0];
     if (file === undefined) {
       throw new RangeError("cannot probe with an empty argv");
     }
 
     const result = spawnSync(file, argv.slice(1), {
+      // Spread only when given, so a probe that names neither is the same
+      // `spawnSync` call it was before `ProbeOptions` existed.
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       timeout: timeoutMs,
       // Load-bearing for the liveness of the whole suite, not a fidelity
       // detail. Node's default `killSignal` is SIGTERM where

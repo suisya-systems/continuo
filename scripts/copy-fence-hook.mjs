@@ -26,7 +26,9 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FROM = join(ROOT, "src", "fencing", "hook.mjs");
+// `codex_hook.mjs` (D-1114) is the Codex worker's hook, launched by path the
+// same way and importing `hook.mjs` from beside itself, so it travels with it.
+const HOOKS = ["hook.mjs", "codex_hook.mjs"];
 const INTO = join(ROOT, "dist", "fencing", "hook.mjs");
 
 function fail(message) {
@@ -34,23 +36,27 @@ function fail(message) {
   process.exit(1);
 }
 
-try {
-  statSync(FROM);
-} catch {
-  fail(`${FROM} does not exist; the deny hook is missing from the source tree`);
-}
+for (const name of HOOKS) {
+  const from = join(ROOT, "src", "fencing", name);
+  const into = join(dirname(INTO), name);
+  try {
+    statSync(from);
+  } catch {
+    fail(`${from} does not exist; the deny hook is missing from the source tree`);
+  }
 
-mkdirSync(dirname(INTO), { recursive: true });
-copyFileSync(FROM, INTO);
+  mkdirSync(dirname(into), { recursive: true });
+  copyFileSync(from, into);
 
-if (!readFileSync(FROM).equals(readFileSync(INTO))) {
-  fail(`${INTO} differs from ${FROM} after copying`);
+  if (!readFileSync(from).equals(readFileSync(into))) {
+    fail(`${into} differs from ${from} after copying`);
+  }
 }
 
 // A hook that copied cleanly but cannot find its fence logic beside it is a
 // hook that denies everything, so the sibling it loads is checked here rather
 // than discovered by a spawned worker being fenced out of its own job.
-for (const sibling of ["state.js", "pyrepr.js", "pyjson.js"]) {
+for (const sibling of ["state.js", "pyrepr.js", "pyjson.js", "rules.js"]) {
   try {
     statSync(join(dirname(INTO), sibling));
   } catch {
