@@ -1071,6 +1071,24 @@ SELECT o.repo_id, o.pr_number, o.head_sha, o.check_scope, o.scope_id,
                           AND f.check_scope IN ('check_suite', 'workflow_run')));
 ```
 
+
+### 6.4 `0007`: `pending`, and the units GitHub reports in (`D-1113`)
+
+The DDL above is 0001's. `0007_ci_check_run_scope_and_pending.sql` rebuilds `ci_observation` with two
+widened `CHECK`s and recreates the view, and changes nothing else:
+
+- `verdict` gains **`pending`** -- observed, not finished. In the fold of rule 5 it ranks between
+  `indeterminate` and `passed`: `failed > timed_out > cancelled > indeterminate > pending > passed`.
+  A running check is not green, and it cannot outrank a check that has already failed.
+- `check_scope` gains **`check_run`** (`scope_id` = the check's name) and **`commit_status`**
+  (`scope_id` = the status's context), the units `commits/<sha>/check-runs` and
+  `commits/<sha>/status` answer in. Both are fine-grained, so rule 3's `NOT EXISTS` list in the view
+  names them too. A check run is keyed by its name and not its id because a rerun is a new check run
+  with a new id: keyed by id, the red run a rerun replaced would stay in the fold as a scope of its
+  own.
+
+The producer is `continuo ci observe`, and the read is `continuo ci show` (`D-1113`).
+
 ---
 
 ## 7. run↔PR linkage

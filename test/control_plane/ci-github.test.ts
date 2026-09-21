@@ -8,7 +8,11 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { GithubChecksUnreadable, readGithubChecks } from "../../src/control_plane/ci_github.js";
+import {
+  GithubChecksUnreadable,
+  readGithubChecks,
+  readGithubPullRequest,
+} from "../../src/control_plane/ci_github.js";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -161,5 +165,68 @@ describe("readGithubChecks", () => {
         statuses(),
       ),
     ).toThrow(/^check run "\\u30d3\\u30eb\\u30c9" carried an unreadable 'started_at'$/);
+  });
+});
+
+describe("readGithubPullRequest", () => {
+  const MERGE = "d".repeat(40);
+
+  function document(fields: Record<string, unknown>): string {
+    return JSON.stringify({
+      number: 7,
+      node_id: "PR_1",
+      state: "open",
+      updated_at: AT,
+      merged_at: null,
+      closed_at: null,
+      merge_commit_sha: MERGE,
+      head: { sha: SHA.toUpperCase(), repo: { name: "fork", node_id: "R_fork" } },
+      base: { repo: { name: "continuo", node_id: "R_base", owner: { login: "suisya" } } },
+      ...fields,
+    });
+  }
+
+  test("an open pull request: the base repository, the head lowercased, no merge commit", () => {
+    expect(readGithubPullRequest(document({}))).toEqual({
+      owner: "suisya",
+      name: "continuo",
+      providerRepoId: "R_base",
+      prNumber: 7,
+      providerPrId: "PR_1",
+      headSha: SHA,
+      state: "open",
+      updatedAtMs: Date.parse(AT),
+      mergedAtMs: null,
+      closedAtMs: null,
+      mergeCommitSha: null,
+    });
+  });
+
+  test("a closed pull request with merged_at is merged, and carries its merge commit", () => {
+    const read = readGithubPullRequest(
+      document({ state: "closed", merged_at: LATER, closed_at: LATER }),
+    );
+    expect(read).toMatchObject({
+      state: "merged",
+      mergedAtMs: Date.parse(LATER),
+      closedAtMs: Date.parse(LATER),
+      mergeCommitSha: MERGE,
+    });
+  });
+
+  test("a closed pull request without merged_at is closed", () => {
+    expect(readGithubPullRequest(document({ state: "closed", closed_at: LATER }))).toMatchObject({
+      state: "closed",
+      mergedAtMs: null,
+      mergeCommitSha: null,
+    });
+  });
+
+  test.each([
+    ["no number", { number: null }],
+    ["an abbreviated head", { head: { sha: "abc1234" } }],
+    ["no base repository", { base: {} }],
+  ])("%s is refused as unreadable", (_label, fields) => {
+    expect(() => readGithubPullRequest(document(fields))).toThrow(GithubChecksUnreadable);
   });
 });

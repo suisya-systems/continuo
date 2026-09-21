@@ -5,7 +5,7 @@ import { pythonJsonString } from "./python_json.js";
  * What GitHub printed about one commit's checks, read into one entry per check.
  *
  * The producer half of `ci observe`: the operator's `gh` fetches, and this reads
- * what it printed. It is pure -- two strings in, a list out -- so every rule
+ * what it printed. It is pure -- strings in, records out -- so every rule
  * about what a commit's checks come to is a unit case with no forge to ask.
  * Carried from rondo's `readEntries` / `joinChecks` (`src/access/forge.ts` at
  * rondo `87e62f0`), which it replaces; what it deliberately does *not* carry is
@@ -145,7 +145,7 @@ export function readGithubChecks(checkRuns: string, status: string): GithubCheck
  * What a completed check run's conclusion comes to.
  *
  * `neutral` and `skipped` are a check that ran and asked for nothing, and count
- * as passing (the window's gate answer recorded in `D-1112`). `cancelled` and
+ * as passing (the window's gate answer recorded in `D-1113`). `cancelled` and
  * `timed_out` keep their own names because continuo's vocabulary does. Anything
  * else -- a failure, one asking for an action, one the forge called stale, one
  * this does not know the name of -- is `failed`: a conclusion nobody has named
@@ -241,4 +241,73 @@ function timestamp(json: unknown, key: string, what: string): number {
     throw new GithubChecksUnreadable(`${what} carried an unreadable '${key}'`);
   }
   return ms;
+}
+
+/** What `repos/<owner>/<name>/pulls/<number>` says about one pull request. */
+export interface GithubPullRequest {
+  /** The base repository's owner login and name, as the forge spells them. */
+  readonly owner: string;
+  readonly name: string;
+  /** The base repository's `node_id`: its identity across renames. */
+  readonly providerRepoId: string;
+  readonly prNumber: number;
+  readonly providerPrId: string;
+  /** The head commit, lowercased: the only commit a verdict is about (`D-1113`). */
+  readonly headSha: string;
+  readonly state: "open" | "closed" | "merged";
+  /** The forge's `updated_at`: its clock for the state this document shows. */
+  readonly updatedAtMs: number;
+  readonly mergedAtMs: number | null;
+  readonly closedAtMs: number | null;
+  readonly mergeCommitSha: string | null;
+}
+
+/**
+ * Read one pull request document, as `gh api repos/<o>/<n>/pulls/<number>`
+ * printed it.
+ *
+ * **The base repository, never the head's.** A pull request from a fork has a
+ * head repository that is the fork, and the pull request, its number and its
+ * checks belong to the base.
+ *
+ * `merge_commit_sha` is kept only for a merged pull request: an open one
+ * carries the forge's test-merge commit there, which is not a merge.
+ *
+ * @throws {GithubChecksUnreadable} for a document that is not JSON or is
+ *   missing a field this reads.
+ */
+export function readGithubPullRequest(printed: string): GithubPullRequest {
+  const [document] = pages(printed);
+  const what = "the pull request document";
+  const number = at(document, "number");
+  if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
+    throw new GithubChecksUnreadable(`${what} carried no positive integer 'number'`);
+  }
+  const head = at(document, "head");
+  const repo = at(at(document, "base"), "repo");
+  const headSha = requiredString(head, "sha", `${what}'s head`);
+  if (!FULL_SHA.test(headSha)) {
+    throw new GithubChecksUnreadable(
+      `${what} names the head ${pythonJsonString(headSha)}, which is not a full SHA`,
+    );
+  }
+  const mergedAt = stringAt(document, "merged_at");
+  const closedAt = stringAt(document, "closed_at");
+  const open = requiredString(document, "state", what) === "open";
+  return {
+    owner: requiredString(at(repo, "owner"), "login", `${what}'s base repository owner`),
+    name: requiredString(repo, "name", `${what}'s base repository`),
+    providerRepoId: requiredString(repo, "node_id", `${what}'s base repository`),
+    prNumber: number,
+    providerPrId: requiredString(document, "node_id", what),
+    headSha: headSha.toLowerCase(),
+    state: open ? "open" : mergedAt !== null ? "merged" : "closed",
+    updatedAtMs: timestamp(document, "updated_at", what),
+    mergedAtMs: open || mergedAt === null ? null : timestamp(document, "merged_at", what),
+    closedAtMs: open || closedAt === null ? null : timestamp(document, "closed_at", what),
+    mergeCommitSha:
+      open || mergedAt === null
+        ? null
+        : requiredString(document, "merge_commit_sha", what).toLowerCase(),
+  };
 }

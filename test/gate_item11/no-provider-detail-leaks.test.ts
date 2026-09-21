@@ -53,6 +53,7 @@ const CONTROL_PLANE_NON_MODULE_FILES: readonly string[] = [
   "migrations/0004_run_writer_epoch.sql",
   "migrations/0005_outbox_delivery_resource.sql",
   "migrations/0006_delegation_record.sql",
+  "migrations/0007_ci_check_run_scope_and_pending.sql",
   "spike_schema.sql",
 ];
 
@@ -65,6 +66,7 @@ const SRC_NON_MODULE_FILES: readonly string[] = [
   "control_plane/migrations/0004_run_writer_epoch.sql",
   "control_plane/migrations/0005_outbox_delivery_resource.sql",
   "control_plane/migrations/0006_delegation_record.sql",
+  "control_plane/migrations/0007_ci_check_run_scope_and_pending.sql",
   "control_plane/spike_schema.sql",
   "fencing/cli_args_allow.json",
   "fencing/hook.mjs",

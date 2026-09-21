@@ -72,7 +72,10 @@ export const CI_PROVIDERS: ReadonlySet<string> = new Set(["github"]);
 /**
  * The closed verdict vocabulary of `ci_observation`. `indeterminate` and
  * `no_run` are separate members because collapsing either into `failed` is
- * the v1 defect `D-0006` records.
+ * the v1 defect `D-0006` records. `pending` -- observed, not finished -- is
+ * `D-1113`'s, added by `0007_ci_check_run_scope_and_pending.sql` so that a
+ * running check is neither nothing (which would let the fold say `passed`)
+ * nor `indeterminate` (which says it could not be observed).
  */
 export const CI_VERDICTS: ReadonlySet<string> = new Set([
   "passed",
@@ -81,14 +84,23 @@ export const CI_VERDICTS: ReadonlySet<string> = new Set([
   "timed_out",
   "no_run",
   "indeterminate",
+  "pending",
 ]);
 
 /**
  * The scopes an observation may be attributed to. `rollup` is the coarse
  * fallback an old `gh` forces, and section 6.3 rule 3 makes it subordinate
- * -- it is not a peer of the fine-grained scopes.
+ * -- it is not a peer of the fine-grained scopes. `check_run` (keyed by the
+ * check's name) and `commit_status` (keyed by its context) are the units
+ * GitHub's commit endpoints report in (`D-1113`); they are fine-grained.
  */
-export const CHECK_SCOPES: ReadonlySet<string> = new Set(["check_suite", "workflow_run", "rollup"]);
+export const CHECK_SCOPES: ReadonlySet<string> = new Set([
+  "check_suite",
+  "workflow_run",
+  "rollup",
+  "check_run",
+  "commit_status",
+]);
 
 /**
  * The event type this module appends. The DDL leaves `event.event_type`
@@ -99,7 +111,9 @@ export const CI_OBSERVED_EVENT_TYPE = "ci_observed";
 
 /**
  * The severity fold of section 6.3 rule 5: `failed > timed_out > cancelled >
- * indeterminate > passed`.
+ * indeterminate > passed`, with `D-1113`'s `pending` between the last two --
+ * not green, and outranked by anything that has actually gone wrong, because a
+ * check still running cannot un-fail one that already did.
  *
  * `indeterminate` outranking `passed` is `D-0006` again -- an unobservable
  * check is not a green one. `no_run` is ranked lowest but that rank is
@@ -109,10 +123,11 @@ export const CI_OBSERVED_EVENT_TYPE = "ci_observed";
  * `passed` would still report a PR green the moment one scope said nothing.
  */
 export const VERDICT_SEVERITY: Readonly<Record<string, number>> = Object.freeze({
-  failed: 5,
-  timed_out: 4,
-  cancelled: 3,
-  indeterminate: 2,
+  failed: 6,
+  timed_out: 5,
+  cancelled: 4,
+  indeterminate: 3,
+  pending: 2,
   passed: 1,
   no_run: 0,
 });

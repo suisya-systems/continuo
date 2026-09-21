@@ -61,6 +61,7 @@ import {
   dispatch,
   dispatchAsync,
 } from "./cli/parser.js";
+import * as ciCli from "./control_plane/ci_cli.js";
 import * as dbCli from "./control_plane/cli.js";
 import * as runCli from "./control_plane/run_cli.js";
 import * as gateCli from "./gate/cli.js";
@@ -162,6 +163,16 @@ export function buildParser(): ArgumentParser {
       "open gates, events and outbox rows without writing anything.",
   );
   runCli.addSubparsers(run.addSubparsers("cmd"));
+
+  // ci (the CI evidence of a pull request's head: record what the forge
+  // reported, and answer the verdict)
+  const ci = sub.addParser(
+    "ci",
+    "CI outcomes of pull requests: record what the forge reported about a " +
+      "pull request's head as observations, and show the verdict of its " +
+      "current head folded from them.",
+  );
+  ciCli.addSubparsers(ci.addSubparsers("cmd"));
 
   // lap (the composition root: one admitted run, carried to an open gate)
   const lap = sub.addParser(
