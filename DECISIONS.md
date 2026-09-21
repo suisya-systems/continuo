@@ -17379,26 +17379,26 @@ because the rules below are built on them:
    the CLI (rondo `D-0015`): `continuo ci observe` and `continuo ci show`, each with `--json` under
    the pinned ids `continuo.ci.observe/1` and `continuo.ci.show/1` (`D-0090`). continuo never
    reaches the network for this.
-2. **`ci observe --db --repo OWNER/NAME --pr N --pull-request F --check-runs F --status F
-   --observer NAME`.** The three files are what `gh api repos/O/N/pulls/N` and `gh api --paginate
-   --slurp repos/O/N/commits/<head>/{check-runs,status}?per_page=100` printed. `--repo` and `--pr`
-   are required and must agree with the pull request document (its *base* repository, never a
-   fork's head repository), and both check documents must be about the document's `head.sha`; any
-   disagreement, any document that is not the endpoint's shape, a document holding no page at
-   all, and any page short of (or missing) the forge's own `total_count` is a
-   `ControlPlaneRefusal` (exit 2) raised before the database is opened, so nothing is written. The repository is upserted with `repo_id = github:<node_id>` and
-   `provider_repo_id = <node_id>`, so a rename lands on the same row; the head is projected by
-   `observePullRequest` at the document's `updated_at`; each check becomes one
-   `recordCiObservation` with `verdict_detail` = the forge's word (`success`, `skipped`,
+2. **`ci observe --db --repo OWNER/NAME --pr N --pull-request F --check-runs F --status F --observer
+   NAME`.** The three files are what `gh api repos/O/N/pulls/N` and `gh api --paginate --slurp
+   repos/O/N/commits/<head>/{check-runs,status}?per_page=100` printed. `--repo` and `--pr` are
+   required and must agree with the pull request document (its *base* repository, never a fork's
+   head repository), and both check documents must be about the document's `head.sha`; any
+   disagreement, any document that is not the endpoint's shape, a document holding no page at all,
+   and any page short of (or missing) the forge's own `total_count` is a `ControlPlaneRefusal` (exit
+   2) raised before the database is opened, so nothing is written. The repository is upserted with
+   `repo_id = github:<node_id>` and `provider_repo_id = <node_id>`, so a rename lands on the same
+   row; the head is projected by `observePullRequest` at the document's `updated_at`; each check
+   becomes one `recordCiObservation` with `verdict_detail` = the forge's word (`success`, `skipped`,
    `neutral`, `in_progress`, ...) and **`attempt` = the forge's own `id` for the check run or
-   status**, also kept in `source_id`. The endpoints carry no attempt number, and the id is what
-   one is needed for: a rerun is a new check run, and a status posted again is a new status, each
-   with a larger id, so it leads the view's `attempt DESC` ordering and replaces what it reran,
-   while a re-poll of one run keeps its id and repeats its identity. A constant `attempt` would
-   make a rerun that comes back to an earlier verdict (`pending -> passed -> pending`, or
-   `failed -> passed -> failed`) collide with the first row, and the stale middle verdict would
-   stand. Within one id, `occurred_at_ms` orders a run's `pending` before its completion.
-   `observer_epoch` is `1`: the host that ran `gh` holds no lease, so there is no epoch to carry. Every write is keyed, so a
+   status**, also kept in `source_id`. The endpoints carry no attempt number, and the id is what one
+   is needed for: a rerun is a new check run, and a status posted again is a new status, each with a
+   larger id, so it leads the view's `attempt DESC` ordering and replaces what it reran, while a
+   re-poll of one run keeps its id and repeats its identity. A constant `attempt` would make a rerun
+   that comes back to an earlier verdict (`pending -> passed -> pending`, or `failed -> passed ->
+   failed`) collide with the first row, and the stale middle verdict would stand. Within one id,
+   `occurred_at_ms` orders a run's `pending` before its completion. `observer_epoch` is `1`: the
+   host that ran `gh` holds no lease, so there is no epoch to carry. Every write is keyed, so a
    repeat is an idempotent no-op and an interrupted run is repaired by running it again.
 3. **The mapping, per gate answer 1.** A check run that is not `completed` is `pending`, whatever
    conclusion it still carries, stamped at `started_at`. A completed one: `success`, `neutral`,
