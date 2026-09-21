@@ -100,6 +100,18 @@ import { patchSeams } from "../testkit/seams.js";
 
 /** The built CLI, and the built endpoint: what an operator actually runs. */
 const CLI_ENTRY = fileURLToPath(new URL("../../dist/cli.js", import.meta.url));
+/**
+ * A preload that answers the built CLI's Unix-socket probe with "fine"
+ * (`D-1112`). The suite may itself run inside a Claude Code sandbox, where the
+ * real probe answers EPERM and every lap here would be refused before it
+ * started; the seam cannot be patched from this process, so it is patched in
+ * the child, on the same module instance `dist/cli.js` imports.
+ */
+const SOCKET_PROBE_STUB = `data:text/javascript,${encodeURIComponent(
+  `const { lapCliSeams } = await import(${JSON.stringify(
+    new URL("../../dist/lap/cli.js", import.meta.url).href,
+  )}); lapCliSeams.probeUnixSocket = () => Promise.resolve(null);`,
+)}`;
 const ENDPOINT_ENTRY = fileURLToPath(new URL("../../dist/messagebus/endpoint.js", import.meta.url));
 
 /** An arbitrary fixed instant, for the setup verbs only. See {@link world}. */
@@ -275,6 +287,8 @@ function startLap(
   const child = spawn(
     process.execPath,
     [
+      "--import",
+      SOCKET_PROBE_STUB,
       CLI_ENTRY,
       "lap",
       "perform",

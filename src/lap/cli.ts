@@ -77,6 +77,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 
 import {
   addJsonArgument,
@@ -123,6 +124,7 @@ import {
   lapStateRoot,
   performLap,
   requireModel,
+  type TurnCommandFact,
 } from "./root.js";
 
 // ASCII only: these reach --help on a cp932 console.
@@ -245,6 +247,19 @@ const PERFORM_DESCRIPTION =
  */
 const PERFORM_SCHEMA = "continuo.lap.perform/1";
 
+/**
+ * The most of one command's output the `--json` document carries, in code
+ * points: the first and the last half of it, with what was left out counted in
+ * `output_omitted_chars` (`D-1112`).
+ *
+ * A turn can run a build whose log is megabytes, and the whole document is one
+ * line on stdout a host holds in memory. 8192 keeps a failing test run's
+ * summary (at the end) and the command's first complaint (at the start) while
+ * bounding a turn of a hundred calls at under a megabyte. The full text stays
+ * in the transcript, which is where a reader who needs all of it goes.
+ */
+export const COMMAND_OUTPUT_LIMIT = 8192;
+
 /** Milliseconds between transcript reads when --poll-interval-ms is omitted. */
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
@@ -283,7 +298,87 @@ export const lapCliSeams = {
   writeError: (text: string): void => {
     process.stderr.write(text);
   },
+  /** Whether this process may create a Unix socket. See {@link probeUnixSocket}. */
+  probeUnixSocket: (): Promise<string | null> => probeUnixSocket(),
 };
+
+/**
+ * Try to listen on an abstract Unix socket, and answer the error code the
+ * kernel refused with, or `null` when it came up (`D-1112`).
+ *
+ * The worker's own sandbox runtime needs `socket(AF_UNIX)`. A process started
+ * inside another Claude Code sandbox inherits that sandbox's seccomp filter,
+ * which refuses it -- and a filter is inherited by every child and cannot be
+ * dropped by one. The worker then prints `Sandbox is enabled but failed to
+ * initialize` and every Bash call after the first runs unsandboxed, while the
+ * lap reports like a clean one (rondo N-16, N-21). Asking the same question of
+ * this process, before a branch or a child exists, is asking it of the child.
+ *
+ * The abstract namespace touches no filesystem, so a read-only directory
+ * cannot be mistaken for the filter. Linux-only: elsewhere there is no abstract
+ * namespace and the cause has never been observed, so the answer is `null`.
+ */
+export function probeUnixSocket(
+  platform: NodeJS.Platform = process.platform,
+): Promise<string | null> {
+  if (platform !== "linux") {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      resolve(error.code ?? "UNKNOWN");
+    });
+    server.listen(`\0continuo-sandbox-probe-${String(process.pid)}`, () => {
+      server.close(() => {
+        resolve(null);
+      });
+    });
+  });
+}
+
+/**
+ * The refusal a probe answer gives, or `undefined`. Only `EPERM` is the filter;
+ * any other failure is not evidence of it and does not stop a lap.
+ */
+function unixSocketRefusal(code: string | null): LapRefused | undefined {
+  if (code !== "EPERM") {
+    return undefined;
+  }
+  return new LapRefused(
+    "this process may not create a Unix socket (EPERM), and the worker it would spawn " +
+      "inherits that block, so the worker's own sandbox would fail to initialize and every " +
+      "Bash call after the first would run unsandboxed. The usual cause is running continuo " +
+      "inside another Claude Code sandbox, whose seccomp filter refuses AF_UNIX for itself " +
+      "and every child; run lap perform outside it. This check is Linux-only and detects " +
+      "only this cause.",
+  );
+}
+
+/**
+ * One command as the `--json` document carries it, its output capped at
+ * {@link COMMAND_OUTPUT_LIMIT} code points (`D-1112`).
+ *
+ * Counted in code points rather than UTF-16 units so a cut never splits a
+ * surrogate pair into two halves no decoder will accept.
+ */
+function commandDocument(command: TurnCommandFact): { readonly [key: string]: JsonValue } {
+  const points = Array.from(command.output);
+  const half = COMMAND_OUTPUT_LIMIT / 2;
+  const omitted = Math.max(0, points.length - COMMAND_OUTPUT_LIMIT);
+  return {
+    index: command.index,
+    command: command.command,
+    output:
+      omitted === 0
+        ? command.output
+        : points.slice(0, half).join("") + points.slice(points.length - half).join(""),
+    // The marker: `0` is the whole output, anything else is how many code
+    // points were cut from the middle.
+    output_omitted_chars: omitted,
+    is_error: command.isError,
+  };
+}
 
 /**
  * The refusal families this verb turns into one operator-facing line.
@@ -533,6 +628,19 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
                 // `BigInt`. `asciiJsonLine` would refuse a value that was not.
                 tool_input: denial.toolInput as { readonly [key: string]: JsonValue },
               })),
+        // **What the turn cost and what it ran** (`D-1112`), under the same
+        // `/1` for `model`'s reason. `null` is the backend being unable to say,
+        // which is not a zero and not an empty list.
+        spend:
+          outcome.report.spend === null
+            ? null
+            : {
+                total_cost_usd: outcome.report.spend.totalCostUsd,
+                num_turns: outcome.report.spend.numTurns,
+                duration_ms: outcome.report.spend.durationMs,
+              },
+        commands:
+          outcome.report.commands === null ? null : outcome.report.commands.map(commandDocument),
       }),
     );
     return;
@@ -665,6 +773,14 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
     // stated once there; `performLap`'s preflight asks it again for its own
     // callers.
     requireModel(model);
+    // **The worker's sandbox, asked before anything exists** (`D-1112`). Here
+    // rather than in `root.ts`'s preflight because it is a question about this
+    // process, not about the run, and a seam here is what lets a suite that
+    // itself runs inside such a sandbox drive the verb at all.
+    const socketRefusal = unixSocketRefusal(await lapCliSeams.probeUnixSocket());
+    if (socketRefusal !== undefined) {
+      throw socketRefusal;
+    }
     // **The per-run state root, derived here because this is the last place
     // before the provider is built over it** (`D-1105`). `--state-root` is a
     // parent, exactly as `--artifact-root` is (`D-0061`), and what the provider

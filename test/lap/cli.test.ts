@@ -51,7 +51,7 @@ import {
 import { RUN_DELEGATION_RECORDED_EVENT_TYPE } from "../../src/control_plane/run_admission.js";
 import { runCliSeams } from "../../src/control_plane/run_cli.js";
 import { EVENT_ADMITTED } from "../../src/fencing/spawn.js";
-import { lapCliSeams } from "../../src/lap/cli.js";
+import { COMMAND_OUTPUT_LIMIT, lapCliSeams, probeUnixSocket } from "../../src/lap/cli.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
 import {
   FENCE_FILENAME,
@@ -178,6 +178,10 @@ function lap(
   });
   patchSeams(lapCliSeams, {
     nowMs: () => T0,
+    // The suite may itself run inside a Claude Code sandbox, where the real
+    // probe answers EPERM and every case here would be refused (`D-1112`). The
+    // refusal has cases of its own below.
+    probeUnixSocket: () => Promise.resolve(null),
     write: (text: string) => {
       out.push(text);
     },
@@ -1107,6 +1111,12 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // are not one value. A host reading `null` as an empty list would read a
       // lap whose verification never ran as a lap whose verification passed.
       permission_denials: null,
+      // Present, and an object of three nulls (`D-1112`): the transcript was
+      // read and its `result` line carries no accounting, which is what this
+      // fake writes. Not `null`, which is a backend that cannot say.
+      spend: { total_cost_usd: null, num_turns: null, duration_ms: null },
+      // Present and empty: the transcript was read and the turn ran nothing.
+      commands: [],
     });
   });
 
@@ -1203,6 +1213,12 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       elapsed_deadline_at_ms: deadline,
       model: null,
       permission_denials: null,
+      // Present, and an object of three nulls (`D-1112`): the transcript was
+      // read and its `result` line carries no accounting, which is what this
+      // fake writes. Not `null`, which is a backend that cannot say.
+      spend: { total_cost_usd: null, num_turns: null, duration_ms: null },
+      // Present and empty: the transcript was read and the turn ran nothing.
+      commands: [],
     });
   });
 
@@ -1276,6 +1292,107 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
 
     expect((oneDocument(f.out) as Record<string, unknown>)["permission_denials"]).toEqual([]);
     expect(f.out.join("")).not.toContain("the fence refused");
+  });
+
+  test("what the turn cost and what it ran reach the document, the output capped", async () => {
+    // `D-1112`: the host budgeting laps read these off the transcript itself,
+    // by computing this provider's state-root layout, and the layout moved.
+    // Carried here, the host reads a field and knows nothing about the layout.
+    const long = `${"a".repeat(COMMAND_OUTPUT_LIMIT)}middle${"z".repeat(COMMAND_OUTPUT_LIMIT)}`;
+    const f = lap("lap-spend-commands");
+    fakeEnv(
+      "FAKE_RESULT_FIELDS",
+      JSON.stringify({ total_cost_usd: 0.42, num_turns: 7, duration_ms: 12_345 }),
+    );
+    fakeEnv(
+      "FAKE_TRANSCRIPT_EVENTS",
+      JSON.stringify([
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+              { type: "tool_use", id: "t2", name: "Read", input: { file_path: "a.ts" } },
+            ],
+          },
+        },
+        {
+          type: "user",
+          message: {
+            content: [
+              { type: "tool_result", tool_use_id: "t1", content: long, is_error: true },
+              { type: "tool_result", tool_use_id: "t2", content: [{ type: "text", text: "ok" }] },
+            ],
+          },
+        },
+      ]),
+    );
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f)), f.err.join("")).toBe(0);
+
+    const document = oneDocument(f.out) as Record<string, unknown>;
+    expect(document["spend"]).toStrictEqual({
+      total_cost_usd: 0.42,
+      num_turns: 7,
+      duration_ms: 12_345,
+    });
+    const commands = document["commands"] as Record<string, unknown>[];
+    expect(commands.map(({ output: _, ...rest }) => rest)).toStrictEqual([
+      // `index` is the transcript line the call was read from, and both calls
+      // are on one line because they are one assistant event.
+      {
+        index: expect.any(Number),
+        command: "npm test",
+        output_omitted_chars: 6 + COMMAND_OUTPUT_LIMIT,
+        is_error: true,
+      },
+      {
+        index: expect.any(Number),
+        command: 'Read {"file_path":"a.ts"}',
+        output_omitted_chars: 0,
+        is_error: false,
+      },
+    ]);
+    // The middle is what is cut: the start and the end of a build log are the
+    // parts a reader acts on.
+    expect(commands[0]?.["output"]).toBe(
+      "a".repeat(COMMAND_OUTPUT_LIMIT / 2) + "z".repeat(COMMAND_OUTPUT_LIMIT / 2),
+    );
+    expect(commands[1]?.["output"]).toBe("ok");
+  });
+
+  test("the real probe answers null or the kernel's code, and null off Linux", async () => {
+    // The seam's default, run for real: every other case replaces it. Inside a
+    // Claude Code sandbox this answers "EPERM", everywhere else `null`.
+    expect([null, "EPERM"]).toContain(await probeUnixSocket());
+    expect(await probeUnixSocket("win32")).toBeNull();
+  });
+
+  test("a process that may not create a Unix socket starts no lap", async () => {
+    // `D-1112`. Inside another Claude Code sandbox the seccomp filter refuses
+    // `socket(AF_UNIX)` for this process and every child, so the worker's own
+    // sandbox would fail and its Bash calls run unsandboxed. The refusal comes
+    // before the worktree exists, so the run is not spent.
+    const f = lap("lap-seccomp");
+    patchSeams(lapCliSeams, { probeUnixSocket: () => Promise.resolve("EPERM") });
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f))).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      ok: false,
+      error: { class: "LapRefused", message: expect.stringContaining("Unix socket (EPERM)") },
+    });
+    expect(existsSync(f.workspace), "the refusal came after the worktree").toBe(false);
+
+    // Any other failure is not the filter, and does not stop a lap.
+    const g = lap("lap-seccomp-other");
+    patchSeams(lapCliSeams, { probeUnixSocket: () => Promise.resolve("EADDRINUSE") });
+    g.out.length = 0;
+    g.err.length = 0;
+    expect(await mainAsync(jsonArgv(g)), g.err.join("")).toBe(0);
   });
 
   test("a refusal is a document on stderr, and the exit code does not move", async () => {

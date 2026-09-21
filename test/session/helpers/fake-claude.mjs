@@ -459,6 +459,13 @@ async function main() {
     return 0;
   }
 
+  // Events a case wants in the transcript ahead of the terminal line -- a
+  // tool call and its result, say (`D-1112`). A JSON array, emitted verbatim
+  // for `FAKE_PERMISSION_DENIALS`'s reason, and absent by default.
+  for (const event of JSON.parse(env.FAKE_TRANSCRIPT_EVENTS ?? "[]")) {
+    emit(event);
+  }
+
   if (env.FAKE_RESULT_BARE === "1") {
     // A `result` with no `terminal_reason`, no `subtype` and no `is_error`: the
     // shape a provider that reads terminality off a missing key would treat as
@@ -487,6 +494,9 @@ async function main() {
       ...(env.FAKE_PERMISSION_DENIALS === undefined
         ? {}
         : { permission_denials: JSON.parse(env.FAKE_PERMISSION_DENIALS) }),
+      // The accounting keys a case wants on the terminal line (`D-1112`), as a
+      // JSON object spread verbatim; absent by default for the reason above.
+      ...JSON.parse(env.FAKE_RESULT_FIELDS ?? "{}"),
       session_id: reported,
       another_unknown_field: true,
     });

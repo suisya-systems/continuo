@@ -137,6 +137,43 @@ export interface LapTerminalReport {
    * ran" for "the verification passed".
    */
   readonly permissionDenials: readonly DeniedToolCallFact[] | null;
+  /**
+   * What the turn spent, or `null` when the backend cannot say (`D-1112`).
+   *
+   * The host that drives laps is the one that budgets them, and before this it
+   * had to compute the provider's state-root layout and read the transcript
+   * itself to find three numbers this step had already read past.
+   */
+  readonly spend: TurnSpendFact | null;
+  /**
+   * The tool calls the turn made, or `null` when the backend cannot say
+   * (`D-1112`). `null` is not `[]`: the second is a turn that ran nothing.
+   */
+  readonly commands: readonly TurnCommandFact[] | null;
+}
+
+/**
+ * One turn's accounting, structurally as the backend hands it over.
+ *
+ * `ClaudeCliSessionProvider`'s `TurnSpend`, re-declared for the reason this
+ * module's docstring gives. Each number is `null` when the backend read none.
+ */
+export interface TurnSpendFact {
+  readonly totalCostUsd: number | null;
+  readonly numTurns: number | null;
+  readonly durationMs: number | null;
+}
+
+/**
+ * One tool call a turn made, structurally as the backend hands it over.
+ *
+ * `ClaudeCliSessionProvider`'s `TurnCommand`, re-declared likewise.
+ */
+export interface TurnCommandFact {
+  readonly index: number;
+  readonly command: string;
+  readonly output: string;
+  readonly isError: boolean;
 }
 
 /**

@@ -215,6 +215,7 @@ spaces distinct.
 | D-1109 | The Windows cells put the suite's temporary directory on the runner's local disk, because that is where the cell's wall clock was going | accepted |
 | D-1110 | The admitting side declares the Bash commands a child may run, and the declaration cannot reach the fence's deny layers | accepted |
 | D-1111 | The Windows `double-green` cells leave the pull-request path for a nightly schedule and `workflow_dispatch`, and the nightly files its own failure issue | accepted |
+| D-1112 | `lap perform --json` carries what the turn cost and what it ran, and `lap perform` refuses to start a lap from a process that may not create a Unix socket | accepted |
 
 ---
 
@@ -17233,3 +17234,98 @@ properties the Windows cells actually check; each carries a note pointing here),
 wall clock). `docs/windows-ci-cost.md` for the measurements and `docs/ci-merge-gate.md` for the gate
 and the ruleset. Decision id `D-1111`, the next free id in the `D-11xx` shared cross-belt band
 opened by `D-1101` (Issue #179).
+
+## D-1112 -- `lap perform --json` carries what the turn cost and what it ran, and `lap perform` refuses to start a lap from a process that may not create a Unix socket
+
+**Context.** Two things continuo owns were being done in rondo, its host.
+
+1. *Cost and commands.* The provider already reads the turn's terminal `result` event (for the
+   report and `permission_denials`, `D-1110`) and dropped the three accounting numbers beside them:
+   `total_cost_usd`, `num_turns` and `duration_ms`. rondo recovered them by computing this
+   provider's state-root layout (`<state root>/<run id>/<session id>/events-NNN.jsonl`, via
+   `record.json`) and reading the transcript itself. It read the model reviewer's input the same
+   way: every tool call and its result, parsed out of the Claude CLI's `stream-json` shape. rondo's
+   own `D-0046` names "continuo reporting the three numbers in `lap perform`'s payload" as the
+   outcome to prefer. It also records that its layout copy is already out of date against this
+   repository's `main` (`D-1105` moved the per-run derivation), so at rondo's next pin move every
+   lap's cost reads as null.
+2. *The worker's sandbox.* rondo laps 6 and 7 (its N-16, N-21) ran a worker whose Claude Code
+   sandbox printed `Sandbox is enabled but failed to initialize: EPERM ... listen
+   '/tmp/claude-1000/srt-mux-*.sock'`. Every Bash call after the first then ran unsandboxed, and
+   the lap reported like a clean one. The cause was measured: `lap perform` had been started from
+   inside another Claude Code sandbox. That sandbox's seccomp filter refuses `socket(AF_UNIX)`, and
+   the filter is inherited by every child and cannot be dropped by one. rondo added a probe before
+   invoking `lap perform`. But the process that spawns the worker is `lap perform`, and rondo's
+   `D-0050` asks continuo to report sandbox failures.
+
+**Decision.**
+
+1. `TerminalReport` gains `spend` (`totalCostUsd`, `numTurns`, `durationMs`) and `commands`
+   (`index`, `command`, `output`, `isError`). The provider reads both from the same verified
+   generation as the report: `spend` from the `result` event, `commands` from the `tool_use` /
+   `tool_result` blocks in the transcript. A number is `null` unless the event carries a finite
+   JSON number, and a number is never coerced. `index` is the transcript's 1-based line number,
+   which is how a transcript is cited. `command` is a `Bash` call's `command`, or for any other
+   tool its name and its JSON input. `LapTerminalReport` re-declares both as nullable, for backends
+   that cannot say.
+2. The `continuo.lap.perform/1` document gains two always-present keys, under `/1` for the reason
+   `model` and `permission_denials` were: `spend` (`{total_cost_usd, num_turns, duration_ms}` or
+   `null`) and `commands` (`[{index, command, output, output_omitted_chars, is_error}]` or
+   `null`). `null` means the backend cannot say. It never means zero or empty. The human line is
+   unchanged.
+3. Each `output` is capped at 8192 code points (`COMMAND_OUTPUT_LIMIT`). When it is longer, the
+   first 4096 and the last 4096 are kept, and `output_omitted_chars` counts what was cut from the
+   middle. It is `0` when the output is whole, so the key also marks whether a cut happened. The
+   reason: the document is one stdout line that a host holds in memory, and a build log can run to
+   megabytes. The start of an output carries a command's first complaint and the end carries a
+   test run's summary, and those are the parts a reviewer acts on. At this size, a turn of a
+   hundred calls stays under a megabyte. The full text stays in the transcript. The count is in
+   code points, so a cut never splits a surrogate pair.
+4. Before it opens the control plane or builds the provider, `lap perform` tries to listen on an
+   abstract Unix socket. On `EPERM` it refuses with a `LapRefused` (one line or one refusal
+   document, exit 2). At that point nothing has been written. Any other error is not evidence of
+   the filter and does not stop the lap. The probe is Linux-only and answers `null` elsewhere. The
+   check lives in the verb (`lapCliSeams.probeUnixSocket`) and not in `root.ts`'s preflight: it is
+   a question about this process, not about the run, and the seam is what lets a suite that itself
+   runs under such a filter still drive the verb.
+
+**Alternatives.**
+
+- *Put the seccomp check in `sandbox doctor` (rejected).* `sandbox_doctor.ts` is a parity port of
+  interlock's module (`test/settings/sandbox-symlink-deny.test.ts`). A check its source never had
+  would change the output of a ported surface, which is the silent improvement §1 of `AGENTS.md`
+  rules out. And the doctor is a command an operator may skip, while the lap is the step that
+  actually spawns the worker.
+- *Carry only the transcript's path and let the host parse it (rejected).* The layout problem would
+  go away, but the Claude CLI's event shape would stay in the host. That shape is this provider's
+  knowledge, which is the misplacement this entry exists to fix.
+- *No cap on `output` (rejected)*, for the size reason in rule 3. *A cap on the whole document
+  (rejected)*: it would drop whole commands and so misreport what the turn ran.
+- *Also carry a running lap's log (out of scope).* `lap perform` returns only after the turn has
+  ended, so no field of its document can describe a lap in progress. Naming a running lap's
+  transcript belongs to `run show` and is left to its own issue.
+
+**Consequences.** A host reads a lap's cost and commands from a field and no longer needs to know
+the state-root layout or the `stream-json` shape. rondo can delete its transcript reader and its
+socket probe at its next pin move. The suite itself may run inside a Claude Code sandbox, where the
+real probe answers `EPERM`, so every case that drives the verb stubs the probe. In-process cases do
+it through the seam. `test/lap/parallel-laps.test.ts`, which starts the built CLI as a separate
+process, does it through a `--import` preload that patches the same seam on the same module
+instance. Nothing is skipped. `test/session/helpers/fake-claude.mjs` grows `FAKE_TRANSCRIPT_EVENTS`
+and `FAKE_RESULT_FIELDS`. Both are absent by default, so every other case writes the same bytes it
+did before.
+
+**Status.** accepted
+
+**Falsifier.** A worker CLI that stops writing the three accounting keys, or renames one: the
+fields go null and say so, and the reader needs the new key. A worker sandbox that fails to
+initialize for some cause other than an `EPERM` on `socket(AF_UNIX)`: the probe passes, the lap
+still reports as clean, and the check needs a second cause. A host that finds 8192 code points too
+few to review from, as a reviewer verdict that cites an output cut at the omission point.
+
+**Source.** rondo `D-0046` (the falsifier naming this as the preferred outcome), rondo `D-0050` and
+its N-16 / N-21 (the seccomp measurement), rondo `src/continuo/transcript.ts` and
+`src/continuo/sandbox.ts` at `87e62f0` (the readers moved here). `D-1110` (the precedent for
+carrying a `result`-event field out of the child), `D-1105` (the layout move that made rondo's copy
+stale), `D-0099` (the `/1` versioning argument). Decision id `D-1112`, the next free id in the
+`D-11xx` shared cross-belt band (`D-1101`).
