@@ -471,6 +471,8 @@ const REPORT = {
   isError: false,
   returncode: 0,
   permissionDenials: null,
+  spend: null,
+  commands: null,
 } as const;
 
 /** The reader every successful case here uses. */

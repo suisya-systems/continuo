@@ -173,6 +173,10 @@ describe("a finished turn that wrote prose", () => {
       // different answer from the `[]` a current one writes when it refused
       // nothing (`D-1110`).
       permissionDenials: null,
+      // Three nulls: the line carries no accounting keys (`D-1112`).
+      spend: { totalCostUsd: null, numTurns: null, durationMs: null },
+      // The transcript holds no tool call.
+      commands: [],
     });
   });
 
@@ -545,6 +549,84 @@ describe("D-1110: what the child was refused", () => {
 
     expect(reportOf(await provider.readTerminalReport(sessionId)).permissionDenials).toEqual([
       { toolName: "WebFetch", toolInput: {} },
+    ]);
+  });
+});
+
+// --------------------------------------------------------------------------
+// D-1112: what the turn cost and what it ran
+// --------------------------------------------------------------------------
+
+describe("D-1112: what the turn cost and what it ran", () => {
+  test("the result line's three accounting numbers come back with the report", async () => {
+    const { provider, sessionId } = planted("spent", [
+      initLine("spent"),
+      resultLine("spent", { total_cost_usd: 1.25, num_turns: 3, duration_ms: 4000 }),
+    ]);
+
+    expect(reportOf(await provider.readTerminalReport(sessionId)).spend).toEqual({
+      totalCostUsd: 1.25,
+      numTurns: 3,
+      durationMs: 4000,
+    });
+  });
+
+  test("a number that is not one is null, never coerced", async () => {
+    // A cost read off a string is a guess; `null` is "not read", not zero.
+    const { provider, sessionId } = planted("unspent", [
+      initLine("unspent"),
+      resultLine("unspent", { total_cost_usd: "1.25", num_turns: null, duration_ms: 0 }),
+    ]);
+
+    expect(reportOf(await provider.readTerminalReport(sessionId)).spend).toEqual({
+      totalCostUsd: null,
+      numTurns: null,
+      // A real zero is a number and is kept.
+      durationMs: 0,
+    });
+  });
+
+  test("tool calls are paired with their results, at the line they were read from", async () => {
+    const { provider, sessionId } = planted("ran", [
+      initLine("ran"),
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "running the suite" },
+            { type: "tool_use", id: "t1", name: "Bash", input: { command: "npm test" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "t1",
+              content: [
+                { type: "text", text: "1 failed" },
+                { type: "text", text: "exit 1" },
+              ],
+              is_error: true,
+            },
+          ],
+        },
+      },
+      // A call the turn was cut off in: no result, so no output.
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "t2", name: "Grep", input: { pattern: "x" } }],
+        },
+      },
+      resultLine("ran"),
+    ]);
+
+    expect(reportOf(await provider.readTerminalReport(sessionId)).commands).toEqual([
+      { index: 2, command: "npm test", output: "1 failed\nexit 1", isError: true },
+      { index: 4, command: 'Grep {"pattern":"x"}', output: "", isError: false },
     ]);
   });
 });

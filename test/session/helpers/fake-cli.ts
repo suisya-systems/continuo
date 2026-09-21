@@ -107,11 +107,13 @@ export type FakeSwitch =
   | "FAKE_PERMISSION_DENIALS"
   | "FAKE_REPORT_ID"
   | "FAKE_RESULT_BARE"
+  | "FAKE_RESULT_FIELDS"
   | "FAKE_RESULT_TEXT"
   | "FAKE_SLEEP"
   | "FAKE_SPAWN_LOG"
   | "FAKE_SUBTYPE"
-  | "FAKE_TERMINAL_REASON";
+  | "FAKE_TERMINAL_REASON"
+  | "FAKE_TRANSCRIPT_EVENTS";
 
 /** The scenarios `FAKE_MODE` selects; anything else is the `ok` path. */
 export type FakeMode =

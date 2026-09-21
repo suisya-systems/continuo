@@ -907,6 +907,8 @@ function identityIncident(
 /** The complete stream-json lines a child has written, and the last bad one. */
 interface ParsedEvents {
   readonly events: readonly Record<string, unknown>[];
+  /** The 1-based transcript line each of {@link events} was read from, index for index. */
+  readonly lineNumbers: readonly number[];
   readonly garbage: string | null;
 }
 
@@ -1070,6 +1072,144 @@ function permissionDenialsOf(
 }
 
 /**
+ * What one turn spent, as the child's own `result` event reports it (`D-1112`).
+ *
+ * Each number is `null` when the event carries no finite number under its key:
+ * "this build did not read a cost" is a different fact from "the turn cost
+ * nothing", and a host budgeting laps must be able to tell them apart. Never
+ * coerced -- a cost read off a string is a guess.
+ */
+export interface TurnSpend {
+  /** `total_cost_usd`. */
+  readonly totalCostUsd: number | null;
+  /** `num_turns`. */
+  readonly numTurns: number | null;
+  /** `duration_ms`. */
+  readonly durationMs: number | null;
+}
+
+/** The three accounting numbers off a `result` event. See {@link TurnSpend}. */
+function turnSpendOf(resultEvent: Readonly<Record<string, unknown>>): TurnSpend {
+  const numberAt = (key: string): number | null => {
+    const value = getOwn(resultEvent, key);
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
+  return {
+    totalCostUsd: numberAt("total_cost_usd"),
+    numTurns: numberAt("num_turns"),
+    durationMs: numberAt("duration_ms"),
+  };
+}
+
+/**
+ * One tool call the turn made, and what came back (`D-1112`).
+ *
+ * `index` is the 1-based line of the transcript the `tool_use` was read from,
+ * which is how a transcript is cited. `output` is the matching `tool_result`'s
+ * text, or `""` when the transcript holds none (a turn cut off mid-call), and
+ * `isError` is that result's own flag, `false` when absent.
+ */
+export interface TurnCommand {
+  readonly index: number;
+  /** A `Bash` call's `command`; any other tool as its name and its JSON input. */
+  readonly command: string;
+  readonly output: string;
+  readonly isError: boolean;
+}
+
+/**
+ * The turn's tool calls, paired with their results by `tool_use_id`.
+ *
+ * **The event shape is the Claude CLI's `stream-json`**, and that knowledge is
+ * why this lives beside the provider rather than in a host: `tool_use` blocks in
+ * an `assistant` event's `message.content`, `tool_result` blocks in a `user`
+ * event's. A transcript in another shape yields no commands rather than wrong
+ * ones.
+ */
+function turnCommandsOf(
+  events: readonly Record<string, unknown>[],
+  lineNumbers: readonly number[],
+): readonly TurnCommand[] {
+  const commands: {
+    index: number;
+    id: unknown;
+    command: string;
+    output: string;
+    isError: boolean;
+  }[] = [];
+  for (const [position, event] of events.entries()) {
+    const message = getOwn(event, "message");
+    const content =
+      typeof message === "object" && message !== null
+        ? getOwn(message as Record<string, unknown>, "content")
+        : undefined;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const block of content) {
+      if (typeof block !== "object" || block === null || Array.isArray(block)) {
+        continue;
+      }
+      const entry = block as Record<string, unknown>;
+      const type = getOwn(entry, "type");
+      if (type === "tool_use") {
+        commands.push({
+          index: lineNumbers[position] ?? 0,
+          id: getOwn(entry, "id"),
+          command: commandTextOf(entry),
+          output: "",
+          isError: false,
+        });
+      } else if (type === "tool_result") {
+        const id = getOwn(entry, "tool_use_id");
+        const call = commands.find((c) => c.id !== undefined && c.id === id);
+        if (call !== undefined) {
+          call.output = resultTextOf(getOwn(entry, "content"));
+          call.isError = getOwn(entry, "is_error") === true;
+        }
+      }
+    }
+  }
+  return Object.freeze(
+    commands.map(({ index, command, output, isError }) => ({ index, command, output, isError })),
+  );
+}
+
+/** A `Bash` call's command, or any other tool's name and JSON input. */
+function commandTextOf(block: Readonly<Record<string, unknown>>): string {
+  const rawName = getOwn(block, "name");
+  const name = typeof rawName === "string" ? rawName : "unknown-tool";
+  const input = getOwn(block, "input");
+  if (name === "Bash" && typeof input === "object" && input !== null) {
+    const command = getOwn(input as Record<string, unknown>, "command");
+    if (typeof command === "string") {
+      return command;
+    }
+  }
+  return `${name} ${JSON.stringify(input ?? null)}`;
+}
+
+/** A `tool_result`'s content as text: a string, or its text blocks joined. */
+function resultTextOf(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part: unknown) => {
+      if (typeof part !== "object" || part === null) {
+        return "";
+      }
+      const text = getOwn(part as Record<string, unknown>, "text");
+      return typeof text === "string" ? text : "";
+    })
+    .filter((text) => text !== "")
+    .join("\n");
+}
+
+/**
  * A finished turn's own prose report, read off the transcript it was written to.
  *
  * This is the L4 fact the report ingress turns into a `worker_escalation_raised`
@@ -1106,6 +1246,10 @@ export interface TerminalReport {
    * (`D-1110`). @see {@link permissionDenialsOf} for why the two are not one.
    */
   readonly permissionDenials: readonly DeniedToolCall[] | null;
+  /** What the turn spent, off the same `result` event (`D-1112`). */
+  readonly spend: TurnSpend;
+  /** The tool calls the turn made, off the same transcript (`D-1112`). */
+  readonly commands: readonly TurnCommand[];
 }
 
 /**
@@ -2658,7 +2802,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         // `except FileNotFoundError`, caught before the wider `except OSError`
         // in the source and so winning: the file the spawn opens exists from
         // the spawn onwards, and its absence before that is not a fault.
-        return { events: [], garbage: null };
+        return { events: [], lineNumbers: [], garbage: null };
       }
       return uninterpretable(
         `the captured output of session ${pyRepr(record.session_id)} at ` +
@@ -2670,11 +2814,12 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     // and a trailing fragment is discarded rather than parsed.
     const lastNewline = raw.lastIndexOf(0x0a);
     if (lastNewline === -1) {
-      return { events: [], garbage: null };
+      return { events: [], lineNumbers: [], garbage: null };
     }
     const body = raw.subarray(0, lastNewline);
 
     const events: Record<string, unknown>[] = [];
+    const lineNumbers: number[] = [];
     let garbage: string | null = null;
     let lineNumber = 0;
     let start = 0;
@@ -2713,8 +2858,9 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         continue;
       }
       events.push(event as Record<string, unknown>);
+      lineNumbers.push(lineNumber);
     }
-    return { events, garbage };
+    return { events, lineNumbers, garbage };
   }
 
   /** `Popen.poll()` for a child of ours, and `None` for an orphan. */
@@ -3066,7 +3212,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       if (isUninterpretable(parsed)) {
         return new Failure(parsed.failureKind, parsed.detail, parsed.providerDetail);
       }
-      const { events, garbage } = parsed;
+      const { events, lineNumbers, garbage } = parsed;
       const baseDetail: Record<string, unknown> = {
         pid: record.pid,
         generation: record.generation,
@@ -3185,6 +3331,11 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         // reported with it is a denial from the turn that was verified, not
         // from whatever else is on disk (`D-1110`).
         permissionDenials: permissionDenialsOf(resultEvent),
+        // Off the same event and the same transcript, for the reason given
+        // just above: what the verified turn cost and what it ran, rather than
+        // what some other file on disk says (`D-1112`).
+        spend: turnSpendOf(resultEvent),
+        commands: turnCommandsOf(events, lineNumbers),
       });
     });
   }
