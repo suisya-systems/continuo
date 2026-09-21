@@ -146,7 +146,7 @@ describe("readGithubChecks", () => {
 
   test("an abbreviated commit is refused", () => {
     expect(() =>
-      readGithubChecks(runs(), JSON.stringify({ sha: "abc1234", statuses: [] })),
+      readGithubChecks(runs(), JSON.stringify({ sha: "abc1234", total_count: 0, statuses: [] })),
     ).toThrow(/not a full SHA/);
   });
 
@@ -160,6 +160,16 @@ describe("readGithubChecks", () => {
     ["no check-run id", runs(run({ id: null, status: "queued" })), statuses()],
     ["no page of check runs", "[]", statuses()],
     ["no page of statuses", runs(run({ status: "queued" })), "[]"],
+    [
+      "a page with no count",
+      JSON.stringify([{ check_runs: [run({ status: "queued" })] }]),
+      statuses(),
+    ],
+    [
+      "a page with a count that is not a number",
+      JSON.stringify([{ total_count: "1", check_runs: [run({ status: "queued" })] }]),
+      statuses(),
+    ],
   ])("%s is refused as unreadable", (_label, checkRuns, status) => {
     expect(() => readGithubChecks(checkRuns, status)).toThrow(GithubChecksUnreadable);
   });

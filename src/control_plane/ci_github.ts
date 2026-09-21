@@ -220,10 +220,15 @@ function every(printed: string, key: string): readonly unknown[] {
       throw new GithubChecksUnreadable(`the forge's answer carried no '${key}' list`);
     }
     entries.push(...list);
+    // Required on every page, not read when present: a page without its count
+    // is not the endpoint's shape, and treating the missing count as zero would
+    // let a truncated document through the one check that catches truncation
+    // (Codex review of this change).
     const total = at(page, "total_count");
-    if (typeof total === "number" && Number.isFinite(total)) {
-      counted = Math.max(counted, total);
+    if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) {
+      throw new GithubChecksUnreadable(`a page of '${key}' carried no 'total_count'`);
     }
+    counted = Math.max(counted, total);
   }
   if (entries.length < counted) {
     throw new GithubChecksUnreadable(

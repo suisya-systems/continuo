@@ -39,7 +39,9 @@
  * **ASCII only**, for the reason `docs/cli-output-policy.md` gives. A check's
  * name is forge text and is printed escaped when it could break a line or a
  * cp932 console; the documents are refused with messages that escape what they
- * quote (`ci_github.ts`).
+ * quote (`ci_github.ts`). `--db` is the one exception, and it is the standing
+ * one `run_cli.ts` records: echoed verbatim, as every subtree echoes it, until
+ * one entry settles echoed paths for every verb at once.
  */
 
 import { randomUUID } from "node:crypto";
