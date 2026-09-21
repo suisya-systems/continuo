@@ -1,0 +1,343 @@
+import { CiObservationRefused } from "./ci_ingest.js";
+import { pythonJsonString } from "./python_json.js";
+
+/**
+ * What GitHub printed about one commit's checks, read into one entry per check.
+ *
+ * The producer half of `ci observe`: the operator's `gh` fetches, and this reads
+ * what it printed. It is pure -- strings in, records out -- so every rule
+ * about what a commit's checks come to is a unit case with no forge to ask.
+ * Carried from rondo's `readEntries` / `joinChecks` (`src/access/forge.ts` at
+ * rondo `87e62f0`), which it replaces; what it deliberately does *not* carry is
+ * the fold. Folding the entries into one answer is `ci_current_verdict` and
+ * `prVerdict`'s job, and a second fold here would be a second answer to
+ * "is this PR green".
+ *
+ * **Both documents, because a repository can use either.** A commit status is
+ * what an external service posts; a check run is what an app (including the
+ * forge's own actions) records. Reading one would report a repository that uses
+ * the other as having no checks at all.
+ *
+ * **One page is a wrong answer, not a partial one.** Both documents are read as
+ * `gh api --paginate --slurp` prints them -- an array of pages -- and the forge's
+ * own `total_count` is checked against what arrived, so a page nothing fetched
+ * is a refusal rather than a green over the failure that sat on it.
+ *
+ * **The rollup fields are not read.** The combined status carries a `state` of
+ * its own, and it is a rollup over statuses alone, so a commit with a green
+ * status and a failing check run reports `success` there.
+ */
+
+const FULL_SHA = /^[0-9a-fA-F]{40}$/;
+
+/** The state of one check, before any fold. `pending` is "not finished yet". */
+export type GithubCheckState = "passed" | "failed" | "cancelled" | "timed_out" | "pending";
+
+/** One check as the forge reported it. */
+export interface GithubCheckEntry {
+  /** Which document it came from. */
+  readonly kind: "check_run" | "commit_status";
+  /** The check run's `name`, or the status's `context`. */
+  readonly name: string;
+  readonly state: GithubCheckState;
+  /**
+   * The forge's own word for the outcome (`conclusion` of a completed run, the
+   * status's `state`, or a run's `status` while it is in flight), kept because
+   * `state` folds `neutral` and `skipped` into `passed` and a reader may still
+   * want to know no test ran.
+   */
+  readonly detail: string;
+  /**
+   * The forge's clock for this state: `completed_at` for a completed run,
+   * `started_at` for one in flight, `updated_at` for a status.
+   */
+  readonly occurredAtMs: number;
+  /**
+   * The forge's own `id` for this check run or status. A rerun is a new check
+   * run, and a status posted again is a new status, each with a new and larger
+   * id -- so this is what tells a rerun apart from a re-poll (`D-1113`).
+   */
+  readonly sourceId: number;
+}
+
+/** Both documents read, and the one commit they are about. */
+export interface GithubChecks {
+  /** The commit, full and lowercase, as the forge named it. */
+  readonly headSha: string;
+  readonly entries: readonly GithubCheckEntry[];
+}
+
+/**
+ * The forge's documents could not be read as a whole answer; nothing is known.
+ *
+ * A refusal and never an empty list: "the forge answered with something else"
+ * and "this commit has no checks" are two different facts.
+ */
+export class GithubChecksUnreadable extends CiObservationRefused {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "GithubChecksUnreadable";
+    Object.setPrototypeOf(this, GithubChecksUnreadable.prototype);
+  }
+}
+
+/**
+ * Read `commits/<sha>/check-runs` and `commits/<sha>/status`, as `gh api
+ * --paginate --slurp` printed them, into one entry per check.
+ *
+ * Every entry, and the status document itself, must name the same commit: two
+ * documents about two commits joined into one answer would be a verdict about
+ * neither.
+ *
+ * @throws {GithubChecksUnreadable} for a document that is not JSON, not the
+ *   shape the endpoint answers, short of its own `total_count`, carrying an
+ *   unparseable timestamp, or about more than one commit.
+ */
+export function readGithubChecks(checkRuns: string, status: string): GithubChecks {
+  const runs = every(checkRuns, "check_runs");
+  const statusPages = pages(status);
+  const statuses = every(status, "statuses");
+  const shas = new Set<string>();
+  for (const page of statusPages) {
+    shas.add(requiredString(page, "sha", "the status document"));
+  }
+  const entries: GithubCheckEntry[] = [];
+  for (const run of runs) {
+    const name = requiredString(run, "name", "a check run");
+    const sourceId = positiveInteger(run, "id", `check run ${pythonJsonString(name)}`);
+    shas.add(requiredString(run, "head_sha", `check run ${pythonJsonString(name)}`));
+    const inFlight = stringAt(run, "status") !== "completed";
+    const detail = inFlight
+      ? (stringAt(run, "status") ?? "unknown")
+      : (stringAt(run, "conclusion") ?? "none");
+    entries.push({
+      kind: "check_run",
+      sourceId,
+      name,
+      state: inFlight ? "pending" : conclusionState(detail),
+      detail,
+      occurredAtMs: timestamp(
+        run,
+        inFlight ? "started_at" : "completed_at",
+        `check run ${pythonJsonString(name)}`,
+      ),
+    });
+  }
+  for (const one of statuses) {
+    const name = requiredString(one, "context", "a commit status");
+    const sourceId = positiveInteger(one, "id", `status ${pythonJsonString(name)}`);
+    const detail = requiredString(one, "state", `status ${pythonJsonString(name)}`);
+    entries.push({
+      kind: "commit_status",
+      sourceId,
+      name,
+      state: statusState(detail),
+      detail,
+      occurredAtMs: timestamp(one, "updated_at", `status ${pythonJsonString(name)}`),
+    });
+  }
+  const [headSha, ...others] = shas;
+  if (headSha === undefined || others.length > 0) {
+    throw new GithubChecksUnreadable(
+      `the documents name ${shas.size} commits (${[...shas].map((sha) => pythonJsonString(sha)).join(", ")}); ` +
+        "one answer is about exactly one commit",
+    );
+  }
+  if (!FULL_SHA.test(headSha)) {
+    throw new GithubChecksUnreadable(
+      `the documents name the commit ${pythonJsonString(headSha)}, which is not a full SHA`,
+    );
+  }
+  return { headSha: headSha.toLowerCase(), entries };
+}
+
+/**
+ * What a completed check run's conclusion comes to.
+ *
+ * `neutral` and `skipped` are a check that ran and asked for nothing, and count
+ * as passing (the window's gate answer recorded in `D-1113`). `cancelled` and
+ * `timed_out` keep their own names because continuo's vocabulary does. Anything
+ * else -- a failure, one asking for an action, one the forge called stale, one
+ * this does not know the name of -- is `failed`: a conclusion nobody has named
+ * here must not read as green.
+ */
+function conclusionState(conclusion: string): GithubCheckState {
+  switch (conclusion) {
+    case "success":
+    case "neutral":
+    case "skipped":
+      return "passed";
+    case "cancelled":
+      return "cancelled";
+    case "timed_out":
+      return "timed_out";
+    default:
+      return "failed";
+  }
+}
+
+/** A commit status's state: `error` is a failure its poster could not even run. */
+function statusState(state: string): GithubCheckState {
+  if (state === "success") {
+    return "passed";
+  }
+  return state === "pending" ? "pending" : "failed";
+}
+
+/** The printed document as its pages: `--slurp` prints an array, one page is an object. */
+function pages(printed: string): readonly unknown[] {
+  let json: unknown;
+  try {
+    json = JSON.parse(printed);
+  } catch (error) {
+    // The parser's own message is not carried: it quotes the input, and the
+    // input is forge text that may hold what an ASCII console cannot print.
+    throw new GithubChecksUnreadable("the forge's answer was not JSON", { cause: error });
+  }
+  const all = Array.isArray(json) ? json : [json];
+  // `--slurp` over an endpoint that answered prints at least one page, and that
+  // page carries its list and its count even when both are empty. No page at
+  // all is not "no checks": it is no answer, and it must not pass as one.
+  if (all.length === 0) {
+    throw new GithubChecksUnreadable("the forge's answer held no page");
+  }
+  return all;
+}
+
+/**
+ * Every entry of one kind across every page, held to the forge's own count.
+ *
+ * `total_count` says how many entries of this kind the commit has; fewer in hand
+ * means a page is missing, and a missing page is exactly where the failure that
+ * makes the reading wrong would be.
+ */
+function every(printed: string, key: string): readonly unknown[] {
+  const entries: unknown[] = [];
+  let counted = 0;
+  for (const page of pages(printed)) {
+    const list = at(page, key);
+    if (!Array.isArray(list)) {
+      throw new GithubChecksUnreadable(`the forge's answer carried no '${key}' list`);
+    }
+    entries.push(...list);
+    // Required on every page, not read when present: a page without its count
+    // is not the endpoint's shape, and treating the missing count as zero would
+    // let a truncated document through the one check that catches truncation
+    // (Codex review of this change).
+    const total = at(page, "total_count");
+    if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) {
+      throw new GithubChecksUnreadable(`a page of '${key}' carried no 'total_count'`);
+    }
+    counted = Math.max(counted, total);
+  }
+  if (entries.length < counted) {
+    throw new GithubChecksUnreadable(
+      `the forge reported ${counted} '${key}' on this commit and answered with ${entries.length}`,
+    );
+  }
+  return entries;
+}
+
+function at(json: unknown, key: string): unknown {
+  return typeof json === "object" && json !== null
+    ? (json as Record<string, unknown>)[key]
+    : undefined;
+}
+
+function stringAt(json: unknown, key: string): string | null {
+  const value = at(json, key);
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function requiredString(json: unknown, key: string, what: string): string {
+  const value = stringAt(json, key);
+  if (value === null) {
+    throw new GithubChecksUnreadable(`${what} carried no '${key}'`);
+  }
+  return value;
+}
+
+function positiveInteger(json: unknown, key: string, what: string): number {
+  const value = at(json, key);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new GithubChecksUnreadable(`${what} carried no positive integer '${key}'`);
+  }
+  return value;
+}
+
+function timestamp(json: unknown, key: string, what: string): number {
+  const ms = Date.parse(requiredString(json, key, what));
+  if (!Number.isFinite(ms)) {
+    throw new GithubChecksUnreadable(`${what} carried an unreadable '${key}'`);
+  }
+  return ms;
+}
+
+/** What `repos/<owner>/<name>/pulls/<number>` says about one pull request. */
+export interface GithubPullRequest {
+  /** The base repository's owner login and name, as the forge spells them. */
+  readonly owner: string;
+  readonly name: string;
+  /** The base repository's `node_id`: its identity across renames. */
+  readonly providerRepoId: string;
+  readonly prNumber: number;
+  readonly providerPrId: string;
+  /** The head commit, lowercased: the only commit a verdict is about (`D-1113`). */
+  readonly headSha: string;
+  readonly state: "open" | "closed" | "merged";
+  /** The forge's `updated_at`: its clock for the state this document shows. */
+  readonly updatedAtMs: number;
+  readonly mergedAtMs: number | null;
+  readonly closedAtMs: number | null;
+  readonly mergeCommitSha: string | null;
+}
+
+/**
+ * Read one pull request document, as `gh api repos/<o>/<n>/pulls/<number>`
+ * printed it.
+ *
+ * **The base repository, never the head's.** A pull request from a fork has a
+ * head repository that is the fork, and the pull request, its number and its
+ * checks belong to the base.
+ *
+ * `merge_commit_sha` is kept only for a merged pull request: an open one
+ * carries the forge's test-merge commit there, which is not a merge.
+ *
+ * @throws {GithubChecksUnreadable} for a document that is not JSON or is
+ *   missing a field this reads.
+ */
+export function readGithubPullRequest(printed: string): GithubPullRequest {
+  const [document] = pages(printed);
+  const what = "the pull request document";
+  const number = at(document, "number");
+  if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
+    throw new GithubChecksUnreadable(`${what} carried no positive integer 'number'`);
+  }
+  const head = at(document, "head");
+  const repo = at(at(document, "base"), "repo");
+  const headSha = requiredString(head, "sha", `${what}'s head`);
+  if (!FULL_SHA.test(headSha)) {
+    throw new GithubChecksUnreadable(
+      `${what} names the head ${pythonJsonString(headSha)}, which is not a full SHA`,
+    );
+  }
+  const mergedAt = stringAt(document, "merged_at");
+  const closedAt = stringAt(document, "closed_at");
+  const open = requiredString(document, "state", what) === "open";
+  return {
+    owner: requiredString(at(repo, "owner"), "login", `${what}'s base repository owner`),
+    name: requiredString(repo, "name", `${what}'s base repository`),
+    providerRepoId: requiredString(repo, "node_id", `${what}'s base repository`),
+    prNumber: number,
+    providerPrId: requiredString(document, "node_id", what),
+    headSha: headSha.toLowerCase(),
+    state: open ? "open" : mergedAt !== null ? "merged" : "closed",
+    updatedAtMs: timestamp(document, "updated_at", what),
+    mergedAtMs: open || mergedAt === null ? null : timestamp(document, "merged_at", what),
+    closedAtMs: open || closedAt === null ? null : timestamp(document, "closed_at", what),
+    mergeCommitSha:
+      open || mergedAt === null
+        ? null
+        : requiredString(document, "merge_commit_sha", what).toLowerCase(),
+  };
+}
