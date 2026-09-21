@@ -17385,8 +17385,8 @@ because the rules below are built on them:
    are required and must agree with the pull request document (its *base* repository, never a
    fork's head repository), and both check documents must be about the document's `head.sha`; any
    disagreement, any document that is not the endpoint's shape, a document holding no page at
-   all, and any page short of the forge's own `total_count` is a `ControlPlaneRefusal` (exit 2) raised before the database is opened, so
-   nothing is written. The repository is upserted with `repo_id = github:<node_id>` and
+   all, and any page short of (or missing) the forge's own `total_count` is a
+   `ControlPlaneRefusal` (exit 2) raised before the database is opened, so nothing is written. The repository is upserted with `repo_id = github:<node_id>` and
    `provider_repo_id = <node_id>`, so a rename lands on the same row; the head is projected by
    `observePullRequest` at the document's `updated_at`; each check becomes one
    `recordCiObservation` with `verdict_detail` = the forge's word (`success`, `skipped`,
@@ -17398,8 +17398,7 @@ because the rules below are built on them:
    make a rerun that comes back to an earlier verdict (`pending -> passed -> pending`, or
    `failed -> passed -> failed`) collide with the first row, and the stale middle verdict would
    stand. Within one id, `occurred_at_ms` orders a run's `pending` before its completion.
-   `observer_epoch` is `1`: the
-   host that ran `gh` holds no lease, so there is no epoch to carry. Every write is keyed, so a
+   `observer_epoch` is `1`: the host that ran `gh` holds no lease, so there is no epoch to carry. Every write is keyed, so a
    repeat is an idempotent no-op and an interrupted run is repaired by running it again.
 3. **The mapping, per gate answer 1.** A check run that is not `completed` is `pending`, whatever
    conclusion it still carries, stamped at `started_at`. A completed one: `success`, `neutral`,
@@ -17428,7 +17427,8 @@ because the rules below are built on them:
   "still running" from "could not be observed", which are different next moves for the reader.
 - **Map check runs onto `check_suite` (rejected).** No migration either, but the label would be
   false, and keyed by the suite the fold would need a second fold inside the mapper.
-- **Key a check run by its id (rejected).** The rerun defect in Context.
+- **Key a check run's scope by its id (rejected).** The rerun defect in Context. The id is the
+  `attempt` within the scope instead (rule 2), which is what makes a rerun replace its run.
 - **Take the head as a `--head` argument and project no pull request (rejected).** The caller would
   be asserting the one fact the verdict is about, unchecked, and `ci_current_verdict` -- which
   selects by `pull_request.head_sha` -- would have nothing to select by.
