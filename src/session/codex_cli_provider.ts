@@ -280,6 +280,24 @@ function isDirectory(path: string): boolean {
   return statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 }
 
+/**
+ * The branch ref among the fence's write roots (`gitMetadataRoots`' item 3,
+ * `<common dir>/refs/heads/<branch>`), split where `refs/heads/` starts, or
+ * `null` for a detached checkout that has none. Split on `/` because
+ * `gitMetadataRoots` spells every path that way.
+ */
+function branchRefOf(
+  writeRoots: readonly string[],
+): { readonly commonDir: string; readonly branch: string } | null {
+  for (const root of writeRoots) {
+    const at = root.indexOf("/refs/heads/");
+    if (at > 0) {
+      return { commonDir: root.slice(0, at), branch: root.slice(at + "/refs/heads/".length) };
+    }
+  }
+  return null;
+}
+
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
@@ -480,6 +498,18 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
       }
       readRules.push(rule);
     }
+  }
+
+  // D-1114 rule 8: `git commit` needs the ref's DIRECTORY writable, and a
+  // top-level branch's directory is `refs/heads` itself, which holds the base
+  // branch too. Refused here, before a worktree exists.
+  const ref = branchRefOf(paths["additionalDirectories"] ?? []);
+  if (ref !== null && !ref.branch.includes("/")) {
+    return (
+      `the topic branch ${JSON.stringify(ref.branch)} is a top-level name; a Codex lap ` +
+      "can commit only on a branch under a namespace (such as lap/<name>), because the " +
+      "directory it must write is the branch's parent and refs/heads itself holds every branch"
+    );
   }
 
   const servers = field(mcp, "mcpServers");
@@ -1076,11 +1106,40 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     // under every writable root, so a FILE root (the branch ref, packed-refs:
     // gitMetadataRoots' 3 and 4) makes bwrap fail and the helper panic (exit
     // 101, measured on the first real lap). Dropping one narrows the profile,
-    // never widens it; `git commit`'s ref update then fails, because git
-    // writes `<ref>.lock` and the reflog beside the ref, not into it.
+    // never widens it; git writes `<ref>.lock` and the reflog beside the ref,
+    // not into it, so the ref file alone would not have let a commit through.
     const roots = [workspace, ...fence.writeRoots.filter(isDirectory)];
+    // What `git commit` does need instead (D-1114 rule 8, the owner's answer):
+    // the branch's parent directory under `refs/heads` for `<ref>.lock`, and
+    // the same directory under `logs/` for the reflog. Every OTHER entry
+    // already in either directory -- a sibling branch's ref or log -- is
+    // pinned read-only, so the grant reaches this branch and new names only.
+    const pinned: string[] = [];
+    const ref = branchRefOf(fence.writeRoots);
+    if (ref !== null) {
+      const slash = ref.branch.lastIndexOf("/");
+      const namespace = ref.branch.slice(0, slash);
+      const own = ref.branch.slice(slash + 1);
+      for (const dir of [
+        `${ref.commonDir}/refs/heads/${namespace}`,
+        `${ref.commonDir}/logs/refs/heads/${namespace}`,
+      ]) {
+        if (!isDirectory(dir)) {
+          continue;
+        }
+        roots.push(dir);
+        for (const entry of readdirSync(dir)) {
+          if (entry !== own) {
+            pinned.push(`${dir}/${entry}`);
+          }
+        }
+      }
+    }
     for (const root of roots) {
       filesystem[root] = "write";
+    }
+    for (const path of pinned) {
+      filesystem[path] = "read";
     }
     for (const path of fence.denyWrite) {
       if (roots.some((root) => within(path, root))) {

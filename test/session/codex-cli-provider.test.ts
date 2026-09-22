@@ -263,13 +263,14 @@ test("a help text missing a required flag is a missing capability", () => {
 // Start: argv, stdin, the per-session home
 // --------------------------------------------------------------------------
 
-test("a write root that is a file is left out of the profile, a directory kept", async () => {
-  // gitMetadataRoots names the branch ref and packed-refs, both files; Codex
-  // mounts `.git` under every writable root, so a file root made the real
-  // helper panic (exit 101) on the first real lap.
-  const l = lap();
+/**
+ * Point the lap's fence at a base `.git` whose branch ref is `branch`, the
+ * way `gitMetadataRoots` names it (`/`-separated, the ref a FILE), and
+ * return the paths involved.
+ */
+function withBranchRef(l: ReturnType<typeof lap>, branch: string) {
   const gitDir = join(l.root, "base", ".git");
-  const ref = join(gitDir, "refs", "heads", "lap-branch");
+  const ref = `${gitDir}/refs/heads/${branch}`;
   mkdirSync(dirname(ref), { recursive: true });
   writeFileSync(ref, "0".repeat(40), "utf8");
   const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
@@ -277,12 +278,63 @@ test("a write root that is a file is left out of the profile, a directory kept",
   };
   settings.sandbox.filesystem["additionalDirectories"] = [gitDir, ref];
   writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+  return { gitDir, ref };
+}
+
+async function profileOf(l: ReturnType<typeof lap>): Promise<string> {
   const log = spawnLog(l.root);
   expect(await start(providerFor(l), l)).toBeInstanceOf(Ok);
   const [entry] = await waitForSpawns(log, 1);
-  const permissions = (entry?.argv ?? []).find((part) => part.startsWith("permissions=")) ?? "";
+  return (entry?.argv ?? []).find((part) => part.startsWith("permissions=")) ?? "";
+}
+
+test("a write root that is a file is left out of the profile, a directory kept", async () => {
+  // gitMetadataRoots names the branch ref and packed-refs, both files; Codex
+  // mounts `.git` under every writable root, so a file root made the real
+  // helper panic (exit 101) on the first real lap.
+  const l = lap();
+  const { gitDir, ref } = withBranchRef(l, "lap/branch");
+  const permissions = await profileOf(l);
   expect(permissions).toContain(`${JSON.stringify(gitDir)} = "write"`);
   expect(permissions).not.toContain(JSON.stringify(ref));
+});
+
+test("the branch's ref and log directories are writable and every sibling in them is pinned read-only (D-1114 rule 8)", async () => {
+  const l = lap();
+  const { gitDir } = withBranchRef(l, "lap/branch");
+  const heads = `${gitDir}/refs/heads`;
+  const logs = `${gitDir}/logs/refs/heads`;
+  writeFileSync(`${heads}/lap/other`, "1".repeat(40), "utf8");
+  writeFileSync(`${heads}/main`, "2".repeat(40), "utf8");
+  mkdirSync(`${logs}/lap`, { recursive: true });
+  writeFileSync(`${logs}/lap/branch`, "", "utf8");
+  writeFileSync(`${logs}/lap/other`, "", "utf8");
+  const permissions = await profileOf(l);
+  // What a commit needs: `<ref>.lock` beside the ref, the reflog beside its log.
+  expect(permissions).toContain(`${JSON.stringify(`${heads}/lap`)} = "write"`);
+  expect(permissions).toContain(`${JSON.stringify(`${logs}/lap`)} = "write"`);
+  // A sibling branch stays as it is, in both places.
+  expect(permissions).toContain(`${JSON.stringify(`${heads}/lap/other`)} = "read"`);
+  expect(permissions).toContain(`${JSON.stringify(`${logs}/lap/other`)} = "read"`);
+  // The branch's own ref and log are not pinned, and nothing above the
+  // namespace -- the base branch included -- is granted.
+  expect(permissions).not.toContain(JSON.stringify(`${heads}/lap/branch`));
+  expect(permissions).not.toContain(JSON.stringify(`${logs}/lap/branch`));
+  expect(permissions).not.toContain(`${JSON.stringify(heads)} = "write"`);
+  expect(permissions).not.toContain(JSON.stringify(`${heads}/main`));
+});
+
+test("a top-level topic branch refuses a Codex lap before it spawns; a namespaced one does not", async () => {
+  const l = lap();
+  withBranchRef(l, "topic");
+  const log = spawnLog(l.root);
+  const refusal = refusalOf(await start(providerFor(l), l));
+  expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
+  expect(refusal.detail).toContain("top-level name");
+  expect(spawned(log)).toEqual([]);
+  const namespaced = lap();
+  withBranchRef(namespaced, "lap/topic");
+  expect(await profileOf(namespaced)).toContain('"write"');
 });
 
 test("start runs codex exec with the fence as -c overrides and the prompt on stdin", async () => {
