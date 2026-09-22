@@ -36,6 +36,7 @@ import {
   type ProviderResult,
   SpawnRefused,
 } from "../../src/session/provider.js";
+import { sessionRuntime } from "../../src/session/runtime.js";
 import { claudeSessionUuid } from "../../src/session/uuid5.js";
 import {
   fenceContext,
@@ -45,6 +46,7 @@ import {
 } from "../fencing/helpers/fence-cases.js";
 import { caseRoot } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
+import { patchSeam } from "../testkit/seams.js";
 import { fakeCodexCli, fakeEnv, fakeMode, spawnLog } from "./helpers/fake-cli.js";
 import {
   cliRequest,
@@ -345,6 +347,38 @@ test("a write denial that contains the workspace refuses the spawn; one beside i
   // The nearest accepted case: a denial beside the workspace, not above it.
   const beside = lapDenying((root) => join(root, "elsewhere"));
   expect(await profileOf(beside)).toContain('"write"');
+});
+
+test("a write denial over the branch's ref namespace refuses the spawn, though the ref is a file (D-1114 rule 8)", async () => {
+  // Rule 8 adds `refs/heads/lap` as a write root; a denial of `refs/heads`
+  // must be checked against it, not only against the roots the fence named.
+  const l = lap();
+  const { gitDir } = withBranchRef(l, "lap/branch");
+  const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
+    sandbox: { filesystem: Record<string, unknown> };
+  };
+  settings.sandbox.filesystem["denyWrite"] = [`${gitDir}/refs/heads`];
+  writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+  const log = spawnLog(l.root);
+  const refusal = refusalOf(await start(providerFor(l), l));
+  expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
+  expect(refusal.detail).toContain(`denies writes under ${gitDir}/refs/heads`);
+  expect(spawned(log)).toEqual([]);
+});
+
+test("a Codex provider built without a command runs codex, not the Claude default", () => {
+  const l = lap();
+  const probed: string[] = [];
+  patchSeam(sessionRuntime, "runProbe", (argv: readonly string[]) => {
+    probed.push(argv[0] ?? "");
+    throw Object.assign(new Error("not run"), { code: "ENOENT" });
+  });
+  const provider = new CodexCliSessionProvider(join(l.root, "state"), {
+    codexHome: join(l.root, "codex-home"),
+  });
+  // Only the command asked for matters here, not how the failed probe ends.
+  expect(() => provider.probeCapabilities()).toThrow("not run");
+  expect(probed[0]).toBe("codex");
 });
 
 test("a top-level topic branch refuses a Codex lap before it spawns; a namespaced one does not", async () => {
