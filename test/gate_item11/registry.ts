@@ -1,6 +1,11 @@
 import { spawnSync } from "node:child_process";
 
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { ClaudeCliSessionProvider } from "../../src/session/claude_cli_provider.js";
+import { CodexCliSessionProvider } from "../../src/session/codex_cli_provider.js";
 import { SessionProvider, type SessionReadout } from "../../src/session/provider.js";
 import { LocalProcessSessionProvider } from "../../src/session/stub_provider.js";
 
@@ -105,6 +110,36 @@ function claudeCliDisqualified(readout: SessionReadout): string | null {
   return null;
 }
 
+/**
+ * The operator's Codex home a live S4 run copies `auth.json` from: `CODEX_HOME`
+ * when set, else `~/.codex`, as the CLI itself resolves it.
+ */
+function operatorCodexHome(): string {
+  return process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
+}
+
+function codexCli(stateRoot: string): SessionProvider {
+  // The model the stack's ChatGPT account can run (`gpt-6-astra`); the pin is
+  // provider-wide spawn configuration, as S2's `haiku` is.
+  return new CodexCliSessionProvider(stateRoot, {
+    codexHome: operatorCodexHome(),
+    baseCliArgs: ["--model", "gpt-6-astra"],
+  });
+}
+
+function codexCliUnavailable(): string | null {
+  if (!which("codex")) {
+    return (
+      "the codex CLI is not on PATH; the Codex provider (S4, issue #220) spawns real " +
+      "`codex exec` children and cannot run here"
+    );
+  }
+  if (!existsSync(join(operatorCodexHome(), "auth.json"))) {
+    return `no auth.json under ${operatorCodexHome()}; a codex child cannot authenticate`;
+  }
+  return null;
+}
+
 /** Every provider the measurement runs against, keyed by its registry handle. */
 export const PROVIDERS: Readonly<Record<string, ProviderEntry>> = Object.freeze({
   S2: Object.freeze({
@@ -114,6 +149,17 @@ export const PROVIDERS: Readonly<Record<string, ProviderEntry>> = Object.freeze(
     implementation: ClaudeCliSessionProvider,
     factory: claudeCli,
     unavailable: claudeCliUnavailable,
+    disqualified: claudeCliDisqualified,
+  }),
+  S4: Object.freeze({
+    id: "S4",
+    scaffold: "S4 -- the Codex provider over supervised codex exec subprocesses",
+    issue: "#220",
+    implementation: CodexCliSessionProvider,
+    factory: codexCli,
+    unavailable: codexCliUnavailable,
+    // The same rule as S2's: a child that died without speaking is a broken
+    // install, and `exited-<rc>` is the shared supervision's word for it.
     disqualified: claudeCliDisqualified,
   }),
   S3: Object.freeze({

@@ -59,7 +59,7 @@ import {
   MCP_CONFIG_FILENAME,
   WORKSPACE_MATERIALIZED_EVENT_TYPE,
 } from "../../src/workspace/materializer.js";
-import { fakeCli, fakeEnv, fakeMode } from "../session/helpers/fake-cli.js";
+import { fakeCli, fakeCodexCli, fakeEnv, fakeMode } from "../session/helpers/fake-cli.js";
 import { caseRoot } from "../testkit/cases.js";
 import { patchSeams } from "../testkit/seams.js";
 
@@ -976,6 +976,23 @@ describe("what the verb refuses, and what it leaves behind", () => {
 const PERFORM_SCHEMA = "continuo.lap.perform/1";
 
 /**
+ * The `spend` object of a Claude turn whose `result` event carried no numbers.
+ * The six D-1114 keys are always present and always `null` for Claude: its
+ * `result` event reports a cost and no token split this build reads.
+ */
+const CLAUDE_UNREAD_SPEND = {
+  total_cost_usd: null,
+  num_turns: null,
+  duration_ms: null,
+  model: null,
+  input_tokens: null,
+  cached_input_tokens: null,
+  cache_write_input_tokens: null,
+  output_tokens: null,
+  reasoning_output_tokens: null,
+};
+
+/**
  * The one document a `--json` run wrote, parsed.
  *
  * The line count is asserted rather than assumed: this verb's human report is a
@@ -1114,7 +1131,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // Present, and an object of three nulls (`D-1112`): the transcript was
       // read and its `result` line carries no accounting, which is what this
       // fake writes. Not `null`, which is a backend that cannot say.
-      spend: { total_cost_usd: null, num_turns: null, duration_ms: null },
+      spend: CLAUDE_UNREAD_SPEND,
       // Present and empty: the transcript was read and the turn ran nothing.
       commands: [],
     });
@@ -1216,7 +1233,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // Present, and an object of three nulls (`D-1112`): the transcript was
       // read and its `result` line carries no accounting, which is what this
       // fake writes. Not `null`, which is a backend that cannot say.
-      spend: { total_cost_usd: null, num_turns: null, duration_ms: null },
+      spend: CLAUDE_UNREAD_SPEND,
       // Present and empty: the transcript was read and the turn ran nothing.
       commands: [],
     });
@@ -1334,6 +1351,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
 
     const document = oneDocument(f.out) as Record<string, unknown>;
     expect(document["spend"]).toStrictEqual({
+      ...CLAUDE_UNREAD_SPEND,
       total_cost_usd: 0.42,
       num_turns: 7,
       duration_ms: 12_345,
@@ -1834,5 +1852,158 @@ describe("D-0099: which model the worker runs on", () => {
     // path on the line is under it.
     expect(without.out.join("")).toMatch(/at seq \d+\n$/);
     expect(with_.out.join("")).toMatch(/at seq \d+, model 'sonnet'\n$/);
+  });
+});
+
+// --------------------------------------------------------------------------
+
+/**
+ * `lap perform --provider codex` over the fake `codex` (D-1114).
+ *
+ * The same fixture as every case above, with the command swapped: the Claude
+ * tokens `argv()` appends are dropped and the fake Codex is given through the
+ * provider-neutral `--worker-command` spelling. The operator home is a
+ * directory beside the lap holding the one file the provider copies.
+ */
+function codexArgv(f: Lap, extra: readonly string[] = [], home = codexHomeOf(f)): string[] {
+  const argv = f.argv();
+  const kept: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === "--claude-command") {
+      index += 1;
+      continue;
+    }
+    kept.push(argv[index] as string);
+  }
+  for (const token of fakeCodexCli(f.root)) {
+    kept.push("--worker-command", token);
+  }
+  kept.push("--provider", "codex", "--codex-home", home, "--json", ...extra);
+  return kept;
+}
+
+function codexHomeOf(f: Lap): string {
+  const home = join(f.root, "operator-codex");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "auth.json"), '{"token":"operator"}', "utf8");
+  return home;
+}
+
+describe("D-1114: a lap whose worker runs on Codex", () => {
+  test("the lap opens a gate, binds codex-cli, and reports tokens and commands", async () => {
+    const f = lap("lap-codex");
+    // The seccomp probe answers EPERM, which refuses a Claude lap (below);
+    // Codex proves its own sandbox instead, so the lap still runs.
+    patchSeams(lapCliSeams, { probeUnixSocket: () => Promise.resolve("EPERM") });
+    fakeEnv(
+      "FAKE_TRANSCRIPT_EVENTS",
+      JSON.stringify([
+        {
+          name: "exec",
+          input: 'text(await tools.exec_command({cmd: "git status"}))',
+          hook: { tool_name: "Bash", tool_input: { command: "git status" } },
+          output: "clean",
+        },
+      ]),
+    );
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(codexArgv(f)), f.err.join("")).toBe(0);
+
+    const document = oneDocument(f.out);
+    expect(document["ok"]).toBe(true);
+    expect(document["spend"]).toStrictEqual({
+      total_cost_usd: null,
+      num_turns: null,
+      duration_ms: 1234,
+      model: "fake-model",
+      input_tokens: 100,
+      cached_input_tokens: 80,
+      cache_write_input_tokens: 0,
+      output_tokens: 7,
+      reasoning_output_tokens: 3,
+    });
+    const commands = document["commands"] as Record<string, unknown>[];
+    expect(commands.map((c) => c["output"])).toEqual(["clean"]);
+    expect(commands[0]?.["command"]).toContain("exec_command");
+    const connection = inspect(f.databasePath);
+    expect(
+      (connection.prepare("SELECT provider FROM session").all() as { provider: string }[]).map(
+        (row) => row.provider,
+      ),
+    ).toEqual(["codex-cli"]);
+
+    // The same probe answer still refuses a Claude lap: the skip is Codex's.
+    const g = lap("lap-codex-claude-seccomp");
+    patchSeams(lapCliSeams, { probeUnixSocket: () => Promise.resolve("EPERM") });
+    g.out.length = 0;
+    g.err.length = 0;
+    expect(await mainAsync(jsonArgv(g))).toBe(2);
+    expect(oneDocument(g.err)).toMatchObject({
+      error: { class: "LapRefused", message: expect.stringContaining("Unix socket (EPERM)") },
+    });
+  });
+
+  test("a Claude lap binds claude-cli, and --worker-command is the same flag", async () => {
+    const f = lap("lap-worker-command");
+    const argv = f
+      .argv()
+      .map((token) => (token === "--claude-command" ? "--worker-command" : token));
+    argv.push("--json");
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(argv), f.err.join("")).toBe(0);
+    expect(oneDocument(f.out)["spend"]).toStrictEqual(CLAUDE_UNREAD_SPEND);
+    const connection = inspect(f.databasePath);
+    expect(connection.prepare("SELECT provider FROM session").get()).toEqual({
+      provider: "claude-cli",
+    });
+  });
+
+  test("--codex-home is required with codex, refused without it, and must be absolute", async () => {
+    const cases: readonly [string, (f: Lap) => string[], string][] = [
+      [
+        "lap-codex-no-home",
+        (f) =>
+          codexArgv(f).filter((t, i, all) => t !== "--codex-home" && all[i - 1] !== "--codex-home"),
+        "requires --codex-home",
+      ],
+      [
+        "lap-codex-relative-home",
+        (f) => codexArgv(f, [], "operator-codex"),
+        "not a fully qualified",
+      ],
+      [
+        "lap-claude-with-home",
+        (f) => [...jsonArgv(f), "--codex-home", codexHomeOf(f)],
+        "only accepted with --provider codex",
+      ],
+    ];
+    for (const [label, argvOf, message] of cases) {
+      const f = lap(label);
+      f.out.length = 0;
+      f.err.length = 0;
+      expect(await mainAsync(argvOf(f)), label).toBe(2);
+      expect(oneDocument(f.err), label).toMatchObject({
+        error: { class: "LapUsageError", message: expect.stringContaining(message) },
+      });
+      expect(existsSync(f.workspace), `${label}: refused after the worktree`).toBe(false);
+    }
+  });
+
+  test("a Codex home inside the worktree is refused before anything is built", async () => {
+    const f = lap("lap-codex-home-inside");
+    f.out.length = 0;
+    f.err.length = 0;
+    expect(await mainAsync(codexArgv(f, [], join(f.workspace, "codex")))).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      error: {
+        class: "LapUsageError",
+        message: expect.stringContaining("the worker CLI's home"),
+      },
+    });
+    expect(existsSync(f.workspace)).toBe(false);
   });
 });

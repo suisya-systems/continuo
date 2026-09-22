@@ -100,7 +100,11 @@ export {
   ClaudeCliSessionProvider,
   type ClaudeCliSessionProviderOptions,
 } from "./claude_cli_provider.js";
-export { createDefaultSessionProvider } from "./default_provider.js";
+export {
+  createDefaultSessionProvider,
+  type SessionProviderKind,
+  sessionProviderName,
+} from "./default_provider.js";
 export {
   CAPABILITY_ASSIGNMENTS,
   CapabilityAssignment,

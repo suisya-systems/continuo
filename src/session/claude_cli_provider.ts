@@ -440,8 +440,12 @@ function isDirectory(path: string): boolean {
  * component-by-component walk with a symlink budget, no ported case constructs
  * such a path, and the port would be inventing a traversal the source's suite
  * has no oracle for.
+ *
+ * Exported for the Codex subclass only (continuo D-1114), which must name the
+ * same state root this class does -- to its own files and, as keys of a
+ * permission profile, to the Codex sandbox. Not re-exported from `src/index.ts`.
  */
-function pyResolve(path: string): string {
+export function pyResolve(path: string): string {
   const absolute = resolve(path);
   const missing: string[] = [];
   let head = absolute;
@@ -1105,6 +1109,21 @@ export interface TurnSpend {
   readonly numTurns: number | null;
   /** `duration_ms`. */
   readonly durationMs: number | null;
+  /**
+   * The model and the token counts, for a CLI that reports those and not a
+   * cost (continuo D-1114, the Codex provider). **Optional, and absent on every
+   * value this class builds**: the Claude `result` event's accounting is the
+   * three keys above, and adding the rest as `null` here would change the
+   * value every existing reader and test compares. A reader that renders the
+   * wider shape spells an absent key as `null` ("this build cannot say"), the
+   * `D-1112` rule.
+   */
+  readonly model?: string | null;
+  readonly inputTokens?: number | null;
+  readonly cachedInputTokens?: number | null;
+  readonly cacheWriteInputTokens?: number | null;
+  readonly outputTokens?: number | null;
+  readonly reasoningOutputTokens?: number | null;
 }
 
 /** The three accounting numbers off a `result` event. See {@link TurnSpend}. */

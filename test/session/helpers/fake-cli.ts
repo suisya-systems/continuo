@@ -81,6 +81,18 @@ export function fakeCli(root: string): readonly [string, string] {
   return [process.execPath, script] as const;
 }
 
+const CODEX_SCRIPT_TEXT = readFileSync(
+  fileURLToPath(new URL("./fake-codex.mjs", import.meta.url)),
+  "utf8",
+);
+
+/** The fake `codex` (`./fake-codex.mjs`), placed as {@link fakeCli} places `claude`. */
+export function fakeCodexCli(root: string): readonly [string, string] {
+  const script = join(root, "fake-codex.mjs");
+  writeFileSync(script, CODEX_SCRIPT_TEXT, "utf8");
+  return [process.execPath, script] as const;
+}
+
 /**
  * Every environment switch the fake reads.
  *
@@ -93,6 +105,15 @@ export function fakeCli(root: string): readonly [string, string] {
  * time out ten seconds later against a message about a state never reached.
  */
 export type FakeSwitch =
+  | "FAKE_CODEX_META_ID"
+  | "FAKE_CODEX_NO_ROLLOUT"
+  | "FAKE_CODEX_POLICY"
+  | "FAKE_CODEX_RESUME_THREAD"
+  | "FAKE_CODEX_SANDBOX"
+  | "FAKE_CODEX_SANDBOX_LOG"
+  | "FAKE_CODEX_SECOND_THREAD"
+  | "FAKE_CODEX_THREAD_ID"
+  | "FAKE_CODEX_USAGE"
   | "FAKE_BARRIER_READY"
   | "FAKE_BARRIER_RELEASE"
   | "FAKE_BARRIER_TIMEOUT"

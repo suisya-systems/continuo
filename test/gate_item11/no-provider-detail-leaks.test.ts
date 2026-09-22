@@ -88,6 +88,7 @@ const TEST_NON_MODULE_FILES: readonly string[] = [
   "fixtures/labelled/session_no_evidence/long_quiet_run_still_alive/expected.json",
   "fixtures/labelled/session_no_evidence/long_quiet_run_still_alive/trace.jsonl",
   "session/helpers/fake-claude.mjs",
+  "session/helpers/fake-codex.mjs",
 ];
 
 /** `src/index.ts`'s allowlisted exception (D-1001). */

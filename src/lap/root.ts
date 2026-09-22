@@ -162,6 +162,17 @@ export interface TurnSpendFact {
   readonly totalCostUsd: number | null;
   readonly numTurns: number | null;
   readonly durationMs: number | null;
+  /**
+   * The model and token counts, for a backend that reports those and not a
+   * cost (D-1114, the Codex provider). Optional because the Claude backend
+   * never sets them; the JSON document spells an absent key as `null`.
+   */
+  readonly model?: string | null;
+  readonly inputTokens?: number | null;
+  readonly cachedInputTokens?: number | null;
+  readonly cacheWriteInputTokens?: number | null;
+  readonly outputTokens?: number | null;
+  readonly reasoningOutputTokens?: number | null;
 }
 
 /**
@@ -763,6 +774,9 @@ function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
     ...(request.workerCommand ?? []).map(
       (token, index) => [`the worker command's token ${String(index)}`, resolve(token)] as const,
     ),
+    ...(request.codexHome === undefined
+      ? []
+      : [["the worker CLI's home", resolve(request.codexHome)] as const]),
   ];
   for (const [what, path] of warded) {
     if (isInside(path, root)) {
@@ -1170,6 +1184,20 @@ export interface LapRequest {
   /** The worker's own command, if the caller pinned one, for the same check. */
   readonly workerCommand?: readonly string[];
   /**
+   * The operator's Codex home the provider copies `auth.json` from, when the
+   * worker runs on Codex (D-1114). Carried to be checked like
+   * {@link workerCommand}: a home inside the worktree is a credential the
+   * fenced child can read and a directory it can edit.
+   */
+  readonly codexHome?: string;
+  /**
+   * The name `session_binding.provider` records, when the caller built a
+   * provider other than the orchestrator's default (`claude-cli`). D-1114:
+   * `recover()` compares it, so a Codex session must not be recorded as a
+   * Claude one. Absent keeps a Claude lap's rows byte-identical.
+   */
+  readonly providerName?: string;
+  /**
    * The model the worker CLI is to run on, if the caller chose one (`D-0099`).
    *
    * Carried so it can be **checked**, exactly as {@link workerCommand} and
@@ -1556,6 +1584,7 @@ async function performLapHoldingTheEndpointLease(
     //
     // `request.nowMs` is a function precisely so this step can supply one.
     nowMs: request.nowMs,
+    ...(request.providerName === undefined ? {} : { providerName: request.providerName }),
     // **The operator's read-back window** (`D-0098`). Omitted rather than
     // spelled with the orchestrator's own default when the caller declared
     // none, so there is one place the number lives.
