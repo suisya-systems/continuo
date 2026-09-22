@@ -5,8 +5,8 @@
  * object in every case and only the backend's behaviour changes.
  *
  * It renders only what the provider reads, in the shapes measured on
- * `codex-cli 0.153.4` (`.worker-scratch` measurements, summarised in the
- * provider's header): `--version`; `exec --help`; `sandbox ... -- <cmd>`; and
+ * `codex-cli 0.153.4` (the measurements D-1114 records): `--version`;
+ * `exec --help`; `sandbox ... -- <cmd>`; and
  * `exec` / `exec resume <thread>` with the prompt on stdin, writing `--json`
  * events to stdout and a rollout under `$CODEX_HOME/sessions/`.
  *

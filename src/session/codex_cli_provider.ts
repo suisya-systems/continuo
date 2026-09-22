@@ -21,8 +21,8 @@
  *
  * - `S.sandbox` and the `Read(...)` denials become a from-scratch permission
  *   profile, passed with `-c` and selected with `default_permissions`, so the
- *   OS sandbox denies the reads Claude's sandbox denies (measure2-read,
- *   measure3 Q1). `CODEX_HOME` and the operator's Codex home are denied too.
+ *   OS sandbox denies the reads Claude's sandbox denies (D-1114 M3).
+ *   `CODEX_HOME` and the operator's Codex home are denied too.
  * - `S.hooks`' deny hook becomes `codex_hook.mjs` beside it, the allowlisting
  *   hook a Codex worker needs because Codex has no permission mode behind its
  *   hook (see that file's header).
@@ -37,7 +37,7 @@
  * ## Config arrives on the command line and nowhere else
  *
  * `--ignore-user-config --strict-config --ignore-rules` and every setting as a
- * `-c` override (measure3 Q1/Q2): no `config.toml` is rendered, the target
+ * `-c` override (D-1114 M3, M6): no `config.toml` is rendered, the target
  * repository's `.codex/` and `.rules` are not loaded, and a key this Codex
  * build does not know is a startup error rather than a silently ignored line.
  * The per-session `CODEX_HOME` holds only `auth.json` (a 0600 copy, never a
@@ -58,13 +58,13 @@
  *   a resume must name the same thread. The rollout's `session_meta` is a
  *   second witness. Orphan recognition is unchanged: the command line carries
  *   continuo's own UUID in the `-o` path.
- * - **`write_stdin` does not fire the hook** (measure3 Q3), so an
+ * - **`write_stdin` does not fire the hook** (D-1114 M5), so an
  *   `allowed_bash` entry whose program reads commands from stdin would escape
  *   the allowlist; the interpreters and shells in {@link STDIN_PROGRAMS} are
  *   refused outright. Another program that does so is bounded only by the OS
  *   sandbox.
  * - **The D-1112 socket probe does not apply**: Codex's sandbox came up and
- *   enforced under the AF_UNIX-EPERM filter (understand-codex section 4). Its
+ *   enforced under the AF_UNIX-EPERM filter (D-1114 M2). Its
  *   place is taken by `codex sandbox` self-tests that prove the denials hold.
  */
 
@@ -140,7 +140,7 @@ const EXEC_FLAGS: readonly string[] = [
 /**
  * Tool surfaces a lap has no use for, switched off by name. The hook denies
  * them anyway; this keeps them out of the model's view. `multi_agent` does not
- * remove sub-agents (measure3 Q4): the hook and the post-turn check hold that.
+ * remove sub-agents (D-1114 M5): the hook and the post-turn check hold that.
  */
 const DISABLED_FEATURES: readonly string[] = [
   "apps",
@@ -166,7 +166,7 @@ const NEUTRAL_ENV: Readonly<Record<string, string>> = {
 };
 
 /**
- * Programs that execute what arrives on their stdin (design-final O5). A Bash
+ * Programs that execute what arrives on their stdin (D-1114 rule 5). A Bash
  * allow entry naming one is refused for a Codex lap, because `write_stdin`
  * reaches a running process without the hook seeing it. Compared after a
  * trailing version is dropped, so `python3.12` and `node22` are caught.
@@ -194,7 +194,7 @@ const FENCE_PERMISSION_MODE = "acceptEdits";
 /** The permission profile's name, in `-c` and in the post-turn check. */
 const PROFILE = "fence";
 
-/** Depth Codex expands a `**` deny glob to at spawn (measure2-read row 4). */
+/** Depth Codex expands a `**` deny glob to at spawn (D-1114 M3). */
 const GLOB_SCAN_MAX_DEPTH = 6;
 
 /** Seconds Codex gives the hook; `codex_hook.mjs` denies on its own at 20. */
@@ -582,9 +582,9 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
 
   /**
    * `codex sandbox -- true` under a minimal from-scratch profile, before any
-   * worktree exists (design-final O3). A Codex whose sandbox cannot come up
-   * runs no command and still reports a finished turn (understand-codex
-   * section 4), so this is where that is found out cheaply. `codex sandbox`
+   * worktree exists (D-1114 rule 4). A Codex whose sandbox cannot come up
+   * runs no command and still reports a finished turn (D-1114 M2),
+   * so this is where that is found out cheaply. `codex sandbox`
    * is offline and needs no credentials.
    */
   protected override _cliProbeExtra(run: CliProbeRunner): Failure | null {
@@ -642,7 +642,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       "-C",
       record.workspace,
       ...this.#configArgs(this.#translationOf(record.session_id), record),
-      // The prompt is on stdin (`-`, measure3 Q6): a prompt argument is read
+      // The prompt is on stdin (`-`, D-1114 M7): a prompt argument is read
       // as a subcommand or a flag by clap when it looks like one.
       ...baseCliArgs,
       "-",
@@ -692,8 +692,8 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
   }
 
   /**
-   * Render the per-session home and prove the profile holds (design section
-   * 6.4): `true` must run, a write outside the writable roots must fail and
+   * Render the per-session home and prove the profile holds (D-1114
+   * rule 4): `true` must run, a write outside the writable roots must fail and
    * leave nothing, and a read of the operator's `auth.json` must fail.
    * Credentials are copied in last, so a refused spawn leaves none behind.
    */
@@ -735,7 +735,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       mkdirSync(home, { recursive: true, mode: 0o700 });
       chmodSync(home, 0o700);
       // Codex writes project trust into it even under --ignore-user-config
-      // (measure3 Q2), and `codex sandbox` below does read it.
+      // (D-1114 M6), and `codex sandbox` below does read it.
       rmSync(join(home, "config.toml"), { force: true });
       writeFileSync(join(home, "hooks.json"), `${JSON.stringify(hooks)}\n`, "utf8");
     } catch (exc) {
@@ -824,7 +824,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
 
   /**
    * The report, spend, commands and denials of the verified turn, and the
-   * post-turn checks that refuse it (design section 6.5, section 7):
+   * post-turn checks that refuse it (D-1114 rule 7):
    *
    * - the rollout's `session_meta` must name the adopted thread, or it is an
    *   identity incident;
@@ -832,7 +832,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    *   `workspace-write` sandbox without network, and the `fence` profile --
    *   the proof the `-c` configuration was what ran;
    * - a turn that made a tool call must have a hook log, because an untrusted
-   *   or missing hook is skipped silently (measure2-hook section 3);
+   *   or missing hook is skipped silently (D-1114 M4);
    * - every sub-agent call must have been denied by the hook.
    */
   protected override _cliTurnFacts(
@@ -1060,7 +1060,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
   }
 
   /**
-   * The permission profile (design section 5): read everywhere, write in the
+   * The permission profile (D-1114 rule 2): read everywhere, write in the
    * workspace and the git metadata roots, the fence's write denials read-only
    * where they fall inside a write root, and its read denials, every
    * session's `CODEX_HOME` (their common parent: each holds a copy of the
@@ -1100,7 +1100,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     return { [PROFILE]: { filesystem } };
   }
 
-  /** Every `-c` / `--disable` the spawn is configured by (design-final O1). */
+  /** Every `-c` / `--disable` the spawn is configured by (D-1114 rule 2). */
   #configArgs(fence: CodexFence, record: Omit<SessionRecord, "argv">): readonly string[] {
     const workspace = record.workspace;
     const lastMessage = join(

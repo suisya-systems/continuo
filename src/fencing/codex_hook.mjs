@@ -31,7 +31,7 @@
  * ## Fail closed, harder than `hook.mjs` has to
  *
  * Codex runs the call when its hook exits 1, crashes, is missing, or times out
- * (measure2-hook section 1). So every path here ends in exactly one of two
+ * (D-1114 M4). So every path here ends in exactly one of two
  * ways: exit 0 with nothing on stdout (allow), or the JSON deny on stdout, the
  * reason on stderr and exit 2 (both forms were measured to block). The only
  * static imports are Node built-ins; `hook.mjs` and `rules.js` arrive by
@@ -45,7 +45,7 @@
  *
  * ## What the allowlist does not bound
  *
- * `write_stdin` does not fire this hook (measure3 Q3). Nothing the read-only
+ * `write_stdin` does not fire this hook (D-1114 M5). Nothing the read-only
  * set or the role's git entries run executes its stdin, and the provider
  * refuses interpreter programs in `allowed_bash`; what remains is the OS
  * sandbox's to hold, as it is for Claude.
