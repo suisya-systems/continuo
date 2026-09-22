@@ -7,7 +7,8 @@
  * tool the model is shown simply runs, so for a Codex worker this file is the
  * allowlist as well as the deny list, and it is **default deny**:
  *
- * - `Bash`: a single command with no shell composition, admitted by a
+ * - `Bash`: a single command of plain characters only (see
+ *   {@link PLAIN_COMMAND}), admitted by a
  *   `Bash(<spec>)` entry of the fence's `settings.permissions.allow` (the
  *   role's git entries plus the run's `allowed_bash`, D-1110) under Claude's
  *   own matcher, or by a fixed read-only first word. Then `hook.mjs`'s rules.
@@ -34,10 +35,11 @@
  * (D-1114 M4). So every path here ends in exactly one of two
  * ways: exit 0 with nothing on stdout (allow), or the JSON deny on stdout, the
  * reason on stderr and exit 2 (both forms were measured to block). The only
- * static imports are Node built-ins; `hook.mjs` and `rules.js` arrive by
- * `import()` inside `try`, from the same two fixed directories `hook.mjs` uses
- * and for the same reason (an environment variable naming them would let the
- * fenced child pick its own hook). `uncaughtException` and
+ * static imports are Node built-ins; `hook.mjs` (from beside this file) and
+ * `rules.js` (from the two fixed directories `hook.mjs` itself uses) arrive by
+ * `import()` inside `try`, both at fixed paths for `hook.mjs`'s reason (an
+ * environment variable naming them would let the fenced child pick its own
+ * hook). `uncaughtException` and
  * `unhandledRejection` deny. A watchdog denies before Codex's own hook timeout
  * would let the call through. And the log line is written before the verdict:
  * the log is the lap's `permission_denials` and its evidence that the hook ran
@@ -81,12 +83,22 @@ const DEPENDENCY_DIRECTORIES = Object.freeze([
 const READ_ONLY_PROGRAMS = new Set(["cat", "head", "tail", "ls", "wc", "grep", "pwd"]);
 
 /**
- * Refused anywhere in a `Bash` command, quoted or not: `;` `&` `|` `<` `>`
- * backtick `$` newline CR backslash. An allow entry names ONE command, and
- * checking a quoted string for composition is a shell parser this file will
- * not carry; the model is told to issue single commands.
+ * The only characters a `Bash` command may contain: letters, digits, space and
+ * `_ . / : = @ % + , - " '`. Anything else is refused, quoted or not, and the
+ * model is told to issue one plain command per call.
+ *
+ * **An allowlist of characters, not a list of shell metacharacters.** Codex
+ * runs the command in the user's login shell, which may be zsh, and zsh runs
+ * code from places a list of the usual suspects misses: a glob qualifier
+ * (`ls *(e:'curl x':)`) and `=(curl x)` need none of `; & | < > $` or a
+ * backtick. Which characters a shell treats as special is the shell's to say
+ * and differs by shell; the characters above are plain in sh, bash and zsh
+ * alike (quotes only group words, and inside double quotes only `$`, a
+ * backtick and a backslash are special, and all three are refused). An allow
+ * entry names ONE command, and a shell parser is what this file will not
+ * carry.
  */
-const SHELL_COMPOSITION = /[;&|<>`$\n\r\\]/;
+const PLAIN_COMMAND = /^[A-Za-z0-9 _./:=@%+,"'-]+$/;
 
 /**
  * The program a shell runs for `command`: its first word as `bash -c` splits
@@ -333,10 +345,11 @@ async function main() {
     if (typeof command !== "string" || command.trim() === "") {
       deny("continuo codex hook: a Bash call carried no command");
     }
-    if (SHELL_COMPOSITION.test(command)) {
+    if (!PLAIN_COMMAND.test(command)) {
       deny(
-        "continuo codex hook: shell composition (; & | < > ` $ newline backslash) is not " +
-          "allowed in a lap; issue one command per call",
+        "continuo codex hook: a lap's command may contain only letters, digits, spaces and " +
+          "_ . / : = @ % + , - \" ' (no shell composition, globs or expansions); issue one " +
+          "plain command per call",
       );
     }
     await hook.hookSeams.loadDependencies();
@@ -374,8 +387,10 @@ async function main() {
     const cwd = own(event, "cwd");
     const paths = [];
     for (const raw of patch.split("\n")) {
-      // Trimmed as Codex's patch parser trims a hunk header before matching it.
-      const line = raw.trim();
+      // Trimmed as Codex's patch parser trims a hunk header before matching it:
+      // Rust's `str::trim` strips U+0085 (NEL), which JavaScript's `trim` keeps,
+      // so a NEL-prefixed header would be skipped here and applied there.
+      const line = raw.replace(/^[\s\u0085]+|[\s\u0085]+$/g, "");
       if (!line.startsWith("***") || PATCH_FRAME.has(line)) {
         continue;
       }

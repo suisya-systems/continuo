@@ -672,6 +672,15 @@ function preflight(request: LapRequest, provider: SessionProvider, intent: LapRu
   // this function is exists so that a flag added later has a place to go
   // instead of a hole.
   requireModel(request.model);
+  // D-1114 rule 8 (see `requireNamespacedTopicBranch`). The provider refuses
+  // it too, but only at session start, after the worktree exists; asked here
+  // so it does not cost the run id.
+  if (request.requireNamespacedTopicBranch === true && !intent.topicBranch.includes("/")) {
+    throw new LapRefused(
+      `the topic branch ${JSON.stringify(intent.topicBranch)} is a top-level name; a Codex ` +
+        "lap can commit only on a branch under a namespace (such as lap/<name>)",
+    );
+  }
   // The artifact directory's name, which the encoding can push past a
   // filesystem's limit. Computed and discarded: what is wanted is the refusal.
   lapArtifactDir(request.artifactRoot, request.runId);
@@ -1197,6 +1206,14 @@ export interface LapRequest {
    * Claude one. Absent keeps a Claude lap's rows byte-identical.
    */
   readonly providerName?: string;
+  /**
+   * Refuse a topic branch whose name has no `/` (D-1114 rule 8). Set by a
+   * caller whose worker commits by writing its branch ref's parent directory
+   * (a Codex worker): a top-level branch's parent is `refs/heads` itself, which
+   * holds every branch. A flag and not a provider name, so this module stays
+   * the provider-neutral half `D-0059` keeps it.
+   */
+  readonly requireNamespacedTopicBranch?: boolean;
   /**
    * The model the worker CLI is to run on, if the caller chose one (`D-0099`).
    *

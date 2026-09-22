@@ -17610,7 +17610,10 @@ the residual that new branches can be created in that namespace recorded here. T
      own or another lap's credentials.
    - **A permission profile**: read everywhere; write in the workspace and in the git metadata roots
      that are directories (M2); `S`'s `denyRead` and `Read(...)` denials as `deny` entries; `S`'s
-     `denyWrite` entries inside a write root as `read`; the Codex homes denied. Network off.
+     `denyWrite` entries inside a write root as `read` (a `denyWrite` entry that *contains* a write
+     root cannot be kept by such a profile, and refuses the spawn); the Codex homes denied. The
+     network is off because the profile's derived `workspace-write` sandbox has it off (M3); the
+     post-turn check of rule 7 refuses a turn whose `turn_context` says otherwise.
    - **Tools**: web search, `apps`, image generation, goals, `view_image` and `multi_agent`
      disabled.
    - **Environment**: `shell_environment_policy` `core` plus `S.env` plus editor and pager values
@@ -17618,10 +17621,16 @@ the residual that new branches can be created in that namespace recorded here. T
 3. **`src/fencing/codex_hook.mjs` is the hook**, next to `hook.mjs`, which is unchanged. It
    **denies by default, by tool name.** `Bash` is admitted only when a `Bash(...)` entry of the
    fence's allow list names the command's program and matches it with Claude's semantics, or when
-   the program is one of `cat head tail ls wc grep pwd` (Codex has no separate read tool). A
-   command containing any shell composition (`; & | < > $` backtick, newline, backslash) is denied.
+   the program is one of `cat head tail ls wc grep pwd` (Codex has no separate read tool). **A
+   command may contain only letters, digits, space and `_ . / : = @ % + , - " '`**; any other
+   character refuses it, quoted or not. An allowlist of characters rather than a list of shell
+   metacharacters, because Codex runs the command in the user's login shell, and zsh runs code
+   from places such a list misses (a glob qualifier `ls *(e:'cmd':)`, `=(cmd)`); the characters
+   kept are plain in sh, bash and zsh alike. The model issues one plain command per call.
    `apply_patch` has every path it names checked as a `Write`, so the fence's `Edit(...)` rules
-   apply. The lap's MCP server (in Codex's spelling, M8) is admitted. Everything else is denied. The
+   apply; a header line is trimmed with the white space Codex's parser trims (Rust's, which includes
+   U+0085), so no header is hidden from the hook that Codex still applies. The lap's MCP server
+   (in Codex's spelling, M8) is admitted. Everything else is denied. The
    fence's deny rules then apply through `hook.mjs` unchanged. Every failure path is a JSON deny
    plus exit 2 (M4), and every call is logged; the log is the source of `permission_denials`.
 4. **The sandbox proves itself before a lap uses it.** `probeCapabilities` runs `codex sandbox --
@@ -17634,8 +17643,9 @@ the residual that new branches can be created in that namespace recorded here. T
    there, is covered for Codex by these self-tests, which check the denials themselves rather than
    inferring them from a socket.
 5. **What cannot be switched off is closed around or refused.** A Codex lap whose allow list names a
-   program that executes its stdin (a shell or an interpreter: `sh bash zsh dash fish node python
-   perl ruby deno bun npx env xargs`, version suffixes included) is refused, because `write_stdin`
+   program that executes its stdin (a shell or an interpreter: `sh bash zsh dash fish ksh mksh csh
+   tcsh pwsh node python perl ruby php lua irb deno bun npx env xargs`, version suffixes included)
+   is refused, because `write_stdin`
    would reach it without the hook (M5). Sub-agent calls are denied by the hook, and a turn whose
    rollout shows one that was not denied is refused.
 6. **The identity is adopted, not committed.** Codex has no flag that names a thread before it
@@ -17652,16 +17662,21 @@ the residual that new branches can be created in that namespace recorded here. T
    `total_cost_usd` and `num_turns` `null`. A Claude lap is unchanged: its three keys as before, the
    six new ones `null`. The turn is refused (no gate is opened) when the rollout is missing, when its
    `turn_context` does not show approval `never`, `workspace-write` without network and the `fence`
-   profile, when a tool call has no hook log behind it (M4: a hook that did not run is silent), or
-   when a sub-agent call was not denied.
+   profile, when the hook log has fewer lines than the turn has calls that must have fired the
+   hook (M4: a hook that did not run is silent), or when a sub-agent call was not denied. That count
+   is a lower bound, not a pairing: a code-mode `exec` call runs any number of tool calls, or none,
+   and the rollout does not record the inner ones. So a call counts once when it is a direct hooked
+   call, or an `exec` whose script names `tools.exec_command`, `tools.apply_patch` or an MCP tool
+   and did not fail (a failed script, such as a syntax error, may have called nothing).
 8. **Committing: the topic branch's ref directory, with its siblings pinned.** `git commit` writes
    `<ref>.lock` beside the branch's ref and appends to its reflog, so the ref file the Claude fence
    grants (`D-0082`'s item 3) is not enough, and Codex cannot take a file as a writable root (M2).
    The profile grants the branch's parent directory under `refs/heads/` and the same directory
    under `logs/refs/heads/`, and pins **every other entry already in either directory** -- a
    sibling branch's ref or log -- as `read`. A Codex lap whose topic branch is a top-level name
-   (no `/`) is refused before a worktree exists, because that parent is `refs/heads` itself and
-   holds the base branch. Measured on the real sandbox with lap 5's own profile: the commit landed;
+   (no `/`) is refused by `lap perform`'s preflight, before a worktree exists, because that parent
+   is `refs/heads` itself and holds the base branch; the provider refuses it again at session start
+   for any other caller. Measured on the real sandbox with lap 5's own profile: the commit landed;
    writing, renaming over and removing a pinned sibling ref all failed; a file directly under
    `refs/heads` could not be written.
 
@@ -17690,6 +17705,9 @@ rediscovered:
   `Permission denied`;
 - `commands` cite rollout lines, and a Codex command is the model's code-mode program as written,
   not a parsed shell line;
+- rule 7's hook-log check is a count: a script that calls two hooked tools where the hook ran for
+  only one is not told apart from one where it ran for both, and a completed script whose only
+  hooked call sat in a branch not taken refuses the turn (the fail-closed side);
 - no dollar cost and no turn count for Codex;
 - an operator `cli_args` vector (`D-0088`) is refused for Codex until the allowlist has per-provider
   entries;

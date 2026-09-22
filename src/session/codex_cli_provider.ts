@@ -186,6 +186,14 @@ const STDIN_PROGRAMS: ReadonlySet<string> = new Set([
   "npx",
   "env",
   "xargs",
+  "ksh",
+  "mksh",
+  "csh",
+  "tcsh",
+  "pwsh",
+  "php",
+  "lua",
+  "irb",
 ]);
 
 /** The only permission mode the materializer renders for a `-p` child (D-0081). */
@@ -193,6 +201,13 @@ const FENCE_PERMISSION_MODE = "acceptEdits";
 
 /** The permission profile's name, in `-c` and in the post-turn check. */
 const PROFILE = "fence";
+
+/**
+ * Tools that fire the hook, as a code-mode `exec` script calls them and as a
+ * direct call names them (D-1114 M4); the post-turn check's lower bound.
+ */
+const HOOKED_IN_SCRIPT = /\btools\.(?:exec_command|apply_patch|mcp__\w+)\s*\(/;
+const HOOKED_DIRECT = /^(?:exec_command|shell|apply_patch|mcp__)/;
 
 /** Depth Codex expands a `**` deny glob to at spawn (D-1114 M3). */
 const GLOB_SCAN_MAX_DEPTH = 6;
@@ -502,7 +517,8 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
 
   // D-1114 rule 8: `git commit` needs the ref's DIRECTORY writable, and a
   // top-level branch's directory is `refs/heads` itself, which holds the base
-  // branch too. Refused here, before a worktree exists.
+  // branch too. `lap perform`'s preflight refuses it before a worktree exists;
+  // this is the same rule for any other caller of the provider.
   const ref = branchRefOf(paths["additionalDirectories"] ?? []);
   if (ref !== null && !ref.branch.includes("/")) {
     return (
@@ -725,7 +741,9 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    * Render the per-session home and prove the profile holds (D-1114
    * rule 4): `true` must run, a write outside the writable roots must fail and
    * leave nothing, and a read of the operator's `auth.json` must fail.
-   * Credentials are copied in last, so a refused spawn leaves none behind.
+   * Credentials are copied in last, so a refused FIRST spawn leaves none
+   * behind; a later generation's home already holds the earlier copy, which
+   * the profile's denial of every Codex home keeps unreadable to any child.
    */
   protected override _cliPrepareSpawn(record: SessionRecord, run: CliProbeRunner): Failure | null {
     const sessionId = record.session_id;
@@ -733,6 +751,19 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     this.#translations.delete(sessionId);
     if (fence === undefined) {
       return refused(`session '${sessionId}' reached its spawn with no translated fence`);
+    }
+    // A write denial that CONTAINS a write root cannot be kept by a profile
+    // whose root entry grants write beneath it, and Claude's sandbox would
+    // deny those writes; the lap is refused rather than widened.
+    const roots = [record.workspace, ...fence.writeRoots.filter(isDirectory)];
+    const swallowed = fence.denyWrite.find((path) =>
+      roots.some((root) => root !== path && within(root, path)),
+    );
+    if (swallowed !== undefined) {
+      return refused(
+        `the fence denies writes under ${swallowed}, which contains ${record.workspace} or a ` +
+          "git directory the worker must write; a Codex permission profile cannot keep that",
+      );
     }
     const home = this.#homeOf(sessionId);
     const hookLog = join(
@@ -861,8 +892,9 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    * - its last `turn_context` must show `approval_policy` never, a
    *   `workspace-write` sandbox without network, and the `fence` profile --
    *   the proof the `-c` configuration was what ran;
-   * - a turn that made a tool call must have a hook log, because an untrusted
-   *   or missing hook is skipped silently (D-1114 M4);
+   * - a turn that made a tool call must have a hook log, and at least one log
+   *   line per call that must have fired the hook, because an untrusted or
+   *   missing hook is skipped silently (D-1114 M4);
    * - every sub-agent call must have been denied by the hook.
    */
   protected override _cliTurnFacts(
@@ -927,7 +959,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     }
 
     const responses = payloadsOf("response_item");
-    const calls: { line: number; id: unknown; command: string; name: string }[] = [];
+    const calls: { line: number; id: unknown; command: string; name: string; input: string }[] = [];
     const outputs = new Map<unknown, string>();
     for (const { line, payload } of responses) {
       const type = field(payload, "type");
@@ -940,6 +972,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
           id: field(payload, "call_id"),
           command: `${name} ${String(input)}`,
           name,
+          input: String(input),
         });
       } else if (type === "function_call") {
         const input = field(payload, "arguments");
@@ -948,6 +981,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
           id: field(payload, "call_id"),
           command: `${name} ${String(input)}`,
           name,
+          input: String(input),
         });
       } else if (type === "custom_tool_call_output" || type === "function_call_output") {
         const output = field(payload, "output");
@@ -979,6 +1013,24 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       return uninterpretable(
         `the turn made ${calls.length} tool call(s) and the hook log is empty, so the ` +
           "fence's hook did not run; the turn is not accepted",
+      );
+    }
+    // A lower bound, not a pairing: a code-mode `exec` call runs any number of
+    // tool calls (or none) and the rollout does not record the inner ones, so a
+    // call cannot be matched to its log line. Each call that must have fired
+    // the hook at least once -- a direct hooked call, or an `exec` whose script
+    // names a hooked tool and did not fail -- needs a log line of its own.
+    const hooked = calls.filter((call) =>
+      call.name === "exec"
+        ? HOOKED_IN_SCRIPT.test(call.input) &&
+          !(outputs.get(call.id) ?? "").startsWith("Script failed")
+        : HOOKED_DIRECT.test(call.name),
+    ).length;
+    if (hooked > (hookLog?.length ?? 0)) {
+      return uninterpretable(
+        `the turn made ${hooked} tool call(s) the hook must have seen and the hook log has ` +
+          `${hookLog?.length ?? 0} line(s), so the hook did not run for every call; the turn ` +
+          "is not accepted",
       );
     }
     const denied = (hookLog ?? []).filter((entry) => entry.value["denied"] === true);
@@ -1146,6 +1198,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
         filesystem[path] = "read";
       }
     }
+
     for (const path of fence.denyRead) {
       filesystem[path] = "deny";
     }

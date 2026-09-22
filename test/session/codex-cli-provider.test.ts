@@ -324,6 +324,29 @@ test("the branch's ref and log directories are writable and every sibling in the
   expect(permissions).not.toContain(JSON.stringify(`${heads}/main`));
 });
 
+test("a write denial that contains the workspace refuses the spawn; one beside it does not", async () => {
+  const lapDenying = (pathOf: (root: string) => string) => {
+    const l = lap();
+    const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
+      sandbox: { filesystem: Record<string, unknown> };
+    };
+    settings.sandbox.filesystem["denyWrite"] = [pathOf(l.root)];
+    writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+    return l;
+  };
+  // Claude's sandbox would deny every write under it; a profile whose
+  // workspace entry grants write beneath it could not.
+  const above = lapDenying((root) => join(root, "workspaces"));
+  const log = spawnLog(above.root);
+  const refusal = refusalOf(await start(providerFor(above), above));
+  expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
+  expect(refusal.detail).toContain("denies writes under");
+  expect(spawned(log)).toEqual([]);
+  // The nearest accepted case: a denial beside the workspace, not above it.
+  const beside = lapDenying((root) => join(root, "elsewhere"));
+  expect(await profileOf(beside)).toContain('"write"');
+});
+
 test("a top-level topic branch refuses a Codex lap before it spawns; a namespaced one does not", async () => {
   const l = lap();
   withBranchRef(l, "topic");
@@ -457,6 +480,40 @@ test("a tool call with no hook log refuses the turn; the same call through the h
   fakeEnv("FAKE_TRANSCRIPT_EVENTS", JSON.stringify([bash("git status")]));
   const accepted = providerFor(through);
   await start(accepted, through);
+  expect((await reportOf(accepted)).permissionDenials).toEqual([]);
+});
+
+test("a hooked call with no log line of its own refuses the turn, though the log is not empty", async () => {
+  const l = lap();
+  fakeEnv("FAKE_RESULT_TEXT", "done");
+  fakeEnv(
+    "FAKE_TRANSCRIPT_EVENTS",
+    JSON.stringify([bash("git status"), { ...bash("git log"), hook: undefined }]),
+  );
+  const provider = providerFor(l);
+  await start(provider, l);
+  expect(await refusedTurn(provider, FailureKind.UNINTERPRETABLE_RESPONSE)).toContain(
+    "did not run for every call",
+  );
+
+  // A script that failed (a syntax error) may have called nothing, so it needs
+  // no line; the same pair with the second call through the hook is accepted.
+  const failed = lap();
+  fakeEnv(
+    "FAKE_TRANSCRIPT_EVENTS",
+    JSON.stringify([
+      bash("git status"),
+      { ...bash("git log", "Script failed\nWall time 0.0 seconds\nOutput:\n"), hook: undefined },
+    ]),
+  );
+  const acceptedFailed = providerFor(failed);
+  await start(acceptedFailed, failed);
+  expect((await reportOf(acceptedFailed)).permissionDenials).toEqual([]);
+
+  const both = lap();
+  fakeEnv("FAKE_TRANSCRIPT_EVENTS", JSON.stringify([bash("git status"), bash("git log")]));
+  const accepted = providerFor(both);
+  await start(accepted, both);
   expect((await reportOf(accepted)).permissionDenials).toEqual([]);
 });
 

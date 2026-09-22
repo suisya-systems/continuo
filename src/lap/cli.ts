@@ -916,6 +916,7 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         // the name the binding row records so `recover()` stays honest.
         ...(codexHome === undefined ? {} : { codexHome }),
         providerName: sessionProviderName(kind),
+        ...(kind === "codex" ? { requireNamespacedTopicBranch: true } : {}),
         // Handed over to be CHECKED, like the two above it (`D-0099`): the
         // provider is already built over this value, and `preflight` is where
         // an argument an operator typed is refused before a branch, a worktree

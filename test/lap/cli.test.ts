@@ -137,6 +137,7 @@ function lap(
   label: string,
   runId = RUN_ID,
   spellWorkspace: (workspace: string) => string = (workspace) => workspace,
+  topicBranch = TOPIC_BRANCH,
 ): Lap {
   const root = caseRoot(label);
   const repository = join(root, "repo");
@@ -214,7 +215,7 @@ function lap(
       "--base-branch",
       BASE_BRANCH,
       "--topic-branch",
-      TOPIC_BRANCH,
+      topicBranch,
       "--prompt",
       "do the work",
       "--delegation-record",
@@ -2003,6 +2004,17 @@ describe("D-1114: a lap whose worker runs on Codex", () => {
         class: "LapUsageError",
         message: expect.stringContaining("the worker CLI's home"),
       },
+    });
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a top-level topic branch is refused before the worktree exists", async () => {
+    const f = lap("lap-codex-top-level", RUN_ID, undefined, "topic");
+    f.out.length = 0;
+    f.err.length = 0;
+    expect(await mainAsync(codexArgv(f))).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      error: { class: "LapRefused", message: expect.stringContaining("top-level name") },
     });
     expect(existsSync(f.workspace)).toBe(false);
   });

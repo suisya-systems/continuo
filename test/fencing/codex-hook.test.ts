@@ -198,18 +198,21 @@ describe("Bash", () => {
     const l = lap(["npm:*", "npm test"]);
     expectAllowed(call(l, "Bash", bash("npm run build")));
     expectAllowed(call(l, "Bash", bash("npm test")));
-    expectAllowed(call(l, "Bash", bash("cat\ta")));
-    // specMatches alone admits each of these: a bare prefix, a normalised
-    // path, and white space JavaScript splits on and the shell does not.
+    // specMatches alone admits each of these: a bare prefix and a normalised
+    // path.
+    for (const command of ["npm/../node_modules/.bin/x", "./npm test"]) {
+      expectDenied(call(l, "Bash", bash(command)), /not in this lap's allowed Bash/);
+    }
+    // And white space JavaScript splits on and the shell does not; the plain
+    // character set refuses these before the program is even read.
     for (const command of [
-      "npm/../node_modules/.bin/x",
-      "./npm test",
       "npm\u00a0/../x",
       "cat\u00a0/../node_modules/.bin/x",
       "cat\f/../x",
       "cat\v/../x",
+      "cat\ta",
     ]) {
-      expectDenied(call(l, "Bash", bash(command)), /not in this lap's allowed Bash/);
+      expectDenied(call(l, "Bash", bash(command)), /may contain only/);
     }
   });
 
@@ -244,7 +247,7 @@ describe("Bash", () => {
     }
   });
 
-  test("shell composition is denied anywhere, including inside quotes", () => {
+  test("a command with any character outside the plain set is denied, quoted or not", () => {
     const l = lap();
     for (const command of [
       "git status; rm -rf x",
@@ -260,12 +263,27 @@ describe("Bash", () => {
       "cat a\\ b",
       "git commit -m 'a; b'",
       "git status &",
+      // zsh (a login shell Codex may run the command in) runs code from these.
+      "ls *(e:'curl example.com':)",
+      "cat =(curl example.com)",
+      "git status *(e:'touch x':)",
+      // Globs, braces, tilde, history and the like: special in some shell.
+      "ls *",
+      "cat a?",
+      "cat [ab]",
+      "cat a{b,c}",
+      "cat ~/.ssh/id_ed25519",
+      "git commit -m 'hi!'",
+      "cat #a",
+      "git status\tx",
     ]) {
-      expectDenied(call(l, "Bash", bash(command)), /shell composition/);
+      expectDenied(call(l, "Bash", bash(command)), /may contain only/);
     }
-    // The nearest admitted spellings.
+    // The nearest admitted spellings: every allowed character appears here.
     expectAllowed(call(l, "Bash", bash("git status")));
     expectAllowed(call(l, "Bash", bash("git commit -m 'a b'")));
+    expectAllowed(call(l, "Bash", bash('git commit -m "add note: a_b, c+d=e @x 50% -f"')));
+    expectAllowed(call(l, "Bash", bash("cat ./src/a.ts")));
   });
 
   test("a Bash call with no string command is denied", () => {
@@ -309,6 +327,19 @@ describe("apply_patch", () => {
     expectAllowed(
       call(l, "apply_patch", patch("*** Update File: a.txt", "*** Move to: b.txt", "@@")),
     );
+  });
+
+  test("a header behind a U+0085 (NEL) is still checked, as Codex's parser trims it", () => {
+    const l = lap();
+    const settings = join(homedir(), ".claude", "settings.json");
+    expectDenied(
+      call(
+        l,
+        "apply_patch",
+        patch("*** Add File: ok.txt", "+ok", `\u0085*** Add File: ${settings}`, "+x"),
+      ),
+    );
+    expectAllowed(call(l, "apply_patch", patch("*** Add File: ok.txt", "+ok", "\u0085+x")));
   });
 
   test("a patch the hook cannot read paths from is denied", () => {
