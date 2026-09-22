@@ -263,6 +263,28 @@ test("a help text missing a required flag is a missing capability", () => {
 // Start: argv, stdin, the per-session home
 // --------------------------------------------------------------------------
 
+test("a write root that is a file is left out of the profile, a directory kept", async () => {
+  // gitMetadataRoots names the branch ref and packed-refs, both files; Codex
+  // mounts `.git` under every writable root, so a file root made the real
+  // helper panic (exit 101) on the first real lap.
+  const l = lap();
+  const gitDir = join(l.root, "base", ".git");
+  const ref = join(gitDir, "refs", "heads", "lap-branch");
+  mkdirSync(dirname(ref), { recursive: true });
+  writeFileSync(ref, "0".repeat(40), "utf8");
+  const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
+    sandbox: { filesystem: Record<string, unknown> };
+  };
+  settings.sandbox.filesystem["additionalDirectories"] = [gitDir, ref];
+  writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+  const log = spawnLog(l.root);
+  expect(await start(providerFor(l), l)).toBeInstanceOf(Ok);
+  const [entry] = await waitForSpawns(log, 1);
+  const permissions = (entry?.argv ?? []).find((part) => part.startsWith("permissions=")) ?? "";
+  expect(permissions).toContain(`${JSON.stringify(gitDir)} = "write"`);
+  expect(permissions).not.toContain(JSON.stringify(ref));
+});
+
 test("start runs codex exec with the fence as -c overrides and the prompt on stdin", async () => {
   const l = lap();
   const log = spawnLog(l.root);

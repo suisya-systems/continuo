@@ -14,7 +14,11 @@
  * - `apply_patch`: every path the patch names, checked as a `Write` so the
  *   fence's `Edit(...)` rules apply (D-0089). A patch naming no path is denied.
  * - `mcp__<--mcp-server>__*`: the endpoint's own server, then `hook.mjs`'s
- *   rules. No other server; `mcp__codex_apps__*` is the operator's ChatGPT
+ *   rules. Codex spells a `-` in a server name as `_` in its tool names
+ *   (measured on the first real lap: `continuo-messagebus` reaches this hook
+ *   as `mcp__continuo_messagebus__poll`), so that is the prefix admitted, and
+ *   the rules see the Claude spelling the fence's own rules are written in.
+ *   No other server; `mcp__codex_apps__*` is the operator's ChatGPT
  *   connectors, not the lap's.
  * - Anything else -- `webrun`, `view_image`, `collaboration*` (sub-agents,
  *   which Codex cannot switch off), `clock*`, `image_gen*`, goals, plugin
@@ -399,9 +403,10 @@ async function main() {
     allow();
   }
 
-  if (toolName.startsWith(`mcp__${args.mcpServer}__`)) {
+  const mcpPrefix = `mcp__${args.mcpServer.replaceAll("-", "_")}__`;
+  if (toolName.startsWith(mcpPrefix)) {
     await requireNoDenyRule(hook, args.fence, args.role, {
-      tool_name: toolName,
+      tool_name: `mcp__${args.mcpServer}__${toolName.slice(mcpPrefix.length)}`,
       tool_input: input,
     });
     allow();

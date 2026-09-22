@@ -325,13 +325,16 @@ describe("apply_patch", () => {
 });
 
 describe("tools by name", () => {
-  test("only the named MCP server is admitted", () => {
+  test("only the named MCP server is admitted, in the spelling Codex gives it", () => {
     const l = lap();
-    expectAllowed(call(l, `mcp__${MCP_SERVER}__send`, { text: "hi" }));
+    // Measured on the first real lap: `continuo-messagebus`'s tools reach the
+    // hook as `mcp__continuo_messagebus__<tool>`.
+    expectAllowed(call(l, "mcp__continuo_messagebus__send", { text: "hi" }));
     for (const name of [
       "mcp__codex_apps__sites_deploy_site_version",
       "mcp__other__send",
-      `mcp__${MCP_SERVER}x__send`,
+      `mcp__${MCP_SERVER}__send`,
+      "mcp__continuo_messagebusx__send",
     ]) {
       expectDenied(call(l, name, {}), /not available in a lap/);
     }

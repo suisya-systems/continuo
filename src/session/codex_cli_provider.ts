@@ -76,6 +76,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -199,17 +200,6 @@ const GLOB_SCAN_MAX_DEPTH = 6;
 /** Seconds Codex gives the hook; `codex_hook.mjs` denies on its own at 20. */
 const HOOK_TIMEOUT_SECONDS = 30;
 
-/**
- * The name Codex gives an MCP server's tools, `mcp__<this>__<tool>`, for the
- * server the fence names. The one place that spelling lives: measured only for
- * a server named `x` (measure2-hook section 2), so whether Codex rewrites the
- * hyphen in `continuo-messagebus` is confirmed on the first real lap, and a
- * wrong guess fails closed (the hook denies every endpoint call).
- */
-function codexToolServerName(configName: string): string {
-  return configName;
-}
-
 /** The fence as this provider reads it off `S` and `P`. */
 interface CodexFence {
   readonly python: string;
@@ -284,6 +274,10 @@ function toml(value: unknown): string {
 
 function paddedGeneration(generation: number): string {
   return String(generation).padStart(3, "0");
+}
+
+function isDirectory(path: string): boolean {
+  return statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 }
 
 function within(path: string, root: string): boolean {
@@ -723,7 +717,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       "--fence",
       quote(fence.fencePath),
       "--mcp-server",
-      quote(codexToolServerName(fence.mcpName)),
+      quote(fence.mcpName),
       "--log",
       quote(hookLog),
     ].join(" ");
@@ -1078,7 +1072,13 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       glob_scan_max_depth: GLOB_SCAN_MAX_DEPTH,
       ":root": "read",
     };
-    const roots = [workspace, ...fence.writeRoots];
+    // Directories only. Codex mounts a read-only `.git`/`.codex`/`.agents`
+    // under every writable root, so a FILE root (the branch ref, packed-refs:
+    // gitMetadataRoots' 3 and 4) makes bwrap fail and the helper panic (exit
+    // 101, measured on the first real lap). Dropping one narrows the profile,
+    // never widens it; `git commit`'s ref update then fails, because git
+    // writes `<ref>.lock` and the reflog beside the ref, not into it.
+    const roots = [workspace, ...fence.writeRoots.filter(isDirectory)];
     for (const root of roots) {
       filesystem[root] = "write";
     }
