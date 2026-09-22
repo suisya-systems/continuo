@@ -123,7 +123,13 @@ import {
   WorkspaceTransition,
   WorkspaceVerdict,
 } from "./provider.js";
-import { type ChildHandle, ChildTimeout, type ProbeResult, sessionRuntime } from "./runtime.js";
+import {
+  type ChildHandle,
+  ChildTimeout,
+  type ProbeOptions,
+  type ProbeResult,
+  sessionRuntime,
+} from "./runtime.js";
 import { claudeSessionUuid } from "./uuid5.js";
 
 // --------------------------------------------------------------------------
@@ -434,8 +440,12 @@ function isDirectory(path: string): boolean {
  * component-by-component walk with a symlink budget, no ported case constructs
  * such a path, and the port would be inventing a traversal the source's suite
  * has no oracle for.
+ *
+ * Exported for the Codex subclass only (continuo D-1114), which must name the
+ * same state root this class does -- to its own files and, as keys of a
+ * permission profile, to the Codex sandbox. Not re-exported from `src/index.ts`.
  */
-function pyResolve(path: string): string {
+export function pyResolve(path: string): string {
   const absolute = resolve(path);
   const missing: string[] = [];
   let head = absolute;
@@ -602,8 +612,11 @@ function unknownSessionDetail(sessionId: string): string {
  * oracle compares the two runtimes' files, so this interface is the wire format
  * rather than a rendering of it; a `camelCase` shape here would need a
  * translation layer whose only job would be to be got wrong once.
+ *
+ * Exported for the `_cli*` hooks' signatures only (continuo D-1114): a
+ * subclass reads it, never writes it. Not re-exported from `src/index.ts`.
  */
-interface SessionRecord {
+export interface SessionRecord {
   readonly session_id: string;
   readonly claude_session_uuid: string;
   readonly workspace: string;
@@ -931,13 +944,18 @@ interface ParsedEvents {
 /**
  * The **last** `result` event, which is what `next(... reversed(events) ...)`
  * finds, or `null` when the child has not written one.
+ *
+ * `isTerminal` is the provider's word for "result event" (continuo D-1114):
+ * `type === "result"` for the Claude CLI, and whatever another CLI ends a turn
+ * with for a subclass. The rule -- the last one wins -- stays here.
  */
 function lastResultEvent(
   events: readonly Record<string, unknown>[],
+  isTerminal: (event: Readonly<Record<string, unknown>>) => boolean,
 ): Record<string, unknown> | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index] as Record<string, unknown>;
-    if (getOwn(event, "type") === "result") {
+    if (isTerminal(event)) {
       return event;
     }
   }
@@ -953,9 +971,12 @@ function lastResultEvent(
  * spawn, and accepting it anyway would let schema drift quietly defeat the one
  * check U27 makes mandatory.
  */
-function identityReadBackOf(events: readonly Record<string, unknown>[]): boolean {
+function identityReadBackOf(
+  events: readonly Record<string, unknown>[],
+  identityOf: (event: Readonly<Record<string, unknown>>) => unknown,
+): boolean {
   return events.some((event) => {
-    const reported = getOwn(event, "session_id");
+    const reported = identityOf(event);
     return reported !== undefined && reported !== null;
   });
 }
@@ -971,9 +992,10 @@ function identityReadBackOf(events: readonly Record<string, unknown>[]): boolean
 function identityMismatchIn(
   events: readonly Record<string, unknown>[],
   expected: string,
+  identityOf: (event: Readonly<Record<string, unknown>>) => unknown,
 ): { readonly event: Record<string, unknown>; readonly reported: unknown } | null {
   for (const event of events) {
-    const reported = getOwn(event, "session_id");
+    const reported = identityOf(event);
     if (reported !== undefined && reported !== null && reported !== expected) {
       return { event, reported };
     }
@@ -992,12 +1014,13 @@ function identityMismatchIn(
  */
 function identityIncidentText(
   record: SessionRecord,
+  expected: string,
   event: Record<string, unknown>,
   reported: unknown,
 ): string {
   return (
     `session ${pyRepr(record.session_id)} committed identity ` +
-    `${pyRepr(record.claude_session_uuid)} before the spawn, but the ` +
+    `${pyRepr(expected)} before the spawn, but the ` +
     `child's own ${pyStr(getOwn(event, "type") ?? "?")} event reports ` +
     `${pyRepr(reported)}. Two processes reporting one id -- or one ` +
     "process reporting another's -- is the U27 failure shape; " +
@@ -1086,6 +1109,21 @@ export interface TurnSpend {
   readonly numTurns: number | null;
   /** `duration_ms`. */
   readonly durationMs: number | null;
+  /**
+   * The model and the token counts, for a CLI that reports those and not a
+   * cost (continuo D-1114, the Codex provider). **Optional, and absent on every
+   * value this class builds**: the Claude `result` event's accounting is the
+   * three keys above, and adding the rest as `null` here would change the
+   * value every existing reader and test compares. A reader that renders the
+   * wider shape spells an absent key as `null` ("this build cannot say"), the
+   * `D-1112` rule.
+   */
+  readonly model?: string | null;
+  readonly inputTokens?: number | null;
+  readonly cachedInputTokens?: number | null;
+  readonly cacheWriteInputTokens?: number | null;
+  readonly outputTokens?: number | null;
+  readonly reasoningOutputTokens?: number | null;
 }
 
 /** The three accounting numbers off a `result` event. See {@link TurnSpend}. */
@@ -1291,6 +1329,47 @@ interface ResolvedSettings {
   readonly cliArgs: readonly string[];
 }
 
+/**
+ * One probe through this provider's own command prefix and probe timeout, with
+ * the refusals `probeCapabilities` gives a probe that could not run or exited
+ * non-zero. Handed to the hooks that probe beyond `--version` and the help text
+ * (continuo D-1114).
+ */
+export type CliProbeRunner = (
+  args: readonly string[],
+  options?: ProbeOptions,
+) => ProbeResult | Failure;
+
+/** What `probeCapabilities` asks the CLI after `--version`. See `_cliProbe`. */
+export interface CliProbePlan {
+  /** The arguments whose output is the help text the flags are looked for in. */
+  readonly helpArgs: readonly string[];
+  /** Capability to the flags its rendering needs, in report order. */
+  readonly flags: ReadonlyMap<string, readonly string[]>;
+  /** The CLI build this provider was written against, quoted in the report. */
+  readonly writtenAgainst: string;
+}
+
+/**
+ * A terminal event's own words, **unnormalised**: each reader applies its own
+ * rule to them (the readout's Python `or`, the report's string test, `noneOf`
+ * in the detail), so a hook that normalised them would change answers.
+ */
+export interface CliTerminalWords {
+  readonly terminalReason: unknown;
+  readonly subtype: unknown;
+  readonly isError: unknown;
+}
+
+/** The per-turn facts a {@link TerminalReport} carries besides its words. */
+export interface CliTurnFacts {
+  /** The report body, unvalidated: the no-report rules are applied to it after. */
+  readonly body: unknown;
+  readonly permissionDenials: TerminalReport["permissionDenials"];
+  readonly spend: TerminalReport["spend"];
+  readonly commands: TerminalReport["commands"];
+}
+
 /** Constructor options, which are keyword-only in the source. */
 export interface ClaudeCliSessionProviderOptions {
   /**
@@ -1421,18 +1500,16 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       }
     }
     this.#baseCliArgs = [...(options.baseCliArgs ?? [])].map((part) => pyStr(part));
-    for (const part of this.#baseCliArgs) {
-      const owned = matchesOwnedFlag(part);
-      if (owned !== null) {
-        // Programmer error, so it raises at construction rather than surfacing
-        // per-spawn: a provider-wide argument overriding the committed identity
-        // or the structured readout is never a per-session condition to report.
-        throw new PyValueError(
-          `base_cli_args carries ${pyRepr(owned)}, which this provider ` +
-            "renders itself; provider-wide arguments must not override " +
-            "the committed identity or the structured readout",
-        );
-      }
+    const owned = this._cliCheckBaseArgs(this.#baseCliArgs);
+    if (owned !== null) {
+      // Programmer error, so it raises at construction rather than surfacing
+      // per-spawn: a provider-wide argument overriding the committed identity
+      // or the structured readout is never a per-session condition to report.
+      throw new PyValueError(
+        `base_cli_args carries ${pyRepr(owned)}, which this provider ` +
+          "renders itself; provider-wide arguments must not override " +
+          "the committed identity or the structured readout",
+      );
     }
     this.#stopTimeoutSeconds = options.stopTimeout ?? 5.0;
     this.#stopTimeoutMs = this.#stopTimeoutSeconds * 1000;
@@ -1459,6 +1536,184 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     return run;
   }
 
+  // -- the CLI dialect (continuo D-1114) -----------------------------------
+  //
+  // Everything below that is specific to *which* CLI the child is -- how it is
+  // probed, how its argv is spelled, how its transcript names an identity and
+  // ends a turn, where a turn's facts are read from -- sits behind one of these
+  // `protected _cli*` methods, and each default body is the Claude code that
+  // stood at its call site, moved and not changed. Everything that is not --
+  // the record, the order of writes, liveness, the stop ladder, the group
+  // sweep, the queue, the identity *rules* -- stays private and shared, so a
+  // second CLI is a subclass overriding words and never a second copy of the
+  // supervision the U27 / U32 / D-1106 reasoning above is about.
+  //
+  // `_cliCheckBaseArgs` is the one hook called from the constructor, and so
+  // runs before a subclass's own fields exist: it must stay pure.
+
+  /**
+   * The first of `args` this provider will not take as a provider-wide
+   * argument, or `null`. Claude refuses its own flags (a denylist, in
+   * {@link PROVIDER_OWNED_FLAGS}'s order).
+   */
+  protected _cliCheckBaseArgs(args: readonly string[]): string | null {
+    for (const part of args) {
+      const owned = matchesOwnedFlag(part);
+      if (owned !== null) {
+        return owned;
+      }
+    }
+    return null;
+  }
+
+  /** Which help text to scan, for which flags. Claude: `--help`, {@link CAPABILITY_FLAGS}. */
+  protected _cliProbe(): CliProbePlan {
+    return {
+      helpArgs: ["--help"],
+      flags: CAPABILITY_FLAGS,
+      writtenAgainst: CLI_VERSION_WRITTEN_AGAINST,
+    };
+  }
+
+  /**
+   * A probe step after the help text, whose `Failure` fails the whole probe
+   * (and so refuses the spawn before anything exists). Claude has none.
+   */
+  protected _cliProbeExtra(_run: CliProbeRunner): Failure | null {
+    return null;
+  }
+
+  /**
+   * A refusal of the per-session `cli_args`, after the element checks every
+   * provider shares. Claude refuses nothing further.
+   */
+  protected _cliSessionArgs(_sessionId: string, _cliArgs: readonly string[]): Failure | null {
+    return null;
+  }
+
+  /**
+   * The start argv, in the one order that matters: the provider's own flags
+   * first, then the provider-wide arguments, then the per-role ones, so
+   * neither of the last two can precede -- and so override -- the committed
+   * identity.
+   */
+  protected _cliStartArgv(
+    command: readonly string[],
+    baseCliArgs: readonly string[],
+    record: Omit<SessionRecord, "argv">,
+    prompt: string,
+  ): readonly string[] {
+    return [
+      ...command,
+      "-p",
+      prompt,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--session-id",
+      record.claude_session_uuid,
+      ...baseCliArgs,
+      ...record.cli_args,
+    ];
+  }
+
+  /**
+   * The resume argv for `record`'s next generation, or a refusal when there is
+   * nothing this CLI can resume. Claude always has one, and `--session-id` is
+   * deliberately absent from it.
+   */
+  protected _cliResumeArgv(
+    command: readonly string[],
+    baseCliArgs: readonly string[],
+    record: Omit<SessionRecord, "argv">,
+  ): readonly string[] | Failure {
+    return [
+      ...command,
+      "--resume",
+      record.claude_session_uuid,
+      "-p",
+      record.resume_prompt,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      ...baseCliArgs,
+      ...record.cli_args,
+    ];
+  }
+
+  /**
+   * The text written to the child's stdin before it is closed, or `null` for
+   * no stdin at all. Claude takes its prompt in the argv, so `null`.
+   */
+  protected _cliPromptInput(_prompt: string): string | null {
+    return null;
+  }
+
+  /**
+   * Work done after the record is committed and before the child exists, on
+   * every generation; a `Failure` refuses the spawn. Claude has none.
+   */
+  protected _cliPrepareSpawn(_record: SessionRecord, _run: CliProbeRunner): Failure | null {
+    return null;
+  }
+
+  /**
+   * Environment the child gets on top of the parent's. Applied *before* the
+   * session marker, so no hook can overwrite the marker. Claude adds nothing.
+   */
+  protected _cliEnv(_record: SessionRecord): Readonly<Record<string, string>> {
+    return {};
+  }
+
+  /** The identity an event names, or `undefined` / `null` for none. Claude: `session_id`. */
+  protected _cliIdentityOf(event: Readonly<Record<string, unknown>>): unknown {
+    return getOwn(event, "session_id");
+  }
+
+  /**
+   * The identity every event naming one must name. Claude: the one committed
+   * before the spawn, whatever the transcript says.
+   */
+  protected _cliExpectedIdentity(
+    record: SessionRecord,
+    _events: readonly Record<string, unknown>[],
+  ): string {
+    return record.claude_session_uuid;
+  }
+
+  /** Whether an event ends the turn. Claude: a `result` event. */
+  protected _cliIsTerminal(event: Readonly<Record<string, unknown>>): boolean {
+    return getOwn(event, "type") === "result";
+  }
+
+  /** A terminal event's own words. Claude: `terminal_reason`, `subtype`, `is_error`. */
+  protected _cliTerminalWords(event: Readonly<Record<string, unknown>>): CliTerminalWords {
+    return {
+      terminalReason: getOwn(event, "terminal_reason"),
+      subtype: getOwn(event, "subtype"),
+      isError: getOwn(event, "is_error"),
+    };
+  }
+
+  /**
+   * The finished turn's report body and facts, read after the identity has
+   * reconciled; a `Failure` refuses the report. Claude reads all of them off
+   * the `result` event and the transcript, and never refuses.
+   */
+  protected _cliTurnFacts(
+    _record: SessionRecord,
+    events: readonly Record<string, unknown>[],
+    lineNumbers: readonly number[],
+    terminal: Readonly<Record<string, unknown>>,
+  ): CliTurnFacts | Failure {
+    return {
+      body: getOwn(terminal, "result"),
+      permissionDenials: permissionDenialsOf(terminal),
+      spend: turnSpendOf(terminal),
+      commands: turnCommandsOf(events, lineNumbers),
+    };
+  }
+
   // -- the capability probe (D-0010) -------------------------------------
 
   /**
@@ -1477,7 +1732,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
    * distinguishes.
    */
   probeCapabilities(): ProviderResult<CapabilityReport> {
-    const versionRun = this.#runProbe("--version");
+    const versionRun = this.#runProbe(["--version"]);
     if (versionRun instanceof Failure) {
       return versionRun;
     }
@@ -1492,18 +1747,23 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       );
     }
 
-    const helpRun = this.#runProbe("--help");
+    const plan = this._cliProbe();
+    const helpRun = this.#runProbe(plan.helpArgs);
     if (helpRun instanceof Failure) {
       return helpRun;
     }
     const helpText = helpRun.stdout.toString("utf8");
+    const further = this._cliProbeExtra((args, options) => this.#runProbe(args, options));
+    if (further !== null) {
+      return further;
+    }
 
     // `set(REQUIRED_CAPABILITIES) - set(_CAPABILITY_FLAGS)`: the three verbs C2
     // renders through Interlock's own supervision are supported the moment the
     // CLI answered both probes at all.
     const supported = new Set<string>();
     for (const capability of REQUIRED_CAPABILITIES) {
-      if (!CAPABILITY_FLAGS.has(capability)) {
+      if (!plan.flags.has(capability)) {
         supported.add(capability);
       }
     }
@@ -1512,7 +1772,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     // capability name, none of which is integer-like.
     const missingFlags: Record<string, string[]> = {};
     let anyMissing = false;
-    for (const [capability, flags] of CAPABILITY_FLAGS) {
+    for (const [capability, flags] of plan.flags) {
       // A plain substring test over the whole help text, never tokenised --
       // `flag not in help_text` is what the source asks, and a tokeniser would
       // answer a different question about a document whose layout is the CLI's.
@@ -1526,7 +1786,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     }
     // Written **after** the capability computation and **before** the report,
     // as the source orders it: the pointer this returns is interpolated below.
-    const evidence = this.#recordProbeEvidence(version, helpText);
+    const evidence = this.#recordProbeEvidence(version, plan.helpArgs, helpText);
     return new Ok(
       new CapabilityReport({
         providerVersion: version,
@@ -1535,7 +1795,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           `version probe answered ${pyRepr(version)}; help text ` +
           `${anyMissing ? `is missing ${pyRepr(missingFlags)}` : "carries every required flag"}` +
           `; raw probe output ${evidence}` +
-          `; written against ${CLI_VERSION_WRITTEN_AGAINST}`,
+          `; written against ${plan.writtenAgainst}`,
       }),
     );
   }
@@ -1548,7 +1808,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
    * Failing to write it degrades the record, not the probe -- and says so in
    * the pointer instead of silently pointing at nothing.
    */
-  #recordProbeEvidence(version: string, helpText: string): string {
+  #recordProbeEvidence(version: string, helpArgs: readonly string[], helpText: string): string {
     const path = join(this.#stateRoot, "probe-evidence.txt");
     try {
       mkdirSync(this.#stateRoot, { recursive: true });
@@ -1560,7 +1820,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       sessionRuntime.writeAtomic(
         path,
         `$ ${this.#command.join(" ")} --version\n${version}\n\n` +
-          `$ ${this.#command.join(" ")} --help\n${helpText}`,
+          `$ ${this.#command.join(" ")} ${helpArgs.join(" ")}\n${helpText}`,
       );
     } catch (exc) {
       return `could not be recorded at ${path}: ${errorText(exc)}`;
@@ -1568,15 +1828,26 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     return `recorded at ${path}`;
   }
 
-  /** `subprocess.run([*command, flag], capture_output=True, timeout=, check=False)`. */
-  #runProbe(flag: string): ProbeResult | Failure {
+  /**
+   * `subprocess.run([*command, flag], capture_output=True, timeout=, check=False)`.
+   *
+   * `args` is `[flag]` for the two probes the source makes, and the messages
+   * name `args.join(" ")`, which for one flag is the flag itself.
+   */
+  #runProbe(args: readonly string[], options?: ProbeOptions): ProbeResult | Failure {
     // Only `command[0]` is named in every one of these messages, and it is
     // `repr`'d -- the rest of a command prefix is not the thing that could not
     // be executed.
     const name = pyRepr(this.#command[0]);
+    const flag = args.join(" ");
     let completed: ProbeResult;
     try {
-      completed = sessionRuntime.runProbe([...this.#command, flag], this.#probeTimeoutMs);
+      // The third argument only when a hook gave one, so the Claude probe is
+      // the same two-argument seam call it always was.
+      completed =
+        options === undefined
+          ? sessionRuntime.runProbe([...this.#command, ...args], this.#probeTimeoutMs)
+          : sessionRuntime.runProbe([...this.#command, ...args], this.#probeTimeoutMs, options);
     } catch (exc) {
       if (exc instanceof ChildTimeout) {
         return new Failure(
@@ -1700,7 +1971,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           "sessions must not share one identity",
       );
     }
-    const record: SessionRecord = {
+    const unspawned = {
       session_id: sessionId,
       claude_session_uuid: sessionUuid,
       workspace,
@@ -1708,29 +1979,19 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       resume_prompt: settings.resumePrompt,
       cli_args: settings.cliArgs,
       generation: 0,
-      // The start argv, in the one order that matters: the provider's own flags
-      // first, then the provider-wide arguments, then the per-role ones, so
-      // neither of the last two can precede -- and so override -- the committed
-      // identity. The **start** prompt is not persisted anywhere else: only
-      // `resume_prompt` is a record field, so the prompt survives solely inside
-      // this argv.
-      argv: [
-        ...this.#command,
-        "-p",
-        settings.prompt,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--session-id",
-        sessionUuid,
-        ...this.#baseCliArgs,
-        ...settings.cliArgs,
-      ],
       pid: null,
       pgid: null,
       incident: null,
     };
-    return await this.#spawn(record, true);
+    const record: SessionRecord = {
+      ...unspawned,
+      // The start argv ({@link ClaudeCliSessionProvider._cliStartArgv} says
+      // why its order matters). For Claude the **start** prompt is not
+      // persisted anywhere else: only `resume_prompt` is a record field, so the
+      // prompt survives solely inside this argv.
+      argv: this._cliStartArgv(this.#command, this.#baseCliArgs, unspawned, settings.prompt),
+    };
+    return await this.#spawn(record, true, this._cliPromptInput(settings.prompt));
   }
 
   /**
@@ -1959,26 +2220,20 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             `precondition refused it (D-0010): ${exc.message}`,
         );
       }
-      const record: SessionRecord = {
+      const { argv: _previous, ...unspawned } = {
         ...session.record,
         generation: session.record.generation + 1,
-        // The resume argv, and `--session-id` is deliberately absent from it.
-        argv: [
-          ...this.#command,
-          "--resume",
-          session.record.claude_session_uuid,
-          "-p",
-          session.record.resume_prompt,
-          "--output-format",
-          "stream-json",
-          "--verbose",
-          ...this.#baseCliArgs,
-          ...session.record.cli_args,
-        ],
         pid: null,
         pgid: null,
       };
-      return await this.#spawn(record, false);
+      // The resume argv, and for Claude `--session-id` is deliberately absent
+      // from it.
+      const argv = this._cliResumeArgv(this.#command, this.#baseCliArgs, unspawned);
+      if (argv instanceof Failure) {
+        return argv;
+      }
+      const record: SessionRecord = { ...unspawned, argv };
+      return await this.#spawn(record, false, this._cliPromptInput(record.resume_prompt));
     });
   }
 
@@ -1998,8 +2253,15 @@ export class ClaudeCliSessionProvider extends SessionProvider {
    * never had a process is not a session and a half-written record would refuse
    * the id forever while showing a phantom orphan. A resume keeps the
    * directory, because the previous generation's evidence is in it.
+   *
+   * `input` is {@link ClaudeCliSessionProvider._cliPromptInput}'s answer:
+   * `null` keeps stdin ignored, as it always was for Claude.
    */
-  async #spawn(record: SessionRecord, fresh: boolean): Promise<ProviderResult<SessionReadout>> {
+  async #spawn(
+    record: SessionRecord,
+    fresh: boolean,
+    input: string | null = null,
+  ): Promise<ProviderResult<SessionReadout>> {
     const sessionId = record.session_id;
     const directory = this.#sessionDir(sessionId);
     try {
@@ -2013,6 +2275,18 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         { errno: errnoOf(exc) },
       );
     }
+    // After the record, so the refusal of a resume leaves the generation's
+    // evidence where the ordinary failures leave it; before the capture files,
+    // so a refused start takes nothing half-made down with it but the directory.
+    const prepared = this._cliPrepareSpawn(record, (args, options) =>
+      this.#runProbe(args, options),
+    );
+    if (prepared !== null) {
+      if (fresh) {
+        this.#removeSessionDir(sessionId);
+      }
+      return prepared;
+    }
 
     const eventsPath = this.#eventsPath(sessionId, record.generation);
     const stderrPath = this.#stderrPath(sessionId, record.generation);
@@ -2020,7 +2294,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     // environment rather than extending it, so the copy is what keeps the child
     // in the same world as its parent -- and the copying itself is under test,
     // because every scenario switch the fake CLI reads travels this way.
-    const environment: NodeJS.ProcessEnv = { ...process.env };
+    const environment: NodeJS.ProcessEnv = { ...process.env, ...this._cliEnv(record) };
     environment[CHILD_ENV_SESSION_UUID] = record.claude_session_uuid;
 
     let eventsFd: number | undefined;
@@ -2035,11 +2309,18 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       child = await sessionRuntime.spawn([...record.argv], {
         cwd: record.workspace,
         env: environment,
-        stdin: "ignore",
+        stdin: input === null ? "ignore" : "pipe",
         stdout: eventsFd,
         stderr: stderrFd,
         newProcessGroup: true,
       });
+      if (input !== null && child.stdin !== null) {
+        // Written whole and closed, so the child reads its prompt to EOF. A
+        // child that dies before reading it raises EPIPE on the pipe; that is
+        // answered by the readout of the exit, not by an unhandled 'error'.
+        child.stdin.on("error", () => undefined);
+        child.stdin.end(input);
+      }
     } catch (exc) {
       spawnFailure = exc;
     } finally {
@@ -2236,6 +2517,10 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           `${pyRepr(sessionId)} must be a list or tuple of arguments, ` +
           `got ${pyRepr(rawArgs)}`,
       );
+    }
+    const refused = this._cliSessionArgs(sessionId, cliArgs);
+    if (refused !== null) {
+      return refused;
     }
     return { prompt, resumePrompt, cliArgs };
   }
@@ -2618,13 +2903,16 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       baseDetail["stderr_tail"] = stderrTail;
     }
 
-    const mismatch = identityMismatchIn(events, record.claude_session_uuid);
+    const identityOf = (event: Readonly<Record<string, unknown>>): unknown =>
+      this._cliIdentityOf(event);
+    const expected = this._cliExpectedIdentity(record, events);
+    const mismatch = identityMismatchIn(events, expected, identityOf);
     if (mismatch !== null) {
-      const incident = identityIncidentText(record, mismatch.event, mismatch.reported);
+      const incident = identityIncidentText(record, expected, mismatch.event, mismatch.reported);
       this.#recordIncident(session, incident);
       return identityIncident(`identity incident: ${incident}`, {
         ...baseDetail,
-        expected: record.claude_session_uuid,
+        expected,
         reported: mismatch.reported,
       });
     }
@@ -2638,8 +2926,8 @@ export class ClaudeCliSessionProvider extends SessionProvider {
     }
 
     // A live child is given time (below); a finished one is answered loudly.
-    const identityReadBack = identityReadBackOf(events);
-    const resultEvent = lastResultEvent(events);
+    const identityReadBack = identityReadBackOf(events, identityOf);
+    const resultEvent = lastResultEvent(events, (event) => this._cliIsTerminal(event));
     if (resultEvent !== null) {
       if (!identityReadBack) {
         return uninterpretable(
@@ -2647,11 +2935,12 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             "without any event naming a session identity, so the " +
             "identity committed before the spawn cannot be read back " +
             "and reconciled; its outcome is not accepted on trust",
-          { ...baseDetail, expected: record.claude_session_uuid },
+          { ...baseDetail, expected },
         );
       }
-      const terminalReason = getOwn(resultEvent, "terminal_reason");
-      const subtype = getOwn(resultEvent, "subtype");
+      const words = this._cliTerminalWords(resultEvent);
+      const terminalReason = words.terminalReason;
+      const subtype = words.subtype;
       // Python's `or`: a falsy `terminal_reason` -- an empty string, `0`,
       // `false` -- falls through to `subtype`. `??` would keep the empty string
       // and then refuse it as unnameable, which is a different answer.
@@ -2670,7 +2959,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         providerState: word,
         providerDetail: {
           ...baseDetail,
-          is_error: noneOf(getOwn(resultEvent, "is_error")),
+          is_error: noneOf(words.isError),
           subtype: noneOf(subtype),
           terminal_reason: noneOf(terminalReason),
           returncode: this.#returncode(session),
@@ -2749,7 +3038,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           "emitting events, none of which named a session identity; the " +
           "identity committed before the spawn cannot be read back and " +
           "reconciled",
-        { ...baseDetail, expected: record.claude_session_uuid },
+        { ...baseDetail, expected },
       );
     }
     const returncode = this.#returncode(session);
@@ -3218,13 +3507,16 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         generation: record.generation,
         ...session.providerDetail,
       };
-      const mismatch = identityMismatchIn(events, record.claude_session_uuid);
+      const identityOf = (event: Readonly<Record<string, unknown>>): unknown =>
+        this._cliIdentityOf(event);
+      const expected = this._cliExpectedIdentity(record, events);
+      const mismatch = identityMismatchIn(events, expected, identityOf);
       if (mismatch !== null) {
-        const incident = identityIncidentText(record, mismatch.event, mismatch.reported);
+        const incident = identityIncidentText(record, expected, mismatch.event, mismatch.reported);
         this.#recordIncident(session, incident);
         return new Failure(FailureKind.IDENTITY_INCIDENT, `identity incident: ${incident}`, {
           ...baseDetail,
-          expected: record.claude_session_uuid,
+          expected,
           reported: mismatch.reported,
         });
       }
@@ -3235,7 +3527,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         // would be a report read past the check that authorises it.
         return new Failure(FailureKind.UNINTERPRETABLE_RESPONSE, garbage, baseDetail);
       }
-      const resultEvent = lastResultEvent(events);
+      const resultEvent = lastResultEvent(events, (event) => this._cliIsTerminal(event));
       if (resultEvent === null) {
         // No terminal line. Whether that is "not yet" or "not ever" is the
         // difference between polling again and giving up, so it is decided
@@ -3272,7 +3564,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           { ...baseDetail, returncode },
         );
       }
-      if (!identityReadBackOf(events)) {
+      if (!identityReadBackOf(events, identityOf)) {
         // The same refusal `#readout` gives a finished child that never named
         // itself, in this verb's own vocabulary: an outcome is not accepted on
         // trust, and neither is the report attached to it.
@@ -3282,10 +3574,19 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             "without any event naming a session identity, so the " +
             "identity committed before the spawn cannot be read back " +
             "and reconciled; its report is not accepted on trust",
-          { ...baseDetail, expected: record.claude_session_uuid },
+          { ...baseDetail, expected },
         );
       }
-      const body = getOwn(resultEvent, "result");
+      const facts = this._cliTurnFacts(record, events, lineNumbers, resultEvent);
+      if (facts instanceof Failure) {
+        if (facts.kind === FailureKind.IDENTITY_INCIDENT) {
+          // Impounded like the mismatch above, so a later read or resume does
+          // not carry on past a contradicted identity.
+          this.#recordIncident(session, facts.detail.replace(/^identity incident: /, ""));
+        }
+        return facts;
+      }
+      const body = facts.body;
       if (typeof body !== "string") {
         // Never coerced. `String({})` is `"[object Object]"`, and that string
         // would go on to become a gate rationale a human is asked to approve.
@@ -3309,8 +3610,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             "blank report, which is a turn that ended without saying anything",
         });
       }
-      const terminalReason = getOwn(resultEvent, "terminal_reason");
-      const subtype = getOwn(resultEvent, "subtype");
+      const { terminalReason, subtype, isError } = this._cliTerminalWords(resultEvent);
       return new Ok({
         kind: "report",
         sessionId: record.session_id,
@@ -3323,19 +3623,19 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         subtype: typeof subtype === "string" ? subtype : null,
         // Python-truthy, the spelling the readout's own `word` fallback uses:
         // `is_error: 0` and `is_error: ""` are the CLI saying no.
-        isError: pyTruthy(getOwn(resultEvent, "is_error")),
+        isError: pyTruthy(isError),
         returncode: this.#returncode(session),
         // Off the same event as everything above it, and the reason it is read
         // here rather than by a second pass over the transcript: this is the
         // line the turn's identity was already reconciled on, so a denial
         // reported with it is a denial from the turn that was verified, not
         // from whatever else is on disk (`D-1110`).
-        permissionDenials: permissionDenialsOf(resultEvent),
+        permissionDenials: facts.permissionDenials,
         // Off the same event and the same transcript, for the reason given
         // just above: what the verified turn cost and what it ran, rather than
         // what some other file on disk says (`D-1112`).
-        spend: turnSpendOf(resultEvent),
-        commands: turnCommandsOf(events, lineNumbers),
+        spend: facts.spend,
+        commands: facts.commands,
       });
     });
   }

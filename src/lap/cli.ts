@@ -94,6 +94,7 @@ import {
   type Subparsers,
 } from "../cli/parser.js";
 import { SERVED_RECIPIENTS } from "../control_plane/handlers.js";
+import { isFullyQualified } from "../control_plane/lap_run_intent.js";
 import { LeaseRefusal } from "../control_plane/lease.js";
 import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { pythonRepr } from "../control_plane/python_repr.js";
@@ -102,7 +103,11 @@ import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 // see this module's header and D-0059. Through `../index.js` deliberately --
 // `../session/index.js` would make this file know a session backend, which is
 // the join the leak test forbids outside the barrel.
-import { createDefaultSessionProvider } from "../index.js";
+import {
+  createDefaultSessionProvider,
+  type SessionProviderKind,
+  sessionProviderName,
+} from "../index.js";
 // The session CONTRACT, not a backend: `no-provider-detail-leaks` excludes
 // `src/session/provider.js` from what counts as knowing one, and this is the
 // refusal every provider raises before it starts anything.
@@ -149,6 +154,14 @@ const STATE_ROOT_HELP =
   "the per-run directory is derived rather than named, so two laps given this " +
   "same parent cannot share one state root. Never defaulted: two providers " +
   "sharing one directory adopt each other's children.";
+const PROVIDER_HELP =
+  "which worker CLI runs the turn: claude (Claude Code, the default) or codex " +
+  "(OpenAI Codex CLI). The fence, the budget and the report are the same for " +
+  "both; a fence layer the chosen CLI cannot enforce refuses the lap.";
+const CODEX_HOME_HELP =
+  "the operator's Codex home, as an ABSOLUTE path; auth.json is copied from it " +
+  "into a per-session home under the state root. Required with --provider codex " +
+  "and refused otherwise. Never defaulted, for the reason --worker-command is not.";
 const CLAUDE_COMMAND_HELP =
   "the worker CLI to run, as one token, and it must be an ABSOLUTE path. " +
   "Repeat the flag to give a command prefix in order (an interpreter and a " +
@@ -156,8 +169,8 @@ const CLAUDE_COMMAND_HELP =
   "resolved through PATH, and the fence cannot rest on which directory the " +
   "worker happens to be started from.";
 const MODEL_HELP =
-  "the model the worker runs on, as a plain model id (claude-opus-5, sonnet, " +
-  "us.anthropic.claude-sonnet-4-5-20250929-v1:0). Appended to every spawn of " +
+  "the model the worker CLI runs on, as a plain model id (claude-opus-5, sonnet, " +
+  "us.anthropic.claude-sonnet-4-5-20250929-v1:0, or gpt-6-astra for codex). Appended to every spawn of " +
   "this lap's session as '--model <MODEL>'. Omitted by default, and omitting " +
   "it is not a neutral choice: the child then runs on whatever the worker CLI " +
   "defaults to, which this stack does not decide and cannot report. Refused " +
@@ -532,6 +545,42 @@ function claudeCommandOf(args: Namespace): readonly string[] | undefined {
   return Array.isArray(supplied) ? supplied.map(String) : undefined;
 }
 
+/**
+ * `--provider` and `--codex-home`, checked together (D-1114).
+ *
+ * Here and not in the provider's constructor for the reason `requireModel` is
+ * called before it (`D-0099`): the constructor's refusal is a `TypeError`, and
+ * an operator's missing flag must be a refusal line and exit 2, not a stack
+ * trace. The home is refused without `--provider codex` so a flag that would
+ * change nothing is not silently accepted; containment in the worktree is
+ * `performLap`'s preflight, which is the only place that knows the worktree.
+ */
+function providerOf(args: Namespace): {
+  readonly kind: SessionProviderKind;
+  readonly codexHome: string | undefined;
+} {
+  const kind: SessionProviderKind = args["provider"] === "codex" ? "codex" : "claude";
+  const codexHome = optionalText(args, "codex_home");
+  if (kind === "claude") {
+    if (codexHome !== undefined) {
+      throw new LapUsageError("--codex-home is only accepted with --provider codex");
+    }
+    return { kind, codexHome };
+  }
+  if (codexHome === undefined) {
+    throw new LapUsageError(
+      "--provider codex requires --codex-home, the operator's Codex home auth.json is copied from",
+    );
+  }
+  if (!isFullyQualified(codexHome)) {
+    throw new LapUsageError(
+      `--codex-home is ${pythonRepr(codexHome)}, which is not a fully qualified path; ` +
+        "it is resolved by this process and by the provider, and must name one directory to both",
+    );
+  }
+  return { kind, codexHome };
+}
+
 /** `--gate-option`, repeated. `append` leaves the key unset when never given. */
 function gateOptionsOf(args: Namespace): readonly string[] {
   const supplied = args["gate_options"];
@@ -638,6 +687,16 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
                 total_cost_usd: outcome.report.spend.totalCostUsd,
                 num_turns: outcome.report.spend.numTurns,
                 duration_ms: outcome.report.spend.durationMs,
+                // The model and the token counts (D-1114), always present under
+                // the same `/1`: a Claude turn reports cost and no tokens, a
+                // Codex turn tokens and no cost, and each says `null` for the
+                // half it cannot say rather than dropping the key.
+                model: outcome.report.spend.model ?? null,
+                input_tokens: outcome.report.spend.inputTokens ?? null,
+                cached_input_tokens: outcome.report.spend.cachedInputTokens ?? null,
+                cache_write_input_tokens: outcome.report.spend.cacheWriteInputTokens ?? null,
+                output_tokens: outcome.report.spend.outputTokens ?? null,
+                reasoning_output_tokens: outcome.report.spend.reasoningOutputTokens ?? null,
               },
         commands:
           outcome.report.commands === null ? null : outcome.report.commands.map(commandDocument),
@@ -773,13 +832,25 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
     // stated once there; `performLap`'s preflight asks it again for its own
     // callers.
     requireModel(model);
+    const { kind, codexHome } = providerOf(args);
     // **The worker's sandbox, asked before anything exists** (`D-1112`). Here
     // rather than in `root.ts`'s preflight because it is a question about this
     // process, not about the run, and a seam here is what lets a suite that
     // itself runs inside such a sandbox drive the verb at all.
-    const socketRefusal = unixSocketRefusal(await lapCliSeams.probeUnixSocket());
-    if (socketRefusal !== undefined) {
-      throw socketRefusal;
+    //
+    // **Asked for Claude only, and that is a judgment, not an omission**
+    // (D-1114). The probe infers "the worker's sandbox will fail" from
+    // AF_UNIX being refused, which is true of Claude Code's sandbox runtime.
+    // Codex's bwrap sandbox was measured coming up and enforcing under that
+    // same seccomp filter, so the probe would refuse a lap that works. The
+    // Codex provider instead proves its sandbox before the child starts: a
+    // minimal `codex sandbox -- true` at probe time, and the real profile's
+    // `true` / write-outside / denied-read self-tests at every spawn.
+    if (kind === "claude") {
+      const socketRefusal = unixSocketRefusal(await lapCliSeams.probeUnixSocket());
+      if (socketRefusal !== undefined) {
+        throw socketRefusal;
+      }
     }
     // **The per-run state root, derived here because this is the last place
     // before the provider is built over it** (`D-1105`). `--state-root` is a
@@ -792,28 +863,33 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
     // that cannot be a directory name, which is why it is inside the `try`:
     // that refusal is an operator's to read, not a stack trace.
     const stateRoot = lapStateRoot(stateRootParent, runId);
-    const provider = createDefaultSessionProvider(stateRoot, {
-      ...(claudeCommand === undefined ? {} : { claudeCommand }),
-      // **This is where model selection lives** (`D-0099`), and the seam is the
-      // provider's own: `baseCliArgs` is documented there as the one for
-      // provider-wide choices "(a pinned `--model`, say)", appended to every
-      // spawn before the per-role `cli_args` and after the flags the provider
-      // renders itself. Nothing else in the stack had a place for the choice --
-      // `roles.json` carries no model key and is not going to (`D-0014`: a role
-      // is not an executor), the `cli_args` allowlist is a per-run operator
-      // vector checked by whole-vector equality (`D-0088`), and the admitted
-      // record fixes what a run may do rather than what it costs.
-      //
-      // Two tokens and never one: `--model=<id>` would be a single token whose
-      // interpretation belongs to the child's parser, and the value has been
-      // checked as an id on the assumption that it arrives as its own argument.
-      //
-      // Constructed AFTER the check above and handed to `performLap` below to be
-      // CHECKED again, exactly as `--claude-command` and `--state-root` are
-      // (`D-0067`): this constructor has a guard of its own over `base_cli_args`,
-      // and reaching it first turned an operator's typo into a stack trace.
-      ...(model === undefined ? {} : { baseCliArgs: ["--model", model] }),
-    });
+    const provider = createDefaultSessionProvider(
+      stateRoot,
+      {
+        ...(claudeCommand === undefined ? {} : { claudeCommand }),
+        ...(codexHome === undefined ? {} : { codexHome }),
+        // **This is where model selection lives** (`D-0099`), and the seam is the
+        // provider's own: `baseCliArgs` is documented there as the one for
+        // provider-wide choices "(a pinned `--model`, say)", appended to every
+        // spawn before the per-role `cli_args` and after the flags the provider
+        // renders itself. Nothing else in the stack had a place for the choice --
+        // `roles.json` carries no model key and is not going to (`D-0014`: a role
+        // is not an executor), the `cli_args` allowlist is a per-run operator
+        // vector checked by whole-vector equality (`D-0088`), and the admitted
+        // record fixes what a run may do rather than what it costs.
+        //
+        // Two tokens and never one: `--model=<id>` would be a single token whose
+        // interpretation belongs to the child's parser, and the value has been
+        // checked as an id on the assumption that it arrives as its own argument.
+        //
+        // Constructed AFTER the check above and handed to `performLap` below to be
+        // CHECKED again, exactly as `--claude-command` and `--state-root` are
+        // (`D-0067`): this constructor has a guard of its own over `base_cli_args`,
+        // and reaching it first turned an operator's typo into a stack trace.
+        ...(model === undefined ? {} : { baseCliArgs: ["--model", model] }),
+      },
+      kind,
+    );
     const connection = openProductionControlPlane(path);
     try {
       const outcome = await performLap(connection, provider, provider, {
@@ -836,6 +912,11 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         // refusal that check was added to prevent.
         providerStateRoot: stateRoot,
         ...(claudeCommand === undefined ? {} : { workerCommand: claudeCommand }),
+        // Checked against the worktree like the command above (D-1114), and
+        // the name the binding row records so `recover()` stays honest.
+        ...(codexHome === undefined ? {} : { codexHome }),
+        providerName: sessionProviderName(kind),
+        ...(kind === "codex" ? { requireNamespacedTopicBranch: true } : {}),
         // Handed over to be CHECKED, like the two above it (`D-0099`): the
         // provider is already built over this value, and `preflight` is where
         // an argument an operator typed is refused before a branch, a worktree
@@ -944,8 +1025,20 @@ export function addSubparsers(sub: Subparsers): void {
   addOptional(perform, "--endpoint-db", "endpoint_db", ENDPOINT_DB_HELP);
   addOptional(perform, "--endpoint-module", "endpoint_module", ENDPOINT_MODULE_HELP);
   addOptional(perform, "--node", "node", NODE_HELP);
+  // which worker CLI runs the turn (D-1114). The default is what every lap
+  // before it ran, so an existing invocation is unchanged.
   perform.addArgument({
-    optionStrings: ["--claude-command"],
+    optionStrings: ["--provider"],
+    dest: "provider",
+    choices: ["claude", "codex"],
+    defaultValue: "claude",
+    help: PROVIDER_HELP,
+  });
+  addOptional(perform, "--codex-home", "codex_home", CODEX_HOME_HELP);
+  // `--worker-command` is the provider-neutral spelling (D-1114); the
+  // original stays first so the required-flag diagnostic reads as it did.
+  perform.addArgument({
+    optionStrings: ["--claude-command", "--worker-command"],
     dest: "claude_command",
     append: true,
     required: true,

@@ -430,7 +430,13 @@ function permissionSubject(toolName: string, toolInput: ToolInput): string | nul
   return null;
 }
 
-function specMatches(spec: string, subject: string): boolean {
+/**
+ * Exported for one reader outside this module: `codex_hook.mjs` (D-1114)
+ * matches a Codex `Bash` call against the fence's `permissions.allow` entries,
+ * and it has to use the matcher Claude-side allow and deny specs already mean
+ * here rather than a second reading of `Bash(git add:*)` that could drift.
+ */
+export function specMatches(spec: string, subject: string): boolean {
   if (spec === "*") {
     return true;
   }

@@ -217,6 +217,7 @@ spaces distinct.
 | D-1111 | The Windows `double-green` cells leave the pull-request path for a nightly schedule and `workflow_dispatch`, and the nightly files its own failure issue | accepted |
 | D-1112 | `lap perform --json` carries what the turn cost and what it ran, and `lap perform` refuses to start a lap from a process that may not create a Unix socket | accepted |
 | D-1113 | CI evidence and its verdict move from rondo into continuo as `ci observe` / `ci show`; `ci_observation` gains `pending` and the `check_run` / `commit_status` scopes | accepted |
+| D-1114 | A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars | accepted |
 
 ---
 
@@ -17503,3 +17504,242 @@ same day; Codex review of this change, rounds 1 to 3; rondo `87e62f0` `src/acces
 `D-0090`; `docs/production-schema.md` sections 6.2, 6.3 and 7.1. Decision id `D-1113`: `D-1112`
 is the concurrent lap-spend change's (#217), and this is the next free id in the `D-11xx` shared
 cross-belt band opened by `D-1101`.
+
+---
+
+## D-1114 -- A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars
+
+**Context.** Issue #220. Until now a lap's worker could only be the Claude Code CLI
+(`ClaudeCliSessionProvider`, `D-0059`). The owner (2026-09-22) wants the stack to let a person
+choose the model that does the work, under the same scope, budget, independent review and decision
+record whichever model it is. The OpenAI Codex CLI is the first second CLI, because the stack
+already runs it for review. The issue's three open decisions were put to the owner through the
+window and answered on 2026-09-22:
+
+1. *Which CLI first, and how its session, transcript and cost are read.* Codex. Its session,
+   transcript and cost are read as the measurements below say. **Cost is facts only**: continuo
+   reports the model and the token counts Codex reports, and no dollar figure; converting tokens to
+   money, and holding a budget against it, is rondo's.
+2. *Where the provider is named.* In rondo's tier table (a provider column beside the model it
+   already maps a tier to). continuo takes the provider as a `lap perform` argument, as it takes
+   `--model` (`D-0099`), and decides nothing about which tier runs where.
+3. *The independent-review rule (rondo `D-0065`) when the worker runs on the reviewer's family.*
+   Unchanged, and rondo's: a same-family reading is `unavailable`. Nothing here.
+
+And one standing instruction for everything below: **a fence layer a CLI cannot enforce is a lap
+that is refused**, never a lap that runs with the layer missing.
+
+### What was measured
+
+On `codex-cli 0.153.4` with `gpt-6-astra` and a ChatGPT login, on 2026-09-22, from inside a Claude
+Code sandbox (bubblewrap plus a seccomp filter that refuses `socket(AF_UNIX)`). Each item was
+observed on a real run; the raw outputs are not committed.
+
+- **M1. The event stream.** `codex exec --json` writes JSONL: `thread.started {thread_id}`,
+  `turn.started`, `item.started` / `item.completed` (`agent_message`, `command_execution`,
+  `file_change`, `error`), `turn.completed {usage}` or `turn.failed`. `usage` carries
+  `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` and
+  `reasoning_output_tokens`. **No dollar cost appears anywhere**, and neither the model nor a
+  duration is on stdout. The session file (the rollout,
+  `$CODEX_HOME/sessions/Y/M/D/rollout-<time>-<thread id>.jsonl`) has the model in `session_meta` and
+  `turn_context`, `duration_ms` in `task_complete`, the effective policy in `turn_context`, and every
+  tool call the model made as `custom_tool_call` / `custom_tool_call_output` pairs -- including the
+  calls that never started, which stdout omits.
+- **M2. The sandbox.** The default `workspace-write` sandbox fails before running anything in this
+  environment (`bwrap: Can't mkdir /tmp/.git: Read-only file system`), and the turn still ends with
+  the agent saying it is done and **exit 0**. A permission profile built from scratch (`":root" =
+  "read"` plus write roots) runs. It **came up and enforced its limits under the AF_UNIX-refusing
+  seccomp filter** that breaks Claude Code's sandbox (`D-1112`). A writable root that is a *file*
+  (a branch ref, `packed-refs`) makes the sandbox helper panic (exit 101).
+- **M3. Read denial.** Under `workspace-write` the child can read everything, including
+  `$CODEX_HOME/auth.json`. A permission profile entry `"<path>" = "deny"` makes a path unreadable,
+  inside or outside the workspace, and `deny` globs work for files present at start, to
+  `glob_scan_max_depth`. `-p <profile>` is silently dropped under `--ignore-user-config`; the same
+  profile given as `-c permissions={...}` plus `default_permissions` is enforced.
+- **M4. Hooks.** Codex runs a `PreToolUse` hook written in Claude Code's format from
+  `$CODEX_HOME/hooks.json`, with `tool_name` / `tool_input` in Claude's shape (`Bash {command}`,
+  `apply_patch {command: <patch text>}`, `mcp__<server>__<tool>`, and names such as `webrun`,
+  `view_image`, `collaborationspawn_agent`). It blocks **only** on exit 2 or a JSON deny. Exit 1, a
+  missing or non-executable hook, a timeout, and an untrusted hook all let the call run, silently.
+  A hook in the per-session home runs under `--ignore-user-config` with
+  `--dangerously-bypass-hook-trust`.
+- **M5. What cannot be switched off.** `write_stdin` (input to a running process) does not fire the
+  hook, and no setting removes it while keeping the shell. Sub-agents cannot be disabled; their
+  shell calls do fire the hook. Web search, image generation, goals, `view_image` and the account's
+  ChatGPT connectors can be disabled.
+- **M6. What the workspace can load.** The target repository's `.codex/config.toml`, `.rules` and
+  MCP servers load unless the project is untrusted or `--ignore-user-config` is given, and they can
+  turn the network back on. A `decision="allow"` rule runs its command **outside** the sandbox
+  unless a permission profile is active. Rules cannot express default-deny. `--strict-config`
+  turns an unknown `-c` key into a startup error.
+- **M7. The prompt.** A prompt given as `-` is read from stdin, so a prompt starting with `-` is
+  neither a flag nor a subcommand.
+- **M8. The first real laps** (`lap perform --provider codex`, four runs). Each reached an open gate
+  with exit 0 once two defects were fixed: the file writable roots of M2, and Codex's spelling of
+  `-` as `_` in MCP tool names (`mcp__continuo_messagebus__poll`). Spend read `model gpt-6-astra`,
+  all five token counts, `duration_ms` equal to the rollout's; the hook fired for every tool call;
+  `turn_context` showed approval `never`, `workspace-write` without network, and profile `fence`.
+  `git commit` failed on the ref lock (`Read-only file system`) until rule 8; lap 5, with it,
+  committed.
+
+### What was put to the gate during the work, and its answer
+
+The first real lap could not commit (M8). Put to the owner through the window on 2026-09-22, with
+(a) recommended: **(a)** grant the topic branch's parent directory under `refs/heads/` and
+`logs/refs/heads/`, pin the siblings already there read-only, and refuse a top-level topic branch;
+(b) grant the parent directory without pinning; (c) no commits in a Codex lap. **Answer: (a)**, with
+the residual that new branches can be created in that namespace recorded here. That is rule 8.
+
+### Decision
+
+1. **`lap perform --provider {claude,codex}`**, default `claude`, so every existing call is
+   unchanged. `--codex-home DIR` names the operator's Codex home, whose `auth.json` the lap
+   links to; it is required with `codex`, refused without it, must be absolute, and must lie outside
+   the worktree. `--worker-command` is a second spelling of `--claude-command`. The session binding
+   records `codex-cli`. The provider is `CodexCliSessionProvider`, a subclass of the Claude provider
+   over `protected _cli*` seams whose default bodies are the Claude code unchanged: the record,
+   liveness, the stop ladder and the identity rules are shared, and only the CLI's dialect differs.
+2. **The fence is translated, not re-rendered.** The provider accepts exactly the vector the
+   materializer renders for every lap (`--settings S --permission-mode acceptEdits
+   --setting-sources '' --mcp-config P --strict-mcp-config`, whole-vector equality as in `D-0088`)
+   and anything else is refused. From `S` and `P` it builds:
+   - **Configuration only on the command line**: `--ignore-user-config --strict-config
+     --ignore-rules`, the project marked untrusted, and every setting a `-c` override (M3, M6).
+   - **A per-session `CODEX_HOME`** holding `auth.json` as a **link** to the real path of the
+     operator's file, never a copy, and a `hooks.json`, rewritten before every spawn, under one
+     parent that the profile denies. Every Codex lap's profile denies the operator's Codex home and
+     the real directory its `auth.json` resolves to, so the credentials read as denied through any
+     lap's link, including a lap under a sibling state root that this profile cannot name (measured
+     on the real sandbox). A copy at rest would have been readable from such a lap (Codex review).
+     On Windows, where a link needs a privilege and Codex's sandbox is unmeasured, it is a copy.
+   - **A permission profile**: read everywhere; write in the workspace and in the git metadata roots
+     that are directories (M2); `S`'s `denyRead` and `Read(...)` denials as `deny` entries; `S`'s
+     `denyWrite` entries inside a write root as `read` (a `denyWrite` entry that *contains* a write
+     root cannot be kept by such a profile, and refuses the spawn, as does a `denyWrite` glob, which
+     cannot be compared with the write roots and would drop out; Codex review); the Codex homes
+     denied. The network is off because the profile's derived `workspace-write` sandbox has it off
+     (M3); the post-turn check of rule 7 refuses a turn whose `turn_context` says otherwise.
+   - **Tools**: web search, `apps`, image generation, goals, `view_image` and `multi_agent`
+     disabled.
+   - **Environment**: `shell_environment_policy` `core` plus `S.env` plus editor and pager values
+     that open nothing interactive (`GIT_EDITOR=true`, `PAGER=cat` and the like).
+3. **`src/fencing/codex_hook.mjs` is the hook**, next to `hook.mjs`, which is unchanged. It
+   **denies by default, by tool name.** `Bash` is admitted only when a `Bash(...)` entry of the
+   fence's allow list names the command's program and matches it with Claude's semantics, or when
+   the program is one of `cat head tail ls wc grep pwd` (Codex has no separate read tool). **A
+   command may contain only letters, digits, space and `_ . / : = @ % + , - " '`**; any other
+   character refuses it, quoted or not. An allowlist of characters rather than a list of shell
+   metacharacters, because Codex runs the command in the user's login shell, and zsh runs code
+   from places such a list misses (a glob qualifier `ls *(e:'cmd':)`, `=(cmd)`); the characters
+   kept are plain in sh, bash and zsh alike. The model issues one plain command per call.
+   `apply_patch` has every path it names checked as a `Write`, so the fence's `Edit(...)` rules
+   apply; a header line is trimmed with the white space Codex's parser trims (Rust's, which includes
+   U+0085), so no header is hidden from the hook that Codex still applies. The lap's MCP server
+   (in Codex's spelling, M8) is admitted. Everything else is denied. The
+   fence's deny rules then apply through `hook.mjs` unchanged. Every failure path is a JSON deny
+   plus exit 2 (M4), and every call is logged; the log is the source of `permission_denials`.
+4. **The sandbox proves itself before a lap uses it.** `probeCapabilities` runs `codex sandbox --
+   true` under a minimal profile, so a broken sandbox is a `SpawnRefused` before a worktree exists
+   (M2). Before every spawn, `codex sandbox` under the lap's own profile must run `true`, must fail
+   to write outside the write roots, and must fail to read the operator's `auth.json`. **The
+   `D-1112` Unix-socket probe runs only for Claude laps.** It exists because Claude Code's sandbox
+   cannot come up under that filter; Codex's measurably does (M2), so applying the probe would refuse
+   laps Codex runs correctly. What `D-1112` guards against, a worker whose sandbox is not really
+   there, is covered for Codex by these self-tests, which check the denials themselves rather than
+   inferring them from a socket.
+5. **What cannot be switched off is closed around or refused.** A Codex lap whose allow list names a
+   program that executes its stdin (a shell or an interpreter: `sh bash zsh dash fish ksh mksh csh
+   tcsh pwsh node python perl ruby php lua irb deno bun npx env xargs`, version suffixes included)
+   is refused, because `write_stdin`
+   would reach it without the hook (M5). The program is read from the entry exactly as the hook
+   reads it (leading space and tab dropped, first word), and a name outside letters, digits and
+   `_ . / + -` is refused too, since `'python3'` or an empty name would pass the list while the
+   hook still matched the program behind it (Codex review). Sub-agent calls are denied by the hook, and a turn whose rollout shows
+   one that was not denied is refused.
+6. **The identity is adopted, not committed.** Codex has no flag that names a thread before it
+   starts. Generation 0 adopts the first `thread.started`; every later event, the rollout's
+   `session_meta`, and a resumed child must name the same thread; a contradiction from either the
+   events or the rollout is recorded as the session's incident, so it is impounded. Orphan
+   recognition is unchanged: continuo's own UUID is on the child's command line, in the `-o` path.
+7. **A turn's facts and the post-turn checks.** The report is the last `agent_message` before
+   `turn.completed` / `turn.failed`. `commands` are the rollout's tool calls of the current turn
+   (every call, including the refused ones), each cited by its rollout line. `permission_denials`
+   are the hook log's denials. **`spend`** gains six always-present keys in
+   `continuo.lap.perform/1`, under `D-1112`'s rule (always present; `null` means the backend cannot
+   say): `model`, `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`,
+   `output_tokens`, `reasoning_output_tokens`. A Codex lap fills them and `duration_ms`, and leaves
+   `total_cost_usd` and `num_turns` `null`. A Claude lap is unchanged: its three keys as before, the
+   six new ones `null`. The turn is refused (no gate is opened) when the rollout is missing, when its
+   `turn_context` does not show approval `never`, `workspace-write` without network and the `fence`
+   profile, when the hook log has fewer lines than the turn has calls that must have fired the
+   hook (M4: a hook that did not run is silent), or when a sub-agent call was not denied. That count
+   is a lower bound, not a pairing: a code-mode `exec` call runs any number of tool calls, or none,
+   and the rollout does not record the inner ones. So a call counts once when it is a direct hooked
+   call, or an `exec` whose script names `tools.exec_command`, `tools.apply_patch` or an MCP tool
+   and did not fail (a failed script, such as a syntax error, may have called nothing).
+8. **Committing: the topic branch's ref directory, with its siblings pinned.** `git commit` writes
+   `<ref>.lock` beside the branch's ref and appends to its reflog, so the ref file the Claude fence
+   grants (`D-0082`'s item 3) is not enough, and Codex cannot take a file as a writable root (M2).
+   The profile grants the branch's parent directory under `refs/heads/` and the same directory
+   under `logs/refs/heads/`, and pins **every other entry already in either directory** -- a
+   sibling branch's ref or log -- as `read`. A Codex lap whose topic branch is a top-level name
+   (no `/`) is refused by `lap perform`'s preflight, before a worktree exists, because that parent
+   is `refs/heads` itself and holds the base branch; the provider refuses it again at session start
+   for any other caller. Measured on the real sandbox with lap 5's own profile: the commit landed;
+   writing, renaming over and removing a pinned sibling ref all failed; a file directly under
+   `refs/heads` could not be written.
+
+**Alternatives.**
+
+- *A separate provider class (rejected).* It would duplicate about 1,400 lines of process
+  supervision -- the record, liveness, the stop ladder, the group sweep -- and two copies of the
+  ordering reasoning (`U32`, `D-1106`) would drift.
+- *Re-rendering the fence per provider in the materializer (rejected for now).* Translating the one
+  rendered vector keeps `root.ts` and the materializer provider-neutral, and whole-vector equality
+  makes any new Claude-side layer a Codex refusal until it is translated.
+- *Codex's `.rules` for the allow list (rejected).* Rules cannot say default-deny, and an `allow`
+  rule leaves the sandbox (M6).
+- *Keeping the `D-1112` probe for Codex too (rejected)*, for rule 4's reason.
+- *A dollar figure from a price table (rejected)*: the owner's decision 1; that is rondo's.
+
+**Consequences.** rondo can put `codex` in a tier row and pass `--provider codex --codex-home` with
+`--model`. A Codex worker reads files only through the fixed read-only programs and its allowed
+commands, and issues one command per call. What is weaker than a Claude lap, stated so it is not
+rediscovered:
+
+- the identity at generation 0 (rule 6);
+- an allowed program that reads commands from its stdin and is not in rule 5's list is bounded only
+  by the OS sandbox;
+- deny globs cover files present at spawn, to depth 6, and a denial looks like any
+  `Permission denied`;
+- `commands` cite rollout lines, and a Codex command is the model's code-mode program as written,
+  not a parsed shell line;
+- rule 7's hook-log check is a count: a script that calls two hooked tools where the hook ran for
+  only one is not told apart from one where it ran for both, and a completed script whose only
+  hooked call sat in a branch not taken refuses the turn (the fail-closed side);
+- no dollar cost and no turn count for Codex;
+- an `allowed_bash` entry whose program name is not plain (a quote, a glob, a `:`) is refused for
+  Codex even when the program is harmless, since it cannot be classified;
+- an operator `cli_args` vector (`D-0088`) is refused for Codex until the allowlist has per-provider
+  entries;
+- if a Codex release ever replaces the `auth.json` link with a regular file (say, on a token
+  refresh), that file is readable to a lap under a sibling state root; unobserved on 0.153.4;
+- rule 8's grant lets a worker **create new branch refs** in its topic branch's namespace, and a
+  sibling ref created there after the spawn (a parallel lap's) is not pinned; existing siblings
+  cannot be changed;
+- if the Codex sandbox helper panics, the empty mount targets it created (`.codex/`, `.agents/`, a
+  `.env` device node) stay in the worktree.
+
+**Status.** accepted
+
+**Falsifier.** A Codex release that names a thread before it starts (rule 6 should commit the
+identity then), that makes hooks fail closed or fire for `write_stdin` (rules 3 and 5 can relax),
+or that lets rules default-deny. A Codex lap that ran with any of rule 2's settings absent while
+`turn_context` said they were present. A command a Codex worker ran that its fence's allow list
+does not admit, other than through rule 5's residual. A lap refused by the rule 4 self-test whose
+sandbox did in fact deny what the fence denies.
+
+**Source.** Issue #220; the owner's answers relayed by the window on 2026-09-22; the measurements
+above; the Codex review of this change. `D-0059`, `D-0081`, `D-0082`, `D-0088`, `D-0099`, `D-1110`,
+`D-1112`; rondo `D-0021`, `D-0064` section 5, `D-0065`, `D-0093`. Decision id `D-1114`, the next free
+id in the `D-11xx` shared cross-belt band opened by `D-1101`.

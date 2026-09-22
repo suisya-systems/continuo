@@ -69,6 +69,7 @@ const SRC_NON_MODULE_FILES: readonly string[] = [
   "control_plane/migrations/0007_ci_check_run_scope_and_pending.sql",
   "control_plane/spike_schema.sql",
   "fencing/cli_args_allow.json",
+  "fencing/codex_hook.mjs",
   "fencing/hook.mjs",
   "fencing/roles.json",
   "settings/role_configs_schema.json",
@@ -87,6 +88,7 @@ const TEST_NON_MODULE_FILES: readonly string[] = [
   "fixtures/labelled/session_no_evidence/long_quiet_run_still_alive/expected.json",
   "fixtures/labelled/session_no_evidence/long_quiet_run_still_alive/trace.jsonl",
   "session/helpers/fake-claude.mjs",
+  "session/helpers/fake-codex.mjs",
 ];
 
 /** `src/index.ts`'s allowlisted exception (D-1001). */

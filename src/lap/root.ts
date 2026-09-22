@@ -162,6 +162,17 @@ export interface TurnSpendFact {
   readonly totalCostUsd: number | null;
   readonly numTurns: number | null;
   readonly durationMs: number | null;
+  /**
+   * The model and token counts, for a backend that reports those and not a
+   * cost (D-1114, the Codex provider). Optional because the Claude backend
+   * never sets them; the JSON document spells an absent key as `null`.
+   */
+  readonly model?: string | null;
+  readonly inputTokens?: number | null;
+  readonly cachedInputTokens?: number | null;
+  readonly cacheWriteInputTokens?: number | null;
+  readonly outputTokens?: number | null;
+  readonly reasoningOutputTokens?: number | null;
 }
 
 /**
@@ -661,6 +672,15 @@ function preflight(request: LapRequest, provider: SessionProvider, intent: LapRu
   // this function is exists so that a flag added later has a place to go
   // instead of a hole.
   requireModel(request.model);
+  // D-1114 rule 8 (see `requireNamespacedTopicBranch`). The provider refuses
+  // it too, but only at session start, after the worktree exists; asked here
+  // so it does not cost the run id.
+  if (request.requireNamespacedTopicBranch === true && !intent.topicBranch.includes("/")) {
+    throw new LapRefused(
+      `the topic branch ${JSON.stringify(intent.topicBranch)} is a top-level name; a Codex ` +
+        "lap can commit only on a branch under a namespace (such as lap/<name>)",
+    );
+  }
   // The artifact directory's name, which the encoding can push past a
   // filesystem's limit. Computed and discarded: what is wanted is the refusal.
   lapArtifactDir(request.artifactRoot, request.runId);
@@ -763,6 +783,9 @@ function requireOutsideWorkspace(request: LapRequest, workspace: string): void {
     ...(request.workerCommand ?? []).map(
       (token, index) => [`the worker command's token ${String(index)}`, resolve(token)] as const,
     ),
+    ...(request.codexHome === undefined
+      ? []
+      : [["the worker CLI's home", resolve(request.codexHome)] as const]),
   ];
   for (const [what, path] of warded) {
     if (isInside(path, root)) {
@@ -1170,6 +1193,28 @@ export interface LapRequest {
   /** The worker's own command, if the caller pinned one, for the same check. */
   readonly workerCommand?: readonly string[];
   /**
+   * The operator's Codex home the provider copies `auth.json` from, when the
+   * worker runs on Codex (D-1114). Carried to be checked like
+   * {@link workerCommand}: a home inside the worktree is a credential the
+   * fenced child can read and a directory it can edit.
+   */
+  readonly codexHome?: string;
+  /**
+   * The name `session_binding.provider` records, when the caller built a
+   * provider other than the orchestrator's default (`claude-cli`). D-1114:
+   * `recover()` compares it, so a Codex session must not be recorded as a
+   * Claude one. Absent keeps a Claude lap's rows byte-identical.
+   */
+  readonly providerName?: string;
+  /**
+   * Refuse a topic branch whose name has no `/` (D-1114 rule 8). Set by a
+   * caller whose worker commits by writing its branch ref's parent directory
+   * (a Codex worker): a top-level branch's parent is `refs/heads` itself, which
+   * holds every branch. A flag and not a provider name, so this module stays
+   * the provider-neutral half `D-0059` keeps it.
+   */
+  readonly requireNamespacedTopicBranch?: boolean;
+  /**
    * The model the worker CLI is to run on, if the caller chose one (`D-0099`).
    *
    * Carried so it can be **checked**, exactly as {@link workerCommand} and
@@ -1556,6 +1601,7 @@ async function performLapHoldingTheEndpointLease(
     //
     // `request.nowMs` is a function precisely so this step can supply one.
     nowMs: request.nowMs,
+    ...(request.providerName === undefined ? {} : { providerName: request.providerName }),
     // **The operator's read-back window** (`D-0098`). Omitted rather than
     // spelled with the orchestrator's own default when the caller declared
     // none, so there is one place the number lives.

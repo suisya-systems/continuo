@@ -114,6 +114,7 @@ const SPAWNING_TESTS = [
   "test/messagebus/endpoint.test.ts", // 1 + sync
   "test/messagebus/stale-readout.test.ts", // 2
   "test/session/claude-cli-provider.test.ts", // 39
+  "test/session/codex-cli-provider.test.ts", // 22, the fake codex and the real codex hook
   "test/session/stub-provider.test.ts", // 29
   "test/settings/sandbox-symlink-deny.test.ts", // sync
   "test/workspace/materializer.test.ts", // sync, via src/workspace/git.ts
