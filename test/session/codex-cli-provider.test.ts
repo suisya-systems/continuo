@@ -671,6 +671,11 @@ test("a rollout whose session_meta names another thread is an identity incident"
   const provider = providerFor(l);
   await start(provider, l);
   expect(await refusedTurn(provider, FailureKind.IDENTITY_INCIDENT)).toContain("someone-else");
+  // Impounded, not just refused once: a resume must not spawn another generation.
+  await waitForExit(provider, SESSION);
+  const resumed = await provider.resume(SESSION);
+  expect(resumed).toBeInstanceOf(Failure);
+  expect((resumed as Failure).kind).toBe(FailureKind.IDENTITY_INCIDENT);
 });
 
 test("resume re-enters the adopted thread with the resume prompt on stdin", async () => {
@@ -779,6 +784,15 @@ test("an interpreter in allowed_bash is refused; an ordinary program is not", as
   for (const entry of ["python3 build.py", "bash -c make", "/usr/bin/node x.js"]) {
     const l = lap({ allowedBash: [entry] });
     expect(refusalOf(await start(providerFor(l), l)).detail).toContain("executes its stdin");
+  }
+  for (const entry of [
+    "'python3' build.py",
+    "py'thon3' x",
+    '"/usr/bin/bash" -c make',
+    "'my dir/bash'",
+  ]) {
+    const l = lap({ allowedBash: [entry] });
+    expect(refusalOf(await start(providerFor(l), l)).detail).toContain("quotes its program name");
   }
   const l = lap({ allowedBash: ["npm test"] });
   fakeEnv("FAKE_RESULT_TEXT", "done");

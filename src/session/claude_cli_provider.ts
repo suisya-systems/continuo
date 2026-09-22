@@ -3579,6 +3579,11 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       }
       const facts = this._cliTurnFacts(record, events, lineNumbers, resultEvent);
       if (facts instanceof Failure) {
+        if (facts.kind === FailureKind.IDENTITY_INCIDENT) {
+          // Impounded like the mismatch above, so a later read or resume does
+          // not carry on past a contradicted identity.
+          this.#recordIncident(session, facts.detail.replace(/^identity incident: /, ""));
+        }
         return facts;
       }
       const body = facts.body;

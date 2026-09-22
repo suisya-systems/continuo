@@ -558,6 +558,15 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
   for (const entry of allow) {
     const spec = entry.startsWith("Bash(") && entry.endsWith(")") ? entry.slice(5, -1) : null;
     const program = spec?.split(/[ \t:]/)[0] ?? "";
+    if (/["']/.test(program)) {
+      // A quoted program name hides it from the list below (`'python3'`), and
+      // the hook splits on space without reading quotes, so `'my dir/bash'`
+      // cannot be classified at all. Refused rather than unquoted (D-1114 rule 5).
+      return (
+        `the allow entry ${JSON.stringify(entry)} quotes its program name, which ` +
+        "cannot be checked against the programs that execute their stdin"
+      );
+    }
     if (STDIN_PROGRAMS.has(basename(program).replace(/[0-9.]+$/, ""))) {
       return (
         `the allow entry ${JSON.stringify(entry)} runs a program that executes its stdin, ` +

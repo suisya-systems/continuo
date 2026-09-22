@@ -17650,12 +17650,15 @@ the residual that new branches can be created in that namespace recorded here. T
    program that executes its stdin (a shell or an interpreter: `sh bash zsh dash fish ksh mksh csh
    tcsh pwsh node python perl ruby php lua irb deno bun npx env xargs`, version suffixes included)
    is refused, because `write_stdin`
-   would reach it without the hook (M5). Sub-agent calls are denied by the hook, and a turn whose
-   rollout shows one that was not denied is refused.
+   would reach it without the hook (M5). An allow entry whose program name contains a quote is
+   refused too: `'python3'` would pass the list, and the hook's first-word split does not read
+   quotes (Codex review). Sub-agent calls are denied by the hook, and a turn whose rollout shows
+   one that was not denied is refused.
 6. **The identity is adopted, not committed.** Codex has no flag that names a thread before it
    starts. Generation 0 adopts the first `thread.started`; every later event, the rollout's
-   `session_meta`, and a resumed child must name the same thread. Orphan recognition is unchanged:
-   continuo's own UUID is on the child's command line, in the `-o` path.
+   `session_meta`, and a resumed child must name the same thread; a contradiction from either the
+   events or the rollout is recorded as the session's incident, so it is impounded. Orphan
+   recognition is unchanged: continuo's own UUID is on the child's command line, in the `-o` path.
 7. **A turn's facts and the post-turn checks.** The report is the last `agent_message` before
    `turn.completed` / `turn.failed`. `commands` are the rollout's tool calls of the current turn
    (every call, including the refused ones), each cited by its rollout line. `permission_denials`
@@ -17713,6 +17716,8 @@ rediscovered:
   only one is not told apart from one where it ran for both, and a completed script whose only
   hooked call sat in a branch not taken refuses the turn (the fail-closed side);
 - no dollar cost and no turn count for Codex;
+- an `allowed_bash` entry that quotes its program name is refused for Codex even when the program
+  is harmless, since it cannot be classified;
 - an operator `cli_args` vector (`D-0088`) is refused for Codex until the allowlist has per-provider
   entries;
 - if a Codex release ever replaces the `auth.json` link with a regular file (say, on a token
