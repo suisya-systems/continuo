@@ -515,6 +515,16 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
     }
     paths[key] = entries;
   }
+  // A write denial is kept by comparing it with the write roots as a literal
+  // path; a glob (`/tmp/*/protected`) never compares as inside one and would
+  // be dropped from the profile, so it is refused instead (D-1114 rule 2).
+  const globbed = (paths["denyWrite"] ?? []).find((entry) => /[*?[\]{}]/.test(entry));
+  if (globbed !== undefined) {
+    return (
+      `${settingsPath}'s sandbox.filesystem.denyWrite entry ${JSON.stringify(globbed)} is a glob, ` +
+      "which a Codex permission profile cannot be checked to keep"
+    );
+  }
 
   const groups = field(settings["hooks"], "PreToolUse");
   const group = Array.isArray(groups) && groups.length === 1 ? groups[0] : undefined;

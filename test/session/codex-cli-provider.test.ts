@@ -359,6 +359,20 @@ test("a write denial that contains the workspace refuses the spawn; one beside i
   expect(await profileOf(beside)).toContain('"write"');
 });
 
+test("a globbed write denial refuses the spawn instead of dropping out of the profile", async () => {
+  const l = lap();
+  const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
+    sandbox: { filesystem: Record<string, unknown> };
+  };
+  settings.sandbox.filesystem["denyWrite"] = [join(dirname(l.root), "*", "protected")];
+  writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+  const log = spawnLog(l.root);
+  const refusal = refusalOf(await start(providerFor(l), l));
+  expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
+  expect(refusal.detail).toContain("is a glob");
+  expect(spawned(log)).toEqual([]);
+});
+
 test("a write denial over the branch's ref namespace refuses the spawn, though the ref is a file (D-1114 rule 8)", async () => {
   // Rule 8 adds `refs/heads/lap` as a write root; a denial of `refs/heads`
   // must be checked against it, not only against the roots the fence named.

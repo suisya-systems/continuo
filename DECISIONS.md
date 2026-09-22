@@ -17615,9 +17615,10 @@ the residual that new branches can be created in that namespace recorded here. T
    - **A permission profile**: read everywhere; write in the workspace and in the git metadata roots
      that are directories (M2); `S`'s `denyRead` and `Read(...)` denials as `deny` entries; `S`'s
      `denyWrite` entries inside a write root as `read` (a `denyWrite` entry that *contains* a write
-     root cannot be kept by such a profile, and refuses the spawn); the Codex homes denied. The
-     network is off because the profile's derived `workspace-write` sandbox has it off (M3); the
-     post-turn check of rule 7 refuses a turn whose `turn_context` says otherwise.
+     root cannot be kept by such a profile, and refuses the spawn, as does a `denyWrite` glob, which
+     cannot be compared with the write roots and would drop out; Codex review); the Codex homes
+     denied. The network is off because the profile's derived `workspace-write` sandbox has it off
+     (M3); the post-turn check of rule 7 refuses a turn whose `turn_context` says otherwise.
    - **Tools**: web search, `apps`, image generation, goals, `view_image` and `multi_agent`
      disabled.
    - **Environment**: `shell_environment_policy` `core` plus `S.env` plus editor and pager values
