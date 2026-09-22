@@ -17593,8 +17593,8 @@ the residual that new branches can be created in that namespace recorded here. T
 ### Decision
 
 1. **`lap perform --provider {claude,codex}`**, default `claude`, so every existing call is
-   unchanged. `--codex-home DIR` names the operator's Codex home, whose `auth.json` is copied for
-   the lap; it is required with `codex`, refused without it, must be absolute, and must lie outside
+   unchanged. `--codex-home DIR` names the operator's Codex home, whose `auth.json` the lap
+   links to; it is required with `codex`, refused without it, must be absolute, and must lie outside
    the worktree. `--worker-command` is a second spelling of `--claude-command`. The session binding
    records `codex-cli`. The provider is `CodexCliSessionProvider`, a subclass of the Claude provider
    over `protected _cli*` seams whose default bodies are the Claude code unchanged: the record,
@@ -17605,9 +17605,13 @@ the residual that new branches can be created in that namespace recorded here. T
    and anything else is refused. From `S` and `P` it builds:
    - **Configuration only on the command line**: `--ignore-user-config --strict-config
      --ignore-rules`, the project marked untrusted, and every setting a `-c` override (M3, M6).
-   - **A per-session `CODEX_HOME`** holding a 0600 copy of `auth.json` and a `hooks.json`,
-     rewritten before every spawn, under one parent that the profile denies, so no lap can read its
-     own or another lap's credentials.
+   - **A per-session `CODEX_HOME`** holding `auth.json` as a **link** to the real path of the
+     operator's file, never a copy, and a `hooks.json`, rewritten before every spawn, under one
+     parent that the profile denies. Every Codex lap's profile denies the operator's Codex home and
+     the real directory its `auth.json` resolves to, so the credentials read as denied through any
+     lap's link, including a lap under a sibling state root that this profile cannot name (measured
+     on the real sandbox). A copy at rest would have been readable from such a lap (Codex review).
+     On Windows, where a link needs a privilege and Codex's sandbox is unmeasured, it is a copy.
    - **A permission profile**: read everywhere; write in the workspace and in the git metadata roots
      that are directories (M2); `S`'s `denyRead` and `Read(...)` denials as `deny` entries; `S`'s
      `denyWrite` entries inside a write root as `read` (a `denyWrite` entry that *contains* a write
@@ -17711,6 +17715,8 @@ rediscovered:
 - no dollar cost and no turn count for Codex;
 - an operator `cli_args` vector (`D-0088`) is refused for Codex until the allowlist has per-provider
   entries;
+- if a Codex release ever replaces the `auth.json` link with a regular file (say, on a token
+  refresh), that file is readable to a lap under a sibling state root; unobserved on 0.153.4;
 - rule 8's grant lets a worker **create new branch refs** in its topic branch's namespace, and a
   sibling ref created there after the spawn (a parallel lap's) is not pinned; existing siblings
   cannot be changed;

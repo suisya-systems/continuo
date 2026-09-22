@@ -19,7 +19,17 @@
  * that refused everything would fail the accepted half.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
 
@@ -366,6 +376,39 @@ test("a write denial over the branch's ref namespace refuses the spawn, though t
   expect(spawned(log)).toEqual([]);
 });
 
+test("a hooks block with no group or no handler is a refusal, not a TypeError", async () => {
+  for (const hooks of [{ PreToolUse: [] }, { PreToolUse: [{ matcher: "*", hooks: [] }] }]) {
+    const l = lap();
+    const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as Record<string, unknown>;
+    settings["hooks"] = hooks;
+    writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+    const refusal = refusalOf(await start(providerFor(l), l));
+    expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
+    expect(refusal.detail).toContain("are not exactly the one deny hook");
+  }
+});
+
+test("the real directory behind the operator's auth.json is denied too", async () => {
+  // `--codex-home` may be a path whose auth.json is itself a link; the
+  // per-session link points at the real file, so its directory is denied.
+  const l = lap();
+  const real = join(l.root, "real-codex");
+  mkdirSync(real, { recursive: true });
+  writeFileSync(join(real, "auth.json"), '{"token":"operator"}', "utf8");
+  // A symlink needs a privilege a Windows runner may not hold; there the
+  // operator's home holds the file itself and only it is asserted.
+  const linked = process.platform !== "win32";
+  if (linked) {
+    rmSync(join(l.codexHome, "auth.json"));
+    symlinkSync(join(real, "auth.json"), join(l.codexHome, "auth.json"));
+  }
+  const permissions = await profileOf(l);
+  expect(permissions).toContain(`${JSON.stringify(l.codexHome)} = "deny"`);
+  if (linked) {
+    expect(permissions).toContain(`${JSON.stringify(realpathSync(real))} = "deny"`);
+  }
+});
+
 test("a Codex provider built without a command runs codex, not the Claude default", () => {
   const l = lap();
   const probed: string[] = [];
@@ -421,9 +464,8 @@ test("start runs codex exec with the fence as -c overrides and the prompt on std
   expect(argv).toContain('web_search="disabled"');
   const permissions = argv.find((part) => part.startsWith("permissions=")) ?? "";
   expect(permissions).toContain(`${JSON.stringify(workspace)} = "write"`);
-  // The parent of every session's home, not only this one's: a finished
-  // session's home keeps its copy of auth.json, and a sibling lap's child must
-  // not read it.
+  // The parent of every session's home, not only this one's: the homes hold
+  // other sessions' rollouts, and a sibling lap's child must not read them.
   expect(permissions).toContain(`${JSON.stringify(dirname(home))} = "deny"`);
   expect(permissions).toContain(`${JSON.stringify(l.codexHome)} = "deny"`);
   expect(permissions).toContain(`${JSON.stringify(`${workspace}/**/.env`)} = "deny"`);
@@ -440,7 +482,12 @@ test("start runs codex exec with the fence as -c overrides and the prompt on std
   expect(hooks).toContain(join(l.root, "state", SESSION, "hook-000.jsonl"));
   expect(readFileSync(join(home, "auth.json"), "utf8")).toBe('{"token":"operator"}');
   if (process.platform !== "win32") {
-    expect(statSync(join(home, "auth.json")).mode & 0o777).toBe(0o600);
+    // A link to the operator's real file, never a copy at rest that a lap
+    // under a sibling state root could read (Codex review round 2).
+    expect(lstatSync(join(home, "auth.json")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(home, "auth.json"))).toBe(
+      realpathSync(join(l.codexHome, "auth.json")),
+    );
   }
   const report = await reportOf(provider);
   expect(report.report).toBe("done");

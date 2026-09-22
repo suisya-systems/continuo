@@ -40,15 +40,16 @@
  * `-c` override (D-1114 M3, M6): no `config.toml` is rendered, the target
  * repository's `.codex/` and `.rules` are not loaded, and a key this Codex
  * build does not know is a startup error rather than a silently ignored line.
- * The per-session `CODEX_HOME` holds only `auth.json` (a 0600 copy, never a
- * link, so the operator's file is not readable through it) and `hooks.json`,
- * and both are rewritten before every spawn; the `config.toml` Codex scribbles
- * trust entries into is removed. It sits beside the session directory, not in
- * it (`codex-homes+/<id>`, a name no session id can spell), because the session
+ * The per-session `CODEX_HOME` holds only `auth.json` (a link to the real
+ * path of the operator's file, which every Codex lap's profile denies, so it
+ * reads as denied through the link from any lap) and `hooks.json`, and both
+ * are rewritten before every spawn; the `config.toml` Codex scribbles trust
+ * entries into is removed. It sits beside the session directory, not in it
+ * (`codex-homes+/<id>`, a name no session id can spell), because the session
  * directory is taken down flat and the home holds the rollout `resume` needs.
- * Every session's home shares that one parent, and the profile denies the
- * parent: a copy of `auth.json` outlives its session, and one lap's child
- * could otherwise read another's (a sibling's home is under `:root` read).
+ * Every session's home shares that one parent, which the profile denies too:
+ * the homes hold other sessions' rollouts, and a link Codex might replace with
+ * a file on a token refresh would otherwise be readable to a sibling session.
  *
  * ## What is weaker than Claude, stated where it is weaker
  *
@@ -75,8 +76,10 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -359,6 +362,15 @@ function effectiveWriteRoots(
   return { roots, pinned };
 }
 
+/** The directory a file's real path lies in, or `null` if it cannot be resolved. */
+function realDirectoryOf(path: string): string | null {
+  try {
+    return dirname(realpathSync(path));
+  } catch {
+    return null;
+  }
+}
+
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
@@ -515,9 +527,13 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
   if (
     !isRecord(settings["hooks"]) ||
     !hasOnlyKeys(settings["hooks"], ["PreToolUse"]) ||
-    !hasOnlyKeys(group as Record<string, unknown>, ["matcher", "hooks"]) ||
+    // Records first: a missing group or handler (an empty or doubled list)
+    // is a refusal like any other unexpected shape, not a TypeError.
+    !isRecord(group) ||
+    !hasOnlyKeys(group, ["matcher", "hooks"]) ||
     field(group, "matcher") !== "*" ||
-    !hasOnlyKeys(handler as Record<string, unknown>, ["type", "command"]) ||
+    !isRecord(handler) ||
+    !hasOnlyKeys(handler, ["type", "command"]) ||
     field(handler, "type") !== "command" ||
     tokens.length !== 6 ||
     tokens[2] !== "--role" ||
@@ -789,9 +805,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    * Render the per-session home and prove the profile holds (D-1114
    * rule 4): `true` must run, a write outside the writable roots must fail and
    * leave nothing, and a read of the operator's `auth.json` must fail.
-   * Credentials are copied in last, so a refused FIRST spawn leaves none
-   * behind; a later generation's home already holds the earlier copy, which
-   * the profile's denial of every Codex home keeps unreadable to any child.
+   * The credential link is made last, so a refused spawn never gets one.
    */
   protected override _cliPrepareSpawn(record: SessionRecord, run: CliProbeRunner): Failure | null {
     const sessionId = record.session_id;
@@ -887,13 +901,28 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       );
     }
 
+    // A LINK to the operator's file, never a copy (Codex review round 2). A
+    // copy at rest under this state root is readable to a lap whose state root
+    // is a sibling (`lap perform` derives one per run under a shared parent),
+    // which this profile's denials cannot name; the link's target is the real
+    // path every Codex lap's profile denies, so reading it through the link
+    // fails the same way from any lap (measured on the real sandbox). It also
+    // keeps one credential: a refresh Codex writes lands in the operator's
+    // file, not in a copy that drifts from it.
+    //
+    // Windows copies instead: a symlink there needs a privilege a runner may
+    // not hold, and Codex's Windows sandbox is unmeasured (D-1114), so nothing
+    // this profile says about Windows is claimed.
     try {
       const auth = join(home, "auth.json");
       rmSync(auth, { force: true });
-      copyFileSync(operatorAuth, auth);
-      chmodSync(auth, 0o600);
+      if (process.platform === "win32") {
+        copyFileSync(operatorAuth, auth);
+      } else {
+        symlinkSync(realpathSync(operatorAuth), auth);
+      }
     } catch (exc) {
-      return refused(`the operator's Codex credentials could not be copied: ${String(exc)}`);
+      return refused(`the operator's Codex credentials could not be linked: ${String(exc)}`);
     }
     return null;
   }
@@ -1193,8 +1222,9 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    * The permission profile (D-1114 rule 2): read everywhere, write in the
    * workspace and the git metadata roots, the fence's write denials read-only
    * where they fall inside a write root, and its read denials, every
-   * session's `CODEX_HOME` (their common parent: each holds a copy of the
-   * credentials) and the operator's Codex home denied. Denials are written
+   * session's `CODEX_HOME` (their common parent) and the operator's Codex
+   * home -- by the path given and by the real path its `auth.json` resolves
+   * to, which is what the per-session link points at -- denied. Denials are written
    * last so a path named twice ends on the stricter access.
    */
   #profile(fence: CodexFence, workspace: string): Record<string, unknown> {
@@ -1225,6 +1255,10 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     }
     filesystem[this.#homesRoot()] = "deny";
     filesystem[this.#codexHome] = "deny";
+    const realAuthHome = realDirectoryOf(join(this.#codexHome, "auth.json"));
+    if (realAuthHome !== null) {
+      filesystem[realAuthHome] = "deny";
+    }
     return { [PROFILE]: { filesystem } };
   }
 
