@@ -781,7 +781,14 @@ test("a hook with no codex_hook.mjs beside it is refused", async () => {
 });
 
 test("an interpreter in allowed_bash is refused; an ordinary program is not", async () => {
-  for (const entry of ["python3 build.py", "bash -c make", "/usr/bin/node x.js"]) {
+  for (const entry of [
+    "python3 build.py",
+    "bash -c make",
+    "/usr/bin/node x.js",
+    // Leading white space is read the way the hook reads it, not as an empty name.
+    " python3 -i",
+    "\tbash -c make",
+  ]) {
     const l = lap({ allowedBash: [entry] });
     expect(refusalOf(await start(providerFor(l), l)).detail).toContain("executes its stdin");
   }
@@ -790,9 +797,11 @@ test("an interpreter in allowed_bash is refused; an ordinary program is not", as
     "py'thon3' x",
     '"/usr/bin/bash" -c make',
     "'my dir/bash'",
+    "py*3 x",
+    "python3:x -i",
   ]) {
     const l = lap({ allowedBash: [entry] });
-    expect(refusalOf(await start(providerFor(l), l)).detail).toContain("quotes its program name");
+    expect(refusalOf(await start(providerFor(l), l)).detail).toContain("cannot be checked");
   }
   const l = lap({ allowedBash: ["npm test"] });
   fakeEnv("FAKE_RESULT_TEXT", "done");

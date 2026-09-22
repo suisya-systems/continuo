@@ -174,6 +174,9 @@ const NEUTRAL_ENV: Readonly<Record<string, string>> = {
  * reaches a running process without the hook seeing it. Compared after a
  * trailing version is dropped, so `python3.12` and `node22` are caught.
  */
+/** The characters an allowed program name may use in a Codex lap (D-1114 rule 5). */
+const PLAIN_PROGRAM = /^[A-Za-z0-9_./+-]+$/;
+
 const STDIN_PROGRAMS: ReadonlySet<string> = new Set([
   "sh",
   "bash",
@@ -556,15 +559,21 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
 
   const allow = (permissions["allow"] ?? []) as string[];
   for (const entry of allow) {
-    const spec = entry.startsWith("Bash(") && entry.endsWith(")") ? entry.slice(5, -1) : null;
-    const program = spec?.split(/[ \t:]/)[0] ?? "";
-    if (/["']/.test(program)) {
-      // A quoted program name hides it from the list below (`'python3'`), and
-      // the hook splits on space without reading quotes, so `'my dir/bash'`
-      // cannot be classified at all. Refused rather than unquoted (D-1114 rule 5).
+    if (!(entry.startsWith("Bash(") && entry.endsWith(")"))) {
+      continue;
+    }
+    // The program exactly as codex_hook.mjs's `admits` reads it (`programOf`
+    // of the spec without its `:*`), so the name checked here is the name the
+    // hook will match. A name outside a plain character set -- a quote, a glob,
+    // a `:`, an empty name -- cannot be classified and is refused (D-1114 rule 5).
+    const spec = entry.slice(5, -1);
+    const named = spec.endsWith(":*") ? spec.slice(0, -2) : spec;
+    const program = named.replace(/^[ \t]+/, "").split(/[ \t]/)[0] ?? "";
+    if (!PLAIN_PROGRAM.test(program)) {
       return (
-        `the allow entry ${JSON.stringify(entry)} quotes its program name, which ` +
-        "cannot be checked against the programs that execute their stdin"
+        `the allow entry ${JSON.stringify(entry)} names its program as ${JSON.stringify(program)}, ` +
+        "which cannot be checked against the programs that execute their stdin; a program " +
+        "name for a Codex lap is letters, digits and _ . / + - only"
       );
     }
     if (STDIN_PROGRAMS.has(basename(program).replace(/[0-9.]+$/, ""))) {
