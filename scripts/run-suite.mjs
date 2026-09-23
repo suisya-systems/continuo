@@ -96,6 +96,7 @@ const SPAWNING_TESTS = [
   "test/fault_injection/cases.test.ts", // 37
   "test/fault_injection/conformance.test.ts", // 33 + sync
   "test/fault_injection/protocol.test.ts", // 8 + sync
+  "test/fencing/codex-hook.test.ts", // sync, the built codex hook per case
   "test/fencing/deny-hook.test.ts", // sync
   "test/fencing/hermetic-child.test.ts", // 2 real `claude -p` children, and only when opted in
   "test/gate/endpoint-relay.test.ts", // 1, the built endpoint over real stdio
@@ -347,6 +348,15 @@ function reportedFiles(path) {
 
 const forwarded = process.argv.slice(2);
 
+// The classification is checked on every platform, not only where the split
+// runs: CI's pull-request matrix is Linux, and a check that only Windows reaches
+// lets an unclassified file merge green and turn up first as a red nightly
+// (issue #224). A filtered run is a person asking for a subset and is left alone.
+const files = allTestFiles();
+if (forwarded.length === 0) {
+  checkPartition(files);
+}
+
 if (!shouldSerialize()) {
   process.exit(runVitest(forwarded));
 }
@@ -366,9 +376,6 @@ if (forwarded.length > 0) {
   );
   process.exit(runVitest(forwarded));
 }
-
-const files = allTestFiles();
-checkPartition(files);
 
 // Each pass also writes a JSON report, so that the two can be checked to cover
 // the suite between them. `--reporter=default` is passed alongside because

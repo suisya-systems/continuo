@@ -72,7 +72,9 @@ small runner, each spawning child processes of its own. The general form of that
 So on Windows `npm test` runs the suite in two passes: everything that does not spawn children, in
 parallel as before, and then the files that do, one at a time. The set is listed in
 `scripts/run-suite.mjs`, which also records how it was measured and refuses to run when a test file
-reaches `child_process` -- in its own text or a helper's -- without being classified there. Two
+reaches `child_process` -- in its own text or a helper's -- without being classified there. That
+refusal applies on every platform, so the Linux pull-request cells catch an unclassified file
+instead of the Windows nightly (issue #224). Two
 passes that between them skipped a file are not a green suite, and the script checks the two runs
 account for every file before it reports one.
 
