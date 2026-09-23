@@ -27,7 +27,16 @@
       "ids": [],
       "note": "This file carries no target-only test. Every case in it translates one interlock node id. The lane's target-only tests are declared on parity/fencing.battery-coverage.ledger.json (the CPython differential oracle) and parity/fencing.spawn-precondition.ledger.json (seam liveness and the canary-acceptance wiring). Target-only tests are never counted as ported coverage."
     },
-    "approved_non_running": []
+    "approved_non_running": [
+      {
+        "file": "test/fencing/codex-hook.test.ts",
+        "constructs": {
+          "skipIf": 1
+        },
+        "reason": "One POSIX-only case, `hook.mjs's deny rules still apply to an admitted command` (continuo #224). It spells its paths with `join`, and on Windows the backslashes are refused by the Codex hook's PLAIN_COMMAND character allowlist before hook.mjs's deny rules are reached -- a refusal that is by design (a backslash is a shell escape), so on win32 the case's allow half fails and its two deny halves pass for the wrong reason. The hook is not widened for it: Codex on Windows is unmeasured (D-1114), and admitting Windows paths is tracked as its own issue. Every other case in the file runs on every platform. Exactly one; a second would need its own approval.",
+        "approved_by": "operator, 2026-09-23 (continuo #224, option (a))"
+      }
+    ]
   },
   "totals": {
     "source_cases": 21,

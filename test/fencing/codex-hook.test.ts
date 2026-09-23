@@ -216,18 +216,24 @@ describe("Bash", () => {
     }
   });
 
-  test("hook.mjs's deny rules still apply to an admitted command", () => {
-    const l = lap();
-    // Admitted by the allowed_bash entry, then denied by `Bash(git push *)`.
-    const reason = expectDenied(call(l, "Bash", bash("git push origin main")));
-    expect(reason).not.toMatch(/not in this lap's allowed Bash/);
-    // Admitted by the read-only set, then denied by the denyRead substring rule.
-    const secret = join(l.interlockRoot, ".secrets", "token");
-    const readReason = expectDenied(call(l, "Bash", bash(`cat ${secret}`)));
-    expect(readReason).not.toMatch(/not in this lap's allowed Bash/);
-    // The paired allows: same programs, paths no rule names.
-    expectAllowed(call(l, "Bash", bash(`cat ${join(l.workerDir, "README.md")}`)));
-  });
+  // POSIX only: the cases spell paths with `join`, and a Windows path's
+  // backslashes are refused by PLAIN_COMMAND before hook.mjs's rules are
+  // reached -- by design, and Codex on Windows is unmeasured (D-1114).
+  test.skipIf(process.platform === "win32")(
+    "hook.mjs's deny rules still apply to an admitted command",
+    () => {
+      const l = lap();
+      // Admitted by the allowed_bash entry, then denied by `Bash(git push *)`.
+      const reason = expectDenied(call(l, "Bash", bash("git push origin main")));
+      expect(reason).not.toMatch(/not in this lap's allowed Bash/);
+      // Admitted by the read-only set, then denied by the denyRead substring rule.
+      const secret = join(l.interlockRoot, ".secrets", "token");
+      const readReason = expectDenied(call(l, "Bash", bash(`cat ${secret}`)));
+      expect(readReason).not.toMatch(/not in this lap's allowed Bash/);
+      // The paired allows: same programs, paths no rule names.
+      expectAllowed(call(l, "Bash", bash(`cat ${join(l.workerDir, "README.md")}`)));
+    },
+  );
 
   test("the read-only set admits reading programs and nothing else", () => {
     const l = lap();

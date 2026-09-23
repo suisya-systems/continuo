@@ -375,6 +375,10 @@ function realDirectoryOf(path: string): string | null {
 }
 
 function within(path: string, root: string): boolean {
+  // Resolved first: rule 8's roots are spelled with `/` and a fence's paths may
+  // not be, so on Windows a raw prefix test against `sep` never matched (#224).
+  path = resolve(path);
+  root = resolve(root);
   return path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 }
 
