@@ -493,7 +493,11 @@ test("start runs codex exec with the fence as -c overrides and the prompt on std
   const hooks = readFileSync(join(home, "hooks.json"), "utf8");
   expect(hooks).toContain("codex_hook.mjs");
   expect(hooks).toContain(`--mcp-server ${MCP_SERVER}`);
-  expect(hooks).toContain(join(l.root, "state", SESSION, "hook-000.jsonl"));
+  // The command decoded, not the raw file: JSON doubles a Windows path's backslashes.
+  const hookCommand = (
+    JSON.parse(hooks) as { hooks: { PreToolUse: { hooks: { command: string }[] }[] } }
+  ).hooks.PreToolUse[0]?.hooks[0]?.command;
+  expect(hookCommand).toContain(join(l.root, "state", SESSION, "hook-000.jsonl"));
   expect(readFileSync(join(home, "auth.json"), "utf8")).toBe('{"token":"operator"}');
   if (process.platform !== "win32") {
     // A link to the operator's real file, never a copy at rest that a lap
