@@ -583,8 +583,9 @@ test("a call that could fire the hook and left no log line refuses the turn; the
 });
 
 test("a turn whose calls could not fire the hook is accepted with an empty hook log", async () => {
-  // Measured on codex-cli 0.153.4: an arithmetic-only script and the direct
-  // `wait` / `write_stdin` tools reach no hook, so the log stays empty.
+  // Measured on codex-cli 0.153.4 (D-1114 M9): arithmetic and `text` scripts,
+  // a `write_stdin` poll and the direct `wait` / `write_stdin` tools reach no
+  // hook, so the log stays empty.
   const l = lap();
   fakeEnv("FAKE_RESULT_TEXT", "done");
   fakeEnv(
@@ -592,6 +593,10 @@ test("a turn whose calls could not fire the hook is accepted with an empty hook 
     JSON.stringify([
       { name: "exec", input: "3 * 3;\n", output: "Script completed" },
       { name: "exec", input: "text(6 * 7)\n", output: "Script completed" },
+      {
+        name: "exec",
+        input: 'text(await tools.write_stdin({session_id:24708,chars:"",yield_time_ms:1000}));\n',
+      },
       { kind: "function", name: "wait", input: '{"cell_id":"1"}', output: "Script completed" },
       { kind: "function", name: "write_stdin", input: '{"session_id":1,"chars":""}' },
     ]),
@@ -600,7 +605,7 @@ test("a turn whose calls could not fire the hook is accepted with an empty hook 
   await start(provider, l);
   const report = await reportOf(provider);
   expect(report.permissionDenials).toEqual([]);
-  expect(report.commands).toHaveLength(4);
+  expect(report.commands).toHaveLength(5);
 });
 
 test("a hooked call with no log line of its own refuses the turn, though the log is not empty", async () => {
@@ -626,12 +631,16 @@ test("a hooked call with no log line of its own refuses the turn, though the log
 test("a script no pattern names as hooked still needs a log line: failed, computed or aliased", async () => {
   // Measured: a script that calls apply_patch and then fails fired the hook
   // first, so "Script failed" proves nothing was called; and a script reaches
-  // a tool by any spelling. Only a script with no identifier but `text` is exempt.
+  // a tool by any spelling. Only a script with no identifier but `text`, or a plain `write_stdin` poll, is exempt.
   for (const unseen of [
     { ...bash("git log", "Script failed\nWall time 0.0 seconds\nOutput:\n"), hook: undefined },
     { name: "exec", input: 'await tools["exec_command"]({cmd: "git log"})\n' },
     { name: "exec", input: "const t = tools; await t.exec_command({cmd: 'git log'})\n" },
     { name: "exec", input: "const x = 5; text(x)\n" },
+    {
+      name: "exec",
+      input: "await tools.write_stdin({session_id: tools.exec_command({cmd: 'git log'})})\n",
+    },
     { name: "clock__curr_time", input: "{}" },
   ]) {
     const l = lap();

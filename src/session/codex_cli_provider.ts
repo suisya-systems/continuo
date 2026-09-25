@@ -211,11 +211,14 @@ const PROFILE = "fence";
 /**
  * The calls the post-turn check lets through without a hook log line, and
  * nothing else (D-1114 rule 7): the direct tools measured not to fire the hook,
- * and a code-mode script that names no identifier but `text`, so it can reach
- * no tool. Every other call, a failed script included, may have fired it.
+ * a code-mode script that names no identifier but `text`, so it can reach no
+ * tool, and a script that only polls a running command through `write_stdin`
+ * with an argument of plain literals (no `.`, `(` or `[`, so nothing in it can
+ * call). Every other call, a failed script included, may have fired it.
  */
 const UNHOOKED_DIRECT = new Set(["wait", "write_stdin"]);
 const TOOL_FREE_SCRIPT = /^(?:[\s\d+\-*/%().,;]|\btext\b)*$/;
+const STDIN_POLL_SCRIPT = /^\s*(?:text\()?await tools\.write_stdin\(\{[\w\s:,"'\\]*\}\)\)?;?\s*$/;
 
 /** Depth Codex expands a `**` deny glob to at spawn (D-1114 M3). */
 const GLOB_SCAN_MAX_DEPTH = 6;
@@ -1006,8 +1009,8 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    * - every sub-agent call must have been denied by the hook;
    * - the hook log must have at least one line per call that could have fired
    *   the hook, because an untrusted or missing hook is skipped silently
-   *   (D-1114 M4); only a tool-free script and the direct tools measured not to
-   *   fire it are exempt.
+   *   (D-1114 M4); only a tool-free script, a `write_stdin` poll and the direct
+   *   tools measured not to fire it are exempt.
    */
   protected override _cliTurnFacts(
     record: SessionRecord,
@@ -1141,7 +1144,9 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     // allowlist, not a list of hooked names. An empty log is then no refusal
     // of its own: a turn of tool-free calls has nothing to show.
     const hooked = calls.filter((call) =>
-      call.name === "exec" ? !TOOL_FREE_SCRIPT.test(call.input) : !UNHOOKED_DIRECT.has(call.name),
+      call.name === "exec"
+        ? !TOOL_FREE_SCRIPT.test(call.input) && !STDIN_POLL_SCRIPT.test(call.input)
+        : !UNHOOKED_DIRECT.has(call.name),
     ).length;
     if (hooked > (hookLog?.length ?? 0)) {
       return uninterpretable(

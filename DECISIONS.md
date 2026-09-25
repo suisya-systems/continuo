@@ -17677,6 +17677,8 @@ the residual that new branches can be created in that namespace recorded here. T
    and the rollout does not record the inner ones. So a call counts once when it is a direct hooked
    call, or an `exec` whose script names `tools.exec_command`, `tools.apply_patch` or an MCP tool
    and did not fail (a failed script, such as a syntax error, may have called nothing).
+   *(Amended 2026-09-26, below: the count is now every call except those that cannot fire the
+   hook, and a failed script counts.)*
 8. **Committing: the topic branch's ref directory, with its siblings pinned.** `git commit` writes
    `<ref>.lock` beside the branch's ref and appends to its reflog, so the ref file the Claude fence
    grants (`D-0082`'s item 3) is not enough, and Codex cannot take a file as a writable root (M2).
@@ -17731,7 +17733,7 @@ rediscovered:
   `.env` device node) stay in the worktree.
 
 **Amended 2026-09-26 (Issue #220, the owner's answer (A)): an empty hook log is no refusal of its
-own, and every call that could have fired the hook counts.** Rule 7 refused any turn with a tool
+own, and every call that could have fired the hook counts.** The code under rule 7 refused any turn with a tool
 call and an empty hook log, which refused a turn whose only calls could not fire the hook (an
 arithmetic script). Its count also exempted a failed script, and counted a script only when it
 matched `tools.<hooked name>(`, so the empty-log refusal was what caught a hook that never ran for
@@ -17740,13 +17742,17 @@ those calls. Measured on `codex-cli 0.153.4` on 2026-09-26:
 - **M9.** A script that ran `tools.apply_patch(...)` and then failed fired the hook for the patch
   first: `Script failed` does not mean nothing was called. A script also sees its tools through a
   global (`ALL_TOOLS`), not only as `tools.<name>`. The direct `wait` and `write_stdin` calls
-  and an arithmetic-only script (`3*3`, `2 + 2;`) left the hook log empty; every hooked call the
-  log recorded was a `Bash` or `apply_patch` inside a script.
+  and an arithmetic-only script (`3*3`, `2 + 2;`) left the hook log empty, as did
+  `const x = 5; text(x)` and a script that only polled a running command,
+  `text(await tools.write_stdin({session_id:24708,chars:"",yield_time_ms:1000}));`; every hooked
+  call the log recorded was a `Bash` or `apply_patch` inside a script.
 
 Rule 7's count is now an allowlist of what cannot fire the hook, and the empty-log refusal is gone:
-a call needs a hook log line of its own unless it is a direct `wait` or `write_stdin` call, or a
+a call needs a hook log line of its own unless it is a direct `wait` or `write_stdin` call, a
 script whose only identifier is `text` (digits, arithmetic, parentheses, `, ; .` and white space
-otherwise). A failed script counts, and so does any other script, whatever it names. So a command
+otherwise), or a script that is one `write_stdin` poll, optionally inside `text(...)`, whose
+argument object holds only letters, digits, white space, `: , " '` and `\` (no `.`, `(` or `[`,
+so nothing in it can call). A failed script counts, and so does any other script, whatever it names. So a command
 that ran without the hook is still refused, now through the count alone: its call counts, whatever
 its spelling. The sub-agent check runs first, so a sub-agent call the hook never saw is reported as
 that. What remains weaker, in place of the hook-log bullet above: the check is still a lower bound,
