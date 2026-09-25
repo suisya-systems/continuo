@@ -17792,11 +17792,13 @@ the "hook-log check is a count" item of its consequences.
    that count.
 2. **An empty hook log is no refusal of its own.** A turn of calls that cannot fire the hook has
    nothing to log, and is accepted.
-3. **A `write_stdin` that writes input counts, and so refuses the turn.** It never fires the hook
-   (M1), so it can never have a line: input written to a running process has passed no hook, and
-   a lap that did so is not accepted. Under `D-1114` the count did not look at `write_stdin` at all,
-   and the residual was bounded by rule 5 (a lap whose allow list names a program that executes its
-   stdin is refused) and by the OS sandbox.
+3. **A `write_stdin` that writes input counts.** It never fires the hook (M1), so input it writes to
+   a running process has passed no hook. A direct `write_stdin` call, or a script that is nothing
+   else, can never have a line of its own and refuses the turn. Under `D-1114` the count did not
+   look at `write_stdin` at all. It is still one line per call: a script that also makes a hooked
+   call, or one that exec call among others whose lines are surplus, is covered by those lines, so
+   input written that way is still bounded only by `D-1114` rule 5 (a lap whose allow list names a
+   program that executes its stdin is refused) and by the OS sandbox, as before.
 4. **The sub-agent check runs before the count**, so a sub-agent call the hook never saw is refused
    as that.
 
@@ -17812,12 +17814,15 @@ the "hook-log check is a count" item of its consequences.
 **Consequences.** A command that ran without the hook is refused through the count, whatever the
 script calls it. What remains, stated so it is not rediscovered:
 
-- the count is a lower bound, not a pairing: a script that calls two hooked tools where the hook ran
-  for only one is not told apart from one where it ran for both, and a surplus line (a sub-agent
-  denial, say) can cover a call's missing one;
+- the count is a lower bound, not a pairing, per outer call: a script that calls two hooked tools
+  where the hook ran for only one is not told apart from one where it ran for both; a script whose
+  hooked calls produce more lines than it needs, or a surplus line (a sub-agent denial, say), can
+  cover another call's missing one; and a script that makes a hooked call and also writes to a
+  running process's stdin needs only the line its hooked call produces, so that input passes the
+  count (Codex review of this change);
 - a script that calls no tool but names anything besides `text` (`const x = 5; text(x)`, a syntax
-  error), and a turn that writes to a running process's stdin, need a line they cannot have and
-  refuse the turn (the fail-closed side);
+  error), and a direct `write_stdin` that writes input, need a line they cannot have and refuse the
+  turn (the fail-closed side);
 - the check runs after the turn: a refused turn opens no gate, but what it ran has run, as for every
   other post-turn check of `D-1114` rule 7.
 

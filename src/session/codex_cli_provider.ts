@@ -214,8 +214,9 @@ const PROFILE = "fence";
  * code-mode script that names no identifier but `text`, so it can reach no
  * tool; and a `write_stdin` that writes nothing, direct or as a script whose
  * argument holds only names, numbers and empty strings. `write_stdin` never
- * fires the hook, so one that writes input counts and refuses the turn: that
- * input reaches a running process past the hook. Every other call, a failed
+ * fires the hook, so one that writes input counts: that input reaches a running
+ * process past the hook. (A script that also makes a hooked call is covered by
+ * that call's line; D-1117 names that residual.) Every other call, a failed
  * script included, may have fired it.
  */
 const TOOL_FREE_SCRIPT = /^(?:[\s\d+\-*/%().,;]|\btext\b)*$/;
