@@ -188,25 +188,38 @@ export const doctorSeams = {
  * the worker a launch from here would spawn. The abstract namespace touches no
  * filesystem, so a read-only directory cannot be mistaken for the filter.
  * Linux-only: elsewhere there is no abstract namespace and the cause has never
- * been observed, so the answer is `null`. A child that cannot be run at all
- * answers `SPAWN_FAILED`, which is not `EPERM` and so fails nothing.
+ * been observed, so the answer is `null`. A listen refused with any other code
+ * answers `NOT_EPERM`, and a child that cannot be run at all `SPAWN_FAILED`;
+ * neither is `EPERM`, so neither fails anything.
  */
 export function probeUnixSocketSync(platform: NodeJS.Platform = process.platform): string | null {
   if (platform !== "linux") {
     return null;
   }
+  // The answer comes back as the exit status, not on a pipe: Node's pipes are
+  // Unix socketpairs, which a filter refusing AF_UNIX can refuse too, and then
+  // the launch fails and the check would be skipped where it must fail.
   const script =
     'const s = require("node:net").createServer();' +
-    's.once("error", (e) => process.stdout.write(e.code ?? "UNKNOWN"));' +
+    's.once("error", (e) => process.exit(e.code === "EPERM" ? 3 : 4));' +
     's.listen("\\0continuo-doctor-probe-" + process.pid, () => s.close());';
   const result = spawnSync(process.execPath, ["-e", script], {
-    encoding: "utf8",
+    stdio: "ignore",
     timeout: 30_000,
   });
-  if (result.error !== undefined || result.status !== 0) {
+  if (result.error !== undefined) {
     return "SPAWN_FAILED";
   }
-  return result.stdout === "" ? null : result.stdout;
+  switch (result.status) {
+    case 0:
+      return null;
+    case 3:
+      return "EPERM";
+    case 4:
+      return "NOT_EPERM";
+    default:
+      return "SPAWN_FAILED";
+  }
 }
 
 /** The socket check's verdict for a probe answer (`D-1116`). */

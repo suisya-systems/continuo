@@ -17769,10 +17769,11 @@ had changes a ported surface's output, which AGENTS.md section 1 rules out.
    `lap perform` keeps its own probe: the doctor is a command an operator may skip.
 2. The doctor gains a third check. On Linux it listens on an abstract Unix socket from a child
    process (`probeUnixSocketSync`). `run` is synchronous, and a child inherits the filter, so the
-   child answers for this process and for any worker it would start. An `EPERM` is a `fail`. The
-   report is then not ok and `run` exits 1. The detail names an inherited seccomp filter, usually
-   a parent Claude Code sandbox, as the cause. Any other error is `skipped` with its code, because
-   only `EPERM` is evidence of the filter (`D-1112`). The check is `skipped` off Linux, and
+   child answers for this process and for any worker it would start. The child answers through
+   its exit status, not a pipe: Node's pipes are Unix socketpairs, which the same filter may
+   refuse. An `EPERM` is a `fail`. The report is then not ok and `run` exits 1. The detail names
+   an inherited seccomp filter, usually a parent Claude Code sandbox, as the cause. Any other
+   error is `skipped`, because only `EPERM` is evidence of the filter (`D-1112`). The check is `skipped` off Linux, and
    `skipped` when the settings disable the sandbox, as the canary is.
 3. `--no-probe-bwrap` does not turn the check off. The check needs no bwrap, and the flag names the
    canary.
