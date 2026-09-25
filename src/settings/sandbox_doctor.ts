@@ -33,8 +33,15 @@
  * 2. **Live canary** -- when `bwrap` is present, actually launch it with the
  *    collected deny paths bound and report whether the sandbox comes up. This
  *    catches unbindable paths whose cause is something other than a symlink.
+ * 3. **Unix socket check** (target-only, `D-1116`) -- on Linux, listen on an
+ *    abstract Unix socket from a child of this process. Claude Code's sandbox
+ *    runtime needs `socket(AF_UNIX)` for its mux socket, and a process started
+ *    inside another Claude Code sandbox inherits a seccomp filter that refuses
+ *    it. bwrap comes up under that filter, so the canary passes while the
+ *    worker's sandbox cannot start (rondo N-16, N-21). interlock has no such
+ *    check.
  *
- * Exit status is non-zero when either check fails, so it can gate a worker
+ * Exit status is non-zero when any check fails, so it can gate a worker
  * launch instead of being advisory.
  *
  * ## The number-spelling obligation reaches this module, at one branch
@@ -163,7 +170,64 @@ export const doctorSeams = {
   stderr: (text: string): void => {
     process.stderr.write(text);
   },
+  /**
+   * The Unix socket check (target-only, `D-1116`). A seam because the suite
+   * itself may run inside a Claude Code sandbox, where the real answer is
+   * `EPERM`. See {@link probeUnixSocketSync}.
+   */
+  probeUnixSocket: (): string | null => probeUnixSocketSync(),
 };
+
+/**
+ * Try to listen on an abstract Unix socket from a child process, and answer the
+ * error code the kernel refused with, or `null` when it came up (`D-1116`).
+ *
+ * `lap perform`'s probe (`src/lap/cli.ts`, `D-1112`) asks the same question in
+ * process, but it is asynchronous and `run` here is not. A child inherits this
+ * process's seccomp filter, so asking it is asking this process -- and asking
+ * the worker a launch from here would spawn. The abstract namespace touches no
+ * filesystem, so a read-only directory cannot be mistaken for the filter.
+ * Linux-only: elsewhere there is no abstract namespace and the cause has never
+ * been observed, so the answer is `null`. A child that cannot be run at all
+ * answers `SPAWN_FAILED`, which is not `EPERM` and so fails nothing.
+ */
+export function probeUnixSocketSync(platform: NodeJS.Platform = process.platform): string | null {
+  if (platform !== "linux") {
+    return null;
+  }
+  const script =
+    'const s = require("node:net").createServer();' +
+    's.once("error", (e) => process.stdout.write(e.code ?? "UNKNOWN"));' +
+    's.listen("\\0continuo-doctor-probe-" + process.pid, () => s.close());';
+  const result = spawnSync(process.execPath, ["-e", script], {
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  if (result.error !== undefined || result.status !== 0) {
+    return "SPAWN_FAILED";
+  }
+  return result.stdout === "" ? null : result.stdout;
+}
+
+/** The socket check's verdict for a probe answer (`D-1116`). */
+function unixSocketVerdict(code: string | null): [status: string, detail: string] {
+  if (code === null) {
+    return process.platform === "linux"
+      ? [CANARY_PASS, "listened on an abstract Unix socket"]
+      : [CANARY_SKIPPED, "Unix socket check is Linux-only"];
+  }
+  if (code !== "EPERM") {
+    // Only `EPERM` is the filter; any other failure is not evidence of it.
+    return [CANARY_SKIPPED, `could not decide: the probe failed with ${code}, not EPERM`];
+  }
+  return [
+    CANARY_FAIL,
+    "this process may not create a Unix socket (EPERM). A worker started from here " +
+      "inherits that block, so its Claude Code sandbox cannot create its mux socket, " +
+      "fails to initialize, and runs Bash unsandboxed. The usual cause is an inherited " +
+      "seccomp filter, typically a parent Claude Code sandbox; launch the worker outside it",
+  ];
+}
 
 /**
  * `os.defpath`: what CPython searches when `PATH` is not set at all.
@@ -319,6 +383,9 @@ export interface DoctorReport {
   readonly findings: readonly Finding[];
   readonly canaryStatus: string;
   readonly canaryDetail: string;
+  /** The Unix socket check (target-only, `D-1116`). */
+  readonly socketStatus: string;
+  readonly socketDetail: string;
   readonly sandboxDisabled: boolean;
 }
 
@@ -341,7 +408,11 @@ export function reportOk(report: DoctorReport): boolean {
   if (report.sandboxDisabled) {
     return true;
   }
-  return reportFailures(report).length === 0 && report.canaryStatus !== CANARY_FAIL;
+  return (
+    reportFailures(report).length === 0 &&
+    report.canaryStatus !== CANARY_FAIL &&
+    report.socketStatus !== CANARY_FAIL
+  );
 }
 
 /** `DoctorReport.to_jsonable`. */
@@ -353,6 +424,10 @@ export function reportToJsonable(report: DoctorReport): Record<string, unknown> 
     canary: {
       status: report.canaryStatus,
       detail: report.canaryDetail,
+    },
+    unix_socket: {
+      status: report.socketStatus,
+      detail: report.socketDetail,
     },
   };
 }
@@ -814,10 +889,17 @@ export function diagnoseSources(
   } else {
     [status, detail] = [CANARY_SKIPPED, "live canary disabled (--no-probe-bwrap)"];
   }
+  // Independent of `--no-probe-bwrap`: it needs no bwrap, and the flag names the
+  // canary. Skipped with it only where no sandbox is launched at all.
+  const [socketStatus, socketDetail] = sandboxDisabled
+    ? [CANARY_SKIPPED, "sandbox.enabled is false; no sandbox launch to probe"]
+    : unixSocketVerdict(doctorSeams.probeUnixSocket());
   return {
     findings,
     canaryStatus: status,
     canaryDetail: detail,
+    socketStatus,
+    socketDetail,
     sandboxDisabled,
   };
 }
@@ -1011,6 +1093,10 @@ export function formatReport(
     }
   }
   lines.push(`bwrap canary: ${report.canaryStatus} - ${report.canaryDetail}`);
+  lines.push(`unix socket: ${report.socketStatus} - ${report.socketDetail}`);
+  // The RESULT chain below is about the deny paths; the socket check adds its
+  // own RESULT line after it (`D-1116`).
+  const bwrapOk = failures.length === 0 && report.canaryStatus !== CANARY_FAIL;
   if (report.sandboxDisabled) {
     lines.push("");
     lines.push(
@@ -1028,7 +1114,7 @@ export function formatReport(
         "the same settings abort the launch as soon as the link is " +
         "visible. Treated as a failure; apply the suggested rewrites.",
     );
-  } else if (!reportOk(report)) {
+  } else if (!bwrapOk) {
     lines.push("");
     lines.push(
       "RESULT: the sandbox will NOT start with these settings. Claude " +
@@ -1040,6 +1126,12 @@ export function formatReport(
     );
   } else {
     lines.push("RESULT: sandbox deny paths are usable by bwrap.");
+  }
+  if (!report.sandboxDisabled && report.socketStatus === CANARY_FAIL) {
+    lines.push(
+      "RESULT: a Claude Code sandbox cannot start from this process, whatever the " +
+        "bwrap canary says: see the unix socket line above.",
+    );
   }
   return `${lines.join("\n")}\n`;
 }
