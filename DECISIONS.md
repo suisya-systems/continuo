@@ -17730,6 +17730,30 @@ rediscovered:
 - if the Codex sandbox helper panics, the empty mount targets it created (`.codex/`, `.agents/`, a
   `.env` device node) stay in the worktree.
 
+**Amended 2026-09-26 (Issue #220, the owner's answer (A)): an empty hook log is no refusal of its
+own, and every call that could have fired the hook counts.** Rule 7 refused any turn with a tool
+call and an empty hook log, which refused a turn whose only calls could not fire the hook (an
+arithmetic script). Its count also exempted a failed script, and counted a script only when it
+matched `tools.<hooked name>(`, so the empty-log refusal was what caught a hook that never ran for
+those calls. Measured on `codex-cli 0.153.4` on 2026-09-26:
+
+- **M9.** A script that ran `tools.apply_patch(...)` and then failed fired the hook for the patch
+  first: `Script failed` does not mean nothing was called. A script also sees its tools through a
+  global (`ALL_TOOLS`), not only as `tools.<name>`. The direct `wait` and `write_stdin` calls
+  and an arithmetic-only script (`3*3`, `2 + 2;`) left the hook log empty; every hooked call the
+  log recorded was a `Bash` or `apply_patch` inside a script.
+
+Rule 7's count is now an allowlist of what cannot fire the hook, and the empty-log refusal is gone:
+a call needs a hook log line of its own unless it is a direct `wait` or `write_stdin` call, or a
+script whose only identifier is `text` (digits, arithmetic, parentheses, `, ; .` and white space
+otherwise). A failed script counts, and so does any other script, whatever it names. So a command
+that ran without the hook is still refused, now through the count alone: its call counts, whatever
+its spelling. The sub-agent check runs first, so a sub-agent call the hook never saw is reported as
+that. What remains weaker, in place of the hook-log bullet above: the check is still a lower bound,
+not a pairing (one line per call, however many tools a script called), and a script that calls no
+tool but names anything besides `text` (`const x = 5; text(x)`, a syntax error) needs a log line
+it cannot have and refuses the turn (the fail-closed side).
+
 **Status.** accepted
 
 **Falsifier.** A Codex release that names a thread before it starts (rule 6 should commit the

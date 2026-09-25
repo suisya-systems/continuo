@@ -209,11 +209,13 @@ const FENCE_PERMISSION_MODE = "acceptEdits";
 const PROFILE = "fence";
 
 /**
- * Tools that fire the hook, as a code-mode `exec` script calls them and as a
- * direct call names them (D-1114 M4); the post-turn check's lower bound.
+ * The calls the post-turn check lets through without a hook log line, and
+ * nothing else (D-1114 rule 7): the direct tools measured not to fire the hook,
+ * and a code-mode script that names no identifier but `text`, so it can reach
+ * no tool. Every other call, a failed script included, may have fired it.
  */
-const HOOKED_IN_SCRIPT = /\btools\.(?:exec_command|apply_patch|mcp__\w+)\s*\(/;
-const HOOKED_DIRECT = /^(?:exec_command|shell|apply_patch|mcp__)/;
+const UNHOOKED_DIRECT = new Set(["wait", "write_stdin"]);
+const TOOL_FREE_SCRIPT = /^(?:[\s\d+\-*/%().,;]|\btext\b)*$/;
 
 /** Depth Codex expands a `**` deny glob to at spawn (D-1114 M3). */
 const GLOB_SCAN_MAX_DEPTH = 6;
@@ -1001,10 +1003,11 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    * - its last `turn_context` must show `approval_policy` never, a
    *   `workspace-write` sandbox without network, and the `fence` profile --
    *   the proof the `-c` configuration was what ran;
-   * - a turn that made a tool call must have a hook log, and at least one log
-   *   line per call that must have fired the hook, because an untrusted or
-   *   missing hook is skipped silently (D-1114 M4);
-   * - every sub-agent call must have been denied by the hook.
+   * - every sub-agent call must have been denied by the hook;
+   * - the hook log must have at least one line per call that could have fired
+   *   the hook, because an untrusted or missing hook is skipped silently
+   *   (D-1114 M4); only a tool-free script and the direct tools measured not to
+   *   fire it are exempt.
    */
   protected override _cliTurnFacts(
     record: SessionRecord,
@@ -1118,30 +1121,6 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
         `hook-${paddedGeneration(record.generation)}.jsonl`,
       ),
     );
-    if (calls.length > 0 && (hookLog === null || hookLog.length === 0)) {
-      return uninterpretable(
-        `the turn made ${calls.length} tool call(s) and the hook log is empty, so the ` +
-          "fence's hook did not run; the turn is not accepted",
-      );
-    }
-    // A lower bound, not a pairing: a code-mode `exec` call runs any number of
-    // tool calls (or none) and the rollout does not record the inner ones, so a
-    // call cannot be matched to its log line. Each call that must have fired
-    // the hook at least once -- a direct hooked call, or an `exec` whose script
-    // names a hooked tool and did not fail -- needs a log line of its own.
-    const hooked = calls.filter((call) =>
-      call.name === "exec"
-        ? HOOKED_IN_SCRIPT.test(call.input) &&
-          !(outputs.get(call.id) ?? "").startsWith("Script failed")
-        : HOOKED_DIRECT.test(call.name),
-    ).length;
-    if (hooked > (hookLog?.length ?? 0)) {
-      return uninterpretable(
-        `the turn made ${hooked} tool call(s) the hook must have seen and the hook log has ` +
-          `${hookLog?.length ?? 0} line(s), so the hook did not run for every call; the turn ` +
-          "is not accepted",
-      );
-    }
     const denied = (hookLog ?? []).filter((entry) => entry.value["denied"] === true);
     for (const call of calls.filter((c) => c.name.startsWith("collaboration"))) {
       const refusals = denied.filter((entry) => entry.value["tool_name"] === call.name).length;
@@ -1153,9 +1132,28 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
         );
       }
     }
-    // No hook log here means no tool call (the case above refused the other),
-    // and the rollout records every call before it runs: the answer is "none
-    // denied", which Claude's report gives as `[]` too, not "cannot say".
+    // A lower bound, not a pairing: a code-mode `exec` call runs any number of
+    // tool calls (or none) and the rollout does not record the inner ones, so a
+    // call cannot be matched to its log line. So every call needs a log line of
+    // its own unless it provably could not fire the hook: a script that fails
+    // may have called a tool first, and a script can reach a tool by a name no
+    // pattern lists (`tools["exec_command"]`), so the exemption is an
+    // allowlist, not a list of hooked names. An empty log is then no refusal
+    // of its own: a turn of tool-free calls has nothing to show.
+    const hooked = calls.filter((call) =>
+      call.name === "exec" ? !TOOL_FREE_SCRIPT.test(call.input) : !UNHOOKED_DIRECT.has(call.name),
+    ).length;
+    if (hooked > (hookLog?.length ?? 0)) {
+      return uninterpretable(
+        `the turn made ${hooked} tool call(s) the hook must have seen and the hook log has ` +
+          `${hookLog?.length ?? 0} line(s), so the hook did not run for every call; the turn ` +
+          "is not accepted",
+      );
+    }
+    // No hook log here means no call that could fire the hook (the case above
+    // refused the other), and the rollout records every call before it runs:
+    // the answer is "none denied", which Claude's report gives as `[]` too, not
+    // "cannot say".
     const permissionDenials: DeniedToolCall[] = denied.map((entry) => ({
       toolName: String(entry.value["tool_name"]),
       toolInput: isRecord(entry.value["tool_input"]) ? entry.value["tool_input"] : {},
