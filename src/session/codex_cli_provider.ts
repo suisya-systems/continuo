@@ -210,15 +210,35 @@ const PROFILE = "fence";
 
 /**
  * The calls the post-turn check lets through without a hook log line, and
- * nothing else (D-1114 rule 7): the direct tools measured not to fire the hook,
- * a code-mode script that names no identifier but `text`, so it can reach no
- * tool, and a script that only polls a running command through `write_stdin`
- * with an argument of plain literals (no `.`, `(` or `[`, so nothing in it can
- * call). Every other call, a failed script included, may have fired it.
+ * nothing else (D-1117): the direct `wait`, measured not to fire the hook; a
+ * code-mode script that names no identifier but `text`, so it can reach no
+ * tool; and a `write_stdin` that writes nothing, direct or as a script whose
+ * argument holds only names, numbers and empty strings. `write_stdin` never
+ * fires the hook, so one that writes input counts and refuses the turn: that
+ * input reaches a running process past the hook. Every other call, a failed
+ * script included, may have fired it.
  */
-const UNHOOKED_DIRECT = new Set(["wait", "write_stdin"]);
 const TOOL_FREE_SCRIPT = /^(?:[\s\d+\-*/%().,;]|\btext\b)*$/;
-const STDIN_POLL_SCRIPT = /^\s*(?:text\()?await tools\.write_stdin\(\{[\w\s:,"'\\]*\}\)\)?;?\s*$/;
+const STDIN_POLL_SCRIPT =
+  /^\s*(?:text\()?await tools\.write_stdin\(\{(?:\s*\w+\s*:\s*(?:\d+|""|'')\s*(?:,|(?=\})))*\s*\}\)\)?;?\s*$/;
+
+function hookFree(name: string, input: string): boolean {
+  switch (name) {
+    case "exec":
+      return TOOL_FREE_SCRIPT.test(input) || STDIN_POLL_SCRIPT.test(input);
+    case "wait":
+      return true;
+    case "write_stdin":
+      try {
+        const args: unknown = JSON.parse(input);
+        return isRecord(args) && (args["chars"] === undefined || args["chars"] === "");
+      } catch {
+        return false;
+      }
+    default:
+      return false;
+  }
+}
 
 /** Depth Codex expands a `**` deny glob to at spawn (D-1114 M3). */
 const GLOB_SCAN_MAX_DEPTH = 6;
@@ -999,7 +1019,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
 
   /**
    * The report, spend, commands and denials of the verified turn, and the
-   * post-turn checks that refuse it (D-1114 rule 7):
+   * post-turn checks that refuse it (D-1114 rule 7, its count as D-1117):
    *
    * - the rollout's `session_meta` must name the adopted thread, or it is an
    *   identity incident;
@@ -1009,8 +1029,8 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
    * - every sub-agent call must have been denied by the hook;
    * - the hook log must have at least one line per call that could have fired
    *   the hook, because an untrusted or missing hook is skipped silently
-   *   (D-1114 M4); only a tool-free script, a `write_stdin` poll and the direct
-   *   tools measured not to fire it are exempt.
+   *   (D-1114 M4); only a tool-free script, `wait` and a `write_stdin` that
+   *   writes nothing are exempt.
    */
   protected override _cliTurnFacts(
     record: SessionRecord,
@@ -1143,11 +1163,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     // pattern lists (`tools["exec_command"]`), so the exemption is an
     // allowlist, not a list of hooked names. An empty log is then no refusal
     // of its own: a turn of tool-free calls has nothing to show.
-    const hooked = calls.filter((call) =>
-      call.name === "exec"
-        ? !TOOL_FREE_SCRIPT.test(call.input) && !STDIN_POLL_SCRIPT.test(call.input)
-        : !UNHOOKED_DIRECT.has(call.name),
-    ).length;
+    const hooked = calls.filter((call) => !hookFree(call.name, call.input)).length;
     if (hooked > (hookLog?.length ?? 0)) {
       return uninterpretable(
         `the turn made ${hooked} tool call(s) the hook must have seen and the hook log has ` +

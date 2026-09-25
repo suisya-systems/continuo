@@ -583,7 +583,7 @@ test("a call that could fire the hook and left no log line refuses the turn; the
 });
 
 test("a turn whose calls could not fire the hook is accepted with an empty hook log", async () => {
-  // Measured on codex-cli 0.153.4 (D-1114 M9): arithmetic and `text` scripts,
+  // Measured on codex-cli 0.153.4 (D-1117 M1, M2): arithmetic and `text` scripts,
   // a `write_stdin` poll and the direct `wait` / `write_stdin` tools reach no
   // hook, so the log stays empty.
   const l = lap();
@@ -628,10 +628,10 @@ test("a hooked call with no log line of its own refuses the turn, though the log
   expect((await reportOf(accepted)).permissionDenials).toEqual([]);
 });
 
-test("a script no pattern names as hooked still needs a log line: failed, computed or aliased", async () => {
+test("a call no pattern names as hooked still needs a log line: failed, computed, aliased, or stdin written", async () => {
   // Measured: a script that calls apply_patch and then fails fired the hook
   // first, so "Script failed" proves nothing was called; and a script reaches
-  // a tool by any spelling. Only a script with no identifier but `text`, or a plain `write_stdin` poll, is exempt.
+  // a tool by any spelling. Only a script with no identifier but `text`, `wait`, or a `write_stdin` that writes nothing, is exempt.
   for (const unseen of [
     { ...bash("git log", "Script failed\nWall time 0.0 seconds\nOutput:\n"), hook: undefined },
     { name: "exec", input: 'await tools["exec_command"]({cmd: "git log"})\n' },
@@ -642,6 +642,9 @@ test("a script no pattern names as hooked still needs a log line: failed, comput
       input: "await tools.write_stdin({session_id: tools.exec_command({cmd: 'git log'})})\n",
     },
     { name: "clock__curr_time", input: "{}" },
+    // write_stdin never fires the hook, so input it writes passed no hook.
+    { kind: "function", name: "write_stdin", input: '{"session_id":1,"chars":"ls\\n"}' },
+    { name: "exec", input: 'await tools.write_stdin({session_id: 1, chars: "ls\\n"})\n' },
   ]) {
     const l = lap();
     fakeEnv("FAKE_RESULT_TEXT", "done");
