@@ -216,6 +216,16 @@ describe("Bash", () => {
     }
   });
 
+  test("a :* prefix entry ends at a word, not inside one (#223)", () => {
+    const l = lap(["git diff:*"]);
+    expectAllowed(call(l, "Bash", bash("git diff")));
+    expectAllowed(call(l, "Bash", bash("git diff HEAD")));
+    // `git difftool --extcmd=...` runs any program; `git diff-tree` is another command.
+    for (const command of ["git difftool -y --extcmd=sh HEAD", "git diff-tree HEAD"]) {
+      expectDenied(call(l, "Bash", bash(command)), /not in this lap's allowed Bash/);
+    }
+  });
+
   // POSIX only: the cases spell paths with `join`, and a Windows path's
   // backslashes are refused by PLAIN_COMMAND before hook.mjs's rules are
   // reached -- by design, and Codex on Windows is unmeasured (D-1114).

@@ -35,6 +35,14 @@
         },
         "reason": "One POSIX-only case, `hook.mjs's deny rules still apply to an admitted command` (continuo #224). It spells its paths with `join`, and on Windows the backslashes are refused by the Codex hook's PLAIN_COMMAND character allowlist before hook.mjs's deny rules are reached -- a refusal that is by design (a backslash is a shell escape), so on win32 the case's allow half fails and its two deny halves pass for the wrong reason. The hook is not widened for it: Codex on Windows is unmeasured (D-1114), and admitting Windows paths is tracked as its own issue. Every other case in the file runs on every platform. Exactly one; a second would need its own approval.",
         "approved_by": "operator, 2026-09-23 (continuo #224, option (a))"
+      },
+      {
+        "file": "test/lap/cli.test.ts",
+        "constructs": {
+          "skipIf": 1
+        },
+        "reason": "One describe, `D-1114: a lap whose worker runs on Codex`, skipped on win32 (continuo #223, D-1118 rule 9). A Codex lap refuses on Windows until #226 measures Codex's Windows sandbox, so every case in it that runs a lap would be refused there. This file may not import the Codex provider to patch its platform seam (test/gate_item11/no-provider-detail-leaks.test.ts confines session backends away from control-plane tests); the translation's own cases do run on Windows, in test/session/codex-fence-shapes.test.ts and test/session/codex-cli-provider.test.ts, through that seam. Exactly one; a second would need its own approval.",
+        "approved_by": "owner, 2026-09-26 (continuo #223 P2, option (a): refuse Codex laps on win32 until #226; relayed by the window)"
       }
     ]
   },

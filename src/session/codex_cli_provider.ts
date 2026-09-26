@@ -32,7 +32,9 @@
  * Anything this does not recognise refuses the spawn: a fence layer a CLI
  * cannot enforce is a lap that does not run (the owner's decision on #220),
  * and the day the Claude fence grows a layer, a Codex lap refuses until
- * someone translates it.
+ * someone translates it. Which shapes are translated into which layer, and
+ * which refuse, is a table (D-1118): `test/session/codex-fence-shapes.test.ts`,
+ * whose partition test fails on a shape that is neither.
  *
  * ## Config arrives on the command line and nowhere else
  *
@@ -86,7 +88,11 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
 
+import { fnmatchcase } from "../fencing/fnmatch.js";
+import { pyJsonDumps } from "../fencing/pyjson.js";
+import { parsePermissionRule } from "../fencing/rules.js";
 import { quote, split as shlexSplit } from "../fencing/shlex.js";
+import { readFence } from "../fencing/state.js";
 import {
   ClaudeCliSessionProvider,
   type ClaudeCliSessionProviderOptions,
@@ -100,7 +106,7 @@ import {
   type TurnCommand,
 } from "./claude_cli_provider.js";
 import { Failure, FailureKind } from "./provider.js";
-import type { ProbeOptions } from "./runtime.js";
+import { type ProbeOptions, sessionRuntime } from "./runtime.js";
 
 /** The Codex build this was written and measured against (D-0010's record). */
 const CODEX_VERSION_WRITTEN_AGAINST = "codex-cli 0.153.4";
@@ -169,6 +175,31 @@ const NEUTRAL_ENV: Readonly<Record<string, string>> = {
 };
 
 /**
+ * `S.env` names a Codex lap refuses (#223): what the shell and the loader read
+ * to pick the program a command runs, git's own knobs, and {@link NEUTRAL_ENV}'s
+ * names, which would be overridden silently. The hook admits `cat` or
+ * `git diff` by name; under a fence-set `PATH` or `GIT_EXTERNAL_DIFF` that name
+ * runs something else.
+ */
+const STEERING_ENV =
+  /^(?:PATH|HOME|SHELL|IFS|ENV|BASH_ENV|ZDOTDIR|CODEX_HOME|NODE_OPTIONS|NODE_PATH|EDITOR|VISUAL|PAGER|MANPAGER|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|LESSOPEN|LESSCLOSE|RUBYOPT|PYTHON[A-Z0-9_]*|PERL[A-Z0-9_]*|(?:LD|DYLD|GIT|XDG|NPM_CONFIG)_[A-Z0-9_]*)$/;
+
+/**
+ * Codex's own tool names a deny rule might name: each reaches the lap either
+ * under another name (`apply_patch` is checked as `Write`, a shell call as
+ * `Bash`) or without the hook at all (`write_stdin`, `wait`), so a rule naming
+ * one matches nothing (#223).
+ */
+const CODEX_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "apply_patch",
+  "exec_command",
+  "shell",
+  "exec",
+  "wait",
+  "write_stdin",
+]);
+
+/**
  * Programs that execute what arrives on their stdin (D-1114 rule 5). A Bash
  * allow entry naming one is refused for a Codex lap, because `write_stdin`
  * reaches a running process without the hook seeing it. Compared after a
@@ -200,7 +231,76 @@ const STDIN_PROGRAMS: ReadonlySet<string> = new Set([
   "php",
   "lua",
   "irb",
+  "nodejs",
+  "ash",
+  "busybox",
+  "tclsh",
+  "expect",
+  // Compared unversioned, so `sqlite3` is `sqlite`.
+  "sqlite",
+  "gdb",
+  "pypy",
+  "ipython",
+  "psql",
+  "mysql",
+  "ed",
+  "ex",
+  "vi",
+  "vim",
+  "nvim",
+  "dc",
+  "gnuplot",
+  "R",
+  "Rscript",
+  "julia",
+  // Programs that read a script from a file argument, which may be /dev/stdin.
+  "awk",
+  "gawk",
+  "mawk",
+  "nawk",
+  "sed",
+  // Programs that run the program their arguments name, which may be any of
+  // the above (#223): `timeout 600 bash` reads stdin as surely as `bash`.
+  "timeout",
+  "nice",
+  "nohup",
+  "stdbuf",
+  "time",
+  "setsid",
+  "script",
+  "sudo",
+  "doas",
+  "chroot",
+  "unshare",
+  "strace",
+  "ltrace",
+  "ionice",
+  "taskset",
+  "chrt",
+  "flock",
+  "nsenter",
+  "watch",
+  "su",
+  "runuser",
+  "pkexec",
+  "systemd-run",
+  "firejail",
+  "fakeroot",
+  "parallel",
+  // Shell builtins the login shell runs as a command's first word.
+  "command",
+  "exec",
+  "builtin",
+  "eval",
+  "source",
+  ".",
 ]);
+
+/** A program's name without a trailing version: `python3.12`, `node22`, `bash-5.2`. */
+function unversioned(program: string): string {
+  const name = basename(program);
+  return name.replace(/[-0-9.]+$/, "") || name;
+}
 
 /** The only permission mode the materializer renders for a `-p` child (D-0081). */
 const FENCE_PERMISSION_MODE = "acceptEdits";
@@ -241,6 +341,12 @@ function hookFree(name: string, input: string): boolean {
   }
 }
 
+/**
+ * The platform a Codex lap would run on. A seam, so the translation's cases
+ * still run in the suite's Windows cells, where a real lap is refused (D-1118).
+ */
+export const codexCliSeams = { platform: process.platform as string };
+
 /** Depth Codex expands a `**` deny glob to at spawn (D-1114 M3). */
 const GLOB_SCAN_MAX_DEPTH = 6;
 
@@ -248,7 +354,7 @@ const GLOB_SCAN_MAX_DEPTH = 6;
 const HOOK_TIMEOUT_SECONDS = 30;
 
 /** The fence as this provider reads it off `S` and `P`. */
-interface CodexFence {
+export interface CodexFence {
   readonly python: string;
   readonly hookScript: string;
   readonly role: string;
@@ -338,8 +444,16 @@ function branchRefOf(
 ): { readonly commonDir: string; readonly branch: string } | null {
   for (const root of writeRoots) {
     const at = root.indexOf("/refs/heads/");
-    if (at > 0) {
-      return { commonDir: root.slice(0, at), branch: root.slice(at + "/refs/heads/".length) };
+    const commonDir = root.slice(0, at);
+    // Only the ref gitMetadataRoots names, beside its own common directory's
+    // `objects` and `packed-refs`: any other path through a `refs/heads`
+    // (a role's own directory) would have its parent granted write (#223).
+    if (
+      at > 0 &&
+      writeRoots.includes(`${commonDir}/objects`) &&
+      writeRoots.includes(`${commonDir}/packed-refs`)
+    ) {
+      return { commonDir, branch: root.slice(at + "/refs/heads/".length) };
     }
   }
   return null;
@@ -389,6 +503,34 @@ function effectiveWriteRoots(
     }
   }
   return { roots, pinned };
+}
+
+/** `path` with its deepest existing ancestor replaced by that ancestor's real path. */
+function realOf(path: string): string {
+  const rest: string[] = [];
+  for (let at = resolve(path); ; at = dirname(at)) {
+    try {
+      return join(realpathSync(at), ...rest.reverse());
+    } catch {
+      if (dirname(at) === at) {
+        return resolve(path);
+      }
+      rest.push(basename(at));
+    }
+  }
+}
+
+/**
+ * Where `path` lies against `root` -- inside it (or it), over it, or apart --
+ * the same by their spellings and by their real paths, or `null` when a link
+ * makes the two disagree (#223): the profile keys the spelling and the kernel
+ * follows the link, so no one answer holds.
+ */
+function relationOf(path: string, root: string): "in" | "over" | "apart" | null {
+  const relation = (p: string, r: string) =>
+    within(p, r) ? "in" : within(r, p) ? "over" : "apart";
+  const spelled = relation(path, root);
+  return spelled === relation(realOf(path), realOf(root)) ? spelled : null;
 }
 
 /** The directory a file's real path lies in, or `null` if it cannot be resolved. */
@@ -445,16 +587,49 @@ function threadIdOf(event: Readonly<Record<string, unknown>>): unknown {
   return field(event, "type") === "thread.started" ? field(event, "thread_id") : undefined;
 }
 
-/** `Read(x)` to the profile paths it denies, or `null` for a shape not translated. */
-function readDenyPaths(rule: string, workspace: string): readonly string[] | null {
+/**
+ * Whether an absolute path is spelled the one way a profile key and the
+ * spawn's containment checks agree on (#223): no `.` or `..` segment, no empty
+ * segment (`//x`, a trailing separator), and no brace, which Codex's glob may
+ * read differently from the fence's matcher. A key Codex resolved differently
+ * from `within` would pin or deny a path the checks never looked at.
+ */
+function plainPath(path: string): boolean {
+  return (
+    !/[{}]/.test(path) &&
+    path
+      .split(/[\\/]/)
+      .every((part, index) => (index === 0 ? true : part !== "" && part !== "." && part !== ".."))
+  );
+}
+
+/**
+ * `Read(x)` to the profile paths it denies, or `null` for a shape not
+ * translated. `roots` are the profile's write roots, the workspace first: a
+ * rule of `**` and one segment is denied under each of them (the owner's answer on #223,
+ * D-1118), so every place the lap can create a file is covered; the fence's
+ * matcher reads it as anywhere, and a matching file outside every write root
+ * stays readable.
+ */
+function readDenyPaths(rule: string, roots: readonly string[]): readonly string[] | null {
+  const workspace = roots[0] ?? "/";
   if (rule.startsWith("~/")) {
-    return [join(homedir(), rule.slice(2))];
+    return plainPath(rule.slice(1)) ? [join(homedir(), rule.slice(2))] : null;
   }
   if (isAbsolute(rule)) {
-    return [rule];
+    return plainPath(rule) ? [rule] : null;
+  }
+  // `~` alone and `~user` name a home directory to the fence's matcher and a
+  // workspace file to the branch below; neither reading is safe to pick (#223).
+  if (
+    rule.startsWith("~") ||
+    /[{}]/.test(rule) ||
+    rule.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    return null;
   }
   if (rule.startsWith("**/") && !rule.slice(3).includes("/")) {
-    return [`${workspace}/${rule}`];
+    return [...new Set(roots)].map((root) => `${root}/${rule}`);
   }
   if (!rule.includes("/")) {
     return [join(workspace, rule), `${workspace}/**/${rule}`];
@@ -471,8 +646,17 @@ function refused(detail: string): Failure {
  * reason they are not translatable. Shape only: every key the Codex rendering
  * does not consume is a reason, so an unknown key is a refusal and never a
  * silently dropped layer.
+ *
+ * Exported for the fence-shape table (`test/session/codex-fence-shapes.test.ts`,
+ * #223), which walks every input shape through it.
  */
-function translateFence(cliArgs: readonly string[]): CodexFence | string {
+export function translateFence(cliArgs: readonly string[]): CodexFence | string {
+  if (codexCliSeams.platform === "win32") {
+    return (
+      "a Codex lap does not run on Windows until Codex's Windows sandbox is measured " +
+      "(#226, D-1118): nothing this translation writes into a profile is claimed there"
+    );
+  }
   const shape = [
     "--settings",
     null,
@@ -540,8 +724,14 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
   const paths: Record<string, string[]> = {};
   for (const key of ["denyRead", "denyWrite", "additionalDirectories"]) {
     const entries = filesystem[key] ?? [];
-    if (!isStringArray(entries) || !entries.every((entry) => isAbsolute(entry))) {
-      return `${settingsPath}'s sandbox.filesystem.${key} is not a list of absolute paths`;
+    if (
+      !isStringArray(entries) ||
+      !entries.every((entry) => isAbsolute(entry) && plainPath(entry))
+    ) {
+      return (
+        `${settingsPath}'s sandbox.filesystem.${key} is not a list of absolute paths ` +
+        "spelled plainly (no '.', '..' or empty segment, no brace)"
+      );
     }
     paths[key] = entries;
   }
@@ -581,7 +771,10 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
     tokens.length !== 6 ||
     tokens[2] !== "--role" ||
     tokens[4] !== "--fence" ||
-    basename(tokens[1] as string) !== "hook.mjs"
+    basename(tokens[1] as string) !== "hook.mjs" ||
+    // A relative interpreter, hook or fence would be resolved against
+    // whatever directory Codex runs the hook in, which the worker can write.
+    ![tokens[0], tokens[1], tokens[5]].every((token) => isAbsolute(token as string))
   ) {
     return (
       `${settingsPath}'s hooks are not exactly the one deny hook ` +
@@ -592,9 +785,35 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
   if (!existsSync(join(dirname(hookScript), "codex_hook.mjs"))) {
     return `codex_hook.mjs is missing beside ${hookScript}; a Codex worker has no fence without it`;
   }
+  // The hook reads its allow and deny lists from F; everything else here is
+  // read from S. They are published together from one fence, and a lap whose
+  // two documents disagree is fenced by one nothing here checked (#223).
+  const canonical = (value: unknown) => pyJsonDumps(value, { sortKeys: true });
+  let hookFence: ReturnType<typeof readFence>;
+  try {
+    hookFence = readFence(tokens[5] as string);
+  } catch (exc) {
+    return `the fence ${tokens[5] as string} the hook reads could not be read: ${String(exc)}`;
+  }
+  if (hookFence.role !== tokens[3] || canonical(hookFence.settings) !== canonical(settings)) {
+    return (
+      `the fence ${tokens[5] as string} the hook reads is not the ${tokens[3] as string} fence ` +
+      `${settingsPath} holds, so the hook would enforce lists this translation never read`
+    );
+  }
   const env = settings["env"] ?? {};
   if (!isStringRecord(env)) {
     return `${settingsPath}'s env is not a mapping of strings`;
+  }
+  const steering = Object.keys(env).find(
+    (key) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || STEERING_ENV.test(key.toUpperCase()),
+  );
+  if (steering !== undefined) {
+    return (
+      `${settingsPath}'s env sets ${JSON.stringify(steering)}, which is not a plain name or ` +
+      "steers which program a Codex lap's allowlisted commands run (or is one this " +
+      "provider sets itself); the hook admits those commands by name"
+    );
   }
 
   const allow = (permissions["allow"] ?? []) as string[];
@@ -616,23 +835,82 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
         "name for a Codex lap is letters, digits and _ . / + - only"
       );
     }
-    if (STDIN_PROGRAMS.has(basename(program).replace(/[0-9.]+$/, ""))) {
+    if (STDIN_PROGRAMS.has(unversioned(program))) {
       return (
         `the allow entry ${JSON.stringify(entry)} runs a program that executes its stdin, ` +
         "and a Codex worker's write_stdin reaches a running process without the hook " +
         "seeing it; interpreters and shells are not allowed_bash entries for a Codex lap"
       );
     }
-  }
-  const readRules: string[] = [];
-  for (const entry of (permissions["deny"] ?? []) as string[]) {
-    if (entry.startsWith("Read(") && entry.endsWith(")")) {
-      const rule = entry.slice(5, -1);
-      if (readDenyPaths(rule, "/") === null) {
-        return `the deny rule ${JSON.stringify(entry)} has no Codex permission-profile spelling`;
-      }
-      readRules.push(rule);
+    // The hook's matcher reads `?` and `[...]` as wildcards; Claude's rule
+    // grammar has only `*`, so the hook would admit what Claude never does.
+    if (/[?[\]]/.test(named)) {
+      return (
+        `the allow entry ${JSON.stringify(entry)} uses ? or [ ], which the Codex hook reads ` +
+        "as a wildcard and Claude reads as a literal character"
+      );
     }
+  }
+  // Every deny rule is classified by the tool it names, the way the fence's
+  // own parser reads it, and a tool with no Codex layer behind it refuses the
+  // lap (#223). Other allow entries (Read, Edit, WebFetch, ...) only grant,
+  // and the hook grants nothing it was not written to, so they are narrowed,
+  // never dropped.
+  const readRules: string[] = [];
+  const editDenials: string[] = [];
+  const mcpRules: string[] = [];
+  for (const entry of (permissions["deny"] ?? []) as string[]) {
+    let rule: ReturnType<typeof parsePermissionRule>;
+    try {
+      rule = parsePermissionRule(entry);
+    } catch {
+      return `the deny rule ${JSON.stringify(entry)} cannot be parsed`;
+    }
+    const { tool, spec } = rule;
+    // The hook enforces F's rules, not S's list: a rule S names and F lacks
+    // would be read here and enforced nowhere.
+    if (!hookFence.rules.some((held) => held.ruleId === rule.ruleId)) {
+      return (
+        `the deny rule ${JSON.stringify(entry)} is not among the rules of the fence ` +
+        `${tokens[5] as string} the hook enforces`
+      );
+    }
+    const whole = !entry.includes("(");
+    const untranslatable = `the deny rule ${JSON.stringify(entry)} has no Codex permission-profile spelling`;
+    if (tool === "Bash") {
+      // codex_hook.mjs puts every admitted Bash call through hook.mjs's rules.
+      continue;
+    }
+    if (tool === "Read") {
+      if (whole || spec === "*" || readDenyPaths(spec, ["/"]) === null) {
+        return untranslatable;
+      }
+      readRules.push(spec);
+    } else if (tool === "Edit" || tool === "Write") {
+      // A patch is checked as a Write by the hook; a shell write is not, so
+      // the path has to reach the profile too, which a glob or a relative
+      // path cannot be checked to do.
+      const path = spec.startsWith("~/") ? join(homedir(), spec.slice(2)) : spec;
+      if (whole || !isAbsolute(path) || !plainPath(path) || /[*?[\]]/.test(path)) {
+        return (
+          `the deny rule ${JSON.stringify(entry)} is not one absolute or ~/ path, so a Codex ` +
+          "permission profile cannot be checked to keep it against a shell write"
+        );
+      }
+      editDenials.push(path);
+    } else if (tool.startsWith("mcp__")) {
+      mcpRules.push(entry);
+    } else if (
+      ["Grep", "Glob", "LS", "NotebookRead", "NotebookEdit", "MultiEdit"].includes(tool) ||
+      CODEX_TOOL_NAMES.has(tool)
+    ) {
+      // Codex reads and writes through `cat`, `grep` and `apply_patch`, which
+      // the hook checks as Bash and Write; a rule under these names never
+      // matches what a Codex worker runs.
+      return untranslatable;
+    }
+    // Any other tool (WebFetch, Task, ...) is one a Codex lap has no route to:
+    // the hook denies every tool it was not written to admit.
   }
 
   // D-1114 rule 8: `git commit` needs the ref's DIRECTORY writable, and a
@@ -663,6 +941,34 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
   ) {
     return `${mcpPath} is not exactly one stdio MCP server the translation reads`;
   }
+  // The hook admits `mcp__<name with - as _>__*`: a name that could spell
+  // another prefix -- the operator's `codex_apps` connectors among them -- is
+  // refused (#223).
+  const mcpName = names[0] as string;
+  if (!/^[A-Za-z0-9-]+$/.test(mcpName) || mcpName.replaceAll("-", "_") === "codex_apps") {
+    return `${mcpPath}'s server name ${JSON.stringify(mcpName)} is not letters, digits and - only`;
+  }
+  // The hook checks a call to the lap's server as `mcp__<name>__<tool>` by
+  // name equality, so a rule for the whole server, with a wildcard, or in
+  // Codex's `_` spelling matches no call (#223). A rule for another server is
+  // kept by the hook's default deny.
+  // Codex spells a qualified tool name in [A-Za-z0-9_] and at most 64
+  // characters, so a tool part outside that is a name the hook never sees.
+  const serverWide = mcpRules.find((entry) => {
+    const { tool } = parsePermissionRule(entry);
+    const server = tool.slice("mcp__".length).split("__")[0] ?? "";
+    return (
+      server.replaceAll("-", "_") === mcpName.replaceAll("-", "_") &&
+      !(new RegExp(`^mcp__${mcpName}__[A-Za-z0-9_]+$`).test(tool) && tool.length <= 64)
+    );
+  });
+  if (serverWide !== undefined) {
+    return (
+      `the deny rule ${JSON.stringify(serverWide)} names the lap's MCP server as a whole or ` +
+      "by a spelling the Codex hook matches against no call; name each tool as mcp__" +
+      `${mcpName}__<tool>`
+    );
+  }
 
   return {
     python: tokens[0] as string,
@@ -672,9 +978,9 @@ function translateFence(cliArgs: readonly string[]): CodexFence | string {
     env,
     writeRoots: paths["additionalDirectories"] ?? [],
     denyRead: paths["denyRead"] ?? [],
-    denyWrite: paths["denyWrite"] ?? [],
+    denyWrite: [...(paths["denyWrite"] ?? []), ...editDenials],
     readRules,
-    mcpName: names[0] as string,
+    mcpName,
     mcpCommand: server["command"],
     mcpArgs: (server["args"] ?? []) as string[],
     mcpEnv: (server["env"] ?? {}) as Record<string, string>,
@@ -872,18 +1178,62 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     if (fence === undefined) {
       return refused(`session '${sessionId}' reached its spawn with no translated fence`);
     }
-    // A write denial that CONTAINS a write root cannot be kept by a profile
-    // whose root entry grants write beneath it, and Claude's sandbox would
-    // deny those writes; the lap is refused rather than widened.
+    // A denial that CONTAINS a write root cannot be kept by a profile whose
+    // root entry grants write (and read) beneath it, and Claude's sandbox would
+    // deny those writes; the lap is refused rather than widened. Read denials
+    // too (#223): Codex resolves the more specific entry, so the root stays
+    // readable under a denied parent.
     const { roots } = effectiveWriteRoots(fence, record.workspace);
-    const swallowed = fence.denyWrite.find((path) =>
-      roots.some((root) => root !== path && within(root, path)),
-    );
-    if (swallowed !== undefined) {
-      return refused(
-        `the fence denies writes under ${swallowed}, which contains ${record.workspace} or a ` +
-          "git directory the worker must write; a Codex permission profile cannot keep that",
-      );
+    const readDenials = [
+      ...fence.denyRead,
+      ...fence.readRules.flatMap((rule) => readDenyPaths(rule, roots) ?? []),
+    ];
+    // A glob is asked whether it matches a write root or any directory above
+    // one (`/home/*` matches `/home/u`, above the workspace), by the fence's
+    // matcher, whose `*` crosses `/` and so matches at least what Codex's does.
+    for (const glob of readDenials.filter((path) => /[*?[\]]/.test(path))) {
+      const covered = roots
+        .flatMap((root) => [root, realOf(root)])
+        .flatMap((root) => {
+          const chain: string[] = [];
+          for (let at = resolve(root); ; at = dirname(at)) {
+            chain.push(at);
+            if (dirname(at) === at) {
+              return chain;
+            }
+          }
+        })
+        .find((dir) => fnmatchcase(dir, glob));
+      if (covered !== undefined) {
+        return refused(
+          `the fence denies reads under ${glob}, which matches ${covered}, the workspace, a git ` +
+            "directory the worker must write or a directory above one; a Codex permission " +
+            "profile cannot keep that",
+        );
+      }
+    }
+    for (const [denials, verb] of [
+      [fence.denyWrite, "writes"],
+      [readDenials.filter((path) => !/[*?[\]]/.test(path)), "reads"],
+    ] as const) {
+      for (const path of denials) {
+        for (const root of roots) {
+          const relation = relationOf(path, root);
+          if (relation === null) {
+            return refused(
+              `the fence denies ${verb} under ${path}, and it and ${root} are not in the ` +
+                "same place by their real paths as by their spelling; a Codex permission " +
+                "profile cannot be checked to keep that",
+            );
+          }
+          if (relation === "over") {
+            return refused(
+              `the fence denies ${verb} under ${path}, which contains ${record.workspace} or a ` +
+                "git directory the worker must write; a Codex permission profile cannot keep that",
+            );
+          }
+        }
+      }
     }
     const home = this.#homeOf(sessionId);
     const hookLog = join(
@@ -921,6 +1271,38 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       writeFileSync(join(home, "hooks.json"), `${JSON.stringify(hooks)}\n`, "utf8");
     } catch (exc) {
       return refused(`the Codex home ${home} could not be prepared: ${String(exc)}`);
+    }
+    // Codex runs the call when its hook exits 0 with nothing to say, exits 1,
+    // or cannot start (D-1114 M4), so an interpreter that is not Node -- or
+    // any hook that does not deny -- is a lap with no allowlist at all. The
+    // rendered hook is asked once, with no event, and must deny (#223).
+    const probeLog = join(this.#sessionDir(sessionId), "hook-probe.jsonl");
+    let answer: { readonly status: number; readonly stdout: Buffer } | null = null;
+    try {
+      answer = sessionRuntime.runProbe(
+        [
+          fence.python,
+          join(dirname(fence.hookScript), "codex_hook.mjs"),
+          "--role",
+          fence.role,
+          "--fence",
+          fence.fencePath,
+          "--mcp-server",
+          fence.mcpName,
+          "--log",
+          probeLog,
+        ],
+        HOOK_TIMEOUT_SECONDS * 1000,
+      );
+    } catch {
+      answer = null;
+    }
+    rmSync(probeLog, { force: true });
+    if (answer?.status !== 2 || !String(answer.stdout).includes('"permissionDecision":"deny"')) {
+      return refused(
+        `the hook rendered for session '${sessionId}' (${fence.python} codex_hook.mjs) did not ` +
+          "deny an empty event; a Codex lap whose hook does not deny runs every call",
+      );
     }
 
     const sandbox = [
@@ -1301,7 +1683,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       filesystem[path] = "deny";
     }
     for (const rule of fence.readRules) {
-      for (const path of readDenyPaths(rule, workspace) ?? []) {
+      for (const path of readDenyPaths(rule, roots) ?? []) {
         filesystem[path] = "deny";
       }
     }

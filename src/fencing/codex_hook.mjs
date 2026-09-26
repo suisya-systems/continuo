@@ -128,8 +128,12 @@ function programOf(command) {
  * @returns {boolean}
  */
 function admits(specMatches, spec, command) {
-  const named = spec.endsWith(":*") ? spec.slice(0, -2) : spec;
-  return programOf(command) === programOf(named) && specMatches(spec, command);
+  const prefix = spec.endsWith(":*");
+  const named = prefix ? spec.slice(0, -2) : spec;
+  // A prefix ends at a word (#223): `git diff:*` is `git diff` and its
+  // arguments, not `git difftool --extcmd=...`.
+  const bounded = !prefix || command === named || /^[ \t]/.test(command.slice(named.length));
+  return bounded && programOf(command) === programOf(named) && specMatches(spec, command);
 }
 
 const PATCH_PATH = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/;

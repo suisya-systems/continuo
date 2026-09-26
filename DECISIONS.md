@@ -217,10 +217,11 @@ spaces distinct.
 | D-1111 | The Windows `double-green` cells leave the pull-request path for a nightly schedule and `workflow_dispatch`, and the nightly files its own failure issue | accepted |
 | D-1112 | `lap perform --json` carries what the turn cost and what it ran, and `lap perform` refuses to start a lap from a process that may not create a Unix socket | accepted |
 | D-1113 | CI evidence and its verdict move from rondo into continuo as `ci observe` / `ci show`; `ci_observation` gains `pending` and the `check_run` / `commit_status` scopes | accepted |
-| D-1114 | A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars | superseded by D-1117 |
+| D-1114 | A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars | superseded by D-1117, D-1118 |
 | D-1115 | The port is complete and continuo evolves on its own: output parity with interlock no longer binds, the parity ledger is the port's historical record, and its check stays in the gate as a coverage guard | accepted |
 | D-1116 | `sandbox doctor` checks that this process may create a Unix socket, and fails when it may not | accepted |
 | D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
+| D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
 
 ---
 
@@ -17733,7 +17734,7 @@ rediscovered:
 - if the Codex sandbox helper panics, the empty mount targets it created (`.codex/`, `.agents/`, a
   `.env` device node) stay in the worktree.
 
-**Status.** superseded by `D-1117`
+**Status.** superseded by `D-1117`, `D-1118`
 
 **Falsifier.** A Codex release that names a thread before it starts (rule 6 should commit the
 identity then), that makes hooks fail closed or fire for `write_stdin` (rules 3 and 5 can relax),
@@ -18009,3 +18010,129 @@ child process cannot run: the check reports `skipped` with `SPAWN_FAILED` and ne
 `D-1115` rules 1 and 8 (the post-port policy); rondo N-16 / N-21; `D-1112` (the probe and the
 rejected alternative this takes up), `D-0023` and `D-0215` (earlier repairs to this module).
 Decision id `D-1116`, allocated by the window in the `D-11xx` shared cross-belt band (`D-1101`).
+
+---
+
+## D-1118 -- The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither
+
+**Context.** Issue #223, a follow-up to #222 (`D-1114`). `D-1114`'s standing rule is that a fence
+layer Codex cannot enforce refuses the lap, and nothing is dropped silently. Every Codex review round
+on #222 found one more corner of the translation (`translateFence` / `#profile` in
+`src/session/codex_cli_provider.ts`) that broke that rule. Each was fixed alone, and the input space
+was never enumerated, so there was no reason to expect the next round to come back clean.
+
+**What was found.** The shapes `S` and `P` can take were enumerated per axis: the vector and `S`'s
+keys, `hooks`, `env`, every `permissions.allow` and `permissions.deny` form, `denyRead` / `denyWrite`
+/ `additionalDirectories` spelled every way a path can be, and `P`'s server. Each was classified
+against the code, and every claimed drop was then checked by an adversarial reviewer. These were
+accepted with no Codex layer behind them, or with a weaker one that was not documented:
+
+- deny rules the translation skipped because they were not `Read(...)`: bare `Read`, `Read(~)`,
+  `Read(~user/...)`, a `Read(...)` with padding, `Grep` / `Glob` / `LS` / `NotebookRead` /
+  `NotebookEdit` / `MultiEdit`, a Codex tool name, and an `mcp__` rule naming the lap's server as a
+  whole, with a wildcard, in Codex's `_` spelling, or with a tool part Codex rewrites (outside
+  `[A-Za-z0-9_]`, or a qualified name over 64 characters): the hook matches by name equality;
+- `Edit(...)` / `Write(...)` denials, which the hook checks against `apply_patch` but which never
+  reached the profile, so a shell write under an admitted program was not stopped;
+- `Read(//x)`, paths with a `.` / `..` / empty segment, and braces, which the profile keys as
+  spelled while the spawn's containment checks resolve them;
+- a `denyRead` (or an absolute `Read(...)`) that contains a write root, which the profile's more
+  specific write entry leaves readable (the `denyWrite` case was already refused), a glob one that
+  matches a directory above one (`/home/*` over `/home/u/ws`), and any denial
+  whose real path relates to a write root differently from its spelling (a link);
+- rule 8 taking any `.../refs/heads/<ns>/<x>` write root for the branch ref, so a role's own
+  directory with that shape had its parent granted write;
+- an `S` that disagrees with the fence file `F` the hook reads (the allow and deny lists the hook
+  enforces are `F`'s, and the stdin check read `S`'s), and a deny rule `S` names that `F`'s rules
+  lack;
+- a hook command whose interpreter, script or fence is relative, and an interpreter that is not Node
+  (`lap perform --python`): Codex runs the call when its hook exits 0 silently or cannot start
+  (`D-1114` M4), so such a lap has no allowlist at all;
+- allow entries whose spec uses `?` or `[ ]` (wildcards to the hook's matcher, literals to Claude),
+  a `:*` prefix the hook matched inside a word (`git diff:*` admitted `git difftool --extcmd=...`),
+  and programs the stdin check missed: ones that run their argument (`timeout`, `ionice`, `flock`,
+  `su`, the shell builtins `exec` / `eval` / `.`), ones that read a script from a file argument
+  (`awk -f /dev/stdin`, `sed -f`), REPLs (`psql`, `ed`, `R`, ...), a versioned name (`bash-5.2`),
+  and `sqlite3`, which the version strip had turned into `sqlite`;
+- `S.env` names that steer which program an admitted name runs (`PATH`, `GIT_*`, `XDG_*` for git's
+  config, `LD_*`, `npm_config_*`, shell startup and `SHELLOPTS` / `PS4`, `NEUTRAL_ENV`'s names,
+  compared without case as Windows reads them), and a server name that could spell another MCP
+  prefix (`codex_apps`).
+
+**Decision.**
+
+1. **The table is the contract.** `test/session/codex-fence-shapes.test.ts` holds it. Each row is
+   one family of shapes on one axis, with its verdict and the Codex layer that enforces it (or the
+   words of its refusal). A **partition test** runs a corpus, crossed from the forms each axis can
+   take, through `translateFence`. Every shape must be claimed by a row and come out as that row
+   says, and every row must be reached. A shape the translation accepts that no translated row
+   claims fails the suite. Each row's example also runs through a real start, and the shapes decided
+   at the spawn have their own cases.
+2. **Every deny rule is classified by the tool it names**, with the fence's own parser. `Bash` goes
+   to the hook. `Read` goes to the profile when it has a spelling there (`~/`, absolute, one segment,
+   `**/` + one segment). `Edit` / `Write` of one absolute or `~/` path, not a glob, go to the hook for
+   `apply_patch` and into the profile as a write denial. The lap's server goes to the hook by exact
+   tool name. Any other tool is one the hook's default deny never admits. Everything else refuses.
+3. **Allow entries that are not `Bash(...)` stay accepted and are not honoured.** They only grant,
+   and the hook grants nothing it was not written to, so Codex is narrower than Claude there, never
+   wider.
+4. **`S` and `F` are one fence**: `F`'s settings must equal `S`, its role must be the hook's, and it
+   must hold every deny rule `S` names.
+5. **Paths are plain.** Every sandbox path and absolute rule body has no `.`, `..` or empty segment
+   and no brace. A read or write denial over a write root (a glob, when the fence's matcher matches a
+   write root or a directory above one with it), or one whose real path relates to a write root
+   differently from its spelling, refuses the spawn.
+6. **The hook is proved to deny before the spawn.** The rendered `codex_hook.mjs` command is run once
+   on an empty event and must answer with the JSON deny and exit 2.
+7. **Rule 8 takes only the ref `gitMetadataRoots` names**: a `refs/heads` path beside its common
+   directory's `objects` and `packed-refs`.
+8. **`Read(**/<name>)` is denied under every write root**, not only the workspace: the owner's
+   answer (a) on #223, relayed by the window on 2026-09-26. Alternatives were the workspace alone
+   with the narrowing documented, a refusal (no Codex lap would run under the bundled roles), and the
+   home directory as well (a depth-6 scan from home, still not "anywhere").
+9. **A Codex lap refuses on Windows** (`process.platform === "win32"`) until #226 measures Codex's
+   Windows sandbox: the owner's answer (a), same relay. Drive, UNC and mixed-separator paths reach a
+   profile nothing has measured, so no layer there is claimed. The suite's Windows cells still run
+   the translation's cases through the `codexCliSeams.platform` seam.
+
+**Alternatives.**
+
+- *Keep fixing corners one review round at a time (rejected)*: the reason for the issue.
+- *Refuse every allow entry that is not `Bash(...)` (rejected)*: a grant Codex does not honour
+  narrows the lap. Refusing would reject fences for no gain in the fence.
+- *Translate `Grep(...)` / `Glob(...)` denials into the profile the way `Read` is (rejected for
+  now)*: their spec is a search pattern as often as a path. None is rendered today, so refusing
+  costs nothing.
+
+**Consequences.** The worker role's fence still translates, with more denied than before:
+`Read(**/*.pem)` and `Read(**/credentials*)` now cover the git write roots as well as the workspace
+(rule 8), and `Edit(~/.claude/settings.json)` reaches the profile, where it lies outside every write
+root. The curator and secretary roles' `Edit(**/...)` denials refuse a Codex lap, and so does every
+Codex lap on Windows (rule 9). What remains
+weaker than Claude, stated so it is not rediscovered:
+
+- a deny glob covers the paths present at the spawn, to depth 6 (`D-1114`). A `Read(**/<name>)` rule
+  covers the workspace and every write root (rule 8), and a one-segment `Read(<name>)` the
+  workspace, where the Claude hook's matcher reads both as anywhere: a matching file outside every
+  write root that the OS sandbox leaves readable (another repository, `/etc/ssl/private`) can be
+  read with an admitted `cat`. Every place the lap can create or change a file is covered;
+- the stdin list and the steering-env list are lists, not proofs: a program that reads commands
+  from its stdin, or an environment name that steers an admitted program, and is not on them is
+  bounded only by the OS sandbox (`D-1114` rule 5). Inverting either into an allowlist (the
+  programs and names known not to) is the stronger form, and would refuse fences that work today;
+  it is left to a decision of its own;
+- a `Bash(...)` deny rule is matched against the raw command text, so a quoted or re-spaced spelling
+  of an admitted command can pass it, as on the Claude side, where the same matcher is used;
+- an exact allow entry admits path-normalised respellings of itself (`npm test/.`), because the
+  hook's matcher normalises paths, as on the Claude side.
+
+**Status.** accepted
+
+**Falsifier.** A shape that `translateFence` accepts and that the table's partition test does not
+reach. A Codex lap that ran under an accepted shape whose row names a layer that did not hold. A
+Codex release whose profile resolves `..` or links in its keys, or orders a less specific `deny`
+before a more specific `write` (rule 5 can relax).
+
+**Source.** Issue #223; the enumeration and adversarial review of this change; the owner's answers
+(a) and (a) to #223's P1 and P2, relayed by the window on 2026-09-26; `D-1114`, `D-1117`.
+Decision id `D-1118`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
