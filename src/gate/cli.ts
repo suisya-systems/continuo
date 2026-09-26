@@ -79,6 +79,14 @@
  * `close` -- which hardcode `actorKind: "human"` -- stay the surface's
  * human-authorised verbs (cadenza `C-4` / `C-13`).
  *
+ * **`D-1121` gives `answer` its one other actor, and only by name.** With
+ * `--on-behalf-of` and `--authority-ref` (both or neither) the answer is
+ * recorded under actor kind `delegate`: `--actor-id` is who acted, the two
+ * flags say on whose behalf and under which approval, and `gate show` prints
+ * all three on the row. Without them nothing changes -- the answer is `human`,
+ * as it was. A delegated answer is refused on a gate type that stays a
+ * person's (`gates.ts` `DELEGABLE_GATE_TYPES`); `close` has no delegate form.
+ *
  * The flag changes **bytes and nothing else**: the same entry point is called,
  * the same refusals are caught, the handle is closed in the same `finally`, and
  * the exit code is the same one. Without it every line below is byte-identical
@@ -109,7 +117,7 @@ import {
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
 import { DestinationRefusal } from "../control_plane/destination.js";
-import { GateRefusal } from "../control_plane/gates.js";
+import { type GateDelegation, GateRefusal } from "../control_plane/gates.js";
 import { LeaseRefusal } from "../control_plane/lease.js";
 import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { HandlerRejected, OutboxUsageError } from "../control_plane/outbox.js";
@@ -157,6 +165,16 @@ const BODY_HELP =
   "the stage is not ack-gated, so this text is the only evidence the question " +
   "was answered. Free-form, and not held to ASCII: it is stored rather than " +
   "printed back.";
+const ON_BEHALF_OF_HELP =
+  "record this answer as made under delegation, on behalf of this person (D-1121). " +
+  "The answer is then recorded under actor kind 'delegate', never 'human': " +
+  "--actor-id names who acted, and it may not be this person. Requires " +
+  "--authority-ref. Printable ASCII, at most 256 characters; recorded as given.";
+const AUTHORITY_REF_HELP =
+  "the approval the delegated answer rests on, e.g. the host's scope decision id. " +
+  "Requires --on-behalf-of. continuo checks its form and records it; whether the " +
+  "approval covers this gate is the caller's judgement. Printable ASCII, at most " +
+  "256 characters.";
 const HOLDER_HELP =
   "the claimant this pass takes the delivery lease under. A lap or an " +
   "endpoint holding THAT resource refuses this verb, which is the intended " +
@@ -229,7 +247,9 @@ const ACK_DESCRIPTION =
 const ANSWER_DESCRIPTION =
   "Record the human answer on an open gate ('answered') and enqueue the " +
   "'forwarded' relay that carries it onward. One verb because the forward " +
-  "relay may only be enqueued from 'answered'.";
+  "relay may only be enqueued from 'answered'. With --on-behalf-of and " +
+  "--authority-ref the answer is recorded as delegated instead, and only a " +
+  "worker_escalation gate accepts one.";
 const CLOSE_DESCRIPTION =
   "Close an open gate with an outcome an operator decides. Refuses the three " +
   "outcomes that are not a hand's to write.";
@@ -497,6 +517,8 @@ function showPayload(gate: GateDetail): { readonly [key: string]: JsonValue } {
       to_stage: transition.toStage,
       actor_kind: transition.actorKind,
       actor_id: transition.actorId,
+      on_behalf_of: transition.onBehalfOf,
+      authority_ref: transition.authorityRef,
       recorded_at_ms: transition.recordedAtMs,
       body: transition.body,
     })),
@@ -541,11 +563,18 @@ function writeGateDetail(gate: GateDetail): number {
     gateCliSeams.write(
       `transition ${transition.seq} ${transition.transitionKind} ` +
         `${transition.fromStage ?? "-"}->${transition.toStage} ` +
-        `by=${transition.actorKind}/${transition.actorId} at=${transition.recordedAtMs}` +
+        `by=${transition.actorKind}/${transition.actorId}` +
+        `${delegationSuffix(transition.onBehalfOf, transition.authorityRef)}` +
+        ` at=${transition.recordedAtMs}` +
         `${transition.body === null ? "" : ` body=${transition.body}`}\n`,
     );
   }
   return 0;
+}
+
+/** ` on-behalf-of=P authority=R` on a delegate's row, and nothing on any other. */
+function delegationSuffix(onBehalfOf: string | null, authorityRef: string | null): string {
+  return onBehalfOf === null ? "" : ` on-behalf-of=${onBehalfOf} authority=${authorityRef}`;
 }
 
 /**
@@ -797,7 +826,32 @@ function answerPayload(recorded: AnswerRecorded): { readonly [key: string]: Json
     enqueued: recorded.enqueued,
     message_id: recorded.messageId,
     to_stage: recorded.toStage,
+    // The answer the gate carries, as stored -- on a repeat, whoever answered
+    // first -- so a host that asked for a delegated answer reads whether one was
+    // recorded rather than assuming it (D-1121).
+    answered_by: {
+      actor_kind: recorded.answeredBy.actorKind,
+      actor_id: recorded.answeredBy.actorId,
+      on_behalf_of: recorded.answeredBy.onBehalfOf,
+      authority_ref: recorded.answeredBy.authorityRef,
+    },
   };
+}
+
+/**
+ * The delegation `gate answer` was given, or `null` for a person's own answer.
+ *
+ * Either flag alone still builds one, with the other empty, so the refusal
+ * names the missing half in `gates.ts`'s words instead of this verb quietly
+ * recording a person's press for a caller that meant to delegate.
+ */
+function delegationOf(args: Namespace): GateDelegation | null {
+  const onBehalfOf = args["on_behalf_of"];
+  const authorityRef = args["authority_ref"];
+  if (onBehalfOf == null && authorityRef == null) {
+    return null;
+  }
+  return { onBehalfOf: String(onBehalfOf ?? ""), authorityRef: String(authorityRef ?? "") };
 }
 
 export function cmdGateAnswer(args: Namespace): number {
@@ -812,6 +866,7 @@ export function cmdGateAnswer(args: Namespace): number {
         body: String(args["body"]),
         actorId: String(args["actor_id"]),
         nowMs,
+        delegation: delegationOf(args),
       });
       if (report !== null) {
         gateCliSeams.write(successLine(report.schema, report.db, answerPayload(recorded)));
@@ -820,7 +875,9 @@ export function cmdGateAnswer(args: Namespace): number {
       gateCliSeams.write(
         `answered=${String(recorded.advanced)} ` +
           `${recorded.enqueued ? "enqueued" : "already enqueued"} ${recorded.messageId} ` +
-          `for stage ${recorded.toStage}\n`,
+          `for stage ${recorded.toStage} ` +
+          `by=${recorded.answeredBy.actorKind}/${recorded.answeredBy.actorId}` +
+          `${delegationSuffix(recorded.answeredBy.onBehalfOf, recorded.answeredBy.authorityRef)}\n`,
       );
       return 0;
     },
@@ -1099,6 +1156,20 @@ export function addSubparsers(sub: Subparsers): void {
     help: BODY_HELP,
   });
   addActorIdArgument(answer);
+  answer.addArgument({
+    optionStrings: ["--on-behalf-of"],
+    dest: "on_behalf_of",
+    required: false,
+    metavar: "PERSON",
+    help: ON_BEHALF_OF_HELP,
+  });
+  answer.addArgument({
+    optionStrings: ["--authority-ref"],
+    dest: "authority_ref",
+    required: false,
+    metavar: "APPROVAL",
+    help: AUTHORITY_REF_HELP,
+  });
   addNowMsArgument(answer);
   addJsonArgument(answer);
   answer.setDefaults({ func: cmdGateAnswer });

@@ -12,6 +12,8 @@ import { KeyedDropbox } from "../../src/control_plane/destination.js";
 import {
   AnswerBodyRequired,
   advanceOnAck,
+  closeGate,
+  DelegationRefused,
   GateClosedRefused,
   InadmissibleTransitionRefused,
   openGate,
@@ -125,14 +127,18 @@ function addOriginEvent(cp: SqliteDatabase, runId = RUN_ID, at: number = T0): nu
 /** A run, its escalation event, and the gate step 9's ingress would have opened. */
 function aGate(
   cp: SqliteDatabase,
-  options: { readonly deadlineAtMs?: number | null; readonly runStatus?: string } = {},
+  options: {
+    readonly deadlineAtMs?: number | null;
+    readonly runStatus?: string;
+    readonly gateType?: string;
+  } = {},
 ): string {
-  const { deadlineAtMs = null, runStatus = "running" } = options;
+  const { deadlineAtMs = null, runStatus = "running", gateType = "worker_escalation" } = options;
   addRun(cp, RUN_ID, runStatus);
   const seq = addOriginEvent(cp);
   openGate(cp, {
     gateId: GATE_ID,
-    gateType: "worker_escalation",
+    gateType,
     subjectKind: "run",
     subjectId: RUN_ID,
     rationale: "the worker cannot decide whether to force-push",
@@ -189,20 +195,30 @@ function inheritedRelayWorld(label: string): {
   const atFour = createProductionControlPlane(dbPath, { nowMs: T0, migrationsDir: partial });
   addRun(atFour, RUN_ID, "running");
   const seq = addOriginEvent(atFour);
-  openGate(atFour, {
-    gateId: GATE_ID,
-    gateType: "worker_escalation",
-    subjectKind: "run",
-    subjectId: RUN_ID,
-    rationale: "a relay in flight when the migration ran",
-    originEventSeq: seq,
-    createdAtMs: T0,
-    actorKind: "worker",
-    actorId: "worker-7",
-    options: ["force-push", "abandon"],
-    deadlineAtMs: null,
-    runId: RUN_ID,
-  });
+  // The gate in 0004's own columns, by hand: `openGate` writes today's
+  // `gate_transition`, whose delegation columns arrive in 0008 (D-1121).
+  atFour
+    .prepare<[string, string, string, number, number, number]>(
+      `
+      INSERT INTO gate (gate_id, gate_type, run_id, subject_kind, subject_id, origin_event_seq,
+                        rationale, options, stage, stage_seq, stage_entered_at_ms, created_at_ms)
+      VALUES (?, 'worker_escalation', ?, 'run', ?, ?, 'a relay in flight when the migration ran',
+              '["force-push", "abandon"]', 'received', NULL, ?, ?)
+      `,
+    )
+    .run(GATE_ID, RUN_ID, RUN_ID, seq, T0, T0);
+  const opened = atFour
+    .prepare<[string, number, number]>(
+      `
+      INSERT INTO gate_transition (gate_id, transition_kind, from_stage, to_stage, actor_kind,
+                                   actor_id, occurred_at_ms, recorded_at_ms)
+      VALUES (?, 'open', NULL, 'received', 'worker', 'worker-7', ?, ?)
+      `,
+    )
+    .run(GATE_ID, T0, T0);
+  atFour
+    .prepare<[number, string]>("UPDATE gate SET stage_seq = ? WHERE gate_id = ?")
+    .run(Number(opened.lastInsertRowid), GATE_ID);
   const messageId = relayMessageId(GATE_ID, "presented");
   // No `delivery_resource` column to bind: at 0004 the row simply has no
   // resource, which is exactly the state the backfill exists to answer for.
@@ -1342,5 +1358,198 @@ describe("a delivery pass names a run that exists (D-1104)", () => {
         .prepare<[string], { n: number }>("SELECT COUNT(*) AS n FROM lease WHERE resource = ?")
         .get(DELIVERY_LEASE_RESOURCE)?.n,
     ).toBe(1);
+  });
+});
+
+describe("an answer made under delegation (D-1121)", () => {
+  const DELEGATE = "rondo-organisation";
+  const PERSON = "happy_ryo";
+  const SCOPE_DECISION = "scope-decision-01J9";
+
+  /** A gate of `gateType`, carried to `presented` the ordinary way. */
+  function presentedGate(label: string, gateType = "worker_escalation"): SqliteDatabase {
+    const cp = cpFixture(label);
+    aGate(cp, { gateType });
+    const relay = presentGate(cp, { gateId: GATE_ID, nowMs: T0 });
+    deliver(cp, destinationDir(label), T0 + MINUTE);
+    ackRelay(cp, { messageId: relay.messageId, actorId: ACTOR, nowMs: T0 + 2 * MINUTE });
+    return cp;
+  }
+
+  function delegatedAnswer(
+    cp: SqliteDatabase,
+    delegation: { readonly onBehalfOf: string; readonly authorityRef: string },
+    actorId = DELEGATE,
+  ) {
+    return answerGate(cp, {
+      gateId: GATE_ID,
+      body: "approve",
+      actorId,
+      nowMs: T0 + 3 * MINUTE,
+      delegation,
+    });
+  }
+
+  test("it is recorded as the delegate's, naming the person and the approval, never as human", () => {
+    const cp = presentedGate("delegated-answer");
+    const answered = delegatedAnswer(cp, { onBehalfOf: PERSON, authorityRef: SCOPE_DECISION });
+
+    expect(answered.advanced).toBe(true);
+    expect(answered.answeredBy).toEqual({
+      actorKind: "delegate",
+      actorId: DELEGATE,
+      onBehalfOf: PERSON,
+      authorityRef: SCOPE_DECISION,
+    });
+    const row = gateDetail(cp, GATE_ID).transitions.find((t) => t.toStage === "answered");
+    expect(row).toMatchObject({
+      actorKind: "delegate",
+      actorId: DELEGATE,
+      onBehalfOf: PERSON,
+      authorityRef: SCOPE_DECISION,
+      body: "approve",
+    });
+    // Every other row carries no delegation, including the person-less ones.
+    for (const other of gateDetail(cp, GATE_ID).transitions.filter((t) => t.seq !== row?.seq)) {
+      expect([other.onBehalfOf, other.authorityRef]).toEqual([null, null]);
+    }
+    // And the rest of the walk is the ordinary one: the forward relay is queued.
+    expect(answered.messageId).toBe(relayMessageId(GATE_ID, "forwarded"));
+  });
+
+  test("a person's own answer is unchanged and carries no delegation", () => {
+    const cp = presentedGate("human-answer-unchanged");
+    const answered = answerGate(cp, {
+      gateId: GATE_ID,
+      body: "approve",
+      actorId: PERSON,
+      nowMs: T0 + 3 * MINUTE,
+    });
+    expect(answered.answeredBy).toEqual({
+      actorKind: "human",
+      actorId: PERSON,
+      onBehalfOf: null,
+      authorityRef: null,
+    });
+  });
+
+  test("a repeat reports whoever answered first, so a delegate can tell it did not land", () => {
+    const cp = presentedGate("delegated-after-human");
+    answerGate(cp, { gateId: GATE_ID, body: "approve", actorId: PERSON, nowMs: T0 + 3 * MINUTE });
+    const repeat = delegatedAnswer(cp, { onBehalfOf: PERSON, authorityRef: SCOPE_DECISION });
+    expect(repeat.advanced).toBe(false);
+    expect(repeat.answeredBy.actorKind).toBe("human");
+  });
+
+  test.each([
+    ["the approval is missing", { onBehalfOf: PERSON, authorityRef: "" }],
+    ["the person is missing", { onBehalfOf: "", authorityRef: SCOPE_DECISION }],
+    ["a reference is not printable ASCII", { onBehalfOf: "ryo\n", authorityRef: SCOPE_DECISION }],
+    ["a reference is not ASCII at all", { onBehalfOf: PERSON, authorityRef: "\u627f\u8a8d" }],
+    ["a reference is a document", { onBehalfOf: PERSON, authorityRef: "x".repeat(257) }],
+  ])("it is refused, and nothing is written, when %s", (_why, delegation) => {
+    const cp = presentedGate(
+      `delegated-malformed-${delegation.onBehalfOf.length}-${delegation.authorityRef.length}`,
+    );
+    expectRefusal(() => delegatedAnswer(cp, delegation), DelegationRefused);
+    expect(stageOf(cp)).toBe("presented");
+    expect(gateDetail(cp, GATE_ID).relays.some((r) => r.toStage === "forwarded")).toBe(false);
+  });
+
+  test("a reference at the bound is accepted", () => {
+    const cp = presentedGate("delegated-at-bound");
+    const answered = delegatedAnswer(cp, { onBehalfOf: PERSON, authorityRef: "x".repeat(256) });
+    expect(answered.advanced).toBe(true);
+  });
+
+  test("a delegate named as the person it acts for is refused: that is the person's press", () => {
+    const cp = presentedGate("delegated-as-person");
+    expectRefusal(
+      () => delegatedAnswer(cp, { onBehalfOf: PERSON, authorityRef: SCOPE_DECISION }, PERSON),
+      DelegationRefused,
+    );
+    expect(stageOf(cp)).toBe("presented");
+  });
+
+  test.each(["merge_approval", "plan_approval", "risk_approval"])(
+    "a %s gate stays a person's to answer",
+    (gateType) => {
+      const cp = presentedGate(`delegated-${gateType}`, gateType);
+      expectRefusal(
+        () => delegatedAnswer(cp, { onBehalfOf: PERSON, authorityRef: SCOPE_DECISION }),
+        DelegationRefused,
+      );
+      expect(stageOf(cp)).toBe("presented");
+      expect(gateDetail(cp, GATE_ID).relays.some((r) => r.toStage === "forwarded")).toBe(false);
+      // The person still can.
+      expect(
+        answerGate(cp, {
+          gateId: GATE_ID,
+          body: "approve",
+          actorId: PERSON,
+          nowMs: T0 + 4 * MINUTE,
+        }).advanced,
+      ).toBe(true);
+    },
+  );
+
+  test("the delegate takes the answer edge and no other", () => {
+    // A delegate that could close a gate would decide more than its authority
+    // names; the edge table leaves `delegate` out of every other row.
+    const cp = presentedGate("delegated-close");
+    expectRefusal(
+      () =>
+        closeGate(cp, {
+          gateId: GATE_ID,
+          outcome: "withdrawn",
+          actorKind: "delegate",
+          actorId: DELEGATE,
+          occurredAtMs: T0 + 3 * MINUTE,
+          recordedAtMs: T0 + 3 * MINUTE,
+        }),
+      InadmissibleTransitionRefused,
+    );
+  });
+
+  test("the schema refuses a delegation the writer would, whoever writes the row", () => {
+    // 0008's CHECKs hold the pairing, the actor-is-not-the-person rule and the
+    // one edge without `gates.ts`: a writer that skipped `_requireDelegation`
+    // is refused by the store.
+    const cp = presentedGate("delegated-schema");
+    const insert = (
+      actorKind: string,
+      actorId: string,
+      kind: string,
+      toStage: string,
+      onBehalfOf: string | null,
+      authorityRef: string | null,
+    ) =>
+      cp
+        .prepare(
+          `INSERT INTO gate_transition (gate_id, transition_kind, from_stage, to_stage, actor_kind,
+                                        actor_id, body, occurred_at_ms, recorded_at_ms,
+                                        on_behalf_of, authority_ref)
+           VALUES (?, ?, 'presented', ?, ?, ?, 'approve', ?, ?, ?, ?)`,
+        )
+        .run(GATE_ID, kind, toStage, actorKind, actorId, T0, T0, onBehalfOf, authorityRef);
+    const refused = /CHECK constraint failed/;
+    expect(() => insert("delegate", DELEGATE, "advance", "answered", null, SCOPE_DECISION)).toThrow(
+      refused,
+    );
+    expect(() => insert("delegate", DELEGATE, "advance", "answered", PERSON, null)).toThrow(
+      refused,
+    );
+    expect(() => insert("human", PERSON, "advance", "answered", PERSON, SCOPE_DECISION)).toThrow(
+      refused,
+    );
+    expect(() => insert("delegate", PERSON, "advance", "answered", PERSON, SCOPE_DECISION)).toThrow(
+      refused,
+    );
+    expect(() =>
+      insert("delegate", DELEGATE, "close", "presented", PERSON, SCOPE_DECISION),
+    ).toThrow(refused);
+    expect(() =>
+      insert("delegate", DELEGATE, "advance", "answered", PERSON, SCOPE_DECISION),
+    ).not.toThrow();
   });
 });

@@ -537,7 +537,9 @@ describe("section 9.5 -- the crash window the whole section exists for", () => {
  *
  * * `-> received` (`open`) is "worker (via system)": the worker raises it and
  *   the system may write it on the worker's behalf.
- * * the three `advance` rows name exactly one actor each.
+ * * the three `advance` rows name exactly one actor each -- except the answer,
+ *   which `D-1121` gives a second, `delegate`, so an answer made under
+ *   delegation is recorded as delegated rather than as the person's press.
  * * `resend` and `correction` are "any" at "any open stage", which is all four
  *   stages -- a forwarded gate is open until it closes.
  * * the close is **two** rows: "varies" out of `received`/`presented`/
@@ -553,7 +555,7 @@ const SECTION_9_3_ACTOR_COLUMN: ReadonlyMap<string, readonly string[]> = new Map
 >([
   [edgeKey(null, "received", "open"), ["system", "worker"]],
   [edgeKey("received", "presented", "advance"), ["secretary"]],
-  [edgeKey("presented", "answered", "advance"), ["human"]],
+  [edgeKey("presented", "answered", "advance"), ["delegate", "human"]],
   [edgeKey("answered", "forwarded", "advance"), ["secretary"]],
   ...GATE_STAGES.flatMap((stage) =>
     (["resend", "correction"] as const).map(
