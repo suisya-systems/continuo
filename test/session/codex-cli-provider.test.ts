@@ -35,126 +35,34 @@ import process from "node:process";
 
 import { expect, test } from "vitest";
 import { PyValueError } from "../../src/fencing/pysemantics.js";
-import { renderFence } from "../../src/fencing/renderer.js";
-import { writeFence } from "../../src/fencing/state.js";
 import type { TerminalReport } from "../../src/session/claude_cli_provider.js";
 import { CodexCliSessionProvider } from "../../src/session/codex_cli_provider.js";
-import {
-  Failure,
-  FailureKind,
-  Ok,
-  type ProviderResult,
-  SpawnRefused,
-} from "../../src/session/provider.js";
+import { Failure, FailureKind, Ok, SpawnRefused } from "../../src/session/provider.js";
 import { sessionRuntime } from "../../src/session/runtime.js";
 import { claudeSessionUuid } from "../../src/session/uuid5.js";
-import {
-  fenceContext,
-  fenceDocument,
-  hookScriptForTest,
-  shippedHookScript,
-} from "../fencing/helpers/fence-cases.js";
+import { hookScriptForTest } from "../fencing/helpers/fence-cases.js";
 import { caseRoot } from "../testkit/cases.js";
 import { expectRefusal } from "../testkit/errors.js";
 import { patchSeam } from "../testkit/seams.js";
-import { fakeCodexCli, fakeEnv, fakeMode, spawnLog } from "./helpers/fake-cli.js";
 import {
-  cliRequest,
+  lap,
+  MCP_SERVER,
+  profileOf,
+  providerFor,
+  publish,
+  refusalOf,
+  SESSION,
+  start,
+  withBranchRef,
+} from "./helpers/codex-lap.js";
+import { fakeEnv, fakeMode, spawnLog } from "./helpers/fake-cli.js";
+import {
   POLL_DEADLINE_MS,
   POLL_INTERVAL_MS,
   spawned,
-  stopSessionsAtTeardown,
   waitForExit,
   waitForSpawns,
 } from "./helpers/session-cases.js";
-
-const SESSION = "sess-1";
-const MCP_SERVER = "continuo-messagebus";
-
-interface Lap {
-  readonly root: string;
-  readonly cliArgs: readonly string[];
-  readonly settingsPath: string;
-  readonly codexHome: string;
-}
-
-/** A worker fence rendered and published as the materializer does, plus an operator home. */
-function lap(
-  options: { readonly allowedBash?: readonly string[]; readonly hookScript?: string } = {},
-): Lap {
-  const root = caseRoot("codexprov");
-  const ctx = fenceContext(join(root, "fence"), {
-    hookScript: options.hookScript ?? shippedHookScript(),
-  });
-  const fence = renderFence("worker", ctx, {
-    document: fenceDocument(),
-    allowedBash: options.allowedBash ?? ["npm test"],
-    nonInteractive: true,
-  });
-  mkdirSync(dirname(ctx.fencePath), { recursive: true });
-  writeFence(fence, ctx.fencePath);
-  const artifacts = join(root, "artifacts");
-  mkdirSync(artifacts, { recursive: true });
-  const settingsPath = join(artifacts, "settings.local.json");
-  writeFileSync(settingsPath, JSON.stringify(fence.settings), "utf8");
-  const mcpPath = join(artifacts, "mcp.json");
-  writeFileSync(
-    mcpPath,
-    JSON.stringify({
-      mcpServers: {
-        [MCP_SERVER]: {
-          command: process.execPath,
-          args: [join(root, "endpoint.mjs")],
-          env: { INTERLOCK_MESSAGEBUS_DB: join(root, "bus.db") },
-        },
-      },
-    }),
-    "utf8",
-  );
-  const codexHome = join(root, "operator-codex");
-  mkdirSync(codexHome, { recursive: true });
-  writeFileSync(join(codexHome, "auth.json"), '{"token":"operator"}', "utf8");
-  return {
-    root,
-    settingsPath,
-    codexHome,
-    cliArgs: [
-      "--settings",
-      settingsPath,
-      "--permission-mode",
-      "acceptEdits",
-      "--setting-sources",
-      "",
-      "--mcp-config",
-      mcpPath,
-      "--strict-mcp-config",
-    ],
-  };
-}
-
-function providerFor(l: Lap): CodexCliSessionProvider {
-  return stopSessionsAtTeardown(
-    new CodexCliSessionProvider(join(l.root, "state"), {
-      claudeCommand: fakeCodexCli(l.root),
-      codexHome: l.codexHome,
-    }),
-  );
-}
-
-function start(
-  provider: CodexCliSessionProvider,
-  l: Lap,
-  settings: Readonly<Record<string, unknown>> = {},
-): Promise<ProviderResult<unknown>> {
-  return provider.start(
-    cliRequest(l.root, SESSION, { prompt: "do the lap", cli_args: l.cliArgs, ...settings }),
-  );
-}
-
-function refusalOf(result: ProviderResult<unknown>): Failure {
-  expect(result, `expected Failure, got ${String(result)}`).toBeInstanceOf(Failure);
-  return result as Failure;
-}
 
 function pause(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -275,31 +183,6 @@ test("a help text missing a required flag is a missing capability", () => {
 // Start: argv, stdin, the per-session home
 // --------------------------------------------------------------------------
 
-/**
- * Point the lap's fence at a base `.git` whose branch ref is `branch`, the
- * way `gitMetadataRoots` names it (`/`-separated, the ref a FILE), and
- * return the paths involved.
- */
-function withBranchRef(l: ReturnType<typeof lap>, branch: string) {
-  const gitDir = join(l.root, "base", ".git");
-  const ref = `${gitDir}/refs/heads/${branch}`;
-  mkdirSync(dirname(ref), { recursive: true });
-  writeFileSync(ref, "0".repeat(40), "utf8");
-  const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
-    sandbox: { filesystem: Record<string, unknown> };
-  };
-  settings.sandbox.filesystem["additionalDirectories"] = [gitDir, ref];
-  writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
-  return { gitDir, ref };
-}
-
-async function profileOf(l: ReturnType<typeof lap>): Promise<string> {
-  const log = spawnLog(l.root);
-  expect(await start(providerFor(l), l)).toBeInstanceOf(Ok);
-  const [entry] = await waitForSpawns(log, 1);
-  return (entry?.argv ?? []).find((part) => part.startsWith("permissions=")) ?? "";
-}
-
 test("a write root that is a file is left out of the profile, a directory kept", async () => {
   // gitMetadataRoots names the branch ref and packed-refs, both files; Codex
   // mounts `.git` under every writable root, so a file root made the real
@@ -339,11 +222,9 @@ test("the branch's ref and log directories are writable and every sibling in the
 test("a write denial that contains the workspace refuses the spawn; one beside it does not", async () => {
   const lapDenying = (pathOf: (root: string) => string) => {
     const l = lap();
-    const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
-      sandbox: { filesystem: Record<string, unknown> };
-    };
-    settings.sandbox.filesystem["denyWrite"] = [pathOf(l.root)];
-    writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+    publish(l, (settings) => {
+      settings["sandbox"]["filesystem"]["denyWrite"] = [pathOf(l.root)];
+    });
     return l;
   };
   // Claude's sandbox would deny every write under it; a profile whose
@@ -361,11 +242,9 @@ test("a write denial that contains the workspace refuses the spawn; one beside i
 
 test("a globbed write denial refuses the spawn instead of dropping out of the profile", async () => {
   const l = lap();
-  const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
-    sandbox: { filesystem: Record<string, unknown> };
-  };
-  settings.sandbox.filesystem["denyWrite"] = [join(dirname(l.root), "*", "protected")];
-  writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+  publish(l, (settings) => {
+    settings["sandbox"]["filesystem"]["denyWrite"] = [join(dirname(l.root), "*", "protected")];
+  });
   const log = spawnLog(l.root);
   const refusal = refusalOf(await start(providerFor(l), l));
   expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
@@ -378,11 +257,9 @@ test("a write denial over the branch's ref namespace refuses the spawn, though t
   // must be checked against it, not only against the roots the fence named.
   const l = lap();
   const { gitDir } = withBranchRef(l, "lap/branch");
-  const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as {
-    sandbox: { filesystem: Record<string, unknown> };
-  };
-  settings.sandbox.filesystem["denyWrite"] = [`${gitDir}/refs/heads`];
-  writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+  publish(l, (settings) => {
+    settings["sandbox"]["filesystem"]["denyWrite"] = [`${gitDir}/refs/heads`];
+  });
   const log = spawnLog(l.root);
   const refusal = refusalOf(await start(providerFor(l), l));
   expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
@@ -393,9 +270,9 @@ test("a write denial over the branch's ref namespace refuses the spawn, though t
 test("a hooks block with no group or no handler is a refusal, not a TypeError", async () => {
   for (const hooks of [{ PreToolUse: [] }, { PreToolUse: [{ matcher: "*", hooks: [] }] }]) {
     const l = lap();
-    const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as Record<string, unknown>;
-    settings["hooks"] = hooks;
-    writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+    publish(l, (settings) => {
+      settings["hooks"] = hooks;
+    });
     const refusal = refusalOf(await start(providerFor(l), l));
     expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
     expect(refusal.detail).toContain("are not exactly the one deny hook");
@@ -824,9 +701,7 @@ test("a settings key or deny rule the translation does not know is refused", asy
   ];
   for (const [mutate, reason] of cases) {
     const l = lap();
-    const settings = JSON.parse(readFileSync(l.settingsPath, "utf8")) as Record<string, unknown>;
-    mutate(settings);
-    writeFileSync(l.settingsPath, JSON.stringify(settings), "utf8");
+    publish(l, mutate);
     const refusal = refusalOf(await start(providerFor(l), l));
     expect(refusal.kind).toBe(FailureKind.REFUSED_BY_PROVIDER);
     expect(refusal.detail).toContain(reason);
