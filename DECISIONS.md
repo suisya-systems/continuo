@@ -18157,7 +18157,10 @@ relayed by the window on 2026-09-26:
    `--force`, so git refuses a worktree with uncommitted changes, and no flag here overrides it. A
    worktree git no longer lists, at a path that no longer exists, answers `outcome: "absent"` with
    exit 0, so a retried cleanup is a no-op; a path that exists but is not a worktree of that
-   repository is refused. The topic branch is never touched.
+   repository is refused. A listed worktree that is not checked out on the run's recorded topic
+   branch is refused too: the path alone does not prove the worktree is still this run's, since a
+   later run may materialise at the same path, and each materialisation creates its own branch.
+   The topic branch is never touched.
 3. **No event is appended**, as `run close` appends none (`D-0084`): whether the worktree exists is
    a question git answers, and a spine fact about it would be a second answer.
 4. **The run must be terminal.** A clean worktree a live lap is running in is not a leftover, and

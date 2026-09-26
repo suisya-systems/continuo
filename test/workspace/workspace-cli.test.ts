@@ -233,6 +233,22 @@ describe("continuo workspace remove", () => {
     expect(existsSync(f.workspace)).toBe(true);
   });
 
+  test("refuses a worktree a later run materialised at the same path", () => {
+    const f = fixture();
+    runGitChecked(["worktree", "remove", f.workspace], f.git);
+    runGitChecked(
+      ["worktree", "add", "--no-track", "-b", "feat/run-2", f.workspace, "main"],
+      f.git,
+    );
+    const streams = capture();
+
+    expect(remove(f.path, true)).toBe(2);
+    const doc = JSON.parse(streams.err()) as { error: { class: string; message: string } };
+    expect(doc.error.class).toBe("WorkspaceRemoveRefused");
+    expect(doc.error.message).toContain("refs/heads/feat/run-2");
+    expect(existsSync(f.workspace)).toBe(true);
+  });
+
   test("refuses a path that exists but is no longer a worktree of the repository", () => {
     const f = fixture();
     runGitChecked(["worktree", "remove", f.workspace], f.git);

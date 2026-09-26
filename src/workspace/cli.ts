@@ -110,24 +110,33 @@ function payloadString(payload: Record<string, unknown>, key: string, runId: str
 }
 
 /**
- * Is `workspace` one of `repository`'s worktrees, as git lists them?
+ * The `branch` line of `workspace`'s entry in `git worktree list --porcelain`:
+ * `undefined` when git does not list it, `null` when it is listed detached.
  *
- * Compared through {@link sameExistingPath}, the rule the materialiser's own
- * sweep uses: git lists the canonical path, and the payload may hold a spelling
- * through a symlinked parent or a Windows 8.3 short name.
+ * Paths are compared through {@link sameExistingPath}, the rule the
+ * materialiser's own sweep uses: git lists the canonical path, and the payload
+ * may hold a spelling through a symlinked parent or a Windows 8.3 short name.
  */
-function isRegisteredWorktree(workspace: string, git: GitOptions): boolean {
-  return runGitChecked(["worktree", "list", "--porcelain"], git)
-    .stdout.split("\n")
-    .some((line) => line.startsWith("worktree ") && sameExistingPath(line.slice(9), workspace));
+function registeredBranch(workspace: string, git: GitOptions): string | null | undefined {
+  for (const entry of runGitChecked(["worktree", "list", "--porcelain"], git).stdout.split(
+    "\n\n",
+  )) {
+    const lines = entry.split("\n");
+    const path = lines.find((line) => line.startsWith("worktree "))?.slice(9);
+    if (path !== undefined && sameExistingPath(path, workspace)) {
+      return lines.find((line) => line.startsWith("branch "))?.slice(7) ?? null;
+    }
+  }
+  return undefined;
 }
 
 /**
  * Remove the worktree `runId` was materialised into.
  *
  * @throws {WorkspaceRemoveRefused} for an unknown run, a run not yet terminal,
- *   a run with no `workspace_materialized` event, or a path that exists but is
- *   not a worktree of the recorded repository.
+ *   a run with no `workspace_materialized` event, a worktree no longer on the
+ *   run's topic branch, or a path that exists but is not a worktree of the
+ *   recorded repository.
  * @throws {GitRefusal} if git refuses the removal (a dirty worktree) or cannot
  *   run in the recorded repository.
  */
@@ -154,7 +163,18 @@ export function removeRunWorkspace(connection: SqliteDatabase, runId: string): R
   const git: GitOptions = { cwd: repository };
 
   let outcome: RemovedWorkspace["outcome"];
-  if (isRegisteredWorktree(workspace, git)) {
+  const branch = registeredBranch(workspace, git);
+  if (branch !== undefined) {
+    // The path alone does not prove the worktree is still this run's: once it
+    // is removed, a later run may materialise at the same path. Each
+    // materialisation creates its own topic branch, so the branch checked out
+    // there is what ties the worktree to this run.
+    if (branch !== `refs/heads/${topicBranch}`) {
+      throw new WorkspaceRemoveRefused(
+        `${workspace} is checked out on ${branch ?? "a detached HEAD"}, not on run ` +
+          `${runId}'s topic branch ${topicBranch}; refusing to remove it`,
+      );
+    }
     removeWorktree(workspace, git);
     outcome = "removed";
   } else if (existsSync(workspace)) {
