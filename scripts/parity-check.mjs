@@ -26,6 +26,14 @@
  *                      entries, per disposition. "Not fewer than" is satisfied
  *                      by lowering the baseline in the same edit that removes
  *                      the coverage; exact reconciliation is not.
+ *  7. **unexplained** -- an entry other than `ported` with no reason, or a
+ *                      `retired` one whose reason cites no decision.
+ *
+ * Since the port was completed (D-1115) this is a coverage guard, not an
+ * output-parity guard: `ported` records that a case was translated from its
+ * source, not that it still asserts what the source does. What it still
+ * catches is coverage lost without a decision -- a deleted case, an unapproved
+ * skip, a quietly re-based total.
  *
  * Run: `node scripts/parity-check.mjs`
  */
@@ -465,6 +473,15 @@ for (const ledgerPath of LEDGERS) {
         `${ledgerPath}: ${entry.source_nodeid} is '${entry.disposition}' with no reason`,
       );
     }
+    // A `retired` case was ported and then deliberately removed after the port
+    // was complete (D-1115). Removing coverage is a decision, so the reason has
+    // to name the one that took it.
+    if (entry.disposition === "retired" && !/\bD-\d{4}\b/.test(entry.reason ?? "")) {
+      fail(
+        "unexplained",
+        `${ledgerPath}: ${entry.source_nodeid} is 'retired' but its reason cites no decision (D-NNNN)`,
+      );
+    }
   }
 
   for (const nodeid of inventory) {
@@ -492,16 +509,20 @@ for (const ledgerPath of LEDGERS) {
     adapted: ledger.entries.filter((entry) => entry.disposition === "adapted").length,
     not_ported: ledger.entries.filter((entry) => entry.disposition === "not-ported").length,
     waivers: ledger.entries.filter((entry) => entry.disposition === "waived").length,
+    retired: ledger.entries.filter((entry) => entry.disposition === "retired").length,
   };
   for (const [key, value] of Object.entries(counted)) {
-    if (ledger.totals[key] !== value) {
+    // `retired` postdates every ledger (D-1115), so a ledger that never retired
+    // a case may omit it; one that has must record it like any other total.
+    const recorded = key === "retired" ? (ledger.totals.retired ?? 0) : ledger.totals[key];
+    if (recorded !== value) {
       fail(
         "totals",
-        `${ledgerPath}: totals.${key} records ${ledger.totals[key]} but the entries count ${value}`,
+        `${ledgerPath}: totals.${key} records ${recorded} but the entries count ${value}`,
       );
     }
   }
-  const dispositions = new Set(["ported", "adapted", "not-ported", "waived"]);
+  const dispositions = new Set(["ported", "adapted", "not-ported", "waived", "retired"]);
   for (const entry of ledger.entries) {
     if (!dispositions.has(entry.disposition)) {
       fail(

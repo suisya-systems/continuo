@@ -218,6 +218,7 @@ spaces distinct.
 | D-1112 | `lap perform --json` carries what the turn cost and what it ran, and `lap perform` refuses to start a lap from a process that may not create a Unix socket | accepted |
 | D-1113 | CI evidence and its verdict move from rondo into continuo as `ci observe` / `ci show`; `ci_observation` gains `pending` and the `check_run` / `commit_status` scopes | accepted |
 | D-1114 | A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars | superseded by D-1117 |
+| D-1115 | The port is complete and continuo evolves on its own: output parity with interlock no longer binds, the parity ledger is the port's historical record, and its check stays in the gate as a coverage guard | accepted |
 | D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
 
 ---
@@ -17835,3 +17836,112 @@ Codex turn accepted under this count in which a tool ran that the hook did not s
 **Source.** Issue #220; the owner's answer (A) relayed by the window on 2026-09-26; the measurements
 above; the Codex review of this change. `D-1114`. Decision id `D-1117`, in the `D-11xx` shared
 cross-belt band opened by `D-1101`; `D-1115` and `D-1116` are held by other open work.
+
+---
+
+## D-1115 -- The port is complete and continuo evolves on its own: output parity with interlock no longer binds, the parity ledger is the port's historical record, and its check stays in the gate as a coverage guard
+
+**Context.** Continuo was started as a test-first parity port of interlock (interlock#74), and a
+set of rules followed from that: interlock's suite was the specification, a translated case could
+assert neither less nor more than its source, and a port that quietly improved on its source was no
+longer a parity port (`AGENTS.md` section 1, `docs/test-translation-conventions.md` section 0,
+`docs/testing.md`). Those rules were right while the port was the work. They have kept binding
+after it, and they now reject changes on no ground but "interlock does it differently" -- `D-1112`
+turned down a seccomp check in `sandbox doctor` because `sandbox_doctor.ts` is a ported surface and
+the check would change its output.
+
+The port is complete by this repository's own records, measured at `a0e642b`:
+
+- `parity/source-inventory.belts.md`: of the 2,194 node ids interlock collects at `65f36c5`, 1,973
+  are in scope and all are ported; the other 221 are `not-porting`, each ratified at this
+  repository's human gate (the last, `broker`, by `D-0053` on 2026-09-03). No subsystem is
+  `decision-pending`, `candidate-lane` or `retarget`.
+- The 70 ledgers hold 1,528 `ported`, 438 `adapted`, 7 `not-ported`, 0 `waived`. Six of the seven
+  `not-ported` have no possible target (the source parametrizes over a directory listing or an
+  `__init__.py`); the seventh needs interlock's spike-schema creator, which continuo does not carry.
+  None is waiting on work.
+- `npm run parity` passes over 3,776 collected target tests; `npm run inventory` passes.
+- The ledgers carry 200 `inherited_limitations`: 22 marked repaired, 178 still reproducing the
+  source.
+
+The owner decided on 2026-09-26 that once the port is complete continuo evolves on its own and need
+not keep output parity with interlock.
+
+**Decision.**
+
+1. **The port is complete as of 2026-09-26, and output parity with interlock no longer binds.**
+   Continuo's own suite and this file are its specification. Interlock stays the design lineage of
+   record and stays frozen (`D-0036`); nothing here makes it a decision-maker.
+2. **Changing ported behaviour is a decision, not a free edit.** A change may make a ported surface
+   behave differently from interlock. It changes the test that pins the behaviour in the same
+   change, and says why -- with an entry here if it settles a question.
+3. **Coverage moves up freely and down only by decision.** Strengthening a test, ported or not,
+   needs no decision. Weakening or deleting one does.
+4. **The parity ledgers are the historical record of the port.** `ported` records that a case was
+   translated from its source, not that it still asserts what the source does; a ported test whose
+   assertion a later decision changes keeps its entry as it is.
+5. **A new disposition, `retired`, is how a ported case is deleted.** A `retired` entry has no
+   target id, its `reason` cites the decision that removed the case (`D-NNNN`), and its ledger
+   records `totals.retired`. A ledger that has retired nothing may omit the total.
+   `scripts/parity-check.mjs` enforces all three.
+6. **`npm run parity` and `npm run inventory` stay in `verify` and in the `parity` CI job under
+   `ci-gate`**, as a coverage guard rather than an output-parity guard. The parity check is also the
+   only guard against an unapproved `skip` / `todo` / `fails` / `xfail` anywhere under `test/` and
+   against an unrecorded deletion of a ported case; the inventory check keeps the frozen snapshot of
+   interlock's suite from being edited by accident. Both are cheap.
+7. **`inherited_limitations` is a backlog, not behaviour to keep.** Any change may repair an entry,
+   retiring it in the form `docs/test-translation-conventions.md` already describes. `D-0023` holds
+   -- inherited defects are repaired here -- and "at the first belt that touches them" now reads "by
+   any change", since there are no more porting belts.
+8. **Alternatives rejected on output parity alone no longer bind.** Known instances: `D-1112`'s
+   seccomp check in `sandbox doctor`; `D-0017`'s structural assertions on error codes, deferred
+   "after the full port is green"; `D-0020`'s testkit guard against a match pattern that also matches
+   the database path; the `D-0030` note that `measure report` refuses a repeated flag while
+   `settings generate` keeps the last one. None of those entries changes status. Each decision
+   still holds; only the parity reason given against the alternative has lapsed. Taking one up is
+   its own change, with its own entry.
+9. **The differential oracles (`D-0018`) are regression pins.** A change that departs from
+   interlock's behaviour on purpose updates the committed vector or the expected value in the same
+   change and cites the decision; the Python halves stay as the record of how each vector was made.
+10. **Unchanged:** the testkit freeze (its reason is that one change must not shift every other
+    area's tests, which has nothing to do with parity); rules 10 and 11 of the translation
+    conventions; the double-green rule; the `D-11xx` band for cross-belt decisions.
+
+**Alternatives.**
+
+- *Take `parity` and `inventory` out of `verify` and CI (rejected).* That removes the output-parity
+  check, but it also removes the skip guard and the deletion guard, which have nothing to do with
+  parity and nothing else provides.
+- *Mark a deleted case `not-ported` with a reason (rejected).* `not-ported` means "never
+  translated", so a deletion would read as a case that was never written, and `AGENTS.md` section 4
+  forbids relabelling a disposition to make a check pass.
+- *Leave `retired` until the first deletion needs it (rejected).* Until then a deliberate deletion
+  has no sanctioned form: the check is red and every way to turn it green is forbidden.
+- *Supersede `D-0017`, `D-0020`, `D-0023`, `D-0030` and `D-1112` (rejected).* Each decision is still
+  true; only one reason, given against an alternative, has lapsed. Supersession would say the
+  decision itself stopped being true.
+- *Make every inherited limitation an issue now (not done).* 178 issues filed at once is noise; an
+  entry is taken up when a change touches it.
+
+**Consequences.**
+
+- `AGENTS.md` section 1 is rewritten for a completed port, and section 4 names `retired`.
+  `docs/testing.md`, `docs/test-translation-conventions.md` (a header, the disposition table, the
+  `inherited_limitations` paragraph, the check list), `docs/differential-oracle.md`, `README.md`'s
+  status and the `parity` job's comment follow.
+- A new test in a ported file is still declared in its ledger's `target_only_tests`, because the
+  unmapped check reads everything in a ported file. That is one line per test.
+- The ledgers are not rewritten: no entry, total or limitation changes in this decision.
+- The translation rules stay in their document as the record of how the entries were made.
+
+**Status.** accepted
+
+**Falsifier.** A ported case deleted with the parity check green and no `retired` entry citing a
+decision. A change turned down on output parity with interlock alone after this entry. A ledger
+whose `totals` disagree with a `retired` entry and the check still passes.
+
+**Source.** The owner's decision of 2026-09-26, relayed by the window, and the answers to this
+task's judgment escalation (keep both checks in the gate; add `retired` in this change). The
+measurements above, at `a0e642b`. `D-0017`, `D-0018`, `D-0020`, `D-0023`, `D-0030`, `D-0036`,
+`D-0053`, `D-1112`. Decision id `D-1115`, the next free id in the `D-11xx` shared cross-belt band
+opened by `D-1101`.
