@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, delimiter as pathDelimiter } from "node:path";
 
-import { describe, expect, onTestFinished, test } from "vitest";
+import { beforeEach, describe, expect, onTestFinished, test } from "vitest";
 import { ArgparseExit } from "../../src/cli/parser.js";
 import { buildParser as buildContinuoParser } from "../../src/cli.js";
 import { osJoin, osRealpath } from "../../src/fencing/pypath.js";
@@ -33,8 +33,10 @@ import {
   doctorSeams,
   formatReport,
   pathStr,
+  probeUnixSocketSync,
   reportFailures,
   reportOk,
+  reportToJsonable,
   runBwrapCanary,
   run as runDoctor,
   STATUS_SYMLINK_ESCAPE,
@@ -1292,6 +1294,21 @@ function roleSchema(deny: readonly unknown[]): Record<string, unknown> {
 }
 
 /** `_write_settings`. */
+/**
+ * The Unix socket check (`D-1116`) answers "came up" for every case unless the
+ * case says otherwise. The suite may itself run inside a Claude Code sandbox,
+ * where the real probe answers `EPERM` and would fail every ported case for a
+ * reason interlock's suite never had. The real probe is exercised by its own
+ * target-only case.
+ */
+beforeEach(() => {
+  const real = doctorSeams.probeUnixSocket;
+  doctorSeams.probeUnixSocket = () => null;
+  return () => {
+    doctorSeams.probeUnixSocket = real;
+  };
+});
+
 function writeSettings(dir: string, settings: Record<string, unknown>): string {
   const path = join(dir, "settings.local.json");
   writeFileSync(path, JSON.stringify(settings), "utf8");
@@ -1994,5 +2011,70 @@ describe("str(Path(p)) is not normpath, and the port models a Path as a string (
       return windows?.[1] !== posixExpected;
     });
     expect(differs, "no input distinguishes the two namespaces").toBe(true);
+  });
+});
+
+describe("the Unix socket check (target-only, D-1116)", () => {
+  test("an EPERM socket fails a report the bwrap canary passes (target-only)", () => {
+    // rondo N-16 / N-21: bwrap comes up under a parent Claude Code sandbox's
+    // seccomp filter, and the worker's own sandbox does not.
+    patchSeam(doctorSeams, "probeUnixSocket", () => "EPERM");
+    const okRunner = (cmd: string[]): CompletedProcess => ({
+      args: cmd,
+      returncode: 0,
+      stdout: "",
+      stderr: "",
+    });
+    const report = diagnose(settingsWithDeny([], ["/"]), { probeBwrap: true, runner: okRunner });
+    expect(report.canaryStatus).toBe(CANARY_PASS);
+    expect(report.socketStatus).toBe(CANARY_FAIL);
+    expect(report.socketDetail).toContain("seccomp");
+    expect(reportOk(report)).toBe(false);
+    const json = reportToJsonable(report);
+    expect(json["ok"]).toBe(false);
+    expect((json["unix_socket"] as Record<string, unknown>)["status"]).toBe(CANARY_FAIL);
+    const text = formatReport(report);
+    expect(text).toContain("unix socket: fail - ");
+    expect(text).toContain("RESULT: a Claude Code sandbox cannot start from this process");
+    // The deny-path RESULT is not replaced by a message that blames the settings.
+    expect(text).toContain("RESULT: sandbox deny paths are usable by bwrap.");
+    expect(isAscii(text)).toBe(true);
+  });
+
+  test("the check runs under --no-probe-bwrap and gates run's exit (target-only)", () => {
+    const tmp = caseTree("socket-run");
+    const path = writeSettings(tmp, settingsWithDeny([]));
+    patchSeam(doctorSeams, "probeUnixSocket", () => "EPERM");
+    const out = captureStdout();
+    expect(
+      runDoctor({ settings: [path], json: false, probe_bwrap: false, merge_scopes: false }),
+    ).toBe(1);
+    expect(out.text()).toContain("unix socket: fail - ");
+  });
+
+  test("a disabled sandbox and a non-EPERM error fail nothing (target-only)", () => {
+    let asked = false;
+    patchSeam(doctorSeams, "probeUnixSocket", () => {
+      asked = true;
+      return "EPERM";
+    });
+    const disabled = diagnose({ sandbox: { enabled: false } }, { probeBwrap: false });
+    expect(asked).toBe(false);
+    expect(disabled.socketStatus).toBe(CANARY_SKIPPED);
+    expect(reportOk(disabled)).toBe(true);
+
+    patchSeam(doctorSeams, "probeUnixSocket", () => "EADDRINUSE");
+    const other = diagnose(settingsWithDeny([]), { probeBwrap: false });
+    expect(other.socketStatus).toBe(CANARY_SKIPPED);
+    expect(other.socketDetail).toContain("EADDRINUSE");
+    expect(reportOk(other)).toBe(true);
+  });
+
+  test("the real probe answers null or EPERM, and null off Linux (target-only)", () => {
+    // Both answers are real: null on an unfiltered host, EPERM inside a Claude
+    // Code sandbox. Which one depends on where the suite runs, not on the code.
+    expect([null, "EPERM"]).toContain(probeUnixSocketSync());
+    expect(probeUnixSocketSync("win32")).toBeNull();
+    expect(probeUnixSocketSync("darwin")).toBeNull();
   });
 });
