@@ -1723,7 +1723,7 @@ function namesTheSameDatabase(left: string, right: string): boolean {
  * asked of paths that are supposed to exist, so a failure to resolve is itself
  * a reason to say no rather than to guess yes.
  */
-function sameExistingPath(left: string, right: string): boolean {
+export function sameExistingPath(left: string, right: string): boolean {
   if (pathIdentity(resolve(left)) === pathIdentity(resolve(right))) {
     return true;
   }
