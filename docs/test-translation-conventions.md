@@ -4,7 +4,14 @@ Continuo is a **test-first parity port**: interlock's suite is the specification
 that is subtly weaker than its source is worse than one that is missing, because a missing case is
 visible in the parity ledger and a weakened one is not.
 
-This document is the rulebook for that translation. It is normative for every belt after this one.
+This document is the rulebook for that translation. It was normative for every belt of the port.
+
+> **The port is complete (`DECISIONS.md` D-1115, 2026-09-26), and output parity with interlock no
+> longer binds.** The translation rules below -- §0's ceiling among them -- are the record of how
+> the existing ledger entries were made, not a constraint on changes made since. What still applies
+> to new work: rule 10 (make it fail on purpose), rule 11 (a repair carries no warrant), the
+> testkit freeze, and the parity ledger's enforcement, which is now a coverage guard (see
+> [The parity ledger](#the-parity-ledger)).
 Each rule names the pattern, the mapping to use, and -- the part that matters -- **the failure mode of
 the mapping a careful person reaches for first**. Every rule has at least one worked example in the
 repository, and the example is cited.
@@ -508,13 +515,16 @@ One entry per **collected source node id**, with `disposition`, `source_status`,
 | `adapted`    | a runtime difference made a straight translation impossible; the **property** is preserved and `reason` says exactly what changed |
 | `not-ported` | not translated; `reason` says why and what unblocks it |
 | `waived`     | translated **weaker** than the source. Requires an approved waiver and is an explicit review topic |
+| `retired`    | ported, then deliberately removed after the port was complete (D-1115). No target id; `reason` must cite the decision (`D-NNNN`) that removed it, and the ledger records `totals.retired` |
 
 There are **no waivers in this pilot**. Five cases are `adapted` and two are `not-ported`; the
 reasons are in the ledger.
 
-The ledger also carries an `inherited_limitations` list, for rough edges the port **reproduces**
-rather than fixes. A parity port that quietly improves on its source is no longer a parity port, and
-interlock#74's acceptance criteria require known limitations to stay disclosed. Each entry says what
+The ledger also carries an `inherited_limitations` list, for rough edges the port **reproduced**
+rather than fixed. During the port that was the rule -- a parity port that quietly improves on its
+source is no longer a parity port, and interlock#74's acceptance criteria required known limitations
+to stay disclosed. Since the port was completed (D-1115) the list is a backlog: any change may
+repair an entry, and retires it as described below. Each entry says what
 the behaviour is, that it matches the source, and where a fix belongs. **That last part is
 continuo's**: interlock is frozen (`D-0023`, `D-0036`), so an inherited defect is repaired here, at
 the first belt that touches it, and `inherited_limitations` records what is reproduced *pending that
@@ -571,9 +581,16 @@ weaker, it is a waiver, and that is a report to the reviewer -- see rule 0.
    removes the coverage; reconciling means the totals cannot be quietly re-based, so a real change
    to them is a diff a reviewer sees. An unknown disposition, or a `ported` entry with no target id,
    fails here too.
-7. **unexplained** -- an `adapted` or `not-ported` entry with no reason.
+7. **unexplained** -- an `adapted`, `not-ported` or `retired` entry with no reason, or a `retired`
+   one whose reason cites no decision.
 
-Each of these seven has been observed failing; a check never seen red is not a check.
+Since D-1115 these are **coverage** checks, not output-parity checks: `ported` records that a case
+was translated, not that it still asserts what the source does. A ported test whose assertion is
+changed by a decision keeps its entry; one that is deleted becomes `retired`.
+
+Each of these seven has been observed failing; a check never seen red is not a check. The
+`retired` half of 6 and 7 was observed failing when D-1115 added it: a retired entry whose reason
+named no decision, and one whose ledger did not record `totals.retired`.
 
 ### The source inventory
 

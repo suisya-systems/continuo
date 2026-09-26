@@ -22,10 +22,12 @@ no arguments. Use `npm run test:watch` while working.
 
 ## The suite is the specification
 
-Continuo is a **test-first parity port** of interlock. The specification being ported is
-interlock's test suite, not its Python source. A ported test is a faithful translation or it is a
-change of behaviour that needs a decision -- there is no third category, and "the TypeScript version
-does it slightly differently" is the failure mode the discipline exists to prevent.
+Continuo's own test suite is its specification. During the port that suite was interlock's,
+translated case by case; the port is complete (`DECISIONS.md` D-1115) and output parity with
+interlock no longer binds. What carries over is the discipline: a change of behaviour changes the
+test that pins it in the same change and says why -- a decision if it settles a question -- and a
+test is never weakened or deleted without one ([`AGENTS.md`](../AGENTS.md) §1). "The code does it
+slightly differently now" with no test saying so is the failure mode the discipline exists to prevent.
 
 ## Order is random, and that is the point
 
