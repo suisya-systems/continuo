@@ -133,6 +133,8 @@ const LAP_SERVER = `mcp__${MCP_SERVER}`;
 const STEERING =
   /^(?:PATH|HOME|SHELL|IFS|ENV|BASH_ENV|ZDOTDIR|CODEX_HOME|NODE_OPTIONS|NODE_PATH|EDITOR|VISUAL|PAGER|MANPAGER|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|LESSOPEN|LESSCLOSE|RUBYOPT|PYTHON\w*|PERL\w*|(?:LD|DYLD|GIT|XDG|NPM_CONFIG)_\w*)$/;
 
+// An absolute path reaches the profile as the fence wrote it, separators
+// included: `{root}/x` is `${l.root}/x` there, not `join(l.root, "x")` (win32).
 const profileHas = (path: (l: Lap) => string, access: string) => (l: Lap) =>
   `${JSON.stringify(path(l))} = "${access}"`;
 const workspaceOf = (l: Lap) => join(l.root, "workspaces", SESSION);
@@ -222,7 +224,7 @@ const TABLE: readonly Row[] = [
     verdict: "translated",
     layer: "permission profile: the path is deny (a glob covers what exists at spawn, depth 6)",
     example: "Read({root}/secret)",
-    profile: profileHas((l) => join(l.root, "secret"), "deny"),
+    profile: profileHas((l) => `${l.root}/secret`, "deny"),
   },
   {
     axis: "deny",
@@ -332,7 +334,7 @@ const TABLE: readonly Row[] = [
     verdict: "translated",
     layer: "permission profile: deny (a glob covers what exists at spawn, depth 6)",
     example: "{root}/secrets",
-    profile: profileHas((l) => join(l.root, "secrets"), "deny"),
+    profile: profileHas((l) => `${l.root}/secrets`, "deny"),
   },
   {
     axis: "denyWrite",
@@ -357,7 +359,7 @@ const TABLE: readonly Row[] = [
     verdict: "translated",
     layer: "permission profile: write if a directory at spawn; a file is left out (narrowed)",
     example: "{root}/extra",
-    profile: profileHas((l) => join(l.root, "extra"), "write"),
+    profile: profileHas((l) => `${l.root}/extra`, "write"),
   },
   ...(["denyRead", "denyWrite", "additionalDirectories"] as const).map(
     (axis): Row => ({
