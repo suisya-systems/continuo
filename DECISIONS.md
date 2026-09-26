@@ -223,6 +223,7 @@ spaces distinct.
 | D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
 | D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
 | D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it: a dirty worktree is refused, an absent one is not an error, the topic branch stays, and no event is appended | accepted |
+| D-1120 | A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire | accepted |
 
 ---
 
@@ -18181,3 +18182,77 @@ the branch deleted too and cannot get it from the forge. A second worktree per r
 **Source.** Issue #230; the owner's answers to the four options, relayed by the window on
 2026-09-26; `D-0084`, `D-0090`, rondo `D-0064` and `D-0093`. Decision id `D-1119`, in the `D-11xx`
 shared cross-belt band opened by `D-1101`.
+
+## D-1120 -- A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire
+
+**Context.** Issue #226. `D-1118` rule 9 refused every Codex lap on Windows until Codex's Windows
+sandbox was measured, and #226 was the measurement: how Codex on Windows spells paths in tool calls
+(the hook's `PLAIN_COMMAND` refuses a backslash), whether its sandbox and the `PreToolUse` hook run
+and deny, and which fence shapes would need a Windows translation.
+
+**What was measured.** On native Windows 11 (10.0.22631), Codex 0.153.4 from a private npm prefix,
+continuo's `codex exec` flags and a profile of the fence's shape (`:root` read, the workspace
+write, a denied directory, a `**\*.pem` glob denial, the session's and the operator's Codex homes
+denied), through `codex sandbox` probes under four path spellings (backslash, forward slash,
+lower-case drive, `\\?\`) and three backends, and two real `codex exec` laps with a logging hook
+that denied one marker word:
+
+- **W1.** The profile is accepted: the lap's `turn_context` lists every entry as spelled, the glob as
+  a `glob_pattern`, with approval `never`, `workspace-write` and no network.
+- **W2.** The default and the unelevated backends refuse it before running anything: `codex sandbox`
+  exits 1 with `Restricted read-only access requires the elevated Windows sandbox backend`, in all
+  four spellings. No spelling reached enforcement.
+- **W3.** The elevated backend, with a fresh `CODEX_HOME`, did not answer within 120 seconds in any
+  cell. Its one-time administrator setup is the likely cause, and continuo renders one `CODEX_HOME`
+  per session. Whether it enforces the fence is not known.
+- **W4.** In both laps every shell call was rejected before it ran (`blocked by policy`), and
+  `apply_patch` was rejected for a file inside the workspace (`writing outside of the project`).
+  Nothing was written anywhere. The lap failed closed and could do no work.
+- **W5.** The hook never ran: no hook log line in either lap, for shell calls or `apply_patch`. The
+  model called both through the code-mode `exec` tool, the same surface that fires the hook on
+  Linux. The allowlist a Codex lap depends on (`D-1114`) lives only in the hook.
+- **W6.** The shell is `pwsh.exe -Command`. By default the model spells paths with backslashes; told
+  to, it spells them with forward slashes, in commands and in patch headers alike. It also writes
+  `(...)`, which `PLAIN_COMMAND` refuses, and `PLAIN_COMMAND`'s reasoning covers `sh`, `bash` and
+  `zsh`, not PowerShell's own syntax.
+
+The measurement's Codex homes sat under `%TEMP%`, where Codex refuses to place its helper binaries,
+as it does on Linux; that may contribute to W3 to W5, but not to W2, which is Codex's statement of
+what the non-elevated backends can hold.
+
+**Decision.**
+
+1. **A Codex lap refuses on Windows**, as `D-1118` rule 9 has it: the owner's answer (a) on #226,
+   relayed by the window on 2026-09-27. W2 and W5 each mean, on their own, that the fence cannot be
+   shown to hold there.
+2. **The refusal names the measured reasons** (the non-elevated backends refuse the profile, the
+   elevated one is unmeasured, the hook did not fire) and #238, and the fence-shape table checks
+   each.
+3. **Nothing about Windows path spelling is admitted.** `PLAIN_COMMAND` keeps refusing a backslash,
+   and no Windows allowlist is added: with no hook firing there is nothing for either to govern.
+
+**Alternatives.**
+
+- *Measure a second round first (deferred to #238)*: homes outside `%TEMP%`, the elevated backend
+  set up once by an administrator, the hook retried. Only if the elevated backend enforces the write,
+  read and glob denials and the hook fires would a Windows admission be designed: forward-slash
+  spelling asked for in the prompt (W6 shows the model complies), `PLAIN_COMMAND` unchanged, and an
+  analysis of PowerShell's syntax. It would also require every operator's Windows host to run the
+  elevated setup.
+- *A Windows-specific allowlist that admits backslashes (rejected)*: moot while the hook does not
+  fire (W5), and it would widen `PLAIN_COMMAND` for a shell it was never reasoned about.
+
+**Consequences.** No behaviour changes: a Codex lap on Windows is refused before anything exists, as
+it was. The refusal's words change, and the per-session copy of `auth.json` the Windows branch of the
+spawn makes stays unreached; #238 has to weigh it, because a token refresh in a copy can invalidate
+the operator's own login.
+
+**Status.** accepted
+
+**Falsifier.** A Codex release whose non-elevated Windows backend holds a restricted-read profile, or
+a measurement in which the elevated backend enforces every denial and the hook fires on every call;
+either reopens rule 1 through #238.
+
+**Source.** Issue #226; the measurement run on the operator's Windows host on 2026-09-26, whose
+script and log are attached to #226's pull request; the owner's answer (a), relayed by the window on 2026-09-27; #238;
+`D-1114`, `D-1118`. Decision id `D-1120`, in the `D-11xx` shared cross-belt band opened by `D-1101`.

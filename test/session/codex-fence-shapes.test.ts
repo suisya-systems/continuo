@@ -841,11 +841,14 @@ test("a Read rule of ** and one segment is denied under every write root, not on
   }
 });
 
-test("a Codex lap on Windows is refused before anything exists, until #226 measures it", async () => {
+test("a Codex lap on Windows is refused before anything exists, for the reasons D-1120 measured", async () => {
   const l = lap();
   patchSeam(codexCliSeams, "platform", "win32");
   await refusedAtSpawn(l, "does not run on Windows");
-  expect(translateFence(l.cliArgs)).toContain("#226");
+  const refusal = translateFence(l.cliArgs);
+  for (const reason of ["D-1120", "unelevated", "elevated one is unmeasured", "hook", "#238"]) {
+    expect(refusal).toContain(reason);
+  }
   // The nearest accepted case: the same lap elsewhere.
   patchSeam(codexCliSeams, "platform", "linux");
   expect(typeof translateFence(l.cliArgs)).toBe("object");
