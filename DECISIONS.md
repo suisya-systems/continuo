@@ -219,6 +219,7 @@ spaces distinct.
 | D-1113 | CI evidence and its verdict move from rondo into continuo as `ci observe` / `ci show`; `ci_observation` gains `pending` and the `check_run` / `commit_status` scopes | accepted |
 | D-1114 | A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars | superseded by D-1117, D-1118 |
 | D-1115 | The port is complete and continuo evolves on its own: output parity with interlock no longer binds, the parity ledger is the port's historical record, and its check stays in the gate as a coverage guard | accepted |
+| D-1116 | `sandbox doctor` checks that this process may create a Unix socket, and fails when it may not | accepted |
 | D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
 | D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
 
@@ -17949,6 +17950,69 @@ opened by `D-1101`.
 
 ---
 
+## D-1116 -- `sandbox doctor` checks that this process may create a Unix socket, and fails when it may not
+
+**Context.** `sandbox doctor` reports whether a worker's Claude Code sandbox will start: static
+analysis of the deny paths, then a live bwrap canary. rondo laps 6 and 7 (its N-16, N-21) ran from
+inside another Claude Code sandbox. There bwrap starts, so the canary passes, but the worker's
+sandbox fails with `EPERM ... listen '/tmp/claude-1000/srt-mux-*.sock'`: the parent's seccomp filter
+refuses `socket(AF_UNIX)`, and every child inherits it. So the doctor reported that the sandbox
+would start, and it did not. Issue #210 asks the doctor to check for this cause.
+
+`D-1112` put the same probe in `lap perform` and rejected putting it in the doctor. The first
+reason was parity: `sandbox_doctor.ts` is a port of interlock's module, and a check interlock never
+had changes a ported surface's output, which AGENTS.md section 1 rules out.
+
+**Decision.**
+
+1. `D-1115` rule 1 ends output parity with interlock, and its rule 8 names `D-1112`'s rejected
+   alternative *"Put the seccomp check in `sandbox doctor`"* as one whose parity reason has
+   lapsed. This entry takes that alternative up, as rule 8 says it must: as its own change with
+   its own entry. `D-1112` keeps its status. Its other reason still holds -- the doctor is a
+   command an operator may skip -- and is why `lap perform` keeps its own probe.
+2. The doctor gains a third check. On Linux it listens on an abstract Unix socket from a child
+   process (`probeUnixSocketSync`). `run` is synchronous, and a child inherits the filter, so the
+   child answers for this process and for any worker it would start. The child answers through
+   its exit status, not a pipe: Node's pipes are Unix socketpairs, which the same filter may
+   refuse. An `EPERM` is a `fail`. The report is then not ok and `run` exits 1. The detail names
+   an inherited seccomp filter, usually a parent Claude Code sandbox, as the cause. Any other
+   error is `skipped`, because only `EPERM` is evidence of the filter (`D-1112`). The check is
+   `skipped` off Linux, and `skipped` when the settings disable the sandbox, as the canary is.
+3. `--no-probe-bwrap` does not turn the check off. The check needs no bwrap, and the flag names the
+   canary.
+4. Output gains one line, `unix socket: <status> - <detail>`, and one extra `RESULT:` line when the
+   check fails. The existing RESULT lines about the deny paths are unchanged. `--json` gains the
+   key `unix_socket: {status, detail}`, and `canary` is untouched.
+5. The ported cases are unchanged. A file-wide `beforeEach` stubs the probe to "came up", because
+   the suite may itself run inside a Claude Code sandbox. Four target-only cases pin the check,
+   and one of them calls the real probe.
+
+**Alternatives.**
+
+- *An opt-in flag with the default output left as interlock's (rejected).* An operator who does
+  not know to pass it still gets the false pass that the issue is about.
+- *Won't fix, since `lap perform` refuses already (rejected).* The doctor would keep saying the
+  sandbox will start when it will not.
+
+**Consequences.** Run inside a Claude Code sandbox, the doctor now exits 1 for any settings file
+that enables the sandbox. That is correct for a worker started from there. It is a false alarm only
+when the worker is launched by a process that is not a child of the doctor's (a terminal
+multiplexer pane, say). The report names the cause, so the operator can tell which case applies.
+
+**Status.** accepted
+
+**Falsifier.** A worker sandbox that fails to initialize for a cause other than `EPERM` on
+`socket(AF_UNIX)`: the check passes and needs a second cause. A Claude Code release whose sandbox no
+longer needs a Unix socket: the check fails a sandbox that would start. A host where the probe's
+child process cannot run: the check reports `skipped` with `SPAWN_FAILED` and never fails.
+
+**Source.** Issue #210; the owner's decision (option A), relayed by the window on 2026-09-26;
+`D-1115` rules 1 and 8 (the post-port policy); rondo N-16 / N-21; `D-1112` (the probe and the
+rejected alternative this takes up), `D-0023` and `D-0215` (earlier repairs to this module).
+Decision id `D-1116`, allocated by the window in the `D-11xx` shared cross-belt band (`D-1101`).
+
+---
+
 ## D-1118 -- The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither
 
 **Context.** Issue #223, a follow-up to #222 (`D-1114`). `D-1114`'s standing rule is that a fence
@@ -18071,5 +18135,4 @@ before a more specific `write` (rule 5 can relax).
 
 **Source.** Issue #223; the enumeration and adversarial review of this change; the owner's answers
 (a) and (a) to #223's P1 and P2, relayed by the window on 2026-09-26; `D-1114`, `D-1117`.
-Decision id `D-1118`, in the `D-11xx` shared cross-belt band opened by `D-1101`; `D-1116` is held
-by other open work.
+Decision id `D-1118`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
