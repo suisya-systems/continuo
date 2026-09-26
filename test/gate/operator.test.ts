@@ -1523,15 +1523,27 @@ describe("an answer made under delegation (D-1121)", () => {
       toStage: string,
       onBehalfOf: string | null,
       authorityRef: string | null,
+      fromStage = "presented",
     ) =>
       cp
         .prepare(
           `INSERT INTO gate_transition (gate_id, transition_kind, from_stage, to_stage, actor_kind,
                                         actor_id, body, occurred_at_ms, recorded_at_ms,
                                         on_behalf_of, authority_ref)
-           VALUES (?, ?, 'presented', ?, ?, ?, 'approve', ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, 'approve', ?, ?, ?, ?)`,
         )
-        .run(GATE_ID, kind, toStage, actorKind, actorId, T0, T0, onBehalfOf, authorityRef);
+        .run(
+          GATE_ID,
+          kind,
+          fromStage,
+          toStage,
+          actorKind,
+          actorId,
+          T0,
+          T0,
+          onBehalfOf,
+          authorityRef,
+        );
     const refused = /CHECK constraint failed/;
     expect(() => insert("delegate", DELEGATE, "advance", "answered", null, SCOPE_DECISION)).toThrow(
       refused,
@@ -1548,6 +1560,13 @@ describe("an answer made under delegation (D-1121)", () => {
     expect(() =>
       insert("delegate", DELEGATE, "close", "presented", PERSON, SCOPE_DECISION),
     ).toThrow(refused);
+    // The edge is `presented -> answered` exactly: skipping presentation, or
+    // coming back from `forwarded`, is refused by the store too.
+    for (const fromStage of ["received", "forwarded"]) {
+      expect(() =>
+        insert("delegate", DELEGATE, "advance", "answered", PERSON, SCOPE_DECISION, fromStage),
+      ).toThrow(refused);
+    }
     expect(() =>
       insert("delegate", DELEGATE, "advance", "answered", PERSON, SCOPE_DECISION),
     ).not.toThrow();

@@ -21,8 +21,9 @@
 --        rondo's scope_decision_id). Both are present on a delegate's row and
 --        absent on every other row -- an IF AND ONLY IF, so neither half can be
 --        forgotten and no human row can claim a delegation.
---    (c) a delegate row is only ever the 'presented -> answered' advance. The
---        application's edge table says the same (gates.ts ADMISSIBLE); the
+--    (c) a delegate row is only ever the 'presented -> answered' advance, both
+--        ends named. The application's edge table says the same (gates.ts
+--        ADMISSIBLE); the
 --        CHECK makes it a property of the store rather than of the one writer.
 --
 --  What continuo does NOT do with the two columns: interpret them. They are
@@ -103,7 +104,8 @@ CREATE TABLE gate_transition_rebuilt_0008 (
     CHECK (on_behalf_of IS NULL OR on_behalf_of <> actor_id),
     -- NEW: and a delegate takes one edge, the answer.
     CHECK (actor_kind <> 'delegate'
-           OR (transition_kind = 'advance' AND to_stage = 'answered'))
+           OR (transition_kind = 'advance' AND from_stage = 'presented'
+               AND to_stage = 'answered'))
 );
 
 -- Every column, by name, for the reason 0003 gives.

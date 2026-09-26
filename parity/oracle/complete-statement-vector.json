@@ -1,6 +1,6 @@
 {
   "sqlite_version": "3.45.1",
-  "count": 3284,
+  "count": 3286,
   "expected": [
     false,
     false,
@@ -3142,6 +3142,7 @@
     false,
     false,
     false,
+    false,
     true,
     true,
     true,
@@ -3150,6 +3151,7 @@
     true,
     true,
     true,
+    false,
     false,
     false,
     false,
