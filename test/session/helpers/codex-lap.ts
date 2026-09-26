@@ -12,7 +12,7 @@ import { expect } from "vitest";
 import { renderFence } from "../../../src/fencing/renderer.js";
 import { Fence, type FenceRule, parsePermissionRule } from "../../../src/fencing/rules.js";
 import { readFence, writeFence } from "../../../src/fencing/state.js";
-import { CodexCliSessionProvider } from "../../../src/session/codex_cli_provider.js";
+import { CodexCliSessionProvider, codexCliSeams } from "../../../src/session/codex_cli_provider.js";
 import { Failure, Ok, type ProviderResult } from "../../../src/session/provider.js";
 import {
   fenceContext,
@@ -20,6 +20,7 @@ import {
   shippedHookScript,
 } from "../../fencing/helpers/fence-cases.js";
 import { caseRoot } from "../../testkit/cases.js";
+import { patchSeam } from "../../testkit/seams.js";
 import { fakeCodexCli, spawnLog } from "./fake-cli.js";
 import { cliRequest, stopSessionsAtTeardown, waitForSpawns } from "./session-cases.js";
 
@@ -39,6 +40,9 @@ export interface Lap {
 export function lap(
   options: { readonly allowedBash?: readonly string[]; readonly hookScript?: string } = {},
 ): Lap {
+  // A real Codex lap refuses on Windows (D-1118); the translation's cases
+  // still run in the suite's Windows cells, as on a measured platform.
+  patchSeam(codexCliSeams, "platform", "linux");
   const root = caseRoot("codexprov");
   const ctx = fenceContext(join(root, "fence"), {
     hookScript: options.hookScript ?? shippedHookScript(),

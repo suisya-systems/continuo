@@ -17861,8 +17861,8 @@ accepted with no Codex layer behind them, or with a weaker one that was not docu
 - `Read(//x)`, paths with a `.` / `..` / empty segment, and braces, which the profile keys as
   spelled while the spawn's containment checks resolve them;
 - a `denyRead` (or an absolute `Read(...)`) that contains a write root, which the profile's more
-  specific write entry leaves readable (the `denyWrite` case was already refused), a glob one whose
-  fixed part does (`/home/*` over `/home/u/ws`), and any denial
+  specific write entry leaves readable (the `denyWrite` case was already refused), a glob one that
+  matches a directory above one (`/home/*` over `/home/u/ws`), and any denial
   whose real path relates to a write root differently from its spelling (a link);
 - rule 8 taking any `.../refs/heads/<ns>/<x>` write root for the branch ref, so a role's own
   directory with that shape had its parent granted write;
@@ -17903,13 +17903,21 @@ accepted with no Codex layer behind them, or with a weaker one that was not docu
 4. **`S` and `F` are one fence**: `F`'s settings must equal `S`, its role must be the hook's, and it
    must hold every deny rule `S` names.
 5. **Paths are plain.** Every sandbox path and absolute rule body has no `.`, `..` or empty segment
-   and no brace. A read or write denial over a write root (a glob by the directory its fixed part
-   names), or one whose real path relates to a write root differently from its spelling, refuses
-   the spawn.
+   and no brace. A read or write denial over a write root (a glob, when the fence's matcher matches a
+   write root or a directory above one with it), or one whose real path relates to a write root
+   differently from its spelling, refuses the spawn.
 6. **The hook is proved to deny before the spawn.** The rendered `codex_hook.mjs` command is run once
    on an empty event and must answer with the JSON deny and exit 2.
 7. **Rule 8 takes only the ref `gitMetadataRoots` names**: a `refs/heads` path beside its common
    directory's `objects` and `packed-refs`.
+8. **`Read(**/<name>)` is denied under every write root**, not only the workspace: the owner's
+   answer (a) on #223, relayed by the window on 2026-09-26. Alternatives were the workspace alone
+   with the narrowing documented, a refusal (no Codex lap would run under the bundled roles), and the
+   home directory as well (a depth-6 scan from home, still not "anywhere").
+9. **A Codex lap refuses on Windows** (`process.platform === "win32"`) until #226 measures Codex's
+   Windows sandbox: the owner's answer (a), same relay. Drive, UNC and mixed-separator paths reach a
+   profile nothing has measured, so no layer there is claimed. The suite's Windows cells still run
+   the translation's cases through the `codexCliSeams.platform` seam.
 
 **Alternatives.**
 
@@ -17920,15 +17928,18 @@ accepted with no Codex layer behind them, or with a weaker one that was not docu
   now)*: their spec is a search pattern as often as a path. None is rendered today, so refusing
   costs nothing.
 
-**Consequences.** Shapes the bundled roles render are unchanged: the worker role's fence translates
-as before (`Edit(~/.claude/settings.json)` now also reaches the profile, where it lies outside every
-write root). The curator and secretary roles' `Edit(**/...)` denials refuse a Codex lap. What remains
+**Consequences.** The worker role's fence still translates, with more denied than before:
+`Read(**/*.pem)` and `Read(**/credentials*)` now cover the git write roots as well as the workspace
+(rule 8), and `Edit(~/.claude/settings.json)` reaches the profile, where it lies outside every write
+root. The curator and secretary roles' `Edit(**/...)` denials refuse a Codex lap, and so does every
+Codex lap on Windows (rule 9). What remains
 weaker than Claude, stated so it is not rediscovered:
 
-- a deny glob covers the paths present at the spawn, to depth 6 (`D-1114`), and a `**/<name>` or
-  one-segment `Read` rule covers the workspace, where the Claude hook's matcher reads it as anywhere
-  [pending the owner's answer on #223 P1];
-- Windows paths are not measured and are not claimed [pending the owner's answer on #223 P2; #226];
+- a deny glob covers the paths present at the spawn, to depth 6 (`D-1114`). A `Read(**/<name>)` rule
+  covers the workspace and every write root (rule 8), and a one-segment `Read(<name>)` the
+  workspace, where the Claude hook's matcher reads both as anywhere: a matching file outside every
+  write root that the OS sandbox leaves readable (another repository, `/etc/ssl/private`) can be
+  read with an admitted `cat`. Every place the lap can create or change a file is covered;
 - the stdin list and the steering-env list are lists, not proofs: a program that reads commands
   from its stdin, or an environment name that steers an admitted program, and is not on them is
   bounded only by the OS sandbox (`D-1114` rule 5). Inverting either into an allowlist (the
@@ -17946,6 +17957,7 @@ reach. A Codex lap that ran under an accepted shape whose row names a layer that
 Codex release whose profile resolves `..` or links in its keys, or orders a less specific `deny`
 before a more specific `write` (rule 5 can relax).
 
-**Source.** Issue #223; the enumeration and adversarial review of this change; `D-1114`, `D-1117`.
+**Source.** Issue #223; the enumeration and adversarial review of this change; the owner's answers
+(a) and (a) to #223's P1 and P2, relayed by the window on 2026-09-26; `D-1114`, `D-1117`.
 Decision id `D-1118`, in the `D-11xx` shared cross-belt band opened by `D-1101`; `D-1115` and
 `D-1116` are held by other open work.

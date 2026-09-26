@@ -35,9 +35,10 @@ import process from "node:process";
 import { expect, test } from "vitest";
 import { Fence, parsePermissionRule } from "../../src/fencing/rules.js";
 import { readFence, writeFence } from "../../src/fencing/state.js";
-import { translateFence } from "../../src/session/codex_cli_provider.js";
+import { codexCliSeams, translateFence } from "../../src/session/codex_cli_provider.js";
 import { FailureKind } from "../../src/session/provider.js";
 import { hookScriptForTest } from "../fencing/helpers/fence-cases.js";
+import { patchSeam } from "../testkit/seams.js";
 import {
   type Lap,
   lap,
@@ -228,7 +229,9 @@ const TABLE: readonly Row[] = [
     shape: "Read(**/<one segment>)",
     claims: denies((r) => r.tool === "Read" && /^\*\*\/[^/{}]+$/.test(r.spec)),
     verdict: "translated",
-    layer: "permission profile: <workspace>/**/<segment> is deny (depth 6, at spawn)",
+    layer:
+      "permission profile: <root>/**/<segment> is deny under the workspace and every write " +
+      "root (depth 6, at spawn); a match outside every write root stays readable",
     example: "Read(**/*.key)",
     profile: profileHas((l) => `${workspaceOf(l)}/**/*.key`, "deny"),
   },
@@ -824,4 +827,24 @@ test("rule 8 needs both objects and packed-refs beside the refs/heads it takes",
     apply(l, "additionalDirectories", ref);
     expect(await profileOf(l)).not.toContain(JSON.stringify(`${common}/refs/heads/ns`));
   }
+});
+
+test("a Read rule of ** and one segment is denied under every write root, not only the workspace", async () => {
+  const l = lap();
+  const { gitDir } = withBranchRef(l, "lap/topic");
+  apply(l, "deny", "Read(**/*.key)");
+  const profile = await profileOf(l);
+  for (const root of [workspaceOf(l), gitDir, `${gitDir}/objects`, `${gitDir}/refs/heads/lap`]) {
+    expect(profile).toContain(`${JSON.stringify(`${root}/**/*.key`)} = "deny"`);
+  }
+});
+
+test("a Codex lap on Windows is refused before anything exists, until #226 measures it", async () => {
+  const l = lap();
+  patchSeam(codexCliSeams, "platform", "win32");
+  await refusedAtSpawn(l, "does not run on Windows");
+  expect(translateFence(l.cliArgs)).toContain("#226");
+  // The nearest accepted case: the same lap elsewhere.
+  patchSeam(codexCliSeams, "platform", "linux");
+  expect(typeof translateFence(l.cliArgs)).toBe("object");
 });

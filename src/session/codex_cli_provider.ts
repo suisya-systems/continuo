@@ -88,6 +88,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
 
+import { fnmatchcase } from "../fencing/fnmatch.js";
 import { pyJsonDumps } from "../fencing/pyjson.js";
 import { parsePermissionRule } from "../fencing/rules.js";
 import { quote, split as shlexSplit } from "../fencing/shlex.js";
@@ -339,6 +340,12 @@ function hookFree(name: string, input: string): boolean {
       return false;
   }
 }
+
+/**
+ * The platform a Codex lap would run on. A seam, so the translation's cases
+ * still run in the suite's Windows cells, where a real lap is refused (D-1118).
+ */
+export const codexCliSeams = { platform: process.platform as string };
 
 /** Depth Codex expands a `**` deny glob to at spawn (D-1114 M3). */
 const GLOB_SCAN_MAX_DEPTH = 6;
@@ -596,8 +603,16 @@ function plainPath(path: string): boolean {
   );
 }
 
-/** `Read(x)` to the profile paths it denies, or `null` for a shape not translated. */
-function readDenyPaths(rule: string, workspace: string): readonly string[] | null {
+/**
+ * `Read(x)` to the profile paths it denies, or `null` for a shape not
+ * translated. `roots` are the profile's write roots, the workspace first: a
+ * rule of `**` and one segment is denied under each of them (the owner's answer on #223,
+ * D-1118), so every place the lap can create a file is covered; the fence's
+ * matcher reads it as anywhere, and a matching file outside every write root
+ * stays readable.
+ */
+function readDenyPaths(rule: string, roots: readonly string[]): readonly string[] | null {
+  const workspace = roots[0] ?? "/";
   if (rule.startsWith("~/")) {
     return plainPath(rule.slice(1)) ? [join(homedir(), rule.slice(2))] : null;
   }
@@ -614,7 +629,7 @@ function readDenyPaths(rule: string, workspace: string): readonly string[] | nul
     return null;
   }
   if (rule.startsWith("**/") && !rule.slice(3).includes("/")) {
-    return [`${workspace}/${rule}`];
+    return [...new Set(roots)].map((root) => `${root}/${rule}`);
   }
   if (!rule.includes("/")) {
     return [join(workspace, rule), `${workspace}/**/${rule}`];
@@ -636,6 +651,12 @@ function refused(detail: string): Failure {
  * #223), which walks every input shape through it.
  */
 export function translateFence(cliArgs: readonly string[]): CodexFence | string {
+  if (codexCliSeams.platform === "win32") {
+    return (
+      "a Codex lap does not run on Windows until Codex's Windows sandbox is measured " +
+      "(#226, D-1118): nothing this translation writes into a profile is claimed there"
+    );
+  }
   const shape = [
     "--settings",
     null,
@@ -861,7 +882,7 @@ export function translateFence(cliArgs: readonly string[]): CodexFence | string 
       continue;
     }
     if (tool === "Read") {
-      if (whole || spec === "*" || readDenyPaths(spec, "/") === null) {
+      if (whole || spec === "*" || readDenyPaths(spec, ["/"]) === null) {
         return untranslatable;
       }
       readRules.push(spec);
@@ -1165,16 +1186,35 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     const { roots } = effectiveWriteRoots(fence, record.workspace);
     const readDenials = [
       ...fence.denyRead,
-      ...fence.readRules.flatMap((rule) => readDenyPaths(rule, record.workspace) ?? []),
-    ].map((path) => {
-      // A glob is compared by the directory its fixed part names: `/home/*`
-      // covers everything under `/home`, the workspace included.
-      const at = path.search(/[*?[\]]/);
-      return at < 0 ? path : dirname(`${path.slice(0, at)}x`);
-    });
+      ...fence.readRules.flatMap((rule) => readDenyPaths(rule, roots) ?? []),
+    ];
+    // A glob is asked whether it matches a write root or any directory above
+    // one (`/home/*` matches `/home/u`, above the workspace), by the fence's
+    // matcher, whose `*` crosses `/` and so matches at least what Codex's does.
+    for (const glob of readDenials.filter((path) => /[*?[\]]/.test(path))) {
+      const covered = roots
+        .flatMap((root) => [root, realOf(root)])
+        .flatMap((root) => {
+          const chain: string[] = [];
+          for (let at = resolve(root); ; at = dirname(at)) {
+            chain.push(at);
+            if (dirname(at) === at) {
+              return chain;
+            }
+          }
+        })
+        .find((dir) => fnmatchcase(dir, glob));
+      if (covered !== undefined) {
+        return refused(
+          `the fence denies reads under ${glob}, which matches ${covered}, the workspace, a git ` +
+            "directory the worker must write or a directory above one; a Codex permission " +
+            "profile cannot keep that",
+        );
+      }
+    }
     for (const [denials, verb] of [
       [fence.denyWrite, "writes"],
-      [readDenials, "reads"],
+      [readDenials.filter((path) => !/[*?[\]]/.test(path)), "reads"],
     ] as const) {
       for (const path of denials) {
         for (const root of roots) {
@@ -1643,7 +1683,7 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
       filesystem[path] = "deny";
     }
     for (const rule of fence.readRules) {
-      for (const path of readDenyPaths(rule, workspace) ?? []) {
+      for (const path of readDenyPaths(rule, roots) ?? []) {
         filesystem[path] = "deny";
       }
     }
