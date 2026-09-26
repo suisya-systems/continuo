@@ -18253,6 +18253,6 @@ the operator's own login.
 a measurement in which the elevated backend enforces every denial and the hook fires on every call;
 either reopens rule 1 through #238.
 
-**Source.** Issue #226; the measurement script and its log from this change, run on the operator's
-Windows host on 2026-09-26; the owner's answer (a), relayed by the window on 2026-09-27; #238;
+**Source.** Issue #226; the measurement run on the operator's Windows host on 2026-09-26, whose
+script and log are attached to #226's pull request; the owner's answer (a), relayed by the window on 2026-09-27; #238;
 `D-1114`, `D-1118`. Decision id `D-1120`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
