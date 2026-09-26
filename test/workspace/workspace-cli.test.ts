@@ -59,7 +59,7 @@ interface Fixture {
  * `created`.
  */
 function fixture(
-  options: { materialize?: boolean; close?: boolean; viaSymlink?: boolean } = {},
+  options: { materialize?: boolean; close?: boolean; viaSymlink?: boolean; name?: string } = {},
 ): Fixture {
   const root = caseRoot("workspace-cli");
   const repoDir = join(root, "repo");
@@ -74,7 +74,7 @@ function fixture(
   runGitChecked(["commit", "-m", "seed"], setup);
   const repository = repositoryRoot(setup);
   const git: GitOptions = { cwd: repository, timeoutMs: 60_000 };
-  const workspace = join(repository, "..", "wt");
+  const workspace = join(repository, "..", options.name ?? "wt");
   runGitChecked(["worktree", "add", "--no-track", "-b", TOPIC, workspace, "main"], git);
   // The spelling the event records. Through a symlinked parent it differs from
   // the canonical path git lists, as a materialisation under one would.
@@ -193,6 +193,16 @@ describe("continuo workspace remove", () => {
 
   test("removes a worktree the event names through a symlinked parent", () => {
     const f = fixture({ viaSymlink: true });
+    const streams = capture();
+
+    expect(remove(f.path, true)).toBe(0);
+    expect(JSON.parse(streams.out())["outcome"]).toBe("removed");
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("removes a worktree whose path git would C-quote", () => {
+    // Non-ASCII, which `git worktree list --porcelain` quotes unless given -z.
+    const f = fixture({ name: "wt-\u00e9" });
     const streams = capture();
 
     expect(remove(f.path, true)).toBe(0);
