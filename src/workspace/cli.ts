@@ -34,7 +34,6 @@
  */
 
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 
 import { addJsonArgument, jsonRequested, refusalLine, successLine } from "../cli/json_output.js";
@@ -43,7 +42,7 @@ import { openProductionControlPlane } from "../control_plane/migrator.js";
 import { ControlPlaneRefusal } from "../control_plane/refusals.js";
 import { readRun, TERMINAL_RUN_STATUSES } from "../control_plane/run_lifecycle.js";
 import { type GitOptions, GitRefusal, removeWorktree, runGitChecked } from "./git.js";
-import { WORKSPACE_MATERIALIZED_EVENT_TYPE } from "./materializer.js";
+import { sameExistingPath, WORKSPACE_MATERIALIZED_EVENT_TYPE } from "./materializer.js";
 
 // ASCII only: these reach --help on a cp932 console.
 const DESCRIPTION =
@@ -113,14 +112,14 @@ function payloadString(payload: Record<string, unknown>, key: string, runId: str
 /**
  * Is `workspace` one of `repository`'s worktrees, as git lists them?
  *
- * Compared through `resolve` on both sides: git prints forward slashes on
- * Windows, and the payload holds the materialiser's own `resolve`d path.
+ * Compared through {@link sameExistingPath}, the rule the materialiser's own
+ * sweep uses: git lists the canonical path, and the payload may hold a spelling
+ * through a symlinked parent or a Windows 8.3 short name.
  */
 function isRegisteredWorktree(workspace: string, git: GitOptions): boolean {
-  const target = resolve(workspace);
   return runGitChecked(["worktree", "list", "--porcelain"], git)
     .stdout.split("\n")
-    .some((line) => line.startsWith("worktree ") && resolve(line.slice(9)) === target);
+    .some((line) => line.startsWith("worktree ") && sameExistingPath(line.slice(9), workspace));
 }
 
 /**

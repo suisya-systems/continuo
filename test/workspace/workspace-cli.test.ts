@@ -8,7 +8,7 @@
  * endpoint preconditions have nothing to do with removal.
  */
 
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import { describe, expect, onTestFinished, test } from "vitest";
@@ -58,7 +58,9 @@ interface Fixture {
  * `materialize: false` leaves the event out; `close: false` leaves the run at
  * `created`.
  */
-function fixture(options: { materialize?: boolean; close?: boolean } = {}): Fixture {
+function fixture(
+  options: { materialize?: boolean; close?: boolean; viaSymlink?: boolean } = {},
+): Fixture {
   const root = caseRoot("workspace-cli");
   const repoDir = join(root, "repo");
   mkdirSync(repoDir);
@@ -74,6 +76,15 @@ function fixture(options: { materialize?: boolean; close?: boolean } = {}): Fixt
   const git: GitOptions = { cwd: repository, timeoutMs: 60_000 };
   const workspace = join(repository, "..", "wt");
   runGitChecked(["worktree", "add", "--no-track", "-b", TOPIC, workspace, "main"], git);
+  // The spelling the event records. Through a symlinked parent it differs from
+  // the canonical path git lists, as a materialisation under one would.
+  let recorded = workspace;
+  if (options.viaSymlink === true) {
+    const link = join(root, "link");
+    // "junction" so it needs no privilege on Windows; ignored on POSIX.
+    symlinkSync(join(repository, ".."), link, "junction");
+    recorded = join(link, "wt");
+  }
 
   const path = template.copyInto(root);
   const connection = openProductionControlPlane(path);
@@ -85,7 +96,7 @@ function fixture(options: { materialize?: boolean; close?: boolean } = {}): Fixt
     intent: new LapRunIntent({
       runId: RUN_ID,
       leaseClaimantId: "secretary-1",
-      workspace,
+      workspace: recorded,
       role: "worker",
       baseBranch: "main",
       topicBranch: TOPIC,
@@ -104,13 +115,13 @@ function fixture(options: { materialize?: boolean; close?: boolean } = {}): Fixt
       occurredAtMs: T0,
       ingestedAtMs: T0,
       runId: RUN_ID,
-      payload: JSON.stringify({ repository, topic_branch: TOPIC, workspace }),
+      payload: JSON.stringify({ repository, topic_branch: TOPIC, workspace: recorded }),
     });
   }
   if (options.close !== false) {
     closeRun(connection, { runId: RUN_ID, outcome: "completed", actorId: "op", nowMs: T0 + 1 });
   }
-  return { path, connection, repository, workspace, git };
+  return { path, connection, repository, workspace: recorded, git };
 }
 
 function capture(): { out: () => string; err: () => string } {
@@ -178,6 +189,15 @@ describe("continuo workspace remove", () => {
     expect(remove(f.path, true)).toBe(0);
     expect(JSON.parse(streams.out())["outcome"]).toBe("removed");
     expect(runGitChecked(["worktree", "list", "--porcelain"], f.git).stdout).not.toContain("wt\n");
+  });
+
+  test("removes a worktree the event names through a symlinked parent", () => {
+    const f = fixture({ viaSymlink: true });
+    const streams = capture();
+
+    expect(remove(f.path, true)).toBe(0);
+    expect(JSON.parse(streams.out())["outcome"]).toBe("removed");
+    expect(existsSync(f.workspace)).toBe(false);
   });
 
   test("refuses a dirty worktree and leaves it in place", () => {
