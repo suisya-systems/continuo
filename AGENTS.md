@@ -8,9 +8,11 @@ Read [`README.md`](./README.md) first for what the project is. This file is abou
 
 ## 1. What this repository is, and what it is not
 
-Continuo is a **test-first parity port** of [interlock](https://github.com/suisya-systems/interlock).
-Interlock's *test suite* is the specification — not its Python source, and not your judgment about
-what the code should do ([`docs/testing.md`](./docs/testing.md), "The suite is the specification").
+Continuo began as a **test-first parity port** of [interlock](https://github.com/suisya-systems/interlock),
+and the port is **complete** (`DECISIONS.md` `D-1115`, 2026-09-26): every source case continuo agreed
+to port is ported, and every other one is declined at this repository's human gate. Continuo now
+evolves on its own. **Output parity with interlock is no longer a constraint**: interlock's suite was
+the specification *for the port*; continuo's own suite and `DECISIONS.md` are the specification now.
 Three consequences that catch newcomers:
 
 - **Interlock is frozen and decides nothing.** It answers no question continuo has open, reviews no
@@ -19,13 +21,19 @@ Three consequences that catch newcomers:
   reading `where_a_fix_belongs: upstream` does not mean somebody elsewhere will do it — see
   [`docs/test-translation-conventions.md`](./docs/test-translation-conventions.md) §"How to read a
   `where_a_fix_belongs` that says upstream".
-- **A stronger test is not a better test.** A translated case that asserts *more* than its source is
-  wrong in the same way as one that asserts less: both make the suite say something interlock's
-  suite does not say (`docs/test-translation-conventions.md` §0). If the stronger assertion is worth
-  having, it goes next to the faithful translation as a declared target-only test.
-- **Improving on the source is not a free win.** A parity port that quietly improves on its source is
-  no longer a parity port; known limitations stay disclosed in the ledger's
-  `inherited_limitations` (same document, §"The parity ledger").
+- **Changing ported behaviour is a decision, not a free edit.** It is allowed — "interlock does it
+  differently" is no longer a reason to reject a change — but a change that alters what a ported
+  surface does changes the test that pins it in the same change, and says why: a `DECISIONS.md`
+  entry if it settles a question. The known limitations inherited from the source
+  (`inherited_limitations` in the ledgers) are a backlog any change may repair, not behaviour to keep.
+- **Coverage only moves up without a decision.** Strengthening a test, including a ported one, needs
+  no decision. Weakening or deleting one does: a ported case that is removed is marked `retired` in
+  its ledger with a reason that cites the decision (§4), and the parity check fails any deletion that
+  is not recorded that way.
+
+The rules in [`docs/test-translation-conventions.md`](./docs/test-translation-conventions.md) that
+govern *how a source case was translated* (§0's ceiling, among others) describe how the existing
+ledger entries were made; they are the record of the port, not a constraint on new work.
 
 ## 2. Recording decisions — `DECISIONS.md`
 
@@ -123,8 +131,13 @@ Prose files are exempt; source files are not. And **Node must be 22.14+ or 24** 
 ## 4. Files that are records, not code
 
 - **`parity/*.ledger.json`** — one entry per collected source node id, with a `disposition`
-  (`ported` / `adapted` / `not-ported` / `waived`). `waived` means *translated weaker than the
-  source* and requires an approved waiver; there are none. Recorded totals must reconcile **exactly**
+  (`ported` / `adapted` / `not-ported` / `waived` / `retired`). Since `D-1115` the ledger is the
+  **historical record of the port**: `ported` says a case was translated from its source, not that
+  it still asserts what the source does. `waived` means *translated weaker than the source* and
+  requires an approved waiver; there are none. `retired` means *ported, then deliberately removed
+  after the port*, and its `reason` must cite the decision that removed it (the check enforces this).
+  The check stays in `verify` and CI as a coverage guard: it is what turns an unrecorded deletion or
+  an unapproved `skip` red. Recorded totals must reconcile **exactly**
   with the entries, so a baseline cannot be quietly re-based in the same edit that removes coverage
   (`docs/test-translation-conventions.md` §"What the check enforces").
 - **`parity/source-inventory/`** — node id snapshots taken from interlock at `65f36c5`. Every

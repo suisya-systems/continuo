@@ -304,6 +304,11 @@ jobs:
     # a shrinking case count, or an inventory that no longer reconciles with
     # interlock's suite baseline turn the merge gate red.
     #
+    # Since the port was completed (D-1115) this is a coverage guard, not an
+    # output-parity guard: continuo may depart from interlock's behaviour, but a
+    # ported case removed without a `retired` entry citing a decision, or a
+    # skip nobody approved, still fails here.
+    #
     # Platform-independent, so one cell is enough (same reasoning as `lint`).
     # It runs `vitest list`, not the suite, so it is cheap and does not
     # duplicate `double-green`.
