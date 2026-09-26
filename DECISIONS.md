@@ -152,10 +152,10 @@ spaces distinct.
 | D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
 | D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
 | D-0048 | Windows runs the child-process-spawning tests apart from the rest of the suite | accepted |
-| D-0049 | The runtime surfaces continuo operates -- the fence hook, the default worker prompt and the CLI descriptions -- say `continuo`, not `Interlock` | accepted |
+| D-0049 | The runtime surfaces continuo operates say `continuo`, not `Interlock` | accepted |
 | D-0050 | The production schema is the control plane the lap runs on, and the spike schema is not a fallback | accepted |
 | D-0051 | A run is created by one writer, `continuo run admit`, which appends `run_created` in the same transaction and refuses a second admission | accepted |
-| D-0052 | The runner's per-test timeout is scaled on a slow platform, from the same constant the harness budgets use | accepted |
+| D-0052 | The runner's per-test timeout is scaled on a slow platform, and the scale has one home | accepted |
 | D-0053 | The broker belt is declined and discharged rather than ported, and the endpoint moves onto the production schema with the outbox aligned to `cancelled` | accepted |
 | D-0054 | `writer_epoch` on `outbox` is delivery-side ownership, not producer provenance: the delivery worker adopts one row immediately before it attempts it | accepted |
 | D-0055 | The lap's execution intent is fixed at admission as `LapRunIntent`, written with the run in one transaction, and carries no authority | accepted |
@@ -173,7 +173,7 @@ spaces distinct.
 | D-0066 | The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference | accepted |
 | D-0067 | Nothing the fence or its evidence depends on may live inside the worktree | accepted |
 | D-0068 | A session is this lap's to stop only while it still holds the lease epoch it spawned under | accepted |
-| D-0069 | A test's wait for a real child is a share of the runner's budget, from D-0052's scale | accepted |
+| D-0069 | A test's wait for a real child is a share of the runner's budget, not a constant of its own | accepted |
 | D-0070 | The materialiser wards every path the fence depends on, and each is judged where its consumer reads it | accepted |
 | D-0071 | The orchestrator's lease stays per-verb, with no code change, and `D-0068`'s residual stays open | accepted |
 | D-0072 | The `lap perform` process is the endpoint's launcher and its lease holder, and the renewal timer lives beside the composition root | accepted |
@@ -201,7 +201,7 @@ spaces distinct.
 | D-0094 | The settings generator refuses a non-string sandbox deny entry instead of writing it for a reader that does not reject it | accepted |
 | D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
 | D-0096 | continuo's database is not a public read surface; `run show` is | accepted |
-| D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present\|deliver\|ack` join the `--json` envelope | accepted |
+| D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present` / `deliver` / `ack` join the `--json` envelope | accepted |
 | D-0098 | The post-spawn identity read-back window is a caller's budget, defaulting to thirty seconds | accepted |
 | D-0099 | Model selection is a `lap perform --model` flag over the provider's `base_cli_args`, not a `roles.json` key and not an admitted argument | accepted |
 | D-1101 | The shared cross-belt band is widened: `D-0019`..`D-0099` is closed, and `D-11xx` is its continuation | accepted |
@@ -222,7 +222,7 @@ spaces distinct.
 | D-1116 | `sandbox doctor` checks that this process may create a Unix socket, and fails when it may not | accepted |
 | D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
 | D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
-| D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it: a dirty worktree is refused, an absent one is not an error, the topic branch stays, and no event is appended | accepted |
+| D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it | accepted |
 | D-1120 | A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire | accepted |
 
 ---
