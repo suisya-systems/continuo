@@ -133,6 +133,8 @@ test("base_cli_args admits a model pin and nothing else", () => {
   expectRefusal(() => make(["--sandbox", "danger-full-access"]), PyValueError, "--sandbox");
   expectRefusal(() => make(["--model", "--yolo"]), PyValueError, "--model");
   expectRefusal(() => make(["-c", "approval_policy=on-request"]), PyValueError, "-c");
+  // D-1122: the Claude CLI's spend cap has no Codex counterpart.
+  expectRefusal(() => make(["--max-budget-usd", "0.05"]), PyValueError, "--max-budget-usd");
 });
 
 test("the operator's Codex home must be absolute", () => {

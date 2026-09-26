@@ -241,6 +241,11 @@ export interface RefusalMetadata {
    * session this process never owned.
    */
   readonly sessionId?: string | undefined;
+  /**
+   * What a turn its spend cap stopped had spent (continuo D-1122), `null` when
+   * the CLI did not say. Absent on every other refusal.
+   */
+  readonly totalCostUsd?: number | null | undefined;
 }
 
 /**
@@ -286,6 +291,7 @@ export function refusalLine(
     ok: false,
     db,
     ...(sessionId === undefined || sessionId === "" ? {} : { session_id: sessionId }),
+    ...(metadata.totalCostUsd === undefined ? {} : { total_cost_usd: metadata.totalCostUsd }),
     error: { class: error.name, message: error.message },
   });
 }

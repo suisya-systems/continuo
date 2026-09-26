@@ -123,6 +123,7 @@ import {
   WorkspaceMaterializationUsageError,
 } from "../workspace/materializer.js";
 import {
+  LapBudgetExhausted,
   type LapOutcome,
   LapRefused,
   LapUsageError,
@@ -177,6 +178,13 @@ const MODEL_HELP =
   "unless it starts with a letter or a digit and uses only letters, digits, " +
   "'.', '_', ':' and '-' after it -- the value becomes a token in the fenced " +
   "child's command line, so it must not be spellable as a second argument.";
+const MAX_BUDGET_USD_HELP =
+  "the most this lap's turn may spend, in US dollars (0.05). Appended to every " +
+  "spawn as '--max-budget-usd <N>' and enforced by the Claude CLI, which checks it " +
+  "between API calls, so a turn can overshoot by one call's cost. A turn the cap " +
+  "stops opens no gate and is refused as LapBudgetExhausted with what it spent. " +
+  "Refused with --provider codex: the Codex CLI has no spend cap to pass it to. " +
+  "Must be a positive decimal (digits, at most one '.').";
 const ENDPOINT_RECIPIENT_HELP =
   "the one recipient the worker's endpoint serves. Must be one the outbox has a handler " +
   "registered for (see the list this flag accepts above); a recipient with no handler is " +
@@ -512,6 +520,9 @@ function refuse(error: Error, db: string, json: boolean): never {
  * "read the message for it".
  */
 function refusalMetadata(error: Error): RefusalMetadata {
+  if (error instanceof LapBudgetExhausted) {
+    return { sessionId: error.sessionId, totalCostUsd: error.totalCostUsd };
+  }
   if (error instanceof LoserTerminated) {
     return { sessionId: error.sessionId };
   }
@@ -579,6 +590,33 @@ function providerOf(args: Namespace): {
     );
   }
   return { kind, codexHome };
+}
+
+/**
+ * `--max-budget-usd`, checked as a plain positive decimal (D-1122).
+ *
+ * Kept as the operator's string and handed to the CLI verbatim, so the cap the
+ * child enforces is the text typed and not a float's re-rendering of it. The
+ * digits-only shape is what keeps it one argument: no sign, no exponent, no
+ * leading `-`. Refused under `--provider codex`, which has no such cap -- a flag
+ * accepted there would be a limit that silently did not apply.
+ */
+function maxBudgetUsdOf(args: Namespace, kind: SessionProviderKind): string | undefined {
+  const value = optionalText(args, "max_budget_usd");
+  if (value === undefined) {
+    return undefined;
+  }
+  if (kind === "codex") {
+    throw new LapUsageError(
+      "--max-budget-usd is only accepted with --provider claude; the Codex CLI has no spend cap to enforce it",
+    );
+  }
+  if (!/^[0-9]{1,9}(\.[0-9]{1,9})?$/.test(value) || !(Number(value) > 0)) {
+    throw new LapUsageError(
+      `--max-budget-usd is ${pythonRepr(value)}, which is not a positive decimal amount of US dollars`,
+    );
+  }
+  return value;
 }
 
 /** `--gate-option`, repeated. `append` leaves the key unset when never given. */
@@ -833,6 +871,7 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
     // callers.
     requireModel(model);
     const { kind, codexHome } = providerOf(args);
+    const maxBudgetUsd = maxBudgetUsdOf(args, kind);
     // **The worker's sandbox, asked before anything exists** (`D-1112`). Here
     // rather than in `root.ts`'s preflight because it is a question about this
     // process, not about the run, and a seam here is what lets a suite that
@@ -886,7 +925,12 @@ export async function cmdLapPerform(args: Namespace): Promise<number> {
         // CHECKED again, exactly as `--claude-command` and `--state-root` are
         // (`D-0067`): this constructor has a guard of its own over `base_cli_args`,
         // and reaching it first turned an operator's typo into a stack trace.
-        ...(model === undefined ? {} : { baseCliArgs: ["--model", model] }),
+        //
+        // The spend cap rides the same seam (D-1122), behind the model.
+        baseCliArgs: [
+          ...(model === undefined ? [] : ["--model", model]),
+          ...(maxBudgetUsd === undefined ? [] : ["--max-budget-usd", maxBudgetUsd]),
+        ],
       },
       kind,
     );
@@ -1050,6 +1094,8 @@ export function addSubparsers(sub: Subparsers): void {
   // what every lap before it did: no token is appended and the worker CLI's own
   // default applies.
   addOptional(perform, "--model", "model", MODEL_HELP);
+  // the turn's spend cap (D-1122). Optional; absent, no token is appended.
+  addOptional(perform, "--max-budget-usd", "max_budget_usd", MAX_BUDGET_USD_HELP);
 
   // the role document's placeholders
   addRequired(perform, "--interlock-root", "interlock_root", INTERLOCK_ROOT_HELP);
