@@ -12,11 +12,30 @@ chords from figures, as this control plane realizes behavior from policy rows an
 > interlock's suite collects is now classified and no status is still a proposal: `broker`'s 54
 > collected cases were the last, declined at continuo's own human gate on 2026-09-03
 > (`DECISIONS.md` D-0053). The per-subsystem record is
-> [`parity/source-inventory.belts.md`](./parity/source-inventory.belts.md) and is kept up to date
-> per belt. Publication is decided (`DECISIONS.md` D-0045, which supersedes D-0008) and has not
+> [`parity/source-inventory.belts.md`](./parity/source-inventory.belts.md). Publication is decided (`DECISIONS.md` D-0045, which supersedes D-0008) and has not
 > been carried out: `package.json` still carries `"private": true` at version `0.0.0`, and the
 > package is not on the registry. D-0045 makes that a separate change -- drop `private`, set a real
 > version, and give the release path the build step it names -- and that change has not landed.
+
+## What it provides
+
+continuo is driven through its CLI, `continuo` (`continuo <verb> --help` is the reference for
+flags). The host application that drives it is `rondo` (`DECISIONS.md` D-0087), and the seam a host
+relies on is `--version`, which carries the build's revision, and a `--json` envelope on the verbs a
+host reads (D-0090).
+
+| Verb | What it does |
+|---|---|
+| `db create` / `migrate` / `verify` | Create a production control plane at head, bring one forward, or check this build can open it (D-0050) |
+| `run admit` / `close` / `show` | Admit a run with its execution intent (D-0051, D-0055), record the operator's close (D-0084), read a run without writing (D-0096) |
+| `lap perform` | Perform one admitted run: materialise its worktree, run the worker under the admitted fence, and open a human gate over its report (D-0059). `--provider claude` (the default) or `--provider codex` runs the turn on Claude Code or the Codex CLI with the same fence (D-1114, D-1117, D-1118); a fence layer the chosen CLI cannot enforce refuses the lap, and a Codex lap is refused on Windows (D-1120) |
+| `gate list` / `show` / `present` / `deliver` / `ack` / `ack-unrelayed` / `answer` / `close` / `reconcile` | The human gates over what a lap reported (D-0078, D-0079, D-0080, D-0097, D-1104) |
+| `workspace remove` | Remove a closed run's worktree, as its `workspace_materialized` event names it, leaving the topic branch (D-1119) |
+| `ci observe` / `show` | Record what the forge reported about a pull request's head, and show the verdict for its current head (D-1113) |
+| `settings generate` / `show` | Render a role's worker `settings.local.json` from the bundled schema, or show it (D-0213) |
+| `sandbox doctor` | Check that a worker's sandbox will start: its deny paths can be mounted, and this process may create a Unix socket (D-0214, D-1116) |
+| `measure report` | The read-only measurement harness over a production control plane |
+| `attention scan` / `watch` | Classify events, pending decisions and the broker journal, and notify once per event |
 
 ## Design lineage
 
@@ -36,8 +55,9 @@ An entry there citing `interlock D-00NN` means the interlock decision of that nu
 
 ## How the port was done
 
-**Test-first.** The specification for the port was interlock's test suite -- 2190 passed / 8 skipped / 1 xfailed
-at interlock PR #72 -- not its Python source. Implementation followed the tests to green, module by
+**Test-first.** The specification for the port was interlock's test suite -- the 2,194 node ids it
+collects at `65f36c5`, snapshotted in [`parity/source-inventory/`](./parity/source-inventory) -- not
+its Python source. Implementation followed the tests to green, module by
 module. SQL was carried verbatim: any dialect-forced deviation is a recorded decision, never a silent
 edit. Since the port was completed (D-1115), a change may depart from interlock's behaviour; it does
 so by changing the test that pins the behaviour, not around it.
@@ -51,7 +71,7 @@ suggests, deliberately.
 
 ```bash
 npm ci --ignore-scripts
-npm run verify          # lint + knip + typecheck + native-addon smoke + the suite
+npm run verify          # lint + knip + typecheck + native-addon smoke + the suite + parity + inventory
 npm run check:package   # build, then publint + attw against the packed tarball
 ```
 
@@ -82,7 +102,7 @@ depends on it, neither visible from the dependency line ([`DECISIONS.md`](./DECI
 | [`docs/testing.md`](./docs/testing.md) | How to run and write tests; the isolation contract |
 | [`docs/ci-merge-gate.md`](./docs/ci-merge-gate.md) | The double-green rule and the fail-closed merge gate |
 | [`docs/sqlite-value-contract.md`](./docs/sqlite-value-contract.md) | How SQLite values appear in JavaScript, and two silent hazards |
-| [`docs/cli-output-policy.md`](./docs/cli-output-policy.md) | ASCII-only output, and why Windows is a required CI cell |
+| [`docs/cli-output-policy.md`](./docs/cli-output-policy.md) | ASCII-only output, and why CI runs Windows cells |
 | [`docs/design/minimal-operating-loop.md`](./docs/design/minimal-operating-loop.md) | What the successor stack must still build to run one task end to end (propose-only) |
 | [`AGENTS.md`](./AGENTS.md) | How work is done here: decisions, verification, records, issue and PR conventions |
 
