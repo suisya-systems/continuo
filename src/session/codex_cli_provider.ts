@@ -181,7 +181,7 @@ const NEUTRAL_ENV: Readonly<Record<string, string>> = {
  * runs something else.
  */
 const STEERING_ENV =
-  /^(?:PATH|HOME|SHELL|IFS|ENV|BASH_ENV|ZDOTDIR|CODEX_HOME|NODE_OPTIONS|EDITOR|VISUAL|PAGER|(?:LD|DYLD|GIT)_[A-Za-z0-9_]*)$/;
+  /^(?:PATH|HOME|SHELL|IFS|ENV|BASH_ENV|ZDOTDIR|CODEX_HOME|NODE_OPTIONS|NODE_PATH|EDITOR|VISUAL|PAGER|MANPAGER|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|LESSOPEN|LESSCLOSE|RUBYOPT|PYTHON[A-Z0-9_]*|PERL[A-Z0-9_]*|(?:LD|DYLD|GIT|XDG|NPM_CONFIG)_[A-Z0-9_]*)$/;
 
 /**
  * Codex's own tool names a deny rule might name: each reaches the lap either
@@ -235,8 +235,29 @@ const STDIN_PROGRAMS: ReadonlySet<string> = new Set([
   "busybox",
   "tclsh",
   "expect",
-  "sqlite3",
+  // Compared unversioned, so `sqlite3` is `sqlite`.
+  "sqlite",
   "gdb",
+  "pypy",
+  "ipython",
+  "psql",
+  "mysql",
+  "ed",
+  "ex",
+  "vi",
+  "vim",
+  "nvim",
+  "dc",
+  "gnuplot",
+  "R",
+  "Rscript",
+  "julia",
+  // Programs that read a script from a file argument, which may be /dev/stdin.
+  "awk",
+  "gawk",
+  "mawk",
+  "nawk",
+  "sed",
   // Programs that run the program their arguments name, which may be any of
   // the above (#223): `timeout 600 bash` reads stdin as surely as `bash`.
   "timeout",
@@ -252,11 +273,32 @@ const STDIN_PROGRAMS: ReadonlySet<string> = new Set([
   "unshare",
   "strace",
   "ltrace",
+  "ionice",
+  "taskset",
+  "chrt",
+  "flock",
+  "nsenter",
+  "watch",
+  "su",
+  "runuser",
+  "pkexec",
+  "systemd-run",
+  "firejail",
+  "fakeroot",
+  "parallel",
+  // Shell builtins the login shell runs as a command's first word.
+  "command",
+  "exec",
+  "builtin",
+  "eval",
+  "source",
+  ".",
 ]);
 
 /** A program's name without a trailing version: `python3.12`, `node22`, `bash-5.2`. */
 function unversioned(program: string): string {
-  return basename(program).replace(/[-0-9.]+$/, "");
+  const name = basename(program);
+  return name.replace(/[-0-9.]+$/, "") || name;
 }
 
 /** The only permission mode the materializer renders for a `-p` child (D-0081). */
@@ -564,7 +606,11 @@ function readDenyPaths(rule: string, workspace: string): readonly string[] | nul
   }
   // `~` alone and `~user` name a home directory to the fence's matcher and a
   // workspace file to the branch below; neither reading is safe to pick (#223).
-  if (rule.startsWith("~") || rule === "" || rule.split("/").some((part) => /^\.\.?$/.test(part))) {
+  if (
+    rule.startsWith("~") ||
+    /[{}]/.test(rule) ||
+    rule.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
     return null;
   }
   if (rule.startsWith("**/") && !rule.slice(3).includes("/")) {
@@ -739,7 +785,7 @@ export function translateFence(cliArgs: readonly string[]): CodexFence | string 
     return `${settingsPath}'s env is not a mapping of strings`;
   }
   const steering = Object.keys(env).find(
-    (key) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || STEERING_ENV.test(key),
+    (key) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || STEERING_ENV.test(key.toUpperCase()),
   );
   if (steering !== undefined) {
     return (
@@ -885,12 +931,14 @@ export function translateFence(cliArgs: readonly string[]): CodexFence | string 
   // name equality, so a rule for the whole server, with a wildcard, or in
   // Codex's `_` spelling matches no call (#223). A rule for another server is
   // kept by the hook's default deny.
-  const lapPrefix = `mcp__${mcpName.replaceAll("-", "_")}`;
+  // Codex spells a qualified tool name in [A-Za-z0-9_] and at most 64
+  // characters, so a tool part outside that is a name the hook never sees.
   const serverWide = mcpRules.find((entry) => {
     const { tool } = parsePermissionRule(entry);
+    const server = tool.slice("mcp__".length).split("__")[0] ?? "";
     return (
-      tool.replaceAll("-", "_").startsWith(lapPrefix) &&
-      !new RegExp(`^mcp__${mcpName}__[^*]+$`).test(tool)
+      server.replaceAll("-", "_") === mcpName.replaceAll("-", "_") &&
+      !(new RegExp(`^mcp__${mcpName}__[A-Za-z0-9_]+$`).test(tool) && tool.length <= 64)
     );
   });
   if (serverWide !== undefined) {
@@ -1118,7 +1166,12 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     const readDenials = [
       ...fence.denyRead,
       ...fence.readRules.flatMap((rule) => readDenyPaths(rule, record.workspace) ?? []),
-    ].filter((path) => !/[*?[\]]/.test(path));
+    ].map((path) => {
+      // A glob is compared by the directory its fixed part names: `/home/*`
+      // covers everything under `/home`, the workspace included.
+      const at = path.search(/[*?[\]]/);
+      return at < 0 ? path : dirname(`${path.slice(0, at)}x`);
+    });
     for (const [denials, verb] of [
       [fence.denyWrite, "writes"],
       [readDenials, "reads"],

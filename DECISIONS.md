@@ -17854,13 +17854,15 @@ accepted with no Codex layer behind them, or with a weaker one that was not docu
 - deny rules the translation skipped because they were not `Read(...)`: bare `Read`, `Read(~)`,
   `Read(~user/...)`, a `Read(...)` with padding, `Grep` / `Glob` / `LS` / `NotebookRead` /
   `NotebookEdit` / `MultiEdit`, a Codex tool name, and an `mcp__` rule naming the lap's server as a
-  whole, with a wildcard or in Codex's `_` spelling (the hook matches by name equality);
+  whole, with a wildcard, in Codex's `_` spelling, or with a tool part Codex rewrites (outside
+  `[A-Za-z0-9_]`, or a qualified name over 64 characters): the hook matches by name equality;
 - `Edit(...)` / `Write(...)` denials, which the hook checks against `apply_patch` but which never
   reached the profile, so a shell write under an admitted program was not stopped;
 - `Read(//x)`, paths with a `.` / `..` / empty segment, and braces, which the profile keys as
   spelled while the spawn's containment checks resolve them;
 - a `denyRead` (or an absolute `Read(...)`) that contains a write root, which the profile's more
-  specific write entry leaves readable (the `denyWrite` case was already refused), and any denial
+  specific write entry leaves readable (the `denyWrite` case was already refused), a glob one whose
+  fixed part does (`/home/*` over `/home/u/ws`), and any denial
   whose real path relates to a write root differently from its spelling (a link);
 - rule 8 taking any `.../refs/heads/<ns>/<x>` write root for the branch ref, so a role's own
   directory with that shape had its parent granted write;
@@ -17872,11 +17874,14 @@ accepted with no Codex layer behind them, or with a weaker one that was not docu
   (`D-1114` M4), so such a lap has no allowlist at all;
 - allow entries whose spec uses `?` or `[ ]` (wildcards to the hook's matcher, literals to Claude),
   a `:*` prefix the hook matched inside a word (`git diff:*` admitted `git difftool --extcmd=...`),
-  and programs that run their argument (`timeout`, `nice`, `busybox`, ...) or a versioned
-  interpreter name (`bash-5.2`), which the stdin check missed;
-- `S.env` names that steer which program an admitted name runs (`PATH`, `GIT_*`, `LD_*`, shell
-  startup files, `NEUTRAL_ENV`'s names), and a server name that could spell another MCP prefix
-  (`codex_apps`).
+  and programs the stdin check missed: ones that run their argument (`timeout`, `ionice`, `flock`,
+  `su`, the shell builtins `exec` / `eval` / `.`), ones that read a script from a file argument
+  (`awk -f /dev/stdin`, `sed -f`), REPLs (`psql`, `ed`, `R`, ...), a versioned name (`bash-5.2`),
+  and `sqlite3`, which the version strip had turned into `sqlite`;
+- `S.env` names that steer which program an admitted name runs (`PATH`, `GIT_*`, `XDG_*` for git's
+  config, `LD_*`, `npm_config_*`, shell startup and `SHELLOPTS` / `PS4`, `NEUTRAL_ENV`'s names,
+  compared without case as Windows reads them), and a server name that could spell another MCP
+  prefix (`codex_apps`).
 
 **Decision.**
 
@@ -17898,8 +17903,9 @@ accepted with no Codex layer behind them, or with a weaker one that was not docu
 4. **`S` and `F` are one fence**: `F`'s settings must equal `S`, its role must be the hook's, and it
    must hold every deny rule `S` names.
 5. **Paths are plain.** Every sandbox path and absolute rule body has no `.`, `..` or empty segment
-   and no brace. A read or write denial over a write root, or one whose real path relates to a write
-   root differently from its spelling, refuses the spawn.
+   and no brace. A read or write denial over a write root (a glob by the directory its fixed part
+   names), or one whose real path relates to a write root differently from its spelling, refuses
+   the spawn.
 6. **The hook is proved to deny before the spawn.** The rendered `codex_hook.mjs` command is run once
    on an empty event and must answer with the JSON deny and exit 2.
 7. **Rule 8 takes only the ref `gitMetadataRoots` names**: a `refs/heads` path beside its common
@@ -17923,8 +17929,11 @@ weaker than Claude, stated so it is not rediscovered:
   one-segment `Read` rule covers the workspace, where the Claude hook's matcher reads it as anywhere
   [pending the owner's answer on #223 P1];
 - Windows paths are not measured and are not claimed [pending the owner's answer on #223 P2; #226];
-- the stdin list is a list, not a proof: a program that reads commands from its stdin and is not on
-  it is bounded only by the OS sandbox (`D-1114` rule 5);
+- the stdin list and the steering-env list are lists, not proofs: a program that reads commands
+  from its stdin, or an environment name that steers an admitted program, and is not on them is
+  bounded only by the OS sandbox (`D-1114` rule 5). Inverting either into an allowlist (the
+  programs and names known not to) is the stronger form, and would refuse fences that work today;
+  it is left to a decision of its own;
 - a `Bash(...)` deny rule is matched against the raw command text, so a quoted or re-spaced spelling
   of an admitted command can pass it, as on the Claude side, where the same matcher is used;
 - an exact allow entry admits path-normalised respellings of itself (`npm test/.`), because the

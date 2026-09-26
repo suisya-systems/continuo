@@ -125,12 +125,12 @@ function programOf(entry: string): string {
 
 const bashAllow = (entry: string) => entry.startsWith("Bash(") && entry.endsWith(")");
 const INTERPRETERS =
-  /^(?:sh|bash|zsh|dash|fish|node|nodejs|python|perl|ruby|deno|bun|npx|env|xargs|ksh|mksh|csh|tcsh|pwsh|php|lua|irb|ash|busybox|tclsh|expect|sqlite3|gdb|timeout|nice|nohup|stdbuf|time|setsid|script|sudo|doas|chroot|unshare|strace|ltrace)$/;
+  /^(?:sh|bash|zsh|dash|fish|node|nodejs|python|perl|ruby|deno|bun|npx|env|xargs|ksh|mksh|csh|tcsh|pwsh|php|lua|irb|ash|busybox|tclsh|expect|sqlite|gdb|pypy|ipython|psql|mysql|ed|ex|vi|vim|nvim|dc|gnuplot|R|Rscript|julia|awk|gawk|mawk|nawk|sed|timeout|nice|nohup|stdbuf|time|setsid|script|sudo|doas|chroot|unshare|strace|ltrace|ionice|taskset|chrt|flock|nsenter|watch|su|runuser|pkexec|systemd-run|firejail|fakeroot|parallel|command|exec|builtin|eval|source|\.)$/;
 const READ_WRITE_OTHERS = ["Grep", "Glob", "LS", "NotebookRead", "NotebookEdit", "MultiEdit"];
 const CODEX_TOOLS = ["apply_patch", "exec_command", "shell", "exec", "wait", "write_stdin"];
 const LAP_SERVER = `mcp__${MCP_SERVER}`;
 const STEERING =
-  /^(?:PATH|HOME|SHELL|IFS|ENV|BASH_ENV|ZDOTDIR|CODEX_HOME|NODE_OPTIONS|EDITOR|VISUAL|PAGER|(?:LD|DYLD|GIT)_\w*)$/;
+  /^(?:PATH|HOME|SHELL|IFS|ENV|BASH_ENV|ZDOTDIR|CODEX_HOME|NODE_OPTIONS|NODE_PATH|EDITOR|VISUAL|PAGER|MANPAGER|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|LESSOPEN|LESSCLOSE|RUBYOPT|PYTHON\w*|PERL\w*|(?:LD|DYLD|GIT|XDG|NPM_CONFIG)_\w*)$/;
 
 const profileHas = (path: (l: Lap) => string, access: string) => (l: Lap) =>
   `${JSON.stringify(path(l))} = "${access}"`;
@@ -161,7 +161,10 @@ const TABLE: readonly Row[] = [
   {
     axis: "allow",
     shape: "Bash(...) running a program that executes its stdin, or runs its argument",
-    claims: (e) => INTERPRETERS.test(basename(programOf(e)).replace(/[-0-9.]+$/, "")),
+    claims: (e) => {
+      const name = basename(programOf(e));
+      return INTERPRETERS.test(name.replace(/[-0-9.]+$/, "") || name);
+    },
     verdict: "refused",
     layer: "executes its stdin",
     example: "Bash(timeout 60 bash)",
@@ -223,7 +226,7 @@ const TABLE: readonly Row[] = [
   {
     axis: "deny",
     shape: "Read(**/<one segment>)",
-    claims: denies((r) => r.tool === "Read" && /^\*\*\/[^/]+$/.test(r.spec)),
+    claims: denies((r) => r.tool === "Read" && /^\*\*\/[^/{}]+$/.test(r.spec)),
     verdict: "translated",
     layer: "permission profile: <workspace>/**/<segment> is deny (depth 6, at spawn)",
     example: "Read(**/*.key)",
@@ -238,6 +241,7 @@ const TABLE: readonly Row[] = [
         !r.whole &&
         !r.spec.includes("/") &&
         !r.spec.startsWith("~") &&
+        !/[{}]/.test(r.spec) &&
         !["", "*", ".", ".."].includes(r.spec),
     ),
     verdict: "translated",
@@ -288,7 +292,9 @@ const TABLE: readonly Row[] = [
   {
     axis: "deny",
     shape: "mcp__<lap server>__<tool>, exactly",
-    claims: denies((r) => new RegExp(`^${LAP_SERVER}__[^*]+$`).test(r.tool)),
+    claims: denies(
+      (r) => new RegExp(`^${LAP_SERVER}__[A-Za-z0-9_]+$`).test(r.tool) && r.tool.length <= 64,
+    ),
     verdict: "translated",
     layer: "codex_hook.mjs runs hook.mjs's rules on every call to the lap's server",
     example: `${LAP_SERVER}__ack`,
@@ -296,7 +302,12 @@ const TABLE: readonly Row[] = [
   {
     axis: "deny",
     shape: "the lap's server whole, with a wildcard, or in Codex's _ spelling",
-    claims: denies((r) => r.tool.replaceAll("-", "_").startsWith(LAP_SERVER.replaceAll("-", "_"))),
+    claims: denies(
+      (r) =>
+        r.tool.startsWith("mcp__") &&
+        (r.tool.slice(5).split("__")[0] ?? "").replaceAll("-", "_") ===
+          MCP_SERVER.replaceAll("-", "_"),
+    ),
     verdict: "refused",
     layer: "matches against no call",
     example: LAP_SERVER,
@@ -360,7 +371,7 @@ const TABLE: readonly Row[] = [
   {
     axis: "env",
     shape: "a plain name that steers nothing the hook admits by name",
-    claims: (k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && !STEERING.test(k),
+    claims: (k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && !STEERING.test(k.toUpperCase()),
     verdict: "translated",
     layer: "shell_environment_policy.set",
     example: "WORKER_DIR",
@@ -460,6 +471,12 @@ const CORPUS: Readonly<Record<Axis, readonly string[]>> = {
       SPECS.map((spec) => (spec === null ? tool : `${tool}(${spec})`)),
     ),
     " Read(.env)",
+    "Read(**/)",
+    "Read({a,b})",
+    "Read(**/{a,b})",
+    `${LAP_SERVER}__send-message`,
+    `${LAP_SERVER}__${"x".repeat(60)}`,
+    "mcp__continuo-messagebus-admin__drop",
     "Read (.env)",
     "Read(.env",
     "Read(x))",
@@ -474,6 +491,13 @@ const CORPUS: Readonly<Record<Axis, readonly string[]>> = {
     "Bash(timeout 60 bash)",
     "Bash(bash-5.2 -c x)",
     "Bash(nodejs x.js)",
+    "Bash(sqlite3 x.db)",
+    "Bash(awk -f x)",
+    "Bash(sed -n p x)",
+    "Bash(ionice bash)",
+    "Bash(. x)",
+    "Bash(pypy3 x)",
+    "Bash(R -q)",
     "Bash(/usr/bin/env x)",
     "Bash('python3' x.py)",
     "Bash(*)",
@@ -516,6 +540,14 @@ const CORPUS: Readonly<Record<Axis, readonly string[]>> = {
     "DYLD_INSERT_LIBRARIES",
     "A=B",
     "1X",
+    "XDG_CONFIG_HOME",
+    "SHELLOPTS",
+    "PS4",
+    "npm_config_script_shell",
+    "LESSOPEN",
+    "PYTHONPATH",
+    "Path",
+    "GITHUB_TOKEN",
   ],
   settings: ["apiKeyHelper", "model", "statusLine", "additionalDirectories", "disableAllHooks"],
   mcp: ["continuo-messagebus", "srv", "srv_x", "codex_apps", "codex-apps", "a.b", "a b", "a/b"],
@@ -562,7 +594,11 @@ function rowFor(axis: Axis, raw: string, l: Lap): Row | undefined {
 // The tests
 // --------------------------------------------------------------------------
 
-test("every shape in the corpus is claimed by one row and comes out as that row says", () => {
+/**
+ * Every corpus shape through `translateFence`, against `table`: what is wrong,
+ * and which rows no shape reached.
+ */
+function partition(table: readonly Row[]): { wrong: string[]; unreached: string[] } {
   const l = lap();
   const saved = [l.settingsPath, l.mcpPath, l.fencePath].map(
     (path) => [path, readFileSync(path)] as const,
@@ -576,7 +612,8 @@ test("every shape in the corpus is claimed by one row and comes out as that row 
       for (const [path, bytes] of saved) {
         writeFileSync(path, bytes);
       }
-      const row = rowFor(axis, raw, l);
+      const value = fill(raw, l);
+      const row = table.find((candidate) => candidate.axis === axis && candidate.claims(value));
       const got = typeof outcome === "string" ? "refused" : "translated";
       if (row === undefined) {
         // Neither translated nor refused BY THE TABLE: a shape no row names.
@@ -594,11 +631,32 @@ test("every shape in the corpus is claimed by one row and comes out as that row 
       }
     }
   }
-  expect(wrong).toEqual([]);
-  // No row the corpus never reaches: a dead row is a claim nothing tests.
-  expect(
-    TABLE.filter((row) => !reached.has(row)).map((row) => `${row.axis}: ${row.shape}`),
-  ).toEqual([]);
+  const unreached = table
+    .filter((row) => !reached.has(row))
+    .map((row) => `${row.axis}: ${row.shape}`);
+  return { wrong, unreached };
+}
+
+test("every shape in the corpus is claimed by one row and comes out as that row says", () => {
+  // No row the corpus never reaches, either: a dead row is a claim nothing tests.
+  expect(partition(TABLE)).toEqual({ wrong: [], unreached: [] });
+});
+
+test("the partition fails on a shape no row names, and on a row that misstates a verdict", () => {
+  // Anti-vacuity: without the deny axis's last row, the shapes it claimed are
+  // accepted by the translation and named by nothing.
+  const last = TABLE.findLast((row) => row.axis === "deny");
+  const { wrong } = partition(TABLE.filter((row) => row !== last));
+  expect(wrong.some((line) => line.includes('"WebFetch": no row claims it (translated)'))).toBe(
+    true,
+  );
+  // And a row saying "translated" where the translation refuses is caught.
+  const flipped = TABLE.map((row) =>
+    row.axis === "env" && row.verdict === "refused"
+      ? { ...row, verdict: "translated" as const }
+      : row,
+  );
+  expect(partition(flipped).wrong.some((line) => line.includes('"PATH": refused'))).toBe(true);
 });
 
 test.each(TABLE.map((row) => [`${row.axis}: ${row.shape}`, row] as const))(
@@ -724,4 +782,46 @@ test("a deny rule S names and the hook's fence lacks is refused", async () => {
     l.fencePath,
   );
   await refusedAtSpawn(l, "is not among the rules");
+});
+
+test("a glob read denial whose fixed part is over the workspace refuses the spawn", async () => {
+  for (const [axis, value] of [
+    ["denyRead", (l: Lap) => join(l.root, "*")],
+    ["deny", (l: Lap) => `Read(${join(l.root, "work*")})`],
+  ] as const) {
+    const l = lap();
+    apply(l, axis, value(l));
+    await refusedAtSpawn(l, "denies reads under");
+  }
+  // The nearest accepted case: a glob inside the workspace.
+  const inside = lap();
+  apply(inside, "denyRead", `${workspaceOf(inside)}/*.pem`);
+  expect(await profileOf(inside)).toContain('*.pem" = "deny"');
+});
+
+test("the hook self-test needs both the deny on stdout and exit 2", async () => {
+  const deny = JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny" } });
+  for (const body of [
+    `process.stdout.write(${JSON.stringify(deny)}); process.exit(0);`,
+    "process.exit(2);",
+  ]) {
+    const hookScript = hookScriptForTest(join(lap().root, "half"));
+    writeFileSync(join(dirname(hookScript), "codex_hook.mjs"), `${body}\n`, "utf8");
+    await refusedAtSpawn(lap({ hookScript }), "did not deny an empty event");
+  }
+});
+
+test("rule 8 needs both objects and packed-refs beside the refs/heads it takes", async () => {
+  for (const sibling of ["objects", "packed-refs"]) {
+    const l = lap();
+    const common = join(l.root, "data");
+    const ref = `${common}/refs/heads/ns/x`;
+    mkdirSync(`${common}/refs/heads/ns`, { recursive: true });
+    mkdirSync(`${common}/objects`, { recursive: true });
+    writeFileSync(ref, "0".repeat(40), "utf8");
+    writeFileSync(`${common}/packed-refs`, "", "utf8");
+    apply(l, "additionalDirectories", `${common}/${sibling}`);
+    apply(l, "additionalDirectories", ref);
+    expect(await profileOf(l)).not.toContain(JSON.stringify(`${common}/refs/heads/ns`));
+  }
 });
