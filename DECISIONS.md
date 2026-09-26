@@ -224,6 +224,7 @@ spaces distinct.
 | D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
 | D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it: a dirty worktree is refused, an absent one is not an error, the topic branch stays, and no event is appended | accepted |
 | D-1120 | A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire | accepted |
+| D-1122 | `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag | accepted |
 
 ---
 
@@ -18256,3 +18257,67 @@ either reopens rule 1 through #238.
 **Source.** Issue #226; the measurement run on the operator's Windows host on 2026-09-26, whose
 script and log are attached to #226's pull request; the owner's answer (a), relayed by the window on 2026-09-27; #238;
 `D-1114`, `D-1118`. Decision id `D-1120`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
+
+## D-1122 -- `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag
+
+**Context.** continuo#241. `D-0099` let a host choose a lap's model and `D-1112` let it read what a
+turn cost afterwards, but nothing let it bound the cost beforehand: a lap that looped ran until
+`--turn-timeout-ms`. The Claude CLI has `--max-budget-usd <amount>` (print mode only), and
+`baseCliArgs` is the seam `D-0099` already routes provider-wide flags through.
+
+Measured on Claude Code 2.1.283 with the raw CLI (haiku, cap $0.0001):
+
+- **B1.** The stopped turn still writes its `result` event: `subtype: "error_max_budget_usd"`,
+  `terminal_reason: "budget_exhausted"`, `is_error: true`, `total_cost_usd: 0.0416399`,
+  `errors: ["Reached maximum budget ($0.0001)"]`, and **no `result` key**. The process exits 1.
+- **B2.** The cap is checked between API calls, not enforced within one: the turn spent 416 times
+  its cap on its first call. A cap bounds a runaway turn, not the price of one call.
+
+And once through a real lap with this change (`lap perform --model claude-haiku-4-5-20251001
+--max-budget-usd 0.01`, run outside the worker sandbox, whose AF_UNIX probe refuses a Claude lap):
+
+- **B3.** The fenced child's argv carried `--model claude-haiku-4-5-20251001 --max-budget-usd 0.01`
+  after `--session-id`. Its transcript ended in the B1 shape (`errors: ["Reached maximum budget
+  ($0.01)"]`, `total_cost_usd: 0.0209669`, `num_turns: 1`, no `result`).
+- **B4.** `lap perform` exited 2 with stdout empty and one refusal document on stderr:
+  `error.class: "LapBudgetExhausted"`, `session_id`, `total_cost_usd: 0.0209669`. No gate was
+  opened; the topic branch and the worktree were left in place.
+
+**Decision.**
+
+1. **`lap perform --max-budget-usd <n>`**, optional. Under `--provider claude` the operator's text is
+   appended to every spawn as the two tokens `--max-budget-usd <n>`, behind `--model` and behind
+   every flag the provider renders itself. Absent, nothing is appended.
+2. **The value is a plain positive decimal** (`^[0-9]{1,9}(\.[0-9]{1,9})?$`, greater than zero),
+   refused as `LapUsageError` before anything is built. It is passed verbatim, so the cap the child
+   enforces is the text typed; no sign, exponent or leading `-` can reach the child's parser.
+3. **`--provider codex` refuses the flag** as `LapUsageError`: the Codex CLI has no spend cap, and a
+   flag accepted there would be a limit that silently did not apply. The Codex provider's own
+   `base_cli_args` guard (`D-1114`, `--model` only) refuses it too, for a caller that skips the verb.
+4. **A turn the cap stopped is a stop, not a report.** The Claude provider reads `subtype:
+   error_max_budget_usd` off the verified `result` event before it looks at the body, and answers a
+   definite no-report carrying `budgetStop.totalCostUsd`. `awaitTerminalReport` raises
+   `LapBudgetExhausted`, a `LapRefused`: no gate is opened, the workspace is left as it is, the
+   session is stopped on the way out, exit 2. Under `--json` the refusal document carries
+   `session_id` and `total_cost_usd` (`null` when the event did not say) beside `error.class`.
+
+**Alternatives.**
+
+- *Open a gate over a budget-stopped turn (rejected)*: there is no body to put in the rationale
+  (B1), and a turn cut off mid-work is not something a human should approve as finished.
+- *Enforce the cap in continuo by watching the transcript (rejected)*: the CLI already enforces it
+  with better information, and continuo would still have to kill a child mid-call.
+- *Accept the flag under Codex and ignore it (rejected)*: see rule 3.
+
+**Consequences.** A host can bound a lap's cost up front and tell a budget stop from every other
+report-less turn by `error.class` alone. The bound is soft by one API call (B2), and the help text
+says so. The success document is unchanged: a lap under its cap reports `spend` as before.
+
+**Status.** accepted
+
+**Falsifier.** A Claude CLI whose budget stop writes a different `subtype`, or a body the ingress
+should escalate; either reopens rule 4.
+
+**Source.** Issue #241; the raw-CLI measurement and the real lap above, both on 2026-09-27;
+`D-0099`, `D-1112`, `D-1114`. Decision id `D-1122`, in the `D-11xx` shared cross-belt band opened by
+`D-1101` (`D-1121` is taken by continuo#240's pending change).

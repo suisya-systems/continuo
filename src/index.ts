@@ -703,6 +703,7 @@ export {
   awaitTerminalReport,
   CREATE_WORKSPACE_TRANSITION,
   LAP_ACTOR_ID,
+  LapBudgetExhausted,
   type LapNoTerminalReport,
   type LapOutcome,
   LapRefused,
