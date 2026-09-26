@@ -222,6 +222,7 @@ spaces distinct.
 | D-1116 | `sandbox doctor` checks that this process may create a Unix socket, and fails when it may not | accepted |
 | D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
 | D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
+| D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it: a dirty worktree is refused, an absent one is not an error, the topic branch stays, and no event is appended | accepted |
 
 ---
 
@@ -18136,3 +18137,44 @@ before a more specific `write` (rule 5 can relax).
 **Source.** Issue #223; the enumeration and adversarial review of this change; the owner's answers
 (a) and (a) to #223's P1 and P2, relayed by the window on 2026-09-26; `D-1114`, `D-1117`.
 Decision id `D-1118`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
+
+## D-1119 -- `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it
+
+**Context.** A lap leaves a git worktree behind (`materializeWorkspace`), and nothing a host could
+call removed it: `removeWorktree` is a library export, and rondo reaches continuo only through its
+CLI (rondo `D-0093`), with cleanup after a merge assigned to continuo (rondo `D-0064` section 5).
+Issue #230.
+
+**Decision.** `continuo workspace remove --db DB --run-id RUN_ID [--json]`, a new top-level
+`workspace` subtree in `src/workspace/cli.ts`. The owner took the four recommended options,
+relayed by the window on 2026-09-26:
+
+1. **The name is `workspace remove`**, not a `run` verb: the subject is the worktree, as `db` and
+   `run` are split by subject (`D-0030`).
+2. **What it removes is read, never supplied.** The worktree path, the repository and the topic
+   branch come from the run's `workspace_materialized` payload; there is no path flag, so the verb
+   cannot be aimed at a directory the run did not create. `removeWorktree` is called without
+   `--force`, so git refuses a worktree with uncommitted changes, and no flag here overrides it. A
+   worktree git no longer lists, at a path that no longer exists, answers `outcome: "absent"` with
+   exit 0, so a retried cleanup is a no-op; a path that exists but is not a worktree of that
+   repository is refused. The topic branch is never touched.
+3. **No event is appended**, as `run close` appends none (`D-0084`): whether the worktree exists is
+   a question git answers, and a spine fact about it would be a second answer.
+4. **The run must be terminal.** A clean worktree a live lap is running in is not a leftover, and
+   git's dirty check cannot tell the two apart. rondo closes the run at publish, before the merge,
+   so the ordering costs it nothing.
+
+The `--json` document is `continuo.workspace.remove/1` in the `D-0090` envelope: `run_id`,
+`workspace`, `repository`, `topic_branch`, `outcome` (`removed` | `absent`). Refusals are exit 2
+with the refusal document on stderr: `WorkspaceRemoveRefused` for the rules above, git's own
+`GitCommandFailed` for a dirty worktree.
+
+**Status.** accepted
+
+**Falsifier.** A run whose worktree was removed while its lap was still running. A host that needs
+the branch deleted too and cannot get it from the forge. A second worktree per run, which would make
+"the one `workspace_materialized` event" false.
+
+**Source.** Issue #230; the owner's answers to the four options, relayed by the window on
+2026-09-26; `D-0084`, `D-0090`, rondo `D-0064` and `D-0093`. Decision id `D-1119`, in the `D-11xx`
+shared cross-belt band opened by `D-1101`.

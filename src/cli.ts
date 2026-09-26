@@ -14,6 +14,7 @@
  * - `lap perform ...`       -> `src/lap/cli.ts`
  * - `gate list|show|present|deliver|ack|answer|close|reconcile ...`
  *                           -> `src/gate/cli.ts`
+ * - `workspace remove ...`  -> `src/workspace/cli.ts`
  *
  * Ported from interlock `src/claude_org_runtime/cli.py` at `65f36c5`, which
  * mounts six subtrees. Two of them are not here -- `dispatcher` and `migrate`
@@ -69,6 +70,7 @@ import * as lapCli from "./lap/cli.js";
 import * as measurementCli from "./measurement/cli.js";
 import { PACKAGE_NAME } from "./meta.js";
 import { addSandboxSubparsers, addSettingsSubparsers } from "./settings/cli.js";
+import * as workspaceCli from "./workspace/cli.js";
 
 /**
  * Where this file's own output goes.
@@ -191,6 +193,14 @@ export function buildParser(): ArgumentParser {
       "and run the reconcile pass.",
   );
   gateCli.addSubparsers(gate.addSubparsers("cmd"));
+
+  // workspace (the cleanup after a merge: remove a closed run's worktree)
+  const workspace = sub.addParser(
+    "workspace",
+    "Worktrees materialised for runs: remove a closed run's worktree once its " +
+      "work has landed, leaving the topic branch in place.",
+  );
+  workspaceCli.addSubparsers(workspace.addSubparsers("cmd"));
 
   return parser;
 }
