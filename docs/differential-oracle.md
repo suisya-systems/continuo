@@ -7,6 +7,11 @@ The comparison:
 [`test/control_plane/differential-oracle.test.ts`](../test/control_plane/differential-oracle.test.ts).
 The vector: `parity/oracle/control-plane-state.json`.
 
+> Since the port was completed (`D-1115`), the committed vectors are regression pins, not a parity
+> obligation: a change that departs from interlock's behaviour on purpose updates the vector or the
+> expected value in the same change and cites the decision that took it. The Python halves stay as
+> the record of how each vector was produced.
+
 ## 1. What the oracle claims that the ported tests do not
 
 A translated case asserts that continuo behaves as *interlock's test* required. That is the

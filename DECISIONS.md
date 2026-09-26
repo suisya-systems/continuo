@@ -217,8 +217,10 @@ spaces distinct.
 | D-1111 | The Windows `double-green` cells leave the pull-request path for a nightly schedule and `workflow_dispatch`, and the nightly files its own failure issue | accepted |
 | D-1112 | `lap perform --json` carries what the turn cost and what it ran, and `lap perform` refuses to start a lap from a process that may not create a Unix socket | accepted |
 | D-1113 | CI evidence and its verdict move from rondo into continuo as `ci observe` / `ci show`; `ci_observation` gains `pending` and the `check_run` / `commit_status` scopes | accepted |
-| D-1114 | A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars | accepted |
+| D-1114 | A lap's worker can run on the Codex CLI: `lap perform --provider codex` translates the same fence into Codex's own layers, refuses a lap where a layer cannot be enforced, and reports tokens instead of dollars | superseded by D-1117 |
+| D-1115 | The port is complete and continuo evolves on its own: output parity with interlock no longer binds, the parity ledger is the port's historical record, and its check stays in the gate as a coverage guard | accepted |
 | D-1116 | `sandbox doctor` checks that this process may create a Unix socket, and fails when it may not | accepted |
+| D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
 
 ---
 
@@ -17731,7 +17733,7 @@ rediscovered:
 - if the Codex sandbox helper panics, the empty mount targets it created (`.codex/`, `.agents/`, a
   `.env` device node) stay in the worktree.
 
-**Status.** accepted
+**Status.** superseded by `D-1117`
 
 **Falsifier.** A Codex release that names a thread before it starts (rule 6 should commit the
 identity then), that makes hooks fail closed or fire for `write_stdin` (rules 3 and 5 can relax),
@@ -17744,6 +17746,206 @@ sandbox did in fact deny what the fence denies.
 above; the Codex review of this change. `D-0059`, `D-0081`, `D-0082`, `D-0088`, `D-0099`, `D-1110`,
 `D-1112`; rondo `D-0021`, `D-0064` section 5, `D-0065`, `D-0093`. Decision id `D-1114`, the next free
 id in the `D-11xx` shared cross-belt band opened by `D-1101`.
+
+---
+
+## D-1117 -- A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise
+
+**Context.** Issue #220. `D-1114` put a lap's worker on the Codex CLI; its known limitations named
+one false refusal: a turn with a tool call and an empty hook log was refused unconditionally, even
+when no call could have fired the hook (an arithmetic-only script). The owner chose, through the
+window on 2026-09-26, to remove that refusal, on the condition that a command which ran without the
+hook is still refused. Under `D-1114` rule 7 the count behind that condition exempted more than it
+could prove: a call counted only when it was a direct `exec_command`, `shell`, `apply_patch` or
+`mcp__` call, or a script that matched `tools.<one of those>(` and did not fail. So a failed script,
+a script reaching a tool by another spelling (`tools["exec_command"]`, an alias), and any other
+direct call were caught, when the hook never ran, only by the empty-log refusal being removed.
+
+**What was measured.** On `codex-cli 0.153.4` with `gpt-6-astra`, on 2026-09-26, with a logging
+`PreToolUse` hook:
+
+- **M1.** The direct `wait` call and `write_stdin` (direct, or as `tools.write_stdin(...)` in a
+  script) never fire the hook; `write_stdin` is `D-1114` M5.
+- **M2.** Scripts that call nothing (`3*3`, `2 + 2;`, `const x = 5; text(x)`) leave the hook log
+  empty, as does a script that only polls a running command,
+  `text(await tools.write_stdin({session_id:24708,chars:"",yield_time_ms:1000}));`.
+- **M3.** A script that ran `tools.apply_patch(...)` and then failed fired the hook for the patch
+  first: `Script failed` does not mean nothing was called.
+- **M4.** A script sees its tools through a global (`ALL_TOOLS`) as well as through
+  `tools.<name>`.
+- **M5.** `codex exec --json` writes a `command_execution` item for a command a script ran and
+  nothing for a tool-free script, but no item for a command whose sandbox failed to come up; it is
+  not used as evidence here.
+
+**Decision.** `D-1114` stands, except for the count in its rule 7, which this entry replaces, and
+the "hook-log check is a count" item of its consequences.
+
+1. **The count is an allowlist of what cannot fire the hook.** A call of the current turn needs a
+   hook log line of its own unless it is:
+   - a direct `wait` call (M1);
+   - a script whose only identifier is `text` (digits, arithmetic, parentheses, `, ; .` and white
+     space otherwise), which can reach no tool (M2);
+   - a `write_stdin` that writes nothing: a direct call whose `chars` is absent or empty, or a
+     script that is one `tools.write_stdin({...})`, optionally in `text(...)`, whose argument
+     holds only names, numbers and empty strings (M2).
+
+   Every other call counts: a failed script (M3), a script naming any tool by any spelling (M4),
+   every other direct call. The turn is refused when the hook log has fewer lines than the calls
+   that count.
+2. **An empty hook log is no refusal of its own.** A turn of calls that cannot fire the hook has
+   nothing to log, and is accepted.
+3. **A `write_stdin` that writes input counts.** It never fires the hook (M1), so input it writes to
+   a running process has passed no hook. A direct `write_stdin` call, or a script that is nothing
+   else, can never have a line of its own and refuses the turn. Under `D-1114` the count did not
+   look at `write_stdin` at all. It is still one line per call: a script that also makes a hooked
+   call, or one that exec call among others whose lines are surplus, is covered by those lines, so
+   input written that way is still bounded only by `D-1114` rule 5 (a lap whose allow list names a
+   program that executes its stdin is refused) and by the OS sandbox, as before.
+4. **The sub-agent check runs before the count**, so a sub-agent call the hook never saw is refused
+   as that.
+
+**Alternatives.**
+
+- *Keep the empty-log refusal (rejected)*: the owner's decision; it refuses a turn that ran nothing.
+- *Count by the hooked-tool names a script mentions (rejected)*: M3 and M4; the names a pattern lists
+  are not the ways a script reaches a tool.
+- *Count `command_execution` items from stdout (rejected)*: M5; a command whose sandbox failed has no
+  item, so the stdout record is not shown to be complete.
+- *Exempt every `write_stdin` (rejected)*: decision 3.
+
+**Consequences.** A command that ran without the hook is refused through the count, whatever the
+script calls it. What remains, stated so it is not rediscovered:
+
+- the count is a lower bound, not a pairing, per outer call: a script that calls two hooked tools
+  where the hook ran for only one is not told apart from one where it ran for both; a script whose
+  hooked calls produce more lines than it needs, or a surplus line (a sub-agent denial, say), can
+  cover another call's missing one; and a script that makes a hooked call and also writes to a
+  running process's stdin needs only the line its hooked call produces, so that input passes the
+  count (Codex review of this change);
+- a script that calls no tool but names anything besides `text` (`const x = 5; text(x)`, a syntax
+  error), and a direct `write_stdin` that writes input, need a line they cannot have and refuse the
+  turn (the fail-closed side);
+- the check runs after the turn: a refused turn opens no gate, but what it ran has run, as for every
+  other post-turn check of `D-1114` rule 7.
+
+**Status.** accepted
+
+**Falsifier.** A Codex release in which `wait`, a tool-free script or an empty `write_stdin` fires the
+hook (the exemptions become unnecessary), or in which `write_stdin` does (decision 3 can relax). A
+Codex turn accepted under this count in which a tool ran that the hook did not see.
+
+**Source.** Issue #220; the owner's answer (A) relayed by the window on 2026-09-26; the measurements
+above; the Codex review of this change. `D-1114`. Decision id `D-1117`, in the `D-11xx` shared
+cross-belt band opened by `D-1101`; `D-1115` and `D-1116` are held by other open work.
+
+---
+
+## D-1115 -- The port is complete and continuo evolves on its own: output parity with interlock no longer binds, the parity ledger is the port's historical record, and its check stays in the gate as a coverage guard
+
+**Context.** Continuo was started as a test-first parity port of interlock (interlock#74), and a
+set of rules followed from that: interlock's suite was the specification, a translated case could
+assert neither less nor more than its source, and a port that quietly improved on its source was no
+longer a parity port (`AGENTS.md` section 1, `docs/test-translation-conventions.md` section 0,
+`docs/testing.md`). Those rules were right while the port was the work. They have kept binding
+after it, and they now reject changes on no ground but "interlock does it differently" -- `D-1112`
+turned down a seccomp check in `sandbox doctor` because `sandbox_doctor.ts` is a ported surface and
+the check would change its output.
+
+The port is complete by this repository's own records, measured at `a0e642b`:
+
+- `parity/source-inventory.belts.md`: of the 2,194 node ids interlock collects at `65f36c5`, 1,973
+  are in scope and all are ported; the other 221 are `not-porting`, each ratified at this
+  repository's human gate (the last, `broker`, by `D-0053` on 2026-09-03). No subsystem is
+  `decision-pending`, `candidate-lane` or `retarget`.
+- The 70 ledgers hold 1,528 `ported`, 438 `adapted`, 7 `not-ported`, 0 `waived`. Six of the seven
+  `not-ported` have no possible target (the source parametrizes over a directory listing or an
+  `__init__.py`); the seventh needs interlock's spike-schema creator, which continuo does not carry.
+  None is waiting on work.
+- `npm run parity` passes over 3,776 collected target tests; `npm run inventory` passes.
+- The ledgers carry 200 `inherited_limitations`: 22 marked repaired, 178 still reproducing the
+  source.
+
+The owner decided on 2026-09-26 that once the port is complete continuo evolves on its own and need
+not keep output parity with interlock.
+
+**Decision.**
+
+1. **The port is complete as of 2026-09-26, and output parity with interlock no longer binds.**
+   Continuo's own suite and this file are its specification. Interlock stays the design lineage of
+   record and stays frozen (`D-0036`); nothing here makes it a decision-maker.
+2. **Changing ported behaviour is a decision, not a free edit.** A change may make a ported surface
+   behave differently from interlock. It changes the test that pins the behaviour in the same
+   change, and says why -- with an entry here if it settles a question.
+3. **Coverage moves up freely and down only by decision.** Strengthening a test, ported or not,
+   needs no decision. Weakening or deleting one does.
+4. **The parity ledgers are the historical record of the port.** `ported` records that a case was
+   translated from its source, not that it still asserts what the source does; a ported test whose
+   assertion a later decision changes keeps its entry as it is.
+5. **A new disposition, `retired`, is how a ported case is deleted.** A `retired` entry has no
+   target id, its `reason` cites the decision that removed the case (`D-NNNN`), and its ledger
+   records `totals.retired`. A ledger that has retired nothing may omit the total.
+   `scripts/parity-check.mjs` enforces all three.
+6. **`npm run parity` and `npm run inventory` stay in `verify` and in the `parity` CI job under
+   `ci-gate`**, as a coverage guard rather than an output-parity guard. The parity check is also the
+   only guard against an unapproved `skip` / `todo` / `fails` / `xfail` anywhere under `test/` and
+   against an unrecorded deletion of a ported case; the inventory check keeps the frozen snapshot of
+   interlock's suite from being edited by accident. Both are cheap.
+7. **`inherited_limitations` is a backlog, not behaviour to keep.** Any change may repair an entry,
+   retiring it in the form `docs/test-translation-conventions.md` already describes. `D-0023` holds
+   -- inherited defects are repaired here -- and "at the first belt that touches them" now reads "by
+   any change", since there are no more porting belts.
+8. **Alternatives rejected on output parity alone no longer bind.** Known instances: `D-1112`'s
+   seccomp check in `sandbox doctor`; `D-0017`'s structural assertions on error codes, deferred
+   "after the full port is green"; `D-0020`'s testkit guard against a match pattern that also matches
+   the database path; the `D-0030` note that `measure report` refuses a repeated flag while
+   `settings generate` keeps the last one. None of those entries changes status. Each decision
+   still holds; only the parity reason given against the alternative has lapsed. Taking one up is
+   its own change, with its own entry.
+9. **The differential oracles (`D-0018`) are regression pins.** A change that departs from
+   interlock's behaviour on purpose updates the committed vector or the expected value in the same
+   change and cites the decision; the Python halves stay as the record of how each vector was made.
+10. **Unchanged:** the testkit freeze (its reason is that one change must not shift every other
+    area's tests, which has nothing to do with parity); rules 10 and 11 of the translation
+    conventions; the double-green rule; the `D-11xx` band for cross-belt decisions.
+
+**Alternatives.**
+
+- *Take `parity` and `inventory` out of `verify` and CI (rejected).* That removes the output-parity
+  check, but it also removes the skip guard and the deletion guard, which have nothing to do with
+  parity and nothing else provides.
+- *Mark a deleted case `not-ported` with a reason (rejected).* `not-ported` means "never
+  translated", so a deletion would read as a case that was never written, and `AGENTS.md` section 4
+  forbids relabelling a disposition to make a check pass.
+- *Leave `retired` until the first deletion needs it (rejected).* Until then a deliberate deletion
+  has no sanctioned form: the check is red and every way to turn it green is forbidden.
+- *Supersede `D-0017`, `D-0020`, `D-0023`, `D-0030` and `D-1112` (rejected).* Each decision is still
+  true; only one reason, given against an alternative, has lapsed. Supersession would say the
+  decision itself stopped being true.
+- *Make every inherited limitation an issue now (not done).* 178 issues filed at once is noise; an
+  entry is taken up when a change touches it.
+
+**Consequences.**
+
+- `AGENTS.md` section 1 is rewritten for a completed port, and section 4 names `retired`.
+  `docs/testing.md`, `docs/test-translation-conventions.md` (a header, the disposition table, the
+  `inherited_limitations` paragraph, the check list), `docs/differential-oracle.md`, `README.md`'s
+  status and the `parity` job's comment follow.
+- A new test in a ported file is still declared in its ledger's `target_only_tests`, because the
+  unmapped check reads everything in a ported file. That is one line per test.
+- The ledgers are not rewritten: no entry, total or limitation changes in this decision.
+- The translation rules stay in their document as the record of how the entries were made.
+
+**Status.** accepted
+
+**Falsifier.** A ported case deleted with the parity check green and no `retired` entry citing a
+decision. A change turned down on output parity with interlock alone after this entry. A ledger
+whose `totals` disagree with a `retired` entry and the check still passes.
+
+**Source.** The owner's decision of 2026-09-26, relayed by the window, and the answers to this
+task's judgment escalation (keep both checks in the gate; add `retired` in this change). The
+measurements above, at `a0e642b`. `D-0017`, `D-0018`, `D-0020`, `D-0023`, `D-0030`, `D-0036`,
+`D-0053`, `D-1112`. Decision id `D-1115`, the next free id in the `D-11xx` shared cross-belt band
+opened by `D-1101`.
 
 ---
 
@@ -17762,19 +17964,19 @@ had changes a ported surface's output, which AGENTS.md section 1 rules out.
 
 **Decision.**
 
-1. `D-1115` records the owner's policy: once the port from interlock is complete, continuo
-   evolves on its own and need not keep its output matched to interlock. So parity alone no
-   longer vetoes a check in the doctor. This supersedes the rejected alternative
-   *"Put the seccomp check in `sandbox doctor`"* in `D-1112`. The rest of `D-1112` stands, and
-   `lap perform` keeps its own probe: the doctor is a command an operator may skip.
+1. `D-1115` rule 1 ends output parity with interlock, and its rule 8 names `D-1112`'s rejected
+   alternative *"Put the seccomp check in `sandbox doctor`"* as one whose parity reason has
+   lapsed. This entry takes that alternative up, as rule 8 says it must: as its own change with
+   its own entry. `D-1112` keeps its status. Its other reason still holds -- the doctor is a
+   command an operator may skip -- and is why `lap perform` keeps its own probe.
 2. The doctor gains a third check. On Linux it listens on an abstract Unix socket from a child
    process (`probeUnixSocketSync`). `run` is synchronous, and a child inherits the filter, so the
    child answers for this process and for any worker it would start. The child answers through
    its exit status, not a pipe: Node's pipes are Unix socketpairs, which the same filter may
    refuse. An `EPERM` is a `fail`. The report is then not ok and `run` exits 1. The detail names
    an inherited seccomp filter, usually a parent Claude Code sandbox, as the cause. Any other
-   error is `skipped`, because only `EPERM` is evidence of the filter (`D-1112`). The check is `skipped` off Linux, and
-   `skipped` when the settings disable the sandbox, as the canary is.
+   error is `skipped`, because only `EPERM` is evidence of the filter (`D-1112`). The check is
+   `skipped` off Linux, and `skipped` when the settings disable the sandbox, as the canary is.
 3. `--no-probe-bwrap` does not turn the check off. The check needs no bwrap, and the flag names the
    canary.
 4. Output gains one line, `unix socket: <status> - <detail>`, and one extra `RESULT:` line when the
@@ -17804,7 +18006,6 @@ longer needs a Unix socket: the check fails a sandbox that would start. A host w
 child process cannot run: the check reports `skipped` with `SPAWN_FAILED` and never fails.
 
 **Source.** Issue #210; the owner's decision (option A), relayed by the window on 2026-09-26;
-`D-1115` (the post-port policy); rondo N-16 / N-21; `D-1112` (the probe and the rejected
-alternative this supersedes), `D-0023` and `D-0215` (earlier repairs to this module). Decision id
-`D-1116`, allocated by the window in the `D-11xx` shared cross-belt band (`D-1101`); `D-1115` is
-taken by the policy entry.
+`D-1115` rules 1 and 8 (the post-port policy); rondo N-16 / N-21; `D-1112` (the probe and the
+rejected alternative this takes up), `D-0023` and `D-0215` (earlier repairs to this module).
+Decision id `D-1116`, allocated by the window in the `D-11xx` shared cross-belt band (`D-1101`).

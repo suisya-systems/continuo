@@ -6,7 +6,9 @@ plane for a coding-agent organization, its measurement harness, and its per-role
 The name is cadenza's structural counterpart. A basso continuo underpins the piece and realizes
 chords from figures, as this control plane realizes behavior from policy rows and rules.
 
-> **Status: porting, well advanced.** All 1,973 node ids not declined are ported. Every subsystem
+> **Status: the port is complete, and continuo evolves on its own** (`DECISIONS.md` D-1115,
+> 2026-09-26): output parity with interlock no longer binds, and the parity ledger is kept as the
+> historical record of the port. All 1,973 node ids not declined are ported. Every subsystem
 > interlock's suite collects is now classified and no status is still a proposal: `broker`'s 54
 > collected cases were the last, declined at continuo's own human gate on 2026-09-03
 > (`DECISIONS.md` D-0053). The per-subsystem record is
@@ -32,12 +34,13 @@ repaired here) and `D-0036` (decision authority is here).
 Continuo's own decisions live in [`DECISIONS.md`](./DECISIONS.md) with a separate numbering space.
 An entry there citing `interlock D-00NN` means the interlock decision of that number.
 
-## How this port is being done
+## How the port was done
 
-**Test-first.** The specification is interlock's test suite -- 2190 passed / 8 skipped / 1 xfailed
-at interlock PR #72 -- not its Python source. Implementation follows the tests to green, module by
-module. SQL carries verbatim: any dialect-forced deviation is a recorded decision, never a silent
-edit.
+**Test-first.** The specification for the port was interlock's test suite -- 2190 passed / 8 skipped / 1 xfailed
+at interlock PR #72 -- not its Python source. Implementation followed the tests to green, module by
+module. SQL was carried verbatim: any dialect-forced deviation is a recorded decision, never a silent
+edit. Since the port was completed (D-1115), a change may depart from interlock's behaviour; it does
+so by changing the test that pins the behaviour, not around it.
 
 **Green twice under random ordering.** Every required CI cell runs the suite twice, in two
 independent processes, at two distinct explicit seeds. Both must pass.
