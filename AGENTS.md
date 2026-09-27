@@ -47,13 +47,16 @@ The rules are stated in that file's own "How to use this file" section:
 - **Every entry states what would falsify it** (`**Falsifier.**` / `**Falsified by.**`, on most
   entries). A decision taken on facts that can change records the fact and the version it was
   measured at.
-- **Number ranges are allocated per belt** (`D-0019`..`D-0099` control plane, closed and exhausted;
+- **Number ranges are allocated per belt** (`D-0019`..`D-0099` control plane and the first
+  cross-belt band, closed and exhausted;
   `D-01xx` measurement, `D-02xx` fencing/settings, `D-03xx` session, `D-04xx` canary, `D-05xx`
   messagebus, `D-06xx` fault-injection, `D-07xx` secretary, `D-08xx` gate_item2, `D-09xx` attention,
   `D-10xx` gate_item11). **`D-11xx` is the cross-belt band** for decisions taken at the window,
   continuing where `D-0019`..`D-0099` left off (see `D-1101`). Take the next free ID in your belt's
   range (or `D-11xx` for a cross-belt decision) and add a row to the index table at the top of the
-  file.
+  file. The row's title is the entry heading's title and its status is the entry's `**Status.**`
+  line; `test/contract/decisions-index.test.ts` fails the suite on a missing row, a row with no
+  entry, or a title or status that differs.
 - An entry citing `interlock D-00NN` means *interlock's* decision of that number; the two numbering
   spaces are separate.
 
@@ -93,13 +96,15 @@ your platform only, and it does not run `publint` or `attw`. The mapping to
 
 | local | CI job |
 |---|---|
-| `npm test`, twice at two `CONTINUO_TEST_SEED` values | `double-green` (ubuntu + windows × node 22 + 24) |
+| `npm test`, twice at two `CONTINUO_TEST_SEED` values | `double-green` (ubuntu × node 22 + 24 on every run; windows × node 22 + 24 on the nightly schedule and `workflow_dispatch` only, `D-1111`) |
 | `npm run lint` | `lint` |
 | `npm run knip` (in `verify`), `npm run check:package` | `package` |
 | `npm run parity`, `npm run inventory` | `parity` |
 
 So green locally is weaker evidence than green in CI in three specific ways: one order instead of
-two, one platform instead of four cells, and no packaging check unless you ran `check:package`.
+two, one platform instead of two cells (four on the nightly), and no packaging check unless you ran
+`check:package`. A pull request is not run on Windows at all: a Windows-only regression first shows
+up as the nightly's `Nightly tests are red` issue (`D-1111`).
 
 **`ci-gate` is the only required check.** It aggregates the four jobs, runs with `always()` because
 GitHub reports a *skipped* required check as success, and allow-lists `success` only (`D-0005`,
@@ -110,8 +115,8 @@ references that literal name and lives outside this repository's diff.
 processes, at two distinct explicit seeds**, and both must pass (`D-0005`). Randomization lives in
 `vitest.config.ts`, never on a command line — a CLI flag can be dropped by an edit without turning
 anything red. `retry: 0` is not negotiable. Locally, run twice with different
-`CONTINUO_TEST_SEED` values to reproduce it; the seed is a hard error under `CI` and printed on
-success either way.
+`CONTINUO_TEST_SEED` values to reproduce it; an unset seed is a hard error under `CI`, and the seed
+is printed on success either way.
 
 **Green is not enough when you add or change a check.** "Each of these has been observed failing; a
 check never seen red is not a check" (`docs/test-translation-conventions.md`, twice). If your change

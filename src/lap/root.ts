@@ -204,6 +204,8 @@ export interface LapNoTerminalReport {
   /** `true` only while a report could still arrive. See {@link awaitTerminalReport}. */
   readonly pending: boolean;
   readonly reason: string;
+  /** Present only for a turn its `--max-budget-usd` cap stopped (D-1122). */
+  readonly budgetStop?: { readonly totalCostUsd: number | null };
 }
 
 /** What {@link TerminalReportReader.readTerminalReport} answers with. */
@@ -267,6 +269,28 @@ export class LapRefused extends ControlPlaneRefusal {
     // extending a built-in under a downlevel emit target loses the prototype
     // chain and `instanceof` then silently reports false. See `refusals.ts`.
     Object.setPrototypeOf(this, LapRefused.prototype);
+  }
+}
+
+/**
+ * The turn was stopped by its `--max-budget-usd` cap (D-1122).
+ *
+ * A {@link LapRefused} like every other turn without a report -- no gate is
+ * opened, the workspace is left as it is -- and its own class so a host reads
+ * the stop off `error.class` and what it cost off `totalCostUsd` rather than off
+ * the message. `null` is the CLI not saying, never a zero.
+ */
+export class LapBudgetExhausted extends LapRefused {
+  readonly totalCostUsd: number | null;
+
+  constructor(
+    message: string,
+    options: { readonly sessionId: string; readonly totalCostUsd: number | null },
+  ) {
+    super(message, { sessionId: options.sessionId });
+    this.name = "LapBudgetExhausted";
+    this.totalCostUsd = options.totalCostUsd;
+    Object.setPrototypeOf(this, LapBudgetExhausted.prototype);
   }
 }
 
@@ -1111,6 +1135,12 @@ export async function awaitTerminalReport(
         );
       }
       return readout;
+    }
+    if (!readout.pending && readout.budgetStop !== undefined) {
+      throw new LapBudgetExhausted(
+        `session ${sessionId} finished its turn without a report to escalate: ${readout.reason}`,
+        { sessionId, totalCostUsd: readout.budgetStop.totalCostUsd },
+      );
     }
     if (!readout.pending) {
       // The turn ended and said nothing usable. Polling will not change it, and

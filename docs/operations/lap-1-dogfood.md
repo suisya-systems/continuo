@@ -184,6 +184,12 @@ node "$CLI" lap perform \
 > a token in the fenced child's command line, so a leading `-`, a path separator, whitespace or an
 > `=` is refused before the lap starts anything.
 
+> **Since `D-1122` a lap's spend can be capped up front.** `--max-budget-usd <n>` (Claude only;
+> refused with `--provider codex`) is appended to every spawn as the CLI's own flag. The CLI checks it
+> between API calls, so a turn can overshoot by one call: a $0.01 cap stopped a one-word turn at
+> $0.0209669. A stopped turn opens no gate; the lap exits 2 with `LapBudgetExhausted` and, under
+> `--json`, `total_cost_usd`.
+
 Measured wall clock, each including one full worker turn: 52 s, 17 s, 32 s over the three laps.
 
 The command materialises the workspace, renders the fence, spawns the worker, waits for the turn's

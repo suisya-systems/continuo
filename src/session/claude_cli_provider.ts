@@ -1317,7 +1317,22 @@ export interface NoTerminalReport {
   readonly pending: boolean;
   /** ASCII, and specific enough to distinguish "not finished" from "said nothing". */
   readonly reason: string;
+  /**
+   * Present only when the turn was stopped by `--max-budget-usd` (continuo
+   * D-1122): what the stopped turn spent, off its own `result` event. A field
+   * for {@link NoTerminalReport.pending}'s reason -- a host tells "the cap
+   * tripped" from "the worker said nothing" without parsing `reason`.
+   */
+  readonly budgetStop?: { readonly totalCostUsd: number | null };
 }
+
+/**
+ * The `result` event's `subtype` for a turn the CLI stopped at its
+ * `--max-budget-usd` cap. Measured on Claude Code 2.1.283 (D-1122): the event
+ * carries it with `terminal_reason: "budget_exhausted"`, `is_error: true`,
+ * `total_cost_usd`, and no `result` body.
+ */
+const BUDGET_STOP_SUBTYPE = "error_max_budget_usd";
 
 /** What {@link ClaudeCliSessionProvider.readTerminalReport} answers with. */
 export type TerminalReportReadout = TerminalReport | NoTerminalReport;
@@ -3586,6 +3601,22 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         }
         return facts;
       }
+      const { terminalReason, subtype, isError } = this._cliTerminalWords(resultEvent);
+      if (subtype === BUDGET_STOP_SUBTYPE) {
+        // Before the body: a turn cut off by its cap is a stop, not a report,
+        // even if some later CLI writes prose on it -- that prose is a turn's
+        // half, and a gate over it would ask a human to approve unfinished work.
+        const spent = facts.spend.totalCostUsd;
+        return new Ok({
+          kind: "no-report",
+          pending: false,
+          reason:
+            `the turn of session ${pyRepr(record.session_id)} was stopped by its ` +
+            `--max-budget-usd cap (subtype ${BUDGET_STOP_SUBTYPE}) after spending ` +
+            `${spent === null ? "an unreported amount" : `$${String(spent)}`}`,
+          budgetStop: { totalCostUsd: spent },
+        });
+      }
       const body = facts.body;
       if (typeof body !== "string") {
         // Never coerced. `String({})` is `"[object Object]"`, and that string
@@ -3610,7 +3641,6 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             "blank report, which is a turn that ended without saying anything",
         });
       }
-      const { terminalReason, subtype, isError } = this._cliTerminalWords(resultEvent);
       return new Ok({
         kind: "report",
         sessionId: record.session_id,

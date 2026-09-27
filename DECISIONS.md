@@ -152,10 +152,10 @@ spaces distinct.
 | D-1002 | The gate_item11 belt completes at 64/64: `test_suite_runs_unchanged.py`'s double-suite-run measurement lands as a vitest `globalSetup` plus a subprocess double-run over `--reporter=json`, and continuo#70 is resolved as intentional | accepted |
 | D-1003 | `suite-runs-unchanged.test.ts` skips on Windows CI: a measured resource-contention failure, not a coverage gap the belt is silently accepting | accepted |
 | D-0048 | Windows runs the child-process-spawning tests apart from the rest of the suite | accepted |
-| D-0049 | The runtime surfaces continuo operates -- the fence hook, the default worker prompt and the CLI descriptions -- say `continuo`, not `Interlock` | accepted |
+| D-0049 | The runtime surfaces continuo operates say `continuo`, not `Interlock` | accepted |
 | D-0050 | The production schema is the control plane the lap runs on, and the spike schema is not a fallback | accepted |
 | D-0051 | A run is created by one writer, `continuo run admit`, which appends `run_created` in the same transaction and refuses a second admission | accepted |
-| D-0052 | The runner's per-test timeout is scaled on a slow platform, from the same constant the harness budgets use | accepted |
+| D-0052 | The runner's per-test timeout is scaled on a slow platform, and the scale has one home | accepted |
 | D-0053 | The broker belt is declined and discharged rather than ported, and the endpoint moves onto the production schema with the outbox aligned to `cancelled` | accepted |
 | D-0054 | `writer_epoch` on `outbox` is delivery-side ownership, not producer provenance: the delivery worker adopts one row immediately before it attempts it | accepted |
 | D-0055 | The lap's execution intent is fixed at admission as `LapRunIntent`, written with the run in one transaction, and carries no authority | accepted |
@@ -173,7 +173,7 @@ spaces distinct.
 | D-0066 | The materialiser's clock is frozen and the orchestrator's is live; step 8 owns the difference | accepted |
 | D-0067 | Nothing the fence or its evidence depends on may live inside the worktree | accepted |
 | D-0068 | A session is this lap's to stop only while it still holds the lease epoch it spawned under | accepted |
-| D-0069 | A test's wait for a real child is a share of the runner's budget, from D-0052's scale | accepted |
+| D-0069 | A test's wait for a real child is a share of the runner's budget, not a constant of its own | accepted |
 | D-0070 | The materialiser wards every path the fence depends on, and each is judged where its consumer reads it | accepted |
 | D-0071 | The orchestrator's lease stays per-verb, with no code change, and `D-0068`'s residual stays open | accepted |
 | D-0072 | The `lap perform` process is the endpoint's launcher and its lease holder, and the renewal timer lives beside the composition root | accepted |
@@ -201,7 +201,7 @@ spaces distinct.
 | D-0094 | The settings generator refuses a non-string sandbox deny entry instead of writing it for a reader that does not reject it | accepted |
 | D-0095 | A document number leaves through `str()` and `repr()` as well as `json.dumps`, and all three now spell it CPython's way | accepted |
 | D-0096 | continuo's database is not a public read surface; `run show` is | accepted |
-| D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present\|deliver\|ack` join the `--json` envelope | accepted |
+| D-0097 | A console acks the `presented` relay it delivered; the dropbox stays the one delivery channel, and `gate present` / `deliver` / `ack` join the `--json` envelope | accepted |
 | D-0098 | The post-spawn identity read-back window is a caller's budget, defaulting to thirty seconds | accepted |
 | D-0099 | Model selection is a `lap perform --model` flag over the provider's `base_cli_args`, not a `roles.json` key and not an admitted argument | accepted |
 | D-1101 | The shared cross-belt band is widened: `D-0019`..`D-0099` is closed, and `D-11xx` is its continuation | accepted |
@@ -222,9 +222,10 @@ spaces distinct.
 | D-1116 | `sandbox doctor` checks that this process may create a Unix socket, and fails when it may not | accepted |
 | D-1117 | A Codex turn's hook-log count exempts only calls that cannot fire the hook, and an empty hook log is no refusal of its own; D-1114 stands otherwise | accepted |
 | D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
-| D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it: a dirty worktree is refused, an absent one is not an error, the topic branch stays, and no event is appended | accepted |
+| D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it | accepted |
 | D-1120 | A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire | accepted |
 | D-1121 | A gate answer made under delegation is recorded as delegated: actor kind `delegate`, naming the person and the approval it rests on, and only a `worker_escalation` gate accepts one | accepted |
+| D-1122 | `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag | accepted |
 
 ---
 
@@ -18350,3 +18351,69 @@ list); owner decisions of 2026-09-27 (automatic gate approval on a clean indepen
 verification record; the delegable set limited to `worker_escalation`). Builds on `D-1107` point 2
 (opaque references) and `D-0090` / `D-0092` (the `--json` envelope). Decision id `D-1121`, in the
 `D-11xx` shared cross-belt band opened by `D-1101`.
+
+---
+
+## D-1122 -- `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag
+
+**Context.** continuo#241. `D-0099` let a host choose a lap's model and `D-1112` let it read what a
+turn cost afterwards, but nothing let it bound the cost beforehand: a lap that looped ran until
+`--turn-timeout-ms`. The Claude CLI has `--max-budget-usd <amount>` (print mode only), and
+`baseCliArgs` is the seam `D-0099` already routes provider-wide flags through.
+
+Measured on Claude Code 2.1.283 with the raw CLI (haiku, cap $0.0001):
+
+- **B1.** The stopped turn still writes its `result` event: `subtype: "error_max_budget_usd"`,
+  `terminal_reason: "budget_exhausted"`, `is_error: true`, `total_cost_usd: 0.0416399`,
+  `errors: ["Reached maximum budget ($0.0001)"]`, and **no `result` key**. The process exits 1.
+- **B2.** The cap is checked between API calls, not enforced within one: the turn spent 416 times
+  its cap on its first call. A cap bounds a runaway turn, not the price of one call.
+
+And once through a real lap with this change (`lap perform --model claude-haiku-4-5-20251001
+--max-budget-usd 0.01`, run outside the worker sandbox, whose AF_UNIX probe refuses a Claude lap):
+
+- **B3.** The fenced child's argv carried `--model claude-haiku-4-5-20251001 --max-budget-usd 0.01`
+  after `--session-id`. Its transcript ended in the B1 shape (`errors: ["Reached maximum budget
+  ($0.01)"]`, `total_cost_usd: 0.0209669`, `num_turns: 1`, no `result`).
+- **B4.** `lap perform` exited 2 with stdout empty and one refusal document on stderr:
+  `error.class: "LapBudgetExhausted"`, `session_id`, `total_cost_usd: 0.0209669`. No gate was
+  opened; the topic branch and the worktree were left in place.
+
+**Decision.**
+
+1. **`lap perform --max-budget-usd <n>`**, optional. Under `--provider claude` the operator's text is
+   appended to every spawn as the two tokens `--max-budget-usd <n>`, behind `--model` and behind
+   every flag the provider renders itself. Absent, nothing is appended.
+2. **The value is a plain positive decimal** (`^[0-9]{1,9}(\.[0-9]{1,9})?$`, greater than zero),
+   refused as `LapUsageError` before anything is built. It is passed verbatim, so the cap the child
+   enforces is the text typed; no sign, exponent or leading `-` can reach the child's parser.
+3. **`--provider codex` refuses the flag** as `LapUsageError`: the Codex CLI has no spend cap, and a
+   flag accepted there would be a limit that silently did not apply. The Codex provider's own
+   `base_cli_args` guard (`D-1114`, `--model` only) refuses it too, for a caller that skips the verb.
+4. **A turn the cap stopped is a stop, not a report.** The Claude provider reads `subtype:
+   error_max_budget_usd` off the verified `result` event before it looks at the body, and answers a
+   definite no-report carrying `budgetStop.totalCostUsd`. `awaitTerminalReport` raises
+   `LapBudgetExhausted`, a `LapRefused`: no gate is opened, the workspace is left as it is, the
+   session is stopped on the way out, exit 2. Under `--json` the refusal document carries
+   `session_id` and `total_cost_usd` (`null` when the event did not say) beside `error.class`.
+
+**Alternatives.**
+
+- *Open a gate over a budget-stopped turn (rejected)*: there is no body to put in the rationale
+  (B1), and a turn cut off mid-work is not something a human should approve as finished.
+- *Enforce the cap in continuo by watching the transcript (rejected)*: the CLI already enforces it
+  with better information, and continuo would still have to kill a child mid-call.
+- *Accept the flag under Codex and ignore it (rejected)*: see rule 3.
+
+**Consequences.** A host can bound a lap's cost up front and tell a budget stop from every other
+report-less turn by `error.class` alone. The bound is soft by one API call (B2), and the help text
+says so. The success document is unchanged: a lap under its cap reports `spend` as before.
+
+**Status.** accepted
+
+**Falsifier.** A Claude CLI whose budget stop writes a different `subtype`, or a body the ingress
+should escalate; either reopens rule 4.
+
+**Source.** Issue #241; the raw-CLI measurement and the real lap above, both on 2026-09-27;
+`D-0099`, `D-1112`, `D-1114`. Decision id `D-1122`, in the `D-11xx` shared cross-belt band opened by
+`D-1101` (`D-1121` is taken by continuo#240's pending change).

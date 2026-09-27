@@ -2022,3 +2022,81 @@ describe.skipIf(process.platform === "win32")("D-1114: a lap whose worker runs o
     expect(existsSync(f.workspace)).toBe(false);
   });
 });
+
+// --------------------------------------------------------------------------
+
+describe("D-1122: a lap's spend cap", () => {
+  test("--max-budget-usd reaches the child's argv as two tokens, behind the model", async () => {
+    const f = lap("lap-budget-argv", "run-budget-argv");
+    expect(
+      await f.perform({ "--model": "sonnet", "--max-budget-usd": "0.05" }),
+      f.err.join(""),
+    ).toBe(0);
+    const { argv } = spawnedRecord(f);
+    const at = argv.indexOf("--max-budget-usd");
+    expect(argv.filter((token) => token === "--max-budget-usd")).toHaveLength(1);
+    // Verbatim: the text typed, not a float's re-rendering of it.
+    expect(argv[at + 1]).toBe("0.05");
+    expect(argv.indexOf("--model")).toBeLessThan(at);
+    expect(argv.indexOf("--session-id")).toBeLessThan(at);
+  });
+
+  test("a value that is not a positive decimal is refused with nothing built", async () => {
+    for (const [index, value] of ["0", "0.0", "-1", "1e3", "abc", "1.", ".5", ""].entries()) {
+      const f = lap(`lap-budget-refused-${index}`, `run-budget-refused-${index}`);
+      f.out.length = 0;
+      f.err.length = 0;
+      const argv = jsonArgv(f);
+      argv.push(`--max-budget-usd=${value}`);
+      expect(await mainAsync(argv), `accepted ${value}`).toBe(2);
+      expect(oneDocument(f.err)).toMatchObject({
+        error: { class: "LapUsageError", message: expect.stringContaining("--max-budget-usd") },
+      });
+      expect(existsSync(f.workspace), `${value}: refused after the worktree`).toBe(false);
+    }
+  });
+
+  test("--provider codex refuses the flag: its CLI has no cap to enforce it", async () => {
+    const f = lap("lap-budget-codex");
+    f.out.length = 0;
+    f.err.length = 0;
+    expect(await mainAsync([...codexArgv(f), "--max-budget-usd", "0.05"])).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      error: { class: "LapUsageError", message: expect.stringContaining("--provider claude") },
+    });
+    expect(existsSync(f.workspace)).toBe(false);
+  });
+
+  test("a turn its cap stopped opens no gate and reports what it spent", async () => {
+    // The shape measured off Claude Code 2.1.283 (D-1122): no `result` body,
+    // `subtype: error_max_budget_usd`, `total_cost_usd` beside it, exit 1.
+    const f = lap("lap-budget-stop", "run-budget-stop");
+    // No body at all, which `fakeEnv` cannot spell: the key is removed for this
+    // case and put back after it.
+    const body = process.env["FAKE_RESULT_TEXT"];
+    delete process.env["FAKE_RESULT_TEXT"];
+    onTestFinished(() => {
+      process.env["FAKE_RESULT_TEXT"] = body;
+    });
+    fakeEnv("FAKE_SUBTYPE", "error_max_budget_usd");
+    fakeEnv("FAKE_IS_ERROR", "1");
+    fakeEnv("FAKE_TERMINAL_REASON", "budget_exhausted");
+    fakeEnv("FAKE_RESULT_FIELDS", JSON.stringify({ total_cost_usd: 0.0416399 }));
+    fakeEnv("FAKE_EXIT", "1");
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f, { "--max-budget-usd": "0.01" }))).toBe(2);
+    const refusal = oneDocument(f.err);
+    expect(refusal).toMatchObject({
+      ok: false,
+      total_cost_usd: 0.0416399,
+      error: { class: "LapBudgetExhausted", message: expect.stringContaining("$0.0416399") },
+    });
+    expect(typeof refusal["session_id"]).toBe("string");
+
+    const connection = inspect(f.databasePath);
+    expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+    expect(connection.prepare("SELECT count(*) AS n FROM gate").get()).toEqual({ n: 0 });
+  });
+});

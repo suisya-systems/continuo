@@ -212,7 +212,9 @@ export function addSandboxSubparsers(sub: Subparsers): void {
   const sandboxSub = sandbox.addSubparsers("cmd");
   const doctor = sandboxSub.addParser(
     "doctor",
-    "Check that a worker's sandbox deny paths can actually be mounted by bubblewrap.",
+    "Check that a worker's sandbox will start: its deny paths can actually be " +
+      "mounted by bubblewrap, and (on Linux) this process may create a Unix " +
+      "socket.",
   );
   addDoctorArguments(doctor);
   doctor.setDefaults({ func: (args: Namespace) => runDoctor(args as unknown as DoctorArgs) });

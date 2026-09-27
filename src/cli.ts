@@ -108,9 +108,12 @@ function defaultStreams(): ArgparseStreams {
 export function buildParser(): ArgumentParser {
   const parser = new ArgumentParser(
     "continuo",
-    "TypeScript runtime for the continuo control plane: the read-only " +
-      "measurement harness, the worker settings generator, and the sandbox " +
-      "preflight.",
+    "Durable control plane for a coding-agent organization: create its " +
+      "database, admit and close runs, perform a lap under a per-role fence, " +
+      "hold the human gates over what it reported, record CI outcomes, and " +
+      "remove a finished run's worktree; plus the read-only measurement " +
+      "harness, the worker settings generator, the sandbox preflight, and the " +
+      "attention watcher.",
   );
   parser.addArgument({
     optionStrings: ["--version"],
