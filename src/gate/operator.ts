@@ -57,6 +57,7 @@ import {
   advanceOnAck,
   closeGate,
   enqueueRelay,
+  type GateDelegation,
   type GateNeedingAdvance,
   type GatePastDeadline,
   GateRefusal,
@@ -201,6 +202,9 @@ export interface TransitionView {
   readonly actorId: string;
   readonly recordedAtMs: number;
   readonly body: string | null;
+  /** Set on a `delegate`'s answer, and on no other row (`D-1121`). */
+  readonly onBehalfOf: string | null;
+  readonly authorityRef: string | null;
 }
 
 /** Everything `gate show` prints about one gate. */
@@ -230,10 +234,25 @@ export interface RelayEnqueued {
   readonly enqueued: boolean;
 }
 
+/** Who the recorded answer is from: the `answered` advance's actor, as stored. */
+export interface AnsweredBy {
+  readonly actorKind: string;
+  readonly actorId: string;
+  readonly onBehalfOf: string | null;
+  readonly authorityRef: string | null;
+}
+
 /** What {@link answerGate} did. */
 export interface AnswerRecorded extends RelayEnqueued {
   /** Whether this call moved the stage to `answered`. */
   readonly advanced: boolean;
+  /**
+   * The actor of the answer the gate carries, read off the transition. On a
+   * repeat (`advanced === false`) that is whoever answered first, which is how
+   * a caller tells its own delegated answer from a person's that landed ahead
+   * of it.
+   */
+  readonly answeredBy: AnsweredBy;
 }
 
 /** What {@link ackRelay} did, in the order it did it. */
@@ -423,11 +442,13 @@ export function gateDetail(connection: SqliteDatabase, gateId: string): GateDeta
         actor_id: string;
         recorded_at_ms: number;
         body: string | null;
+        on_behalf_of: string | null;
+        authority_ref: string | null;
       }
     >(
       `
         SELECT seq, transition_kind, from_stage, to_stage, actor_kind, actor_id,
-               recorded_at_ms, body
+               recorded_at_ms, body, on_behalf_of, authority_ref
           FROM gate_transition
          WHERE gate_id = ?
          ORDER BY seq
@@ -472,6 +493,8 @@ export function gateDetail(connection: SqliteDatabase, gateId: string): GateDeta
           actorId: transition.actor_id,
           recordedAtMs: Number(transition.recorded_at_ms),
           body: transition.body,
+          onBehalfOf: transition.on_behalf_of,
+          authorityRef: transition.authority_ref,
         }),
       ),
     ),
@@ -552,20 +575,40 @@ function forwardedPayload(gate: GateDetail, body: string): string {
  * where the answer is durable: `answered` is not a relayed stage, so the `body`
  * on that row is the whole of the evidence the question was answered.
  */
-function recordedAnswer(connection: SqliteDatabase, gateId: string): string | null {
-  const body = connection
-    .prepare<[string], string | null>(
+function recordedAnswer(
+  connection: SqliteDatabase,
+  gateId: string,
+): (AnsweredBy & { readonly body: string | null }) | null {
+  const row = connection
+    .prepare<
+      [string],
+      {
+        body: string | null;
+        actor_kind: string;
+        actor_id: string;
+        on_behalf_of: string | null;
+        authority_ref: string | null;
+      }
+    >(
       `
-        SELECT body
+        SELECT body, actor_kind, actor_id, on_behalf_of, authority_ref
           FROM gate_transition
          WHERE gate_id = ? AND transition_kind = 'advance' AND to_stage = 'answered'
          ORDER BY seq DESC
          LIMIT 1
         `,
     )
-    .pluck()
     .get(gateId);
-  return body ?? null;
+  if (row === undefined) {
+    return null;
+  }
+  return Object.freeze({
+    body: row.body,
+    actorKind: row.actor_kind,
+    actorId: row.actor_id,
+    onBehalfOf: row.on_behalf_of,
+    authorityRef: row.authority_ref,
+  });
 }
 
 /**
@@ -639,6 +682,12 @@ export function presentGate(
  * Record the human's answer and put it on the queue: `answered`, then the
  * `forwarded` relay.
  *
+ * With `delegation`, the same two steps record an answer made on a person's
+ * standing approval rather than by their press (`D-1121`): the actor kind is
+ * `delegate`, `actorId` is who acted, and the delegation says on whose behalf
+ * and under which approval. `advanceOnAck` refuses a malformed authority and
+ * a gate type that stays a person's (`DelegationRefused`).
+ *
  * Both in one call, and deliberately: the forward relay may only be enqueued
  * from `answered` (`enqueueRelay` reads the direct predecessor off the
  * transition table), so the two are one operator intent -- "this is my answer,
@@ -675,9 +724,15 @@ export function answerGate(
     readonly body: string;
     readonly actorId: string;
     readonly nowMs: number;
+    /**
+     * Present when the answer is made under delegation (`D-1121`): it is then
+     * recorded under actor kind `delegate` with this authority, never as
+     * `human`. Absent, the answer is the person's own, as it always was.
+     */
+    readonly delegation?: GateDelegation | null;
   },
 ): AnswerRecorded {
-  const { gateId, body, actorId, nowMs } = options;
+  const { gateId, body, actorId, nowMs, delegation = null } = options;
   const recipient = GATE_RELAY_RECIPIENT;
   if (body === "") {
     // `advanceOnAck` refuses a null body and SQLite would store an empty
@@ -693,11 +748,12 @@ export function answerGate(
   const advanced = advanceOnAck(connection, {
     gateId,
     toStage: "answered",
-    actorKind: "human",
+    actorKind: delegation === null ? "human" : "delegate",
     actorId,
     occurredAtMs: nowMs,
     recordedAtMs: nowMs,
     body,
+    delegation,
   });
   const gate = gateDetail(connection, gateId);
   // The relay carries the answer the DATABASE holds, never the one this call
@@ -708,8 +764,9 @@ export function answerGate(
   // was dropped on the floor by `advanceOnAck` -- and building the payload from
   // that body would forward an answer that no transition records, so the
   // recipient acts on B while the durable history says A.
-  const recorded = recordedAnswer(connection, gateId);
-  if (recorded === null) {
+  const answer = recordedAnswer(connection, gateId);
+  const recorded = answer?.body ?? null;
+  if (answer === null || recorded === null) {
     // Only reachable if the advance above committed and the transition then
     // vanished, which the schema does not admit -- said plainly rather than
     // forwarded as an empty answer.
@@ -732,7 +789,19 @@ export function answerGate(
     messageId: relayMessageId(gateId, "forwarded"),
     enqueuedAtMs: nowMs,
   });
-  return Object.freeze({ advanced, messageId, toStage: "forwarded", enqueued: !existed });
+  const answeredBy: AnsweredBy = Object.freeze({
+    actorKind: answer.actorKind,
+    actorId: answer.actorId,
+    onBehalfOf: answer.onBehalfOf,
+    authorityRef: answer.authorityRef,
+  });
+  return Object.freeze({
+    advanced,
+    messageId,
+    toStage: "forwarded",
+    enqueued: !existed,
+    answeredBy,
+  });
 }
 
 // --------------------------------------------------------------------------

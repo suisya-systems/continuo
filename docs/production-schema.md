@@ -1695,7 +1695,7 @@ transaction (SQLite triggers can express the shape but not the ack precondition,
 |---|---|---|---|---|
 | — | `received` | `open` | `worker` (via `system`) | An escalation event exists on the spine |
 | `received` | `presented` | `advance` | `secretary` | The `presented` relay's outbox row is `acked` (§9.4) |
-| `presented` | `answered` | `advance` | `human` | A human answer is durable; `body` non-null |
+| `presented` | `answered` | `advance` | `human`, or `delegate` (D-1121) | A human answer is durable; `body` non-null. A `delegate`'s answer also names `on_behalf_of` and `authority_ref`, and only a `worker_escalation` gate takes one |
 | `answered` | `forwarded` | `advance` | `secretary` | The `forwarded` relay's outbox row is `acked` (§9.4) |
 | any open stage | same stage | `resend` | any | A relay attempt was repeated |
 | any open stage | same stage | `correction` | any | `supersedes_seq` names an earlier transition of this gate |
@@ -1705,6 +1705,10 @@ transaction (SQLite triggers can express the shape but not the ack precondition,
 Every other edge is inadmissible. In particular there is **no backwards edge**: a question that
 needs re-asking after being answered is a *new gate*, linked by `superseded_by`, not a rewind. A
 rewind would destroy the aging basis the relay-gap detector reads.
+
+`any` in the `resend` / `correction` / `close` rows is every actor kind but `delegate`, which takes
+the answer edge and nothing else. The `delegate` kind and its two columns arrive in migration
+`0008_gate_delegated_answer.sql` (D-1121); the DDL above is 0001's.
 
 ### 9.4 Terminal states and the taxonomy
 

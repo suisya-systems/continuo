@@ -1311,6 +1311,125 @@ describe("the real ledger", () => {
     }
   });
 
+  test("the gate_transition rebuild carries every row, reference and refusal forward", () => {
+    // 0008 widens the actor vocabulary by a rebuild (D-1121). Created at 0007 and
+    // filled by hand, so the INSERT ... SELECT runs over real rows: an open, an
+    // advance the gate's projection names, and a correction naming an earlier
+    // seq through the self-reference.
+    const root = caseRoot("migrator");
+    const dbPath = databasePath(root);
+    const at0007 = join(root, "at-0007");
+    for (const name of readdirSync(MIGRATIONS_DIR).filter((n) => Number(n.slice(0, 4)) <= 7)) {
+      writeStep(at0007, name, readFileSync(join(MIGRATIONS_DIR, name), "utf8"));
+    }
+    const connection = createProductionControlPlane(dbPath, { nowMs: T0, migrationsDir: at0007 });
+    try {
+      connection
+        .prepare(
+          "INSERT INTO event (event_id, event_type, subject_kind, subject_id, producer," +
+            " dedup_key, occurred_at_ms, ingested_at_ms)" +
+            " VALUES ('evt-1', 'worker_escalation_raised', 'run', 'run-1', 'worker', 'dk-1', ?, ?)",
+        )
+        .run(T0, T0);
+      connection
+        .prepare(
+          "INSERT INTO gate (gate_id, gate_type, subject_kind, subject_id, origin_event_seq," +
+            " rationale, stage, stage_entered_at_ms, created_at_ms)" +
+            " VALUES ('g-1', 'worker_escalation', 'run', 'run-1', 1, 'why', 'received', ?, ?)",
+        )
+        .run(T0, T0);
+      const transition = connection.prepare(
+        "INSERT INTO gate_transition (gate_id, transition_kind, from_stage, to_stage, actor_kind," +
+          " actor_id, body, supersedes_seq, occurred_at_ms, recorded_at_ms)" +
+          " VALUES ('g-1', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      transition.run("open", null, "received", "worker", "w-1", null, null, T0, T0);
+      connection.prepare("UPDATE gate SET stage_seq = 1 WHERE gate_id = 'g-1'").run();
+      transition.run("advance", "received", "presented", "secretary", "s-1", null, null, T0, T0);
+      connection
+        .prepare("UPDATE gate SET stage = 'presented', stage_seq = 2 WHERE gate_id = 'g-1'")
+        .run();
+      transition.run("correction", "presented", "presented", "human", "h-1", "fixed", 2, T0, T0);
+    } finally {
+      connection.close();
+    }
+
+    const migrated = migrateControlPlane(dbPath, { nowMs: T1 });
+    try {
+      expect(versionOf(dbPath)).toEqual([headVersion(), headVersion()]);
+      expect(
+        migrated
+          .prepare(
+            "SELECT seq, transition_kind, actor_kind, actor_id, body, supersedes_seq," +
+              " on_behalf_of, authority_ref FROM gate_transition ORDER BY seq",
+          )
+          .all(),
+      ).toEqual([
+        {
+          seq: 1,
+          transition_kind: "open",
+          actor_kind: "worker",
+          actor_id: "w-1",
+          body: null,
+          supersedes_seq: null,
+          on_behalf_of: null,
+          authority_ref: null,
+        },
+        {
+          seq: 2,
+          transition_kind: "advance",
+          actor_kind: "secretary",
+          actor_id: "s-1",
+          body: null,
+          supersedes_seq: null,
+          on_behalf_of: null,
+          authority_ref: null,
+        },
+        {
+          seq: 3,
+          transition_kind: "correction",
+          actor_kind: "human",
+          actor_id: "h-1",
+          body: "fixed",
+          supersedes_seq: 2,
+          on_behalf_of: null,
+          authority_ref: null,
+        },
+      ]);
+      expect(migrated.pragma("foreign_key_check")).toEqual([]);
+      expect(migrated.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
+      // The next seq continues past the carried rows rather than reusing one.
+      const next = migrated
+        .prepare(
+          "INSERT INTO gate_transition (gate_id, transition_kind, from_stage, to_stage, actor_kind," +
+            " actor_id, occurred_at_ms, recorded_at_ms)" +
+            " VALUES ('g-1', 'resend', 'presented', 'presented', 'system', 'r', ?, ?)",
+        )
+        .run(T1, T1);
+      expect(Number(next.lastInsertRowid)).toBe(4);
+      // Every guard came back, and in 0001's firing order: a backwards
+      // projection is still refused as backwards, and history still immutable.
+      expect(() =>
+        migrated
+          .prepare("UPDATE gate SET stage = 'received', stage_seq = 1 WHERE gate_id = 'g-1'")
+          .run(),
+      ).toThrow(/never walks backwards/);
+      expect(() => migrated.prepare("DELETE FROM gate_transition WHERE seq = 1").run()).toThrow(
+        /relay-gap evidence/,
+      );
+      expect(() =>
+        migrated.prepare("UPDATE gate_transition SET actor_id = 'x' WHERE seq = 1").run(),
+      ).toThrow(/correct it with a correction transition/);
+      expect(() =>
+        migrated
+          .prepare("UPDATE gate SET stage = 'answered', stage_seq = 3 WHERE gate_id = 'g-1'")
+          .run(),
+      ).toThrow(/gate.stage is a projection/);
+    } finally {
+      migrated.close();
+    }
+  });
+
   test("the real ledger is discoverable and contiguous", () => {
     const steps = discoverMigrationSteps();
     expect(steps.length, "the production DDL ledger must ship with the package").toBeGreaterThan(0);

@@ -774,6 +774,8 @@ describe("continuo#155: the JSON documents a host reads", () => {
           to_stage: "received",
           actor_kind: "worker",
           actor_id: "worker-7",
+          on_behalf_of: null,
+          authority_ref: null,
           recorded_at_ms: T0,
           body: null,
         },
@@ -784,6 +786,8 @@ describe("continuo#155: the JSON documents a host reads", () => {
           to_stage: "presented",
           actor_kind: "secretary",
           actor_id: ACTOR,
+          on_behalf_of: null,
+          authority_ref: null,
           recorded_at_ms: T0 + 3 * MINUTE,
           body: null,
         },
@@ -830,8 +834,89 @@ describe("continuo#155: the JSON documents a host reads", () => {
       enqueued: true,
       message_id: relayMessageId(GATE_ID, "forwarded"),
       to_stage: "forwarded",
+      answered_by: {
+        actor_kind: "human",
+        actor_id: ACTOR,
+        on_behalf_of: null,
+        authority_ref: null,
+      },
     });
     expect(streams.err(), "a success writes nothing to stderr").toBe("");
+  });
+
+  test("gate answer records a delegated answer as delegated, and gate show says so (D-1121)", () => {
+    const { path, destination } = aDatabaseWithAGate("gate-json-delegated-answer");
+    carryToPresented(path, destination);
+    const streams = captureStreams();
+
+    expect(
+      main([
+        "gate",
+        "answer",
+        "--db",
+        path,
+        "--gate-id",
+        GATE_ID,
+        "--body",
+        "approve",
+        "--actor-id",
+        "rondo-organisation",
+        "--on-behalf-of",
+        "happy_ryo",
+        "--authority-ref",
+        "scope-decision-01J9",
+        "--now-ms",
+        String(T0 + 4 * MINUTE),
+        "--json",
+      ]),
+    ).toBe(0);
+    expect((oneDocument(streams.out()) as { answered_by: unknown }).answered_by).toStrictEqual({
+      actor_kind: "delegate",
+      actor_id: "rondo-organisation",
+      on_behalf_of: "happy_ryo",
+      authority_ref: "scope-decision-01J9",
+    });
+
+    const shown = captureStreams();
+    expect(main(["gate", "show", "--db", path, "--gate-id", GATE_ID])).toBe(0);
+    expect(shown.out()).toContain(
+      "presented->answered by=delegate/rondo-organisation " +
+        "on-behalf-of=happy_ryo authority=scope-decision-01J9 at=",
+    );
+  });
+
+  test("gate answer refuses one delegation flag without the other, and records nothing", () => {
+    // Either flag alone is a caller that meant to delegate; recording the
+    // answer as the person's press instead would be the one outcome D-1121
+    // exists to prevent.
+    const { path, destination } = aDatabaseWithAGate("gate-json-half-delegation");
+    carryToPresented(path, destination);
+    const streams = captureStreams();
+
+    expect(
+      main([
+        "gate",
+        "answer",
+        "--db",
+        path,
+        "--gate-id",
+        GATE_ID,
+        "--body",
+        "approve",
+        "--actor-id",
+        "rondo-organisation",
+        "--on-behalf-of",
+        "happy_ryo",
+        "--now-ms",
+        String(T0 + 4 * MINUTE),
+      ]),
+    ).toBe(2);
+    expect(streams.out()).toBe("");
+    expect(streams.err()).toContain("authority_ref must be");
+
+    const shown = captureStreams();
+    expect(main(["gate", "show", "--db", path, "--gate-id", GATE_ID])).toBe(0);
+    expect(shown.out()).toContain("stage=presented");
   });
 
   test("a re-run of gate answer reports false rather than a different sentence", () => {

@@ -224,6 +224,7 @@ spaces distinct.
 | D-1118 | The Codex fence translation is a table: every input shape of `S` and `P` is translated into a named Codex layer or refused, and a test fails on a shape that is neither | accepted |
 | D-1119 | `workspace remove` removes a closed run's worktree as its `workspace_materialized` event names it | accepted |
 | D-1120 | A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire | accepted |
+| D-1121 | A gate answer made under delegation is recorded as delegated: actor kind `delegate`, naming the person and the approval it rests on, and only a `worker_escalation` gate accepts one | accepted |
 | D-1122 | `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag | accepted |
 
 ---
@@ -18257,6 +18258,101 @@ either reopens rule 1 through #238.
 **Source.** Issue #226; the measurement run on the operator's Windows host on 2026-09-26, whose
 script and log are attached to #226's pull request; the owner's answer (a), relayed by the window on 2026-09-27; #238;
 `D-1114`, `D-1118`. Decision id `D-1120`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
+
+---
+
+## D-1121 -- A gate answer made under delegation is recorded as delegated: actor kind `delegate`, naming the person and the approval it rests on, and only a `worker_escalation` gate accepts one
+
+**Context.** The only edge into `answered` is `presented -> answered`, and its actor column named
+one kind: `human`. So an answer a host makes on a person's standing approval could be written only
+under the person's own actor id, which records it as the person's press, and nothing downstream
+could tell a carried answer from a composed one. rondo `D-0064` rule 3.6 names exactly this: an
+answer the organisation makes inside a scope the person approved "needs a seam that records a
+delegated answer as delegated: an actor kind other than `human`, naming the scope approval it was
+taken under", and until continuo has one every lap's end gate stays a person's press. The owner
+decided on 2026-09-27 that a gate may be approved automatically when the independent model review
+raised no blocking or major finding and a verification record exists. continuo#240 asks for the
+seam.
+
+**Decision.**
+
+1. **A new actor kind, `delegate`, on the answer edge alone.** `ADMISSIBLE`'s
+   `presented -> answered` row admits `human` and `delegate`; no other row admits `delegate`, so a
+   delegate cannot open, advance a relayed stage, resend, correct or close. A delegate that could
+   close or correct would be deciding more than the answer its authority names.
+2. **Who acted, and on whose authority, are three separate values on the row.** `actor_id` is who
+   acted (a host's component, e.g. rondo's organisation); `on_behalf_of` is the person the answer is
+   made for; `authority_ref` is the approval it rests on (rondo: the `scope_decision_id`). They are
+   two new columns on `gate_transition` rather than a side table, because the rebuild that widens
+   the actor `CHECK` is needed anyway and a row that carries its own authority cannot lose it to a
+   missed join.
+3. **continuo checks the form and records it; it does not judge the scope.** Both references must be
+   1 to 256 printable ASCII characters. What they mean is the host's, in the sense `D-1107` point 2
+   gives the delegation record: whether the approval covers this gate is judged before the call.
+4. **The honesty rules are also the store's.** Migration `0008_gate_delegated_answer.sql` makes the
+   pairing an IF AND ONLY IF (a `delegate` row carries both references; no other row carries
+   either), refuses `on_behalf_of = actor_id` (a delegate named as the person it acts for is the
+   person's press by another spelling), and refuses a `delegate` row on any edge but the answer.
+   `gates.ts` refuses the same things first, with `DelegationRefused` and a message an operator can
+   act on.
+5. **Only a `worker_escalation` gate accepts a delegated answer** (`DELEGABLE_GATE_TYPES`), by the
+   owner's answer on 2026-09-27. It is the one type anything opens today (a lap's end gate) and the
+   one rule 3.6 asks to answer. `plan_approval` is the kind of approval a delegation rests on, so a
+   delegate answering it would authorise itself; `risk_approval` is an irreversible act, approved by
+   a person per act (rondo `D-0064` rule 3.4); `merge_approval` is opened by nothing. The owner's
+   "merge on green" is rondo's own act (`D-0091`) and does not pass through a continuo gate, so
+   this list does not stand in its way. A type joins the list by a decision, when something opens
+   it.
+6. **The surfaces show it.** `gate answer` gains `--on-behalf-of` and `--authority-ref`, both or
+   neither: either alone is refused rather than recorded as the person's press. `gate answer --json`
+   gains `answered_by` -- the actor of the answer the gate carries, as stored, so on a repeat it is
+   whoever answered first and a host can tell its delegated answer from a person's that landed
+   ahead of it. `gate show` prints `on-behalf-of=` / `authority=` on a delegate's row, and
+   `gate show --json` gains `on_behalf_of` / `authority_ref` on every transition (null except on a
+   delegate's). No schema id moves, under the rule `json_output.ts` states. The forwarded relay's
+   payload is unchanged: it names no actor, so it presents nobody's press.
+7. **A person's own answer is unchanged.** Without the two flags the answer is `human`, exactly as
+   before; the human line of `gate answer` gains `by=<kind>/<id>` so an operator sees whose answer
+   the gate carries.
+
+**The rebuild, and what it had to preserve.** `gate_transition` is rebuilt by 0003's procedure. The
+table references itself (`supersedes_seq`) and a trigger on `gate`
+(`gate_stage_matches_its_transition`) reads it, and `ALTER TABLE ... RENAME` refuses a trigger
+naming a missing table, so that trigger is dropped first and recreated last. SQLite fires one
+event's triggers most-recently-created first, so recreating it alone moved it ahead of
+`gate_stage_seq_is_monotonic`, and a backwards projection was refused with the wrong message --
+measured by `production-schema.test.ts`, which went red. The two later `gate` UPDATE triggers are
+therefore recreated after it, in 0001's order.
+
+**Falsification.** Each is a case that goes red when the property is removed:
+
+- Record a delegated answer as `human`, or drop either reference: *it is recorded as the delegate's,
+  naming the person and the approval, never as human* (`test/gate/operator.test.ts`).
+- Accept a delegation on `merge_approval`, `plan_approval` or `risk_approval`: *a ... gate stays a
+  person's to answer*.
+- Admit `delegate` on any other edge: *the delegate takes the answer edge and no other*, and the
+  edge-table pin in `test/control_plane/gates.test.ts`.
+- Drop a 0008 `CHECK`: *the schema refuses a delegation the writer would, whoever writes the row*.
+- Record a half delegation as the person's press: *gate answer refuses one delegation flag without
+  the other, and records nothing* (`test/gate/cli.test.ts`).
+- Lose a row, a reference or a trigger in the rebuild, or its firing order: *the gate_transition
+  rebuild carries every row, reference and refusal forward* (`test/control_plane/migrator.test.ts`).
+
+**Status.** accepted
+
+**Falsifier.** The claim that continuo can record a delegation without judging it. If a real need
+arises for continuo to refuse a delegated answer on what the approval *says* -- its budget, its
+expiry, whether it covers this gate -- then the boundary in point 3 is in the wrong place, and
+either the check belongs on rondo's side of the wire or the approval belongs in a record continuo
+may read. The observable signal is the first patch that resolves `authority_ref` to anything.
+
+**Source.** continuo#240; rondo `D-0064` rule 3.6 (the request) and rule 3.4 (the irreversible
+list); owner decisions of 2026-09-27 (automatic gate approval on a clean independent review with a
+verification record; the delegable set limited to `worker_escalation`). Builds on `D-1107` point 2
+(opaque references) and `D-0090` / `D-0092` (the `--json` envelope). Decision id `D-1121`, in the
+`D-11xx` shared cross-belt band opened by `D-1101`.
+
+---
 
 ## D-1122 -- `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag
 

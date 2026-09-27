@@ -30,6 +30,7 @@ host reads (D-0090).
 | `run admit` / `close` / `show` | Admit a run with its execution intent (D-0051, D-0055), record the operator's close (D-0084), read a run without writing (D-0096) |
 | `lap perform` | Perform one admitted run: materialise its worktree, run the worker under the admitted fence, and open a human gate over its report (D-0059). `--provider claude` (the default) or `--provider codex` runs the turn on Claude Code or the Codex CLI with the same fence (D-1114, D-1117, D-1118); a fence layer the chosen CLI cannot enforce refuses the lap, and a Codex lap is refused on Windows (D-1120) |
 | `gate list` / `show` / `present` / `deliver` / `ack` / `ack-unrelayed` / `answer` / `close` / `reconcile` | The human gates over what a lap reported (D-0078, D-0079, D-0080, D-0097, D-1104) |
+| `gate answer --on-behalf-of` / `--authority-ref` | Record an answer made under delegation as delegated: actor kind `delegate`, naming who acted, the person it acts for and the approval it rests on; only a `worker_escalation` gate accepts one (D-1121) |
 | `workspace remove` | Remove a closed run's worktree, as its `workspace_materialized` event names it, leaving the topic branch (D-1119) |
 | `ci observe` / `show` | Record what the forge reported about a pull request's head, and show the verdict for its current head (D-1113) |
 | `settings generate` / `show` | Render a role's worker `settings.local.json` from the bundled schema, or show it (D-0213) |

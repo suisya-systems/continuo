@@ -166,6 +166,12 @@ export interface Edge {
   readonly precondition: string;
 }
 
+/**
+ * Every actor kind but `delegate`, which takes the `presented -> answered`
+ * advance and nothing else (`D-1121`; `0008` holds the same as a CHECK). A
+ * delegate that could close or correct would be deciding more than the answer
+ * its authority names.
+ */
 const _ANY_ACTOR: ReadonlySet<string> = new Set([
   "worker",
   "secretary",
@@ -216,8 +222,10 @@ export const ADMISSIBLE: readonly Edge[] = Object.freeze([
     fromStage: "presented",
     toStage: "answered",
     kind: "advance",
-    actorKinds: new Set(["human"]),
-    precondition: "a human answer is durable; body non-null",
+    actorKinds: new Set(["human", "delegate"]),
+    precondition:
+      "a human answer is durable; body non-null. A delegate's also names its " +
+      "authority and is refused on a gate type outside DELEGABLE_GATE_TYPES (D-1121)",
   }),
   Object.freeze({
     fromStage: "answered",
@@ -283,6 +291,38 @@ export const CLOSE_OUTCOME_STAGES: Readonly<Record<string, ReadonlySet<string>>>
   unanswerable: new Set(["presented"]),
   superseded: new Set(GATE_STAGES),
 });
+
+/**
+ * The gate types a delegate may answer (`D-1121`); every other type stays a
+ * person's to answer.
+ *
+ * `worker_escalation` alone, because it is the one type anything opens today
+ * (a lap's end gate, `report_ingress.ts`) and the one rondo's rule 3.6 asks to
+ * answer inside a scope. `plan_approval` is the kind of approval a delegation
+ * rests on, so a delegate answering it would be authorising itself;
+ * `risk_approval` is an irreversible act, approved by a person per act (rondo
+ * `D-0064` rule 3.4); and `merge_approval` is opened by nothing, so admitting it
+ * would be a shape no reader has checked. A type joins this list by a decision,
+ * when something opens it.
+ */
+export const DELEGABLE_GATE_TYPES: readonly string[] = Object.freeze(["worker_escalation"]);
+
+/** The bound on `onBehalfOf` and `authorityRef`: references, not documents. */
+const DELEGATION_REFERENCE_MAX_LENGTH = 256;
+
+/**
+ * On whose authority a delegate answered: the person the answer is made for,
+ * and the approval it rests on (rondo: the scope decision's id).
+ *
+ * Both are opaque to continuo. Their form is checked -- printable ASCII,
+ * non-empty, at most {@link DELEGATION_REFERENCE_MAX_LENGTH} -- and their
+ * meaning is the host's: whether the approval covers this gate is judged
+ * before the call, not here.
+ */
+export interface GateDelegation {
+  readonly onBehalfOf: string;
+  readonly authorityRef: string;
+}
 
 /**
  * A gate write that was refused, with the reason it was refused for.
@@ -360,6 +400,19 @@ export class AnswerBodyRequired extends GateRefusal {
     super(message);
     this.name = "AnswerBodyRequired";
     Object.setPrototypeOf(this, AnswerBodyRequired.prototype);
+  }
+}
+
+/**
+ * A delegated answer that cannot be recorded as one: its authority is missing
+ * or malformed, it names the person it acts for as the actor, or the gate's
+ * type stays a person's to answer (`D-1121`).
+ */
+export class DelegationRefused extends GateRefusal {
+  constructor(message: string) {
+    super(message);
+    this.name = "DelegationRefused";
+    Object.setPrototypeOf(this, DelegationRefused.prototype);
   }
 }
 
@@ -681,6 +734,8 @@ export function advanceOnAck(
     readonly recordedAtMs: number;
     readonly writerEpoch?: number | null;
     readonly body?: string | null;
+    /** Required when `actorKind` is `delegate`, and refused otherwise. */
+    readonly delegation?: GateDelegation | null;
   },
 ): boolean {
   const {
@@ -692,6 +747,7 @@ export function advanceOnAck(
     recordedAtMs,
     writerEpoch = null,
     body = null,
+    delegation = null,
   } = options;
 
   return transaction(connection, (tx) => {
@@ -706,6 +762,7 @@ export function advanceOnAck(
     }
     const fromStage = gate.stage;
     _requireActor(fromStage, toStage, "advance", actorKind);
+    _requireDelegation(gate, actorKind, actorId, delegation);
     if (toStage === "answered" && body === null) {
       throw new AnswerBodyRequired(
         `the advance of gate ${gateId} to 'answered' carries the verbatim ` +
@@ -728,6 +785,7 @@ export function advanceOnAck(
       writerEpoch,
       messageId,
       body,
+      delegation,
     });
     tx.prepare<[string, number, number, string]>(
       `
@@ -1422,6 +1480,67 @@ function _requireActor(
   );
 }
 
+/**
+ * Refuse a delegate without a well-formed authority, a delegation carried by
+ * anyone but a delegate, and a delegate on a gate type that stays a person's.
+ *
+ * `_requireActor` has already admitted the edge; this is the half of the
+ * `answered` row the edge table cannot hold, because it reads the gate's type
+ * and the call's arguments. The schema repeats the pairing and the
+ * actor-is-not-the-principal rule as CHECKs (`0008`), so a writer that skipped
+ * this function would still be refused -- by a less helpful message.
+ */
+function _requireDelegation(
+  gate: GateRow,
+  actorKind: string,
+  actorId: string,
+  delegation: GateDelegation | null,
+): void {
+  if (actorKind !== "delegate") {
+    if (delegation !== null) {
+      throw new DelegationRefused(
+        `a delegation is recorded only on a delegate's answer; '${actorKind}' carries none`,
+      );
+    }
+    return;
+  }
+  if (delegation === null) {
+    throw new DelegationRefused(
+      `a delegate's answer to gate ${gate.gateId} names on whose behalf it acts and ` +
+        "the approval it rests on; without them it would read as nobody's",
+    );
+  }
+  _requireReference("on_behalf_of", delegation.onBehalfOf);
+  _requireReference("authority_ref", delegation.authorityRef);
+  if (delegation.onBehalfOf === actorId) {
+    throw new DelegationRefused(
+      `a delegate acting on behalf of '${actorId}' is not '${actorId}'; an answer ` +
+        "under the person's own id is the person's press, and a delegated one names who acted",
+    );
+  }
+  if (!DELEGABLE_GATE_TYPES.includes(gate.gateType)) {
+    throw new DelegationRefused(
+      `gate ${gate.gateId} is a '${gate.gateType}' gate, which stays a person's to answer; ` +
+        `a delegate may answer ${pythonList(Array.from(DELEGABLE_GATE_TYPES))} (D-1121)`,
+    );
+  }
+}
+
+const _PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
+
+function _requireReference(name: string, value: string): void {
+  if (
+    typeof value !== "string" ||
+    !_PRINTABLE_ASCII.test(value) ||
+    value.length > DELEGATION_REFERENCE_MAX_LENGTH
+  ) {
+    throw new DelegationRefused(
+      `${name} must be 1 to ${DELEGATION_REFERENCE_MAX_LENGTH} printable ASCII characters ` +
+        "(U+0020..U+007E); it is a reference, recorded as given and never interpreted",
+    );
+  }
+}
+
 function _loadGate(connection: SqliteDatabase, gateId: string): GateRow {
   const row = connection
     .prepare<
@@ -1502,6 +1621,7 @@ function _insertTransition(
     readonly messageId?: string | null;
     readonly body?: string | null;
     readonly supersedesSeq?: number | null;
+    readonly delegation?: GateDelegation | null;
   },
 ): number {
   const {
@@ -1517,6 +1637,7 @@ function _insertTransition(
     messageId = null,
     body = null,
     supersedesSeq = null,
+    delegation = null,
   } = options;
   const cursor = connection
     .prepare<
@@ -1533,13 +1654,16 @@ function _insertTransition(
         number | null,
         number,
         number,
+        string | null,
+        string | null,
       ]
     >(
       `
         INSERT INTO gate_transition (gate_id, transition_kind, from_stage, to_stage,
                                      actor_kind, actor_id, writer_epoch, message_id,
-                                     body, supersedes_seq, occurred_at_ms, recorded_at_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     body, supersedes_seq, occurred_at_ms, recorded_at_ms,
+                                     on_behalf_of, authority_ref)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
     )
     .run(
@@ -1555,6 +1679,8 @@ function _insertTransition(
       supersedesSeq,
       occurredAtMs,
       recordedAtMs,
+      delegation?.onBehalfOf ?? null,
+      delegation?.authorityRef ?? null,
     );
   return Number(cursor.lastInsertRowid);
 }
