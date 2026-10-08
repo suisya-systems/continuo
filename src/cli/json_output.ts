@@ -242,8 +242,9 @@ export interface RefusalMetadata {
    */
   readonly sessionId?: string | undefined;
   /**
-   * What a turn its spend cap stopped had spent (continuo D-1122), `null` when
-   * the CLI did not say. Absent on every other refusal.
+   * What a turn its spend cap (continuo D-1122) or its turn timeout (D-1123)
+   * stopped had spent, `null` when the CLI did not say. Absent on every other
+   * refusal.
    */
   readonly totalCostUsd?: number | null | undefined;
 }

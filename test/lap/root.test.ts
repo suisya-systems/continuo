@@ -55,6 +55,7 @@ import {
   LapRefused,
   type LapRequest,
   type LapTerminalReadout,
+  LapTurnTimedOut,
   LapUsageError,
   lapArtifactDir,
   MaterializedWorkspaceRequired,
@@ -425,10 +426,12 @@ describe("D-0060: the turn is over when the terminal report exists", () => {
           sleep: recordingSleep(),
           elapsedMs: tickingClock(400),
         }),
-      LapRefused,
+      LapTurnTimedOut,
       /did not finish its turn within 1000ms/,
     );
     expect(refusal.message).toContain("left exactly as they are");
+    // Unknown until the stop has made the CLI say (D-1123): `null`, not zero.
+    expect(refusal.totalCostUsd).toBeNull();
   });
 
   test("a poll interval longer than the budget does not extend it", async () => {

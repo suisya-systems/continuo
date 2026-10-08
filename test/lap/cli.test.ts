@@ -1499,7 +1499,7 @@ describe("D-1102: a refusal document names the session when the lap holds one", 
     // Top-level and not inside the diagnosis: `error` stays a class hint and a
     // sentence for a person, and the id is a fact a host acts on.
     const error = refusal["error"] as Record<string, unknown>;
-    expect(error["class"]).toBe("LapRefused");
+    expect(error["class"]).toBe("LapTurnTimedOut");
     expect(Object.keys(error).sort()).toEqual(["class", "message"]);
   });
 
@@ -1539,7 +1539,14 @@ describe("D-1102: a refusal document names the session when the lap holds one", 
     ).toBe(2);
 
     const refusal = oneDocument(f.err);
-    expect(Object.keys(refusal).sort()).toEqual(["db", "error", "ok", "schema", "session_id"]);
+    expect(Object.keys(refusal).sort()).toEqual([
+      "db",
+      "error",
+      "ok",
+      "schema",
+      "session_id",
+      "total_cost_usd",
+    ]);
     expect(refusal["schema"]).toBe(PERFORM_SCHEMA);
     expect(refusal["ok"]).toBe(false);
     expect(refusal["db"]).toBe(f.databasePath);
@@ -2098,5 +2105,76 @@ describe("D-1122: a lap's spend cap", () => {
     const connection = inspect(f.databasePath);
     expect(eventTypes(connection)).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
     expect(connection.prepare("SELECT count(*) AS n FROM gate").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("D-1123: a turn the timeout stopped is refused with what it spent", () => {
+  test("the cost the stopped CLI wrote rides the refusal", async () => {
+    const f = lap("lap-timeout-spent", "run-timeout-spent");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    fakeEnv("FAKE_SIGTERM_RESULT_FIELDS", JSON.stringify({ total_cost_usd: 0.0731 }));
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+    const refusal = oneDocument(f.err);
+    expect(refusal).toMatchObject({
+      ok: false,
+      // A Windows child is killed outright by `SIGTERM`, with no handler run,
+      // so the stopped CLI never writes its line there and the answer is the
+      // honest `null` rather than a skipped case.
+      total_cost_usd: process.platform === "win32" ? null : 0.0731,
+      error: {
+        class: "LapTurnTimedOut",
+        message: expect.stringContaining("did not finish its turn within 300ms"),
+      },
+    });
+    expect(typeof refusal["session_id"]).toBe("string");
+    expect(eventTypes(inspect(f.databasePath))).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
+  });
+
+  test("a budget stop the timeout's stop raced keeps its cost", async () => {
+    // The cap's line lands after the last poll and is first read after the
+    // stop: it answers `budgetStop`, and its cost must not be dropped for it.
+    const f = lap("lap-timeout-budget-race", "run-timeout-budget-race");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    fakeEnv(
+      "FAKE_SIGTERM_RESULT_FIELDS",
+      JSON.stringify({
+        subtype: "error_max_budget_usd",
+        terminal_reason: "budget_exhausted",
+        total_cost_usd: 0.05,
+      }),
+    );
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      total_cost_usd: process.platform === "win32" ? null : 0.05,
+      error: { class: "LapTurnTimedOut" },
+    });
+  });
+
+  test("a stopped CLI that wrote nothing is null, never a zero", async () => {
+    const f = lap("lap-timeout-unspent", "run-timeout-unspent");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      total_cost_usd: null,
+      error: { class: "LapTurnTimedOut" },
+    });
   });
 });

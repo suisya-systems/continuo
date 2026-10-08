@@ -126,6 +126,7 @@ import {
   LapBudgetExhausted,
   type LapOutcome,
   LapRefused,
+  LapTurnTimedOut,
   LapUsageError,
   lapStateRoot,
   performLap,
@@ -234,7 +235,8 @@ const TURN_TIMEOUT_MS_HELP =
   "milliseconds to wait for the turn's terminal report before giving up. The " +
   "workspace and the fence are left as they are; the worker's session is " +
   "stopped, because a lap that gave up must not leave a fenced child running " +
-  "with nobody polling it.";
+  "with nobody polling it. Refused as LapTurnTimedOut with what the turn spent, " +
+  "as the stopped CLI reported it (null when it did not).";
 const GIT_TIMEOUT_MS_HELP = "wall-clock bound on each git command materialisation runs.";
 const IDENTITY_READBACK_TIMEOUT_MS_HELP =
   "milliseconds the spawned worker is given to emit an event naming the session " +
@@ -520,7 +522,7 @@ function refuse(error: Error, db: string, json: boolean): never {
  * "read the message for it".
  */
 function refusalMetadata(error: Error): RefusalMetadata {
-  if (error instanceof LapBudgetExhausted) {
+  if (error instanceof LapBudgetExhausted || error instanceof LapTurnTimedOut) {
     return { sessionId: error.sessionId, totalCostUsd: error.totalCostUsd };
   }
   if (error instanceof LoserTerminated) {
