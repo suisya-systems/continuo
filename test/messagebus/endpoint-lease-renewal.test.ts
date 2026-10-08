@@ -35,6 +35,13 @@
  * days spent a two-second tolerance; the numbers below are chosen to buy the
  * tolerance back, and the wait is chosen to keep the running time from paying
  * for it twice.
+ *
+ * Ten seconds still failed two of three loaded runs (continuo#188), and making
+ * the number bigger again would only move the line. So a freeze long enough to
+ * lapse the lease by design no longer fails the first case: the attempt is set
+ * aside and made again in a fresh world, but only when this file's own timer
+ * saw the freeze ({@link FROZEN_MS}). The second case no longer spends the TTL
+ * on its child's start-up at all.
  */
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
@@ -93,15 +100,38 @@ const ACROSS_A_TTL_MS = TTL_MS + 1_000;
 const SAMPLE_MS = 250;
 
 /**
+ * A freeze of the runner at least this long sets an attempt of the first case
+ * aside rather than failing it -- and nothing shorter does (continuo#188).
+ *
+ * The lease lapses by design once the renewal's timer is more than
+ * `TTL_MS - INTERVAL_MS` late, so a run that froze that long proves nothing
+ * either way: the renewal latched off because the process was not scheduled,
+ * which is the rule working. Measured on 2026-10-09 by stopping the vitest
+ * worker with SIGSTOP one second into the case: seven seconds passed, nine
+ * failed with `LeaseNotHeld` and not one renewal written. One more interval is
+ * taken off because the freeze is read from {@link watchForStalls}'s timer, a
+ * peer of the renewal's rather than the renewal's itself, and the two can be up
+ * to one interval out of phase.
+ *
+ * What is NOT set aside is everything this case exists to catch: a timer armed
+ * once and never re-armed, and a renewal refused on a machine that kept
+ * scheduling, both fail with a small freeze on the first attempt.
+ */
+const FROZEN_MS = TTL_MS - 2 * INTERVAL_MS;
+
+/** How many attempts the first case makes before a frozen one is reported. */
+const ATTEMPTS = 3;
+
+/**
  * How long the dying holder's lease still stands in the second case.
  *
  * That case needs one number to be two opposite things: long enough that a
  * `node` start-up on a loaded runner cannot lapse the lease before the endpoint
  * has polled once successfully, and short enough to wait out afterwards. They
  * are only in conflict while the number is fixed at acquisition, so it is not
- * -- the holder takes the lease for {@link TTL_MS} and, once the endpoint has
- * polled, re-states its own expiry to this. See the case for why that is still
- * a holder that went away rather than one that released.
+ * -- the holder takes the lease for longer than the case may run and, once the
+ * endpoint has polled, re-states its own expiry to this. See the case for why
+ * that is still a holder that went away rather than one that released.
  */
 const DEATH_WINDOW_MS = 250;
 
@@ -134,9 +164,10 @@ function sleep(ms: number): Promise<void> {
  */
 function watchForStalls(): { worstMs: () => number; stop: () => void } {
   let worstMs = 0;
+  let armedAt = 0;
   let handle: ReturnType<typeof setTimeout> | null = null;
   const arm = (): void => {
-    const armedAt = nowMs();
+    armedAt = nowMs();
     handle = setTimeout(() => {
       worstMs = Math.max(worstMs, nowMs() - armedAt - INTERVAL_MS);
       arm();
@@ -147,6 +178,10 @@ function watchForStalls(): { worstMs: () => number; stop: () => void } {
     worstMs: () => worstMs,
     stop: (): void => {
       if (handle !== null) {
+        // The armed timer counts too: a freeze that outlasts the wait wakes the
+        // wait first, and this timer would otherwise be cancelled still owing
+        // the whole freeze -- reported as 0ms (continuo#188).
+        worstMs = Math.max(worstMs, nowMs() - armedAt - INTERVAL_MS);
         clearTimeout(handle);
         handle = null;
       }
@@ -164,9 +199,14 @@ function watchForStalls(): { worstMs: () => number; stop: () => void } {
  * renewal that is genuinely refused; and no failure at all is a timer that was
  * armed and never re-armed, which is the regression this case was written for.
  */
-function renewalDiagnosis(advances: number, worstStallMs: number, failure: Error | null): string {
+function renewalDiagnosis(
+  advances: number,
+  worstStallMs: number,
+  failure: Error | null,
+  attempt: number,
+): string {
   return (
-    `the lease row advanced ${advances} time(s) across a ${ACROSS_A_TTL_MS}ms wait on a ` +
+    `on attempt ${attempt} of ${ATTEMPTS}, the lease row advanced ${advances} time(s) across a ${ACROSS_A_TTL_MS}ms wait on a ` +
     `${TTL_MS}ms lease renewed every ${INTERVAL_MS}ms, where about ` +
     `${Math.floor(ACROSS_A_TTL_MS / INTERVAL_MS)} were due. The latched renewal failure is ` +
     `${failure === null ? "absent" : failure.message}, and the worst lateness this file's own ` +
@@ -363,6 +403,45 @@ function send(env: BusEnv, epoch: number, messageId: string): void {
   });
 }
 
+/**
+ * One attempt at the first case, in a world of its own, asserting nothing.
+ *
+ * Evidence rather than assertions, so the case can decide whether the attempt
+ * counts before any of it is judged (see {@link FROZEN_MS}).
+ */
+async function pollAcrossATtl() {
+  const { env, root } = expiredWorld("endpoint-lease-renewal");
+
+  // Armed before the acquisition, because the window a stall can ruin starts
+  // there: a freeze during the `node` start-up below latches the renewal just
+  // as surely as one during the wait, and freezes the expiry read afterwards.
+  const stalls = watchForStalls();
+  onTestFinished(() => {
+    stalls.stop();
+  });
+
+  const hold = holdDeliveryLease(env.connection, {
+    resource: RESOURCE,
+    holder: HOLDER,
+    nowMs,
+    ttlMs: TTL_MS,
+    intervalMs: INTERVAL_MS,
+  });
+  onTestFinished(() => {
+    hold.stop();
+  });
+
+  const { client } = startEndpoint(env, root, hold.epoch);
+  send(env, hold.epoch, "task-1");
+
+  const first = await client.callTool("poll");
+  const beforeWait = readLease(env.connection, RESOURCE)?.expiresAtMs ?? 0;
+  const advances = await sleepWatchingRenewals(env, ACROSS_A_TTL_MS);
+  stalls.stop();
+  const renewed = readLease(env.connection, RESOURCE);
+  return { client, hold, first, beforeWait, advances, renewed, worstStallMs: stalls.worstMs() };
+}
+
 describe("a launcher holds the endpoint's lease for the endpoint's whole life", () => {
   test("a poll still works after more than one TTL has passed", async () => {
     // **The acceptance criterion, and the case the whole step exists for.**
@@ -373,45 +452,31 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     // second poll with a stale writer -- and on a build whose timer was armed
     // but never re-armed it fails just as loudly.
     requireBuiltEndpoint();
-    const { env, root } = expiredWorld("endpoint-lease-renewal");
 
-    // Armed before the acquisition, because the window a stall can ruin starts
-    // there: a freeze during the `node` start-up below latches the renewal just
-    // as surely as one during the wait, and freezes the expiry read afterwards.
-    const stalls = watchForStalls();
-    onTestFinished(() => {
-      stalls.stop();
-    });
+    // A fresh world for an attempt whose runner froze for FROZEN_MS or more,
+    // and for no other reason -- said on stderr, so a run that needed one is
+    // visible rather than quietly green.
+    let attempt = 1;
+    let run = await pollAcrossATtl();
+    while (run.worstStallMs >= FROZEN_MS && attempt < ATTEMPTS) {
+      process.stderr.write(
+        `endpoint-lease-renewal: attempt ${attempt} set aside, the runner froze for ` +
+          `${run.worstStallMs}ms (>= ${FROZEN_MS}ms can lapse the lease by design)\n`,
+      );
+      attempt += 1;
+      run = await pollAcrossATtl();
+    }
+    const { client, hold, first, beforeWait, advances, renewed } = run;
 
-    const hold = holdDeliveryLease(env.connection, {
-      resource: RESOURCE,
-      holder: HOLDER,
-      nowMs,
-      ttlMs: TTL_MS,
-      intervalMs: INTERVAL_MS,
-    });
-    onTestFinished(() => {
-      hold.stop();
-    });
     expect(hold.epoch).toBe(2);
-
-    const { client } = startEndpoint(env, root, hold.epoch);
-    send(env, hold.epoch, "task-1");
-
-    const first = await client.callTool("poll");
     expect(first.isError, first.text).toBe(false);
     expect(JSON.parse(first.text)["messages"]).toHaveLength(1);
-
-    const beforeWait = readLease(env.connection, RESOURCE)?.expiresAtMs ?? 0;
-    const advances = await sleepWatchingRenewals(env, ACROSS_A_TTL_MS);
-    stalls.stop();
 
     // The lease outlived the expiry it was taken with, and it did so without
     // changing epoch: the endpoint is writing under exactly the number it was
     // started with. Both halves are read out of SQL, because the row is what
     // the endpoint's own fenced writes are validated against.
-    const diagnosis = renewalDiagnosis(advances, stalls.worstMs(), hold.failure);
-    const renewed = readLease(env.connection, RESOURCE);
+    const diagnosis = renewalDiagnosis(advances, run.worstStallMs, hold.failure, attempt);
     expect(renewed?.epoch).toBe(hold.epoch);
     expect(renewed?.expiresAtMs, diagnosis).toBeGreaterThan(beforeWait);
     // **Twice, not once.** A timer armed at construction and never re-armed
@@ -428,10 +493,10 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     // The same message, re-presented: the point is that the write behind the
     // poll was admitted, not that anything new arrived.
     expect(JSON.parse(second.text)["messages"]).toHaveLength(1);
-    // Five times the case's own running time, as before: the wait grew, and a
-    // timeout that did not grow with it would turn the very stall this file was
-    // re-sized to absorb into a timeout instead of a pass.
-  }, 60_000);
+    // Room for every attempt plus the freezes that set them aside: a timeout
+    // that did not grow with the attempts would turn the very stall this case
+    // retries into a timeout instead of a pass.
+  }, 150_000);
 
   test("a holder that goes away leaves the endpoint durably refused, and its return raises the epoch", async () => {
     // The other half of the design's claim, and the reason a renewal is worth
@@ -448,11 +513,15 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
 
     // No renewal at all: `schedule` records the tick and never fires it, which
     // is a holder that died the moment it took the lease.
+    //
+    // Taken for twice this case's 30-second timeout, so the `node` start-up below
+    // cannot outlast it however loaded the runner is: the one expiry this case
+    // depends on is the one it chooses further down (continuo#188).
     const hold = holdDeliveryLease(env.connection, {
       resource: RESOURCE,
       holder: HOLDER,
       nowMs,
-      ttlMs: TTL_MS,
+      ttlMs: 60_000,
       intervalMs: INTERVAL_MS,
       schedule: () => () => {
         // Deliberately empty: nothing is scheduled and nothing to cancel.
@@ -468,10 +537,10 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     const refusalsBefore = env.refusedActionCount();
 
     // **The moment the holder goes away, chosen rather than waited for.** The
-    // lease was taken for the full TTL so that a loaded runner cannot lapse it
-    // before the endpoint has started and polled once -- which was the second
-    // half of continuo#150, and would have failed the assertion above with a
-    // refusal that proved nothing. Now that the poll has happened, the holder
+    // lease was taken for longer than this case may run so that a loaded
+    // runner cannot lapse it before the endpoint has started and polled once --
+    // which was the second half of continuo#150, and would have failed the
+    // assertion above with a refusal that proved nothing. Now that the poll has happened, the holder
     // re-states its own expiry to a window this case can afford to wait out.
     //
     // Still a holder that went away rather than one that released: `renew`
