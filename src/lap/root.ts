@@ -1721,6 +1721,9 @@ async function performLapHoldingTheEndpointLease(
   // cannot see the exception unwinding through it, and here the exception is
   // precisely what decides whether the teardown is allowed to run at all.
   let failure: unknown;
+  // Whether the child's terminal report is in hand, so the teardown can tell a
+  // child that has finished its turn from one that may still be working (D-1127).
+  let resultWritten = false;
   try {
     let walk: Promise<OrchestrationOutcome> | undefined;
     const spawn = materialized.spawner.execute(materialized.admission, () => {
@@ -1739,6 +1742,7 @@ async function performLapHoldingTheEndpointLease(
     // 5. The turn. Awaited out here, outside every transaction, because
     //    `transaction()` joins rather than nests and refuses an async body.
     const report = await awaitTerminalReport(reader, orchestration.sessionId, request.completion);
+    resultWritten = true;
 
     // 5a. **The renewal that says whether the lease survived the turn**, and it
     //     is by hand for the same reason the one above materialisation is.
@@ -1844,6 +1848,13 @@ async function performLapHoldingTheEndpointLease(
     //    is left to expire on its own, and nothing this lap does shortens the
     //    window the adopted endpoint already had.
     //
+    //    **Except a child that has already written its result** (D-1127). Its
+    //    turn is over, so a stop the provider did not confirm -- its SIGTERM
+    //    grace outrun under load -- is a child on its way out, not one still
+    //    writing, and abandoning would withhold this run's delivery resource
+    //    for a whole TTL for nothing. That lease is released. A stand-down is
+    //    not covered: there the child may belong to a takeover writer.
+    //
     //    **No `return` in this block, ever.** A `return` from a `finally`
     //    discards the exception unwinding through it, which on the refusal
     //    paths is the whole of what the operator was going to be told.
@@ -1852,12 +1863,13 @@ async function performLapHoldingTheEndpointLease(
         ? notThisLapsSession(connection, intent.runId, leaseResource, sessionId, heldEpoch)
         : "takeover_may_have_adopted";
       // The stop is attempted only for a session that is this lap's, and the
-      // lease is abandoned unless the stop reported success. `stopSession`
+      // lease is abandoned unless the stop reported success or the child had
+      // already written its result (D-1127). `stopSession`
       // still swallows the failure for the outcome's sake; what it now reports
       // is only whether there was one, because "the child may still be alive"
       // is exactly the question the lease has to be decided on.
       const stopped = standDown === null && (await stopSession(provider, sessionId));
-      if (!stopped) {
+      if (!stopped && !(resultWritten && standDown === null)) {
         hold.abandon();
       }
       // What was done about the session, for the refusal to say (D-1125).

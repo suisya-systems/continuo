@@ -355,6 +355,7 @@ describe("the endpoint's lease is held and renewed by its launcher (D-0072)", ()
 
     expect(scheduler.armed.every((tick) => tick.cancelled)).toBe(true);
     expect(deliveryRow(connection).expiresAtMs).toBeLessThanOrEqual(clock.ms);
+    expect(hold.releaseFailure).toBeNull();
     // The property the release is FOR: the next claimant does not wait a TTL.
     const next = acquire(connection, {
       resource: RUN_RESOURCE,
@@ -365,7 +366,7 @@ describe("the endpoint's lease is held and renewed by its launcher (D-0072)", ()
     expect(next.epoch).toBe(2);
   });
 
-  test("stop swallows a release the row refuses", () => {
+  test("stop records, and does not throw, a release the row refuses (D-1127)", () => {
     // The state a teardown actually meets: this holder stalled past its TTL and
     // somebody else took the resource. `release` refuses that with
     // `LeaseNotHeld`, and an exception out of a `finally` would REPLACE the
@@ -387,6 +388,9 @@ describe("the endpoint's lease is held and renewed by its launcher (D-0072)", ()
     expect(() => {
       hold.stop();
     }).not.toThrow();
+    // Recorded rather than dropped: a lease left live after a release is
+    // otherwise a fact nothing explains (continuo#253).
+    expect(hold.releaseFailure).toBeInstanceOf(LeaseNotHeld);
     // And the winner's lease is untouched: a swallowed release must also be a
     // release that did nothing, not one that shortened somebody else's row.
     expect(deliveryRow(connection).epoch).toBe(taken.epoch);
@@ -458,6 +462,19 @@ function loserThatMustNotStop(sessionId: string): LoserTerminated {
       stopAttempted: false,
     },
   );
+}
+
+/** Make every `provider.stop` answer a `Failure`: the stop is not confirmed. */
+function refuseStops(f: Fixture): void {
+  const refusingProvider = f.provider as ScriptedProvider & {
+    stop: (sessionId: string) => Promise<ProviderResult<unknown>>;
+  };
+  refusingProvider.stop = (sessionId: string) => {
+    f.provider.stopCalls.push(sessionId);
+    return Promise.resolve(
+      new Failure(FailureKind.BACKEND_UNREACHABLE, "the provider would not answer the stop"),
+    );
+  };
 }
 
 /** A finished turn with something to escalate. */
@@ -653,27 +670,40 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
     expect(row.epoch).toBe(1);
   });
 
-  test("a lap whose stop was not confirmed does NOT give the lease back either", async () => {
+  test("a lap whose stop was not confirmed before any result does NOT give the lease back", async () => {
     // The half a `LoserTerminated` does not cover. `provider.stop` may answer
     // with a `Failure` for a session that does exist, and the provider says in
-    // as many words that this does not prove the child is gone. A child that may
-    // be alive is a child whose endpoint may still be writing, so the lease is
-    // abandoned on the same reasoning.
+    // as many words that this does not prove the child is gone. A child that
+    // may be alive and has not written its result may still be writing through
+    // its endpoint, so the lease is abandoned on the same reasoning.
     const f = fixture("unconfirmed-stop-keeps-the-lease");
-    const refusingProvider = f.provider as ScriptedProvider & {
-      stop: (sessionId: string) => Promise<ProviderResult<unknown>>;
+    refuseStops(f);
+    const failingReader = {
+      readTerminalReport(): Promise<ProviderResult<LapTerminalReadout>> {
+        throw new Error("the transcript could not be read");
+      },
     };
-    refusingProvider.stop = (sessionId: string) => {
-      f.provider.stopCalls.push(sessionId);
-      return Promise.resolve(
-        new Failure(FailureKind.BACKEND_UNREACHABLE, "the provider would not answer the stop"),
-      );
-    };
+
+    await expect(performLap(f.connection, f.provider, failingReader, f.request)).rejects.toThrow(
+      "the transcript could not be read",
+    );
+
+    expect(f.provider.stopCalls).toEqual([SESSION_ID]);
+    expect(deliveryRow(f.connection).expiresAtMs).toBe(T0 + DELIVERY_LEASE_TTL_MS);
+  });
+
+  test("a lap whose child wrote its result gives the lease back even if the stop was not confirmed (D-1127)", async () => {
+    // continuo#253: under load the provider's SIGTERM grace can be outrun, so
+    // a stop that does not report success is not rare -- and abandoning there
+    // left both parallel laps' leases live after both exited 0. A child whose
+    // result is in hand has finished its turn, so the lease is released.
+    const f = fixture("unconfirmed-stop-after-result-releases");
+    refuseStops(f);
 
     await performLap(f.connection, f.provider, REPORTING_READER, f.request);
 
     expect(f.provider.stopCalls).toEqual([SESSION_ID]);
-    expect(deliveryRow(f.connection).expiresAtMs).toBe(T0 + DELIVERY_LEASE_TTL_MS);
+    expect(deliveryRow(f.connection).expiresAtMs).toBeLessThanOrEqual(T0 + 1);
   });
 
   test("a second lap OF THIS RUN is refused while the first holds its delivery lease", async () => {

@@ -235,6 +235,8 @@ export class HeldDeliveryLease {
   #cancel: (() => void) | null = null;
   /** The renewal failure that latched, or `null`. See the module docstring. */
   #failure: Error | null = null;
+  /** The refusal {@link stop}'s release met, or `null`. See {@link releaseFailure}. */
+  #releaseFailure: Error | null = null;
   /** Whether {@link stop} has run. Idempotent, and it disarms permanently. */
   #stopped = false;
 
@@ -286,6 +288,17 @@ export class HeldDeliveryLease {
   /** The renewal failure that latched, or `null` while the lease is held. */
   get failure(): Error | null {
     return this.#failure;
+  }
+
+  /**
+   * The refusal {@link stop}'s release met, or `null` (D-1127).
+   *
+   * Recorded rather than thrown, for the reason {@link stop} gives, and
+   * recorded rather than dropped, because a lease that stays live after a lap
+   * that released it is otherwise a fact nothing explains.
+   */
+  get releaseFailure(): Error | null {
+    return this.#releaseFailure;
   }
 
   /**
@@ -363,13 +376,14 @@ export class HeldDeliveryLease {
    * after this lap exits. `release` only ever shortens and is a legal no-op on
    * an already-expired row.
    *
-   * The refusal is swallowed for the reason `stopSession` swallows its own:
+   * The refusal is not thrown, for the reason `stopSession` does not throw its own:
    * this runs in a `finally`, and an exception thrown from there would
    * **replace** whatever the lap was returning or throwing. A teardown that
    * reported itself instead of the gate that was just opened is the one way
    * this call could do real harm. `release` refuses with `LeaseNotHeld` exactly
    * when somebody else now holds the row, which is a state a teardown meets and
-   * has nothing to do about.
+   * has nothing to do about -- so it is recorded on {@link releaseFailure}
+   * instead (D-1127).
    */
   stop(): void {
     if (this.#stopped) {
@@ -379,8 +393,8 @@ export class HeldDeliveryLease {
     this.#disarm();
     try {
       release(this.#connection, this.#lease, { nowMs: this.#nowMs() });
-    } catch {
-      // Deliberately empty. See above.
+    } catch (error) {
+      this.#releaseFailure = error instanceof Error ? error : new Error(String(error));
     }
   }
 
