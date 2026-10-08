@@ -39,8 +39,8 @@
  * Ten seconds still failed two of three loaded runs (continuo#188), and making
  * the number bigger again would only move the line. So a freeze long enough to
  * lapse the lease by design no longer fails the first case: the attempt is set
- * aside and made again in a fresh world, but only when this file's own timer
- * saw the freeze ({@link FROZEN_MS}). The second case no longer spends the TTL
+ * aside and made again in a fresh world, but only when the lease lapsed and
+ * this file's own timer saw the freeze ({@link FROZEN_MS}, D-1126). The second case no longer spends the TTL
  * on its child's start-up at all.
  */
 
@@ -51,7 +51,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, onTestFinished, test } from "vitest";
 
-import { acquire, readLease, renew } from "../../src/control_plane/lease.js";
+import { acquire, LeaseNotHeld, readLease, renew } from "../../src/control_plane/lease.js";
 import { holdDeliveryLease } from "../../src/lap/endpoint_lease.js";
 import { createTempDir } from "../helpers/tmp.js";
 import { type BusEnv, HOLDER, makeBusEnv, RECIPIENT, RESOURCE, RUN_ID } from "./_env.js";
@@ -100,8 +100,9 @@ const ACROSS_A_TTL_MS = TTL_MS + 1_000;
 const SAMPLE_MS = 250;
 
 /**
- * A freeze of the runner at least this long sets an attempt of the first case
- * aside rather than failing it -- and nothing shorter does (continuo#188).
+ * A freeze of the runner at least this long, in an attempt of the first case
+ * whose lease lapsed, sets that attempt aside rather than failing it -- and
+ * nothing shorter does (continuo#188, D-1126).
  *
  * The lease lapses by design once the renewal's timer is more than
  * `TTL_MS - INTERVAL_MS` late, so a run that froze that long proves nothing
@@ -439,7 +440,43 @@ async function pollAcrossATtl() {
   const advances = await sleepWatchingRenewals(env, ACROSS_A_TTL_MS);
   stalls.stop();
   const renewed = readLease(env.connection, RESOURCE);
-  return { client, hold, first, beforeWait, advances, renewed, worstStallMs: stalls.worstMs() };
+  // Read off the row rather than off `hold.failure`: a freeze that outlasts
+  // the wait can leave the expiry in the past before a late tick has latched.
+  const lapsed = (renewed?.expiresAtMs ?? 0) <= nowMs();
+  const second = await client.callTool("poll");
+  return {
+    hold,
+    first,
+    second,
+    beforeWait,
+    advances,
+    renewed,
+    lapsed,
+    worstStallMs: stalls.worstMs(),
+  };
+}
+
+/**
+ * What no freeze can explain, asserted on every attempt -- a set-aside one too.
+ *
+ * A lapsed lease explains a refused renewal and refused polls, and nothing
+ * else: not a wrong epoch, not a refusal of another kind, not a wrong message
+ * count. Those fail on the attempt they happen in, so setting an attempt aside
+ * never discards evidence a freeze did not cause.
+ */
+function expectNothingButALapse(run: Awaited<ReturnType<typeof pollAcrossATtl>>): void {
+  expect(run.hold.epoch).toBe(2);
+  expect(run.renewed?.epoch).toBe(run.hold.epoch);
+  for (const poll of [run.first, run.second]) {
+    if (poll.isError) {
+      expect(poll.text).toContain("StaleWriterRefused");
+    } else {
+      expect(JSON.parse(poll.text)["messages"]).toHaveLength(1);
+    }
+  }
+  if (run.hold.failure !== null) {
+    expect(run.hold.failure).toBeInstanceOf(LeaseNotHeld);
+  }
 }
 
 describe("a launcher holds the endpoint's lease for the endpoint's whole life", () => {
@@ -453,31 +490,30 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     // but never re-armed it fails just as loudly.
     requireBuiltEndpoint();
 
-    // A fresh world for an attempt whose runner froze for FROZEN_MS or more,
-    // and for no other reason -- said on stderr, so a run that needed one is
-    // visible rather than quietly green.
+    // A fresh world for an attempt whose lease lapsed while its runner froze
+    // for FROZEN_MS or more, and for no other reason (D-1126) -- said on
+    // stderr, so a run that needed one is visible rather than quietly green.
     let attempt = 1;
     let run = await pollAcrossATtl();
-    while (run.worstStallMs >= FROZEN_MS && attempt < ATTEMPTS) {
+    expectNothingButALapse(run);
+    while (run.lapsed && run.worstStallMs >= FROZEN_MS && attempt < ATTEMPTS) {
       process.stderr.write(
-        `endpoint-lease-renewal: attempt ${attempt} set aside, the runner froze for ` +
-          `${run.worstStallMs}ms (>= ${FROZEN_MS}ms can lapse the lease by design)\n`,
+        `endpoint-lease-renewal: attempt ${attempt} set aside, its lease lapsed while the ` +
+          `runner froze for ${run.worstStallMs}ms (>= ${FROZEN_MS}ms, D-1126)\n`,
       );
       attempt += 1;
       run = await pollAcrossATtl();
+      expectNothingButALapse(run);
     }
-    const { client, hold, first, beforeWait, advances, renewed } = run;
+    const { hold, first, second, beforeWait, advances, renewed } = run;
 
-    expect(hold.epoch).toBe(2);
     expect(first.isError, first.text).toBe(false);
-    expect(JSON.parse(first.text)["messages"]).toHaveLength(1);
 
     // The lease outlived the expiry it was taken with, and it did so without
     // changing epoch: the endpoint is writing under exactly the number it was
     // started with. Both halves are read out of SQL, because the row is what
     // the endpoint's own fenced writes are validated against.
     const diagnosis = renewalDiagnosis(advances, run.worstStallMs, hold.failure, attempt);
-    expect(renewed?.epoch).toBe(hold.epoch);
     expect(renewed?.expiresAtMs, diagnosis).toBeGreaterThan(beforeWait);
     // **Twice, not once.** A timer armed at construction and never re-armed
     // writes exactly one expiry -- `acquisition + INTERVAL_MS + TTL_MS`, which
@@ -488,11 +524,9 @@ describe("a launcher holds the endpoint's lease for the endpoint's whole life", 
     expect(advances, diagnosis).toBeGreaterThanOrEqual(2);
     expect(hold.failure, diagnosis).toBeNull();
 
-    const second = await client.callTool("poll");
-    expect(second.isError, second.text).toBe(false);
     // The same message, re-presented: the point is that the write behind the
     // poll was admitted, not that anything new arrived.
-    expect(JSON.parse(second.text)["messages"]).toHaveLength(1);
+    expect(second.isError, second.text).toBe(false);
     // Room for every attempt plus the freezes that set them aside: a timeout
     // that did not grow with the attempts would turn the very stall this case
     // retries into a timeout instead of a pass.

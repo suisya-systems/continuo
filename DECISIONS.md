@@ -228,6 +228,7 @@ spaces distinct.
 | D-1122 | `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag | accepted |
 | D-1123 | A turn `--turn-timeout-ms` stopped is refused as `LapTurnTimedOut`, carrying what the stopped CLI said it spent | accepted |
 | D-1125 | A `lap perform` refusal that names a session says what was done about it: `session_stop` with a confirmed, unconfirmed or not-attempted stop and the reason | accepted |
+| D-1126 | The endpoint lease renewal case sets an attempt aside only when its lease lapsed while its own timer saw the runner freeze; `retry: 0` stands | accepted |
 
 ---
 
@@ -18522,3 +18523,54 @@ or `unconfirmed`: the outcome would then claim more than happened.
 **Source.** Issue #201; rondo#24 (`docs/design/refusal-session-lock.md`); `D-0068`, `D-1102`,
 `D-1123`. Decision id `D-1125`, in the `D-11xx` shared cross-belt band opened by `D-1101`
 (`D-1124` is taken by a concurrent pending change).
+
+## D-1126 -- The endpoint lease renewal case sets an attempt aside only when its lease lapsed while its own timer saw the runner freeze; `retry: 0` stands
+
+**Context.** continuo#188. `test/messagebus/endpoint-lease-renewal.test.ts`'s first case failed two
+of three loaded `npm run verify` runs and passed alone at the same seed. The case spends real time
+on purpose: it proves the shipped timer drives the shipped renewal across more than one TTL, which
+no injected clock can show. Its tolerance is therefore the lease's own: a renewal more than
+`TTL - INTERVAL` late is refused and latches off for good (`D-0073`). Measured by stopping
+the vitest worker with SIGSTOP one second into the case: a 7s freeze passes, a 9s freeze fails with
+`LeaseNotHeld` and no renewal written. The renewal path did what it is specified to do; the case
+had no way to tell a frozen runner from a defect, so it reported both as a defect.
+
+**Decision.**
+
+1. **An attempt is set aside only when both hold**: the lease row's expiry is already past when
+   the wait ends (the lease lapsed), and the file's own stall watcher, a peer timer armed at the
+   renewal interval, was at least `TTL - 2 * INTERVAL` late (one interval is taken off because the
+   peer and the renewal can be up to one interval out of phase). The attempt is then made again in
+   a fresh world, up to three attempts, and each set-aside is written to stderr.
+2. **What a lapse cannot explain is asserted on every attempt, a set-aside one included**: the
+   epoch, a refusal of any kind other than `StaleWriterRefused`, a renewal failure other than
+   `LeaseNotHeld`, and the message count of any poll that succeeded.
+3. **`retry: 0` in `vitest.config.ts` stands.** A runner-level retry re-runs whatever failed; this
+   re-runs one case, for one measured cause, and fails on everything else. No other case may do
+   this without its own decision.
+4. The second case takes its lease for twice its timeout before shortening it to the window it
+   tests, so a slow endpoint start-up can no longer lapse it before the first poll. That removes a
+   wall-clock dependency rather than tolerating one, and needs no set-aside.
+
+**Alternatives.**
+
+- *A larger TTL again (rejected)*: continuo#150 already took this file's TTL from 2s to 10s, and
+  the wait has to exceed one TTL, so each step buys tolerance with running time and only moves
+  the line.
+- *Inject the clock (rejected)*: the sibling `test/lap/endpoint-lease.test.ts` already pins every
+  rule on an injected timer; this file exists for the claim only the shipped timer can make.
+- *`test(..., { retry })` (rejected)*: blind, and exactly what `retry: 0` forbids.
+
+**Consequences.** A loaded runner that freezes long enough to lapse the lease costs about twelve
+more seconds per set-aside instead of a red run. A timer armed once and never re-armed, or a
+renewal refused while the runner kept scheduling, fails on the first attempt (both checked by
+mutation). The stall watcher also counts its still-armed timer when stopped: a freeze that outlasted
+the wait used to be reported as 0ms.
+
+**Status.** accepted
+
+**Falsifier.** A defect that fails this case only on attempts whose runner froze for
+`TTL - 2 * INTERVAL` or more and whose lease lapsed: three set-asides in a row would then hide it.
+
+**Source.** Issue #188; continuo#150 (the 2s-to-10s sizing, #151); `D-0073`. Decision id `D-1126`, in the `D-11xx`
+shared cross-belt band opened by `D-1101`.

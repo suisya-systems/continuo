@@ -114,7 +114,8 @@ references that literal name and lives outside this repository's diff.
 **Double-green** means, within each required cell: the suite runs **twice, in two independent
 processes, at two distinct explicit seeds**, and both must pass (`D-0005`). Randomization lives in
 `vitest.config.ts`, never on a command line — a CLI flag can be dropped by an edit without turning
-anything red. `retry: 0` is not negotiable. Locally, run twice with different
+anything red. `retry: 0` is not negotiable (the one in-case set-aside, for one measured cause, is
+`D-1126`). Locally, run twice with different
 `CONTINUO_TEST_SEED` values to reproduce it; an unset seed is a hard error under `CI`, and the seed
 is printed on success either way.
 
