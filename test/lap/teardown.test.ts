@@ -48,6 +48,7 @@ import {
   type LapTerminalReadout,
   performLap,
   sessionMayBeStopped,
+  sessionStopOf,
 } from "../../src/lap/root.js";
 import { Ok, type ProviderResult } from "../../src/session/provider.js";
 import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
@@ -593,5 +594,88 @@ describe("D-0066: the orchestrator is given a live clock", () => {
       .prepare("SELECT occurred_at_ms FROM event WHERE event_type = :type")
       .get({ type: WORKSPACE_MATERIALIZED_EVENT_TYPE }) as { occurred_at_ms: number };
     expect(materialised.occurred_at_ms).toBe(T0);
+  });
+});
+
+describe("D-1125: the failure says what the teardown did about the session", () => {
+  /** The refusal `performLap` threw, for its side-table answer. */
+  async function refusalOf(f: Fixture, request: LapRequest = f.request): Promise<unknown> {
+    try {
+      await performLap(f.connection, f.provider, UNREACHED_READER, request);
+    } catch (error) {
+      return error;
+    }
+    throw new Error("performLap did not refuse");
+  }
+
+  test("a stop the provider reported successful is confirmed", async () => {
+    const f = fixture("stop-confirmed", () => {
+      throw new OrchestrationRefused("the provider would not start");
+    });
+    expect(sessionStopOf(await refusalOf(f))).toEqual({ outcome: "confirmed", reason: null });
+  });
+
+  test("a stop that did not report success is unconfirmed", async () => {
+    const f = fixture("stop-unconfirmed", () => {
+      throw new OrchestrationRefused("the provider would not start");
+    });
+    f.provider.stop = (): Promise<ProviderResult<never>> => {
+      throw new Error("the stop itself blew up");
+    };
+    expect(sessionStopOf(await refusalOf(f))).toEqual({ outcome: "unconfirmed", reason: null });
+  });
+
+  test("a loser that stood down says a takeover may have adopted the child", async () => {
+    const f = fixture("stop-stood-down", () => {
+      throw loserThatMustNotStop(SESSION_ID);
+    });
+    expect(sessionStopOf(await refusalOf(f))).toEqual({
+      outcome: "not_attempted",
+      reason: "takeover_may_have_adopted",
+    });
+    expect(f.provider.stopCalls).toEqual([]);
+  });
+
+  test("a lease another claimant took says so", async () => {
+    const f = fixture("stop-lease-taken", () => {
+      throw new OrchestrationRefused("unreachable: replaced below");
+    });
+    f.provider.onStart = () => {
+      acquire(f.connection, {
+        resource: `session-run:${RUN_ID}`,
+        holder: "someone-else",
+        nowMs: T0 + SLOW_MS,
+        ttlMs: 600_000,
+      });
+      throw new OrchestrationRefused("the walk stops, having lost the lease inside the spawn");
+    };
+    expect(sessionStopOf(await refusalOf(f))).toEqual({
+      outcome: "not_attempted",
+      reason: "lease_taken_over",
+    });
+  });
+
+  test("a loser that did stop reports its own stop even where the lap stood down", async () => {
+    // The orchestrator's stop is what was done; the lap's teardown standing
+    // down after the takeover must not turn it into "not attempted".
+    const f = fixture("stop-loser-did", () => {
+      throw new OrchestrationRefused("unreachable: replaced below");
+    });
+    f.provider.onStart = () => {
+      acquire(f.connection, {
+        resource: `session-run:${RUN_ID}`,
+        holder: "someone-else",
+        nowMs: T0 + SLOW_MS,
+        ttlMs: 600_000,
+      });
+      throw loserThatDidStop(SESSION_ID);
+    };
+    expect(sessionStopOf(await refusalOf(f))).toEqual({ outcome: "confirmed", reason: null });
+    expect(f.provider.stopCalls).toEqual([]);
+  });
+
+  test("an error performLap never tore down under has no answer", () => {
+    expect(sessionStopOf(new OrchestrationRefused("elsewhere"))).toBeUndefined();
+    expect(sessionStopOf(undefined)).toBeUndefined();
   });
 });

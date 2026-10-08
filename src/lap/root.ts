@@ -321,6 +321,50 @@ export class LapTurnTimedOut extends LapRefused {
   }
 }
 
+/**
+ * Why a lap left the session it names unstopped (D-1125).
+ *
+ * - `takeover_may_have_adopted`: `LoserTerminated.stopAttempted` is `false`; a
+ *   takeover writer confirmed the binding or is driving it, and a stop could
+ *   kill the worker it adopted.
+ * - `lease_taken_over`: the run's lease epoch moved after this lap took it, so
+ *   whatever runs under the session is the new holder's.
+ * - `not_bound`: this run never bound the session, or never held a lease.
+ */
+export type SessionStopNotAttemptedReason =
+  | "takeover_may_have_adopted"
+  | "lease_taken_over"
+  | "not_bound";
+
+/**
+ * What was done about the session a failed lap names (D-1125).
+ *
+ * `confirmed` is a stop the provider reported successful (its "no such
+ * session" included: there is no child of this lap's left); `unconfirmed` is a
+ * stop that was attempted and not reported successful, so the child may still
+ * be alive; `not_attempted` carries the {@link SessionStopNotAttemptedReason}.
+ * `reason` is `null` unless the stop was not attempted.
+ */
+export interface SessionStop {
+  readonly outcome: "confirmed" | "unconfirmed" | "not_attempted";
+  readonly reason: SessionStopNotAttemptedReason | null;
+}
+
+/** Keyed on the failure `performLap`'s teardown ran under. */
+const sessionStops = new WeakMap<Error, SessionStop>();
+
+/**
+ * What `performLap`'s teardown did about the session, for the failure it threw
+ * (D-1125), or `undefined` when no teardown ran under it -- the lap never
+ * minted a session, or the error did not come out of `performLap`.
+ *
+ * A side table rather than a field, because the failures it annotates are not
+ * all this module's classes: `LoserTerminated` is the orchestrator's.
+ */
+export function sessionStopOf(error: unknown): SessionStop | undefined {
+  return error instanceof Error ? sessionStops.get(error) : undefined;
+}
+
 /** A malformed argument to {@link performLap}. A defect in a caller. */
 export class LapUsageError extends Error {
   constructor(message: string) {
@@ -1804,17 +1848,21 @@ async function performLapHoldingTheEndpointLease(
     //    discards the exception unwinding through it, which on the refusal
     //    paths is the whole of what the operator was going to be told.
     if (sessionId !== null) {
-      const mine =
-        sessionMayBeStopped(failure) &&
-        stillThisLapsSession(connection, intent.runId, leaseResource, sessionId, heldEpoch);
+      const standDown: SessionStopNotAttemptedReason | null = sessionMayBeStopped(failure)
+        ? notThisLapsSession(connection, intent.runId, leaseResource, sessionId, heldEpoch)
+        : "takeover_may_have_adopted";
       // The stop is attempted only for a session that is this lap's, and the
       // lease is abandoned unless the stop reported success. `stopSession`
       // still swallows the failure for the outcome's sake; what it now reports
       // is only whether there was one, because "the child may still be alive"
       // is exactly the question the lease has to be decided on.
-      const stopped = mine && (await stopSession(provider, sessionId));
+      const stopped = standDown === null && (await stopSession(provider, sessionId));
       if (!stopped) {
         hold.abandon();
+      }
+      // What was done about the session, for the refusal to say (D-1125).
+      if (failure instanceof Error) {
+        sessionStops.set(failure, sessionStopAfter(failure, standDown, stopped));
       }
       // A turn the ceiling stopped wrote its `result` event as the stop's
       // `SIGTERM` reached it, after the refusal was raised (D-1123). Read once,
@@ -1891,21 +1939,49 @@ export function sessionMayBeStopped(failure: unknown): boolean {
  *
  * `heldEpoch` of `null` means the walk never reached a lease, so there is
  * nothing this lap can claim to own.
+ *
+ * Answers `null` when the session is this lap's, and otherwise why it is not
+ * (D-1125): the refusal says which.
  */
-function stillThisLapsSession(
+function notThisLapsSession(
   connection: SqliteDatabase,
   runId: string,
   leaseResource: string,
   sessionId: string,
   heldEpoch: number | null,
-): boolean {
+): SessionStopNotAttemptedReason | null {
   if (heldEpoch === null) {
-    return false;
+    return "not_bound";
   }
   if (activeBinding(connection, runId)?.sessionId !== sessionId) {
-    return false;
+    return "not_bound";
   }
-  return readLease(connection, leaseResource)?.epoch === heldEpoch;
+  return readLease(connection, leaseResource)?.epoch === heldEpoch ? null : "lease_taken_over";
+}
+
+/**
+ * The teardown's own decision, folded with the orchestrator's (D-1125).
+ *
+ * A `LoserTerminated` that did attempt its stop has already acted on the
+ * session, and the lap's teardown usually stands down after it (the takeover
+ * that made it a loser moved the epoch). That stop is what was done, so its
+ * answer counts: confirmed if either stop was.
+ */
+function sessionStopAfter(
+  failure: Error,
+  standDown: SessionStopNotAttemptedReason | null,
+  stopped: boolean,
+): SessionStop {
+  if (failure instanceof LoserTerminated && failure.stopAttempted) {
+    return {
+      outcome: stopped || failure.stopConfirmed ? "confirmed" : "unconfirmed",
+      reason: null,
+    };
+  }
+  if (standDown !== null) {
+    return { outcome: "not_attempted", reason: standDown };
+  }
+  return { outcome: stopped ? "confirmed" : "unconfirmed", reason: null };
 }
 
 /**
