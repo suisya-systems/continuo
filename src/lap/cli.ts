@@ -392,7 +392,7 @@ function unixSocketRefusal(code: string | null): LapRefused | undefined {
  * Counted in code points rather than UTF-16 units so a cut never splits a
  * surrogate pair into two halves no decoder will accept.
  */
-function commandDocument(command: TurnCommandFact): { readonly [key: string]: JsonValue } {
+export function commandDocument(command: TurnCommandFact): { readonly [key: string]: JsonValue } {
   const points = Array.from(command.output);
   const half = COMMAND_OUTPUT_LIMIT / 2;
   const omitted = Math.max(0, points.length - COMMAND_OUTPUT_LIMIT);

@@ -379,6 +379,8 @@ describe("continuo run show --json", () => {
         observation_reason: "binding committed; spawn not yet attempted",
         bound_at_ms: T1,
         released_at_ms: null,
+        // No --state-root, so the turn cannot be said (D-1124).
+        turn: null,
       },
     ]);
     expect(document["gates"]).toStrictEqual([
