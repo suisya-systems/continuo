@@ -99,9 +99,11 @@ export {
   CLI_VERSION_WRITTEN_AGAINST,
   ClaudeCliSessionProvider,
   type ClaudeCliSessionProviderOptions,
+  type LiveTurn,
 } from "./claude_cli_provider.js";
 export {
   createDefaultSessionProvider,
+  readLiveSessionTurn,
   type SessionProviderKind,
   sessionProviderName,
 } from "./default_provider.js";

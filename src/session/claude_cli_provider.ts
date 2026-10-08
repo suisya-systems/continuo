@@ -925,6 +925,65 @@ interface ParsedEvents {
   readonly garbage: string | null;
 }
 
+/**
+ * The complete lines of a captured transcript, parsed: the rule
+ * `#parseEvents` reads by, as a function a reader without a provider instance
+ * can share ({@link readLiveTurn}).
+ */
+function parseEventLines(raw: Buffer, sessionId: string): ParsedEvents {
+  // `raw.rpartition(b"\n")`: everything up to the last newline is complete,
+  // and a trailing fragment is discarded rather than parsed.
+  const lastNewline = raw.lastIndexOf(0x0a);
+  if (lastNewline === -1) {
+    return { events: [], lineNumbers: [], garbage: null };
+  }
+  const body = raw.subarray(0, lastNewline);
+
+  const events: Record<string, unknown>[] = [];
+  const lineNumbers: number[] = [];
+  let garbage: string | null = null;
+  let lineNumber = 0;
+  let start = 0;
+  // `body.split(b"\n")` -- and the count includes **every** line, blank ones
+  // among them, because the number in the garbage message is 1-based over
+  // that split.
+  for (let cursor = 0; cursor <= body.length; cursor += 1) {
+    if (cursor !== body.length && body[cursor] !== 0x0a) {
+      continue;
+    }
+    const line = body.subarray(start, cursor);
+    start = cursor + 1;
+    lineNumber += 1;
+    if (isBlankLine(line)) {
+      continue;
+    }
+    let event: unknown;
+    try {
+      // Decoded **fatally**, as `line.decode("utf-8")` is: Node's `"utf8"`
+      // substitutes U+FFFD silently, which would turn an undecodable line
+      // into a JSON parse of replacement characters and remove the
+      // `UnicodeDecodeError` branch the source has.
+      event = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(line));
+    } catch {
+      // Overwritten by each later bad line: only the LAST one survives, as
+      // the source's single `garbage` variable does.
+      garbage =
+        `line ${String(lineNumber)} of session ${pyRepr(sessionId)}'s ` +
+        `captured output is complete but is not JSON: ${pyBytesRepr(line.subarray(0, 200))}`;
+      continue;
+    }
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      garbage =
+        `line ${String(lineNumber)} of session ${pyRepr(sessionId)}'s ` +
+        `captured output is JSON but not an object: ${pyBytesRepr(line.subarray(0, 200))}`;
+      continue;
+    }
+    events.push(event as Record<string, unknown>);
+    lineNumbers.push(lineNumber);
+  }
+  return { events, lineNumbers, garbage };
+}
+
 // --------------------------------------------------------------------------
 // the three rules a transcript is read by, as functions rather than as prose
 // --------------------------------------------------------------------------
@@ -1245,6 +1304,63 @@ function resultTextOf(content: unknown): string {
     })
     .filter((text) => text !== "")
     .join("\n");
+}
+
+/**
+ * What a turn that may still be running has done so far (continuo D-1124).
+ *
+ * `partialLine` is whether the transcript ends in a fragment without its
+ * newline: a line the child is still writing, which is read as "not arrived
+ * yet" and not parsed, exactly as {@link parseEventLines} reads it.
+ */
+export interface LiveTurn {
+  readonly generation: number;
+  readonly commands: readonly TurnCommand[];
+  readonly partialLine: boolean;
+}
+
+/**
+ * The current generation's tool calls, read from a session directory under
+ * `stateRoot` without a provider instance (continuo D-1124).
+ *
+ * For `run show`, which runs beside a lap rather than inside it: a provider
+ * answers only for a session it started or adopted, and adopting a running
+ * lap's session is not a read. This reads the record for the generation and
+ * the transcript for the commands, by the same rules the lap's own reads use,
+ * and writes nothing.
+ *
+ * `null` when it cannot say: a session id that is not one path component, or
+ * a record that is absent or unreadable. The identity read-back is not done:
+ * this is a display of what ran, not a report a gate is opened over.
+ */
+export function readLiveTurn(stateRoot: string, sessionId: string): LiveTurn | null {
+  if (!isOnePathComponent(sessionId)) {
+    return null;
+  }
+  const directory = join(stateRoot, sessionId);
+  let record: SessionRecord;
+  try {
+    const bytes = readFileSync(join(directory, RECORD_NAME));
+    record = recordFromJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return null;
+  }
+  let raw: Buffer;
+  try {
+    raw = readFileSync(join(directory, `events-${paddedGeneration(record.generation)}.jsonl`));
+  } catch (exc) {
+    if (!(isSystemError(exc) && exc.code === "ENOENT")) {
+      return null;
+    }
+    // Recorded, not yet spawned: a turn that has run nothing.
+    raw = Buffer.alloc(0);
+  }
+  const { events, lineNumbers } = parseEventLines(raw, sessionId);
+  return Object.freeze({
+    generation: record.generation,
+    commands: turnCommandsOf(events, lineNumbers),
+    partialLine: raw.length > 0 && raw[raw.length - 1] !== 0x0a,
+  });
 }
 
 /**
@@ -3114,57 +3230,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         { errno: errnoOf(exc) },
       );
     }
-    // `raw.rpartition(b"\n")`: everything up to the last newline is complete,
-    // and a trailing fragment is discarded rather than parsed.
-    const lastNewline = raw.lastIndexOf(0x0a);
-    if (lastNewline === -1) {
-      return { events: [], lineNumbers: [], garbage: null };
-    }
-    const body = raw.subarray(0, lastNewline);
-
-    const events: Record<string, unknown>[] = [];
-    const lineNumbers: number[] = [];
-    let garbage: string | null = null;
-    let lineNumber = 0;
-    let start = 0;
-    // `body.split(b"\n")` -- and the count includes **every** line, blank ones
-    // among them, because the number in the garbage message is 1-based over
-    // that split.
-    for (let cursor = 0; cursor <= body.length; cursor += 1) {
-      if (cursor !== body.length && body[cursor] !== 0x0a) {
-        continue;
-      }
-      const line = body.subarray(start, cursor);
-      start = cursor + 1;
-      lineNumber += 1;
-      if (isBlankLine(line)) {
-        continue;
-      }
-      let event: unknown;
-      try {
-        // Decoded **fatally**, as `line.decode("utf-8")` is: Node's `"utf8"`
-        // substitutes U+FFFD silently, which would turn an undecodable line
-        // into a JSON parse of replacement characters and remove the
-        // `UnicodeDecodeError` branch the source has.
-        event = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(line));
-      } catch {
-        // Overwritten by each later bad line: only the LAST one survives, as
-        // the source's single `garbage` variable does.
-        garbage =
-          `line ${String(lineNumber)} of session ${pyRepr(record.session_id)}'s ` +
-          `captured output is complete but is not JSON: ${pyBytesRepr(line.subarray(0, 200))}`;
-        continue;
-      }
-      if (typeof event !== "object" || event === null || Array.isArray(event)) {
-        garbage =
-          `line ${String(lineNumber)} of session ${pyRepr(record.session_id)}'s ` +
-          `captured output is JSON but not an object: ${pyBytesRepr(line.subarray(0, 200))}`;
-        continue;
-      }
-      events.push(event as Record<string, unknown>);
-      lineNumbers.push(lineNumber);
-    }
-    return { events, lineNumbers, garbage };
+    return parseEventLines(raw, record.session_id);
   }
 
   /** `Popen.poll()` for a child of ours, and `None` for an orphan. */

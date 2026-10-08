@@ -226,6 +226,7 @@ spaces distinct.
 | D-1120 | A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire | accepted |
 | D-1121 | A gate answer made under delegation is recorded as delegated: actor kind `delegate`, naming the person and the approval it rests on, and only a `worker_escalation` gate accepts one | accepted |
 | D-1122 | `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag | accepted |
+| D-1124 | `run show --state-root` carries each unreleased session's turn so far, in `lap perform`'s `commands` shape, so a host does not compute the state-root layout | accepted |
 
 ---
 
@@ -18417,3 +18418,59 @@ should escalate; either reopens rule 4.
 **Source.** Issue #241; the raw-CLI measurement and the real lap above, both on 2026-09-27;
 `D-0099`, `D-1112`, `D-1114`. Decision id `D-1122`, in the `D-11xx` shared cross-belt band opened by
 `D-1101` (`D-1121` is taken by continuo#240's pending change).
+
+---
+
+## D-1124 -- `run show --state-root` carries each unreleased session's turn so far, in `lap perform`'s `commands` shape, so a host does not compute the state-root layout
+
+**Context.** rondo's live lap page (rondo#248) reads a lap that is still running. It computes
+`<state root>/<run id>/<session id>/`, reads `record.json` for the generation and parses
+`events-NNN.jsonl` itself, so rondo still carries this provider's layout and its `stream-json`
+shape. `D-1112` moved the finished-lap half into `lap perform --json`, and left this half to
+`run show` because `lap perform` returns only after the turn has ended.
+
+**Decision.**
+
+1. **`run show` takes an optional `--state-root`**, the same parent `lap perform` was given. The
+   verb derives the lap's state root with `lapStateRoot`, so the layout under it stays continuo's.
+   The database records no state root, so the host names the parent; it already chose it.
+2. **Each session in the `--json` document gains `turn`**, always present: `null`, or
+   `{generation, commands, partial_line}`. `commands` is `lap perform`'s list, each output capped
+   by the same `commandDocument` (`D-1112` rule 3). A call whose result has not arrived has `output`
+   `""`, as in `D-1112`. `partial_line` is `true` when the transcript ends in a fragment without
+   its newline: a line still being written, which is not parsed.
+3. **`turn` is `null` when continuo cannot say**: no `--state-root`, a released session (its turn
+   is not running), a record that is absent or unreadable, a run id `lapStateRoot` refuses, or a
+   provider other than `claude-cli`. `run show` never refuses for a reason of this field
+   (`D-0096`: drawing a pane must not be a thing that can fail).
+4. **The read lives in `src/session/`** (`readLiveTurn` beside the Claude provider, sharing its
+   line parser and `turnCommandsOf`; `readLiveSessionTurn` dispatching on the binding's provider
+   name). `run_cli.ts` reaches it through `src/index.ts`, as `src/lap/cli.ts` reaches the provider
+   (`D-0059`), so a provider swap does not edit the control plane.
+5. **No identity read-back.** The live read does not check the transcript against the record's
+   identity, as `readTerminalReport` does: it displays what ran, and no gate is opened over it.
+
+**Alternatives.**
+
+- *Carry only the transcript path (rejected)*, for `D-1112`'s reason: the `stream-json` shape
+  would stay in the host.
+- *Record the state root in the database at `lap perform` (rejected)*: a schema change for a value
+  the host already holds.
+- *Construct a provider in `run show` and ask it (rejected)*: a provider answers only for a
+  session it started or adopted, and adopting a running lap's session is a supervisor's act, not a
+  read's. The read needs the files and the parsing rules, and nothing else.
+
+**Consequences.** rondo#248 can drop its layout and transcript parser for Claude laps by passing
+its `--state-root` to `run show --json`. The human rendering is unchanged. A Codex session's
+`turn` is `null`: its calls are read from a rollout under the session's CODEX_HOME, and a live read
+of that is not built.
+
+**Status.** accepted
+
+**Falsifier.** rondo#248 still has to read continuo's layout for a running Claude lap after this
+lands. A host that needs a Codex lap's live calls reopens rule 3.
+
+**Source.** Issue #218; rondo placement audit 2026-09-22 (its fourth item,
+`src/continuo/transcript.ts`); `D-1112` (the finished-lap half), `D-1105` (the derived state root),
+`D-0096` (the read surface), `D-0059` (the barrel route). Decision id `D-1124`, in the `D-11xx`
+shared cross-belt band opened by `D-1101` (`D-1123` is taken by a pending change).

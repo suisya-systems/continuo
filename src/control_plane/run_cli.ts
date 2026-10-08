@@ -113,6 +113,11 @@ import {
 } from "../cli/json_output.js";
 import type { Namespace, Subparsers } from "../cli/parser.js";
 import { ArgparseExit, type ArgumentParser } from "../cli/parser.js";
+// Through the barrel, as `src/lap/cli.ts` reaches the provider (D-0059): the
+// live read is named provider-neutrally and dispatched in `src/session/`, so a
+// provider swap does not edit this file. `--state-root`'s layout is the lap's.
+import { type LiveTurn, lapStateRoot, readLiveSessionTurn } from "../index.js";
+import { commandDocument } from "../lap/cli.js";
 import { DelegationRecord } from "./delegation_record.js";
 import { LapRunIntent } from "./lap_run_intent.js";
 import { LeaseRefusal } from "./lease.js";
@@ -197,6 +202,44 @@ const ADMIT_DESCRIPTION =
   "run-id already on the table rather than re-admitting it, and exits 2 with " +
   "the reason when it refuses.";
 
+/**
+ * A session's turn so far, in `lap perform`'s `commands` shape and cap
+ * (D-1112), or `null` when it cannot be said (D-1124).
+ */
+function turnDocument(turn: LiveTurn | null): JsonValue {
+  return turn === null
+    ? null
+    : {
+        generation: turn.generation,
+        commands: turn.commands.map(commandDocument),
+        partial_line: turn.partialLine,
+      };
+}
+
+/**
+ * The live turn reader for one `run show` (D-1124): `null` for every session
+ * without `--state-root`, and for a released one, whose turn is not running.
+ *
+ * A run id `lapStateRoot` refuses could never have run a lap, so there is no
+ * transcript to name and the answer is `null` rather than a refusal: drawing a
+ * pane must not be a thing that can fail (D-0096).
+ */
+function liveTurnReader(
+  stateRootParent: string | undefined,
+  runId: string,
+): (session: RunView["sessions"][number]) => LiveTurn | null {
+  let stateRoot: string | undefined;
+  try {
+    stateRoot = stateRootParent === undefined ? undefined : lapStateRoot(stateRootParent, runId);
+  } catch {
+    stateRoot = undefined;
+  }
+  return (session) =>
+    stateRoot === undefined || session.releasedAtMs !== null
+      ? null
+      : readLiveSessionTurn(stateRoot, session.sessionId, session.provider);
+}
+
 const CLOSE_RUN_ID_HELP =
   "the run to close. It must already be admitted and must not already be at a " +
   "terminal status: which terminal status a run reached is a fact, and a wrong " +
@@ -218,6 +261,13 @@ const SHOW_RUN_ID_HELP =
   "the run to read. It must already be admitted: a run-id naming no run is " +
   "refused with the reason, never answered with an empty document, because " +
   "an empty answer cannot be told from a run that has done nothing yet.";
+
+const SHOW_STATE_ROOT_HELP =
+  "the --state-root the run's laps were performed with. Given, each unreleased " +
+  "session carries its turn so far as 'turn' under --json: the tool calls in " +
+  "lap perform's 'commands' shape and whether the transcript ends in a line " +
+  "still being written. Omitted, or for a session this build cannot read, " +
+  "'turn' is null. Read only; nothing under it is written.";
 
 const SHOW_DESCRIPTION =
   "Show one run: its row, the run lease, its session bindings, its open " +
@@ -726,7 +776,10 @@ function quoted(value: string | null): string {
  * on this build's JSON renderer rather than on the value that was stored, which
  * is the same argument `D-0090` makes for not borrowing `pyJsonDumps`.
  */
-function showPayload(view: RunView): { readonly [key: string]: JsonValue } {
+function showPayload(
+  view: RunView,
+  turnOf: (session: RunView["sessions"][number]) => LiveTurn | null,
+): { readonly [key: string]: JsonValue } {
   return {
     run: {
       run_id: view.run.runId,
@@ -774,6 +827,7 @@ function showPayload(view: RunView): { readonly [key: string]: JsonValue } {
       observation_reason: session.observationReason,
       bound_at_ms: session.boundAtMs,
       released_at_ms: session.releasedAtMs,
+      turn: turnDocument(turnOf(session)),
     })),
     gates: view.gates.map((gate) => ({
       gate_id: gate.gateId,
@@ -893,6 +947,7 @@ function writeRunView(view: RunView, path: string): number {
 export function cmdRunShow(args: Namespace): number {
   const path = String(args["db"]);
   const runId = String(args["run_id"]);
+  const stateRoot = args["state_root"];
   const json = jsonRequested(args);
 
   try {
@@ -900,7 +955,8 @@ export function cmdRunShow(args: Namespace): number {
     try {
       const view = runView(connection, runId);
       if (json) {
-        runCliSeams.write(successLine(SHOW_SCHEMA, path, showPayload(view)));
+        const turnOf = liveTurnReader(typeof stateRoot === "string" ? stateRoot : undefined, runId);
+        runCliSeams.write(successLine(SHOW_SCHEMA, path, showPayload(view, turnOf)));
         return 0;
       }
       return writeRunView(view, path);
@@ -1035,7 +1091,7 @@ export function addSubparsers(sub: Subparsers): void {
   addJsonArgument(close);
   close.setDefaults({ func: cmdRunClose });
 
-  // `show` takes exactly two arguments and no clock: it is a read, so there is
+  // `show` takes two required arguments and no clock: it is a read, so there is
   // nothing to stamp and nothing to fence.
   const show = sub.addParser("show", SHOW_DESCRIPTION);
   addDbArgument(show);
@@ -1045,6 +1101,12 @@ export function addSubparsers(sub: Subparsers): void {
     required: true,
     metavar: "RUN_ID",
     help: SHOW_RUN_ID_HELP,
+  });
+  show.addArgument({
+    optionStrings: ["--state-root"],
+    dest: "state_root",
+    metavar: "STATE_ROOT",
+    help: SHOW_STATE_ROOT_HELP,
   });
   addJsonArgument(show);
   show.setDefaults({ func: cmdRunShow });

@@ -1,5 +1,5 @@
 import type { ClaudeCliSessionProviderOptions } from "./claude_cli_provider.js";
-import { ClaudeCliSessionProvider } from "./claude_cli_provider.js";
+import { ClaudeCliSessionProvider, type LiveTurn, readLiveTurn } from "./claude_cli_provider.js";
 import { CodexCliSessionProvider } from "./codex_cli_provider.js";
 
 /**
@@ -22,6 +22,22 @@ export type SessionProviderKind = "claude" | "codex";
  */
 export function sessionProviderName(kind: SessionProviderKind): string {
   return kind === "codex" ? "codex-cli" : "claude-cli";
+}
+
+/**
+ * A running turn's tool calls so far, for the session a binding row names
+ * (continuo D-1124), or `null` when this package cannot say.
+ *
+ * Dispatched on `session_binding.provider`, the name {@link sessionProviderName}
+ * wrote. A Codex session answers `null`: its calls are read from a rollout
+ * under the session's CODEX_HOME, and a live read of that is not built.
+ */
+export function readLiveSessionTurn(
+  stateRoot: string,
+  sessionId: string,
+  providerName: string,
+): LiveTurn | null {
+  return providerName === sessionProviderName("claude") ? readLiveTurn(stateRoot, sessionId) : null;
 }
 
 /**
