@@ -194,6 +194,11 @@ node "$CLI" lap perform \
 > `LapTurnTimedOut` and, under `--json`, `total_cost_usd`: what the CLI wrote when the stop's
 > `SIGTERM` reached it, or `null` when it wrote nothing.
 
+> **Since `D-1125` a refusal naming a session says what was done about it.** Under `--json`,
+> `session_stop` sits beside `session_id`: `{"outcome":"confirmed","reason":null}` for a stop the
+> provider reported, `unconfirmed` for one it did not (the child may still be running), and
+> `not_attempted` with a `reason` (`takeover_may_have_adopted`, `lease_taken_over`, `not_bound`).
+
 Measured wall clock, each including one full worker turn: 52 s, 17 s, 32 s over the three laps.
 
 The command materialises the workspace, renders the fence, spawns the worker, waits for the turn's

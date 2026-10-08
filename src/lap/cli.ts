@@ -63,6 +63,12 @@
  * (rondo `D-0015` rule 7), even though the sentence there quotes the id: the message
  * is written for a person and is free to be reworded.
  *
+ * **Beside it, what was done about that session** (`D-1125`): `session_stop`,
+ * `{"outcome": "confirmed" | "unconfirmed" | "not_attempted", "reason": ...}`,
+ * where `reason` names why a stop was not attempted and is `null` otherwise. A
+ * host deciding about its own concurrency reads whether the child may still be
+ * running off this, not off process mechanics.
+ *
  * **The whole report is one document, and this verb is the one where that is a
  * claim worth making.** `report()` writes a success line plus up to two
  * conditional `note:` lines, and it writes all of them after the lap is over --
@@ -131,6 +137,7 @@ import {
   lapStateRoot,
   performLap,
   requireModel,
+  sessionStopOf,
   type TurnCommandFact,
 } from "./root.js";
 
@@ -489,7 +496,8 @@ function refuse(error: Error, db: string, json: boolean): never {
 
 /**
  * The structured facts this verb's refusal document carries beside the class
- * and the message -- today exactly one, the session (`D-1102`).
+ * and the message: the session (`D-1102`), what the teardown did about it
+ * (`D-1125`), and what a stopped turn spent (`D-1122`, `D-1123`).
  *
  * **The rule is about the state the lap reached, not about the shape of a
  * class.** A refusal names a session here only where the lap already held a
@@ -522,14 +530,13 @@ function refuse(error: Error, db: string, json: boolean): never {
  * "read the message for it".
  */
 function refusalMetadata(error: Error): RefusalMetadata {
+  // What the teardown did about that session rides beside it (D-1125).
+  const sessionStop = sessionStopOf(error);
   if (error instanceof LapBudgetExhausted || error instanceof LapTurnTimedOut) {
-    return { sessionId: error.sessionId, totalCostUsd: error.totalCostUsd };
+    return { sessionId: error.sessionId, sessionStop, totalCostUsd: error.totalCostUsd };
   }
-  if (error instanceof LoserTerminated) {
-    return { sessionId: error.sessionId };
-  }
-  if (error instanceof LapRefused) {
-    return { sessionId: error.sessionId };
+  if (error instanceof LoserTerminated || error instanceof LapRefused) {
+    return { sessionId: error.sessionId, sessionStop };
   }
   return {};
 }

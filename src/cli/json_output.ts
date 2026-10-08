@@ -247,6 +247,13 @@ export interface RefusalMetadata {
    * refusal.
    */
   readonly totalCostUsd?: number | null | undefined;
+  /**
+   * What the verb did about the session {@link sessionId} names (continuo
+   * D-1125): `outcome` is `confirmed`, `unconfirmed` or `not_attempted`, and
+   * `reason` says why for `not_attempted` and is `null` otherwise. Shipped only
+   * beside a `session_id`; absent means the verb did not say.
+   */
+  readonly sessionStop?: { readonly outcome: string; readonly reason: string | null } | undefined;
 }
 
 /**
@@ -287,11 +294,16 @@ export function refusalLine(
   metadata: RefusalMetadata = {},
 ): string {
   const sessionId = metadata.sessionId;
+  const named = sessionId !== undefined && sessionId !== "";
+  const stop = metadata.sessionStop;
   return asciiJsonLine({
     schema,
     ok: false,
     db,
-    ...(sessionId === undefined || sessionId === "" ? {} : { session_id: sessionId }),
+    ...(named ? { session_id: sessionId } : {}),
+    ...(named && stop !== undefined
+      ? { session_stop: { outcome: stop.outcome, reason: stop.reason } }
+      : {}),
     ...(metadata.totalCostUsd === undefined ? {} : { total_cost_usd: metadata.totalCostUsd }),
     error: { class: error.name, message: error.message },
   });
