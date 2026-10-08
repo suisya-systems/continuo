@@ -230,6 +230,7 @@ spaces distinct.
 | D-1124 | `run show --state-root` carries each unreleased session's turn so far, in `lap perform`'s `commands` shape, so a host does not compute the state-root layout | accepted |
 | D-1125 | A `lap perform` refusal that names a session says what was done about it: `session_stop` with a confirmed, unconfirmed or not-attempted stop and the reason | accepted |
 | D-1126 | The endpoint lease renewal case sets an attempt aside only when its lease lapsed while its own timer saw the runner freeze; `retry: 0` stands | accepted |
+| D-1127 | A lap whose child already wrote its result releases its delivery lease even when the session stop is not confirmed; a refused release is recorded | accepted |
 
 ---
 
@@ -12387,6 +12388,9 @@ the window it already had, and nothing this lap does shortens it. Everywhere els
 ever minted, or the stop reported success -- the lease is released, because leaving a global resource
 standing for a minute after a lap that is provably over is pure cost.
 
+> **Amended by `D-1127`:** an unconfirmed stop of a child that has already written its result now
+> releases the lease too. The stand-down case and an unconfirmed stop before any result still abandon.
+
 **The 60 seconds is the number most likely to be wrong, and it is wrong in a visible direction.** It
 is not sized to cover the worst synchronous materialisation, and cannot be: several git commands run
 in sequence and each carries its own bound. What covers that is the by-hand renewal above. If laps on
@@ -18633,3 +18637,42 @@ the wait used to be reported as 0ms.
 
 **Source.** Issue #188; continuo#150 (the 2s-to-10s sizing, #151); `D-0073`. Decision id `D-1126`, in the `D-11xx`
 shared cross-belt band opened by `D-1101`.
+
+## D-1127 -- A lap whose child already wrote its result releases its delivery lease even when the session stop is not confirmed; a refused release is recorded
+
+**Context.** continuo#253. `test/lap/parallel-laps.test.ts` failed once under loaded `npm run verify`:
+both laps exited 0 and both delivery leases were still live. `D-0073` abandons the lease whenever the
+teardown's stop is not reported successful, and the provider's 5s SIGTERM grace can be outrun under
+load, so a lap that had finished its turn left its run's delivery resource withheld for a whole TTL.
+`HeldDeliveryLease.stop()` also swallowed a refused release, so nothing recorded why a lease that was
+released stayed live.
+
+**Decision.** Owner decision on continuo#253.
+
+1. **A lap whose child has written its result releases its delivery lease**, even when the stop is
+   unconfirmed. "Written" is `awaitTerminalReport` having returned: the turn is over, so the child is
+   on its way out rather than still writing through its endpoint.
+2. **Everything else keeps `D-0073`'s abandon path**: an unconfirmed stop before any result, and
+   every stand-down (`takeover_may_have_adopted`, `lease_taken_over`, `not_bound`), where the child
+   may belong to a takeover writer and a release would fence its endpoint out.
+3. **`HeldDeliveryLease.stop()` records a refused release on `releaseFailure`** and still never
+   throws, because it runs in a `finally` and a throw would replace the lap's outcome.
+
+**Alternatives.**
+
+- *Release on every unconfirmed stop (rejected)*: a child that has not written its result may still
+  be writing, which is the harm `D-0073` abandons to avoid.
+- *Extend the stop's grace (rejected)*: it moves the threshold under load rather than removing it.
+- *Throw the release failure (rejected)*: it would replace the lap's outcome from a `finally`.
+
+**Consequences.** After a finished turn the run's delivery resource is free for its next lap and for
+`gate deliver --run-id` as soon as the lap exits. `releaseFailure` is recorded on the hold and not yet
+carried on `LapOutcome` or the CLI.
+
+**Status.** accepted
+
+**Falsifier.** A child that keeps writing through its endpoint after its terminal report: releasing
+would then fence out live writes.
+
+**Source.** Issue #253; `D-0073`, `D-1125`. Decision id `D-1127`, in the `D-11xx` shared cross-belt
+band opened by `D-1101`.
