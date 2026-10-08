@@ -1324,6 +1324,13 @@ export interface NoTerminalReport {
    * tripped" from "the worker said nothing" without parsing `reason`.
    */
   readonly budgetStop?: { readonly totalCostUsd: number | null };
+  /**
+   * What the turn spent, off its `result` event, on every no-report built
+   * from one -- including the line a turn writes as the stop's `SIGTERM`
+   * reaches it, and a budget stop the stop raced (continuo D-1123). Absent
+   * while no `result` event exists.
+   */
+  readonly spend?: TurnSpend;
 }
 
 /**
@@ -3615,6 +3622,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             `--max-budget-usd cap (subtype ${BUDGET_STOP_SUBTYPE}) after spending ` +
             `${spent === null ? "an unreported amount" : `$${String(spent)}`}`,
           budgetStop: { totalCostUsd: spent },
+          spend: facts.spend,
         });
       }
       const body = facts.body;
@@ -3627,6 +3635,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           reason:
             `the result event of session ${pyRepr(record.session_id)} carries no ` +
             `report: its 'result' field is ${pyRepr(noneOf(body))}`,
+          spend: facts.spend,
         });
       }
       if (pyStrip(body) === "") {
@@ -3639,6 +3648,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
           reason:
             `the result event of session ${pyRepr(record.session_id)} carries a ` +
             "blank report, which is a turn that ended without saying anything",
+          spend: facts.spend,
         });
       }
       return new Ok({

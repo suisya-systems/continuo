@@ -226,6 +226,7 @@ spaces distinct.
 | D-1120 | A Codex lap stays refused on Windows, now for measured reasons: the non-elevated sandbox refuses the fence's profile, the elevated one is unmeasured, and the hook did not fire | accepted |
 | D-1121 | A gate answer made under delegation is recorded as delegated: actor kind `delegate`, naming the person and the approval it rests on, and only a `worker_escalation` gate accepts one | accepted |
 | D-1122 | `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag | accepted |
+| D-1123 | A turn `--turn-timeout-ms` stopped is refused as `LapTurnTimedOut`, carrying what the stopped CLI said it spent | accepted |
 
 ---
 
@@ -18417,3 +18418,60 @@ should escalate; either reopens rule 4.
 **Source.** Issue #241; the raw-CLI measurement and the real lap above, both on 2026-09-27;
 `D-0099`, `D-1112`, `D-1114`. Decision id `D-1122`, in the `D-11xx` shared cross-belt band opened by
 `D-1101` (`D-1121` is taken by continuo#240's pending change).
+
+## D-1123 -- A turn `--turn-timeout-ms` stopped is refused as `LapTurnTimedOut`, carrying what the stopped CLI said it spent
+
+**Context.** continuo#245, from rondo#530 / rondo#531 (rondo `D-0152`). A lap whose turn outlives
+`--turn-timeout-ms` is refused, and the refusal said nothing about cost. rondo reads a completed
+lap's cost off `spend.total_cost_usd` (rondo `D-0130` rule 5); for a timed-out one it had to hold an
+estimate indefinitely. Pricing tokens in rondo is rejected (rondo `D-0121` option B, `D-1112`), and
+so is a price table here (`D-1114`).
+
+The cost exists. interlock's i01 probe (Claude Code 2.1.234, section 3.4) measured that a `claude
+-p` child a `SIGTERM` reaches mid-turn still writes its `result` event -- rc 143, `is_error: true`,
+`subtype: error_during_execution`, `terminal_reason: aborted_streaming`, `total_cost_usd`, no
+`result` body -- and that only `SIGKILL` leaves stdout empty. The lap's stop ladder starts with a
+group `SIGTERM`. But `awaitTerminalReport` raises the refusal before `performLap`'s `finally` stops
+the session, so the line was written after anything read it.
+
+**Decision.**
+
+1. **The refusal is its own class, `LapTurnTimedOut`**, a `LapRefused`: no gate, the workspace left
+   as it is, exit 2, and the message unchanged word for word (rondo matches it). A host reads the
+   ceiling off `error.class`, a leaf, where it used to match the sentence.
+2. **The cost is read after the stop, once.** When the stop reported success and the lap's failure
+   is a `LapTurnTimedOut`, `performLap` reads the session's terminal report one more time and sets
+   `totalCostUsd` from that line's `spend`. The read never throws: it runs in a `finally`, and a
+   failure there would replace the refusal it annotates. A stop that did not report success leaves
+   it `null`, since a child that may still be alive has no last word yet.
+3. **The Claude provider carries `spend` on a report-less `result` event.** Every definite
+   no-report answer built from a `result` event (no body, blank body, a budget stop) now carries
+   `spend` beside `reason`, so the stopped turn's line answers with its cost without becoming a
+   report -- including a budget stop that landed after the last poll and is first read after the
+   timeout's stop (Codex review).
+4. **Under `--json` the refusal document carries `total_cost_usd`**, the key `D-1122` added for a
+   budget stop, beside `session_id`. `null` means the CLI did not say -- a stop that needed
+   `SIGKILL`, a Windows child (where `SIGTERM` is a kill), a Codex lap (no cost, `D-1114`) -- never
+   a zero.
+
+**Alternatives.**
+
+- *Price the transcript's token usage here (rejected)*: `D-1114`'s price-table rejection.
+- *Interrupt with `SIGINT` before the stop (rejected for now)*: i01 measured the same body for both
+  signals, and the ladder already sends `SIGTERM`; a second rung buys nothing measured.
+- *Throw a new refusal from the `finally` (rejected)*: replacing the in-flight exception loses its
+  stack and is the move the `finally` is written to avoid; the field is set on the refusal instead.
+
+**Consequences.** rondo can release a timed-out lap's reserve against `total_cost_usd` when it is a
+number and keep its estimate when it is `null`. The stop's wait (`stopTimeoutMs`) is what bounds the
+CLI's chance to write the line; a CLI slower than that is `SIGKILL`ed and reports `null`.
+
+**Status.** accepted
+
+**Falsifier.** A Claude CLI that writes no `result` event on `SIGTERM`, or one without
+`total_cost_usd`: the refusal then always carries `null`, and rule 2 needs a different source.
+
+**Source.** Issue #245; interlock `investigation/i01-supervisor-probe.md` section 3.4 (not
+re-measured on the current CLI for this change: the worker sandbox cannot run a real lap);
+`D-1112`, `D-1114`, `D-1122`. Decision id `D-1123`, in the `D-11xx` shared cross-belt band opened by
+`D-1101`.

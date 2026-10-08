@@ -455,6 +455,24 @@ async function main() {
   }
 
   if (mode === "events-then-hang") {
+    if (env.FAKE_SIGTERM_RESULT_FIELDS !== undefined) {
+      // What the real CLI writes when a `SIGTERM` reaches a turn mid-flight
+      // (interlock i01 3.4: rc 143, `subtype: error_during_execution`,
+      // `terminal_reason: aborted_streaming`, no `result` body), with the
+      // accounting keys a case wants (`D-1123`). Opt-in: the handler exits at
+      // once, so the stop ladder's first rung still ends the leader.
+      process.on("SIGTERM", () => {
+        emit({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          terminal_reason: "aborted_streaming",
+          ...JSON.parse(env.FAKE_SIGTERM_RESULT_FIELDS),
+          session_id: reported,
+        });
+        process.exit(143);
+      });
+    }
     await sleep(sleepForMs);
     return 0;
   }
@@ -505,7 +523,8 @@ async function main() {
   return intFromEnv("FAKE_EXIT", "0");
 }
 
-// The leader installs **no** `SIGTERM` handler, on any path. The stop ladder's
+// The leader installs **no** `SIGTERM` handler on any path but the opt-in
+// `FAKE_SIGTERM_RESULT_FIELDS` one above, which exits at once. The stop ladder's
 // first rung is a group `SIGTERM` and it depends on this process dying from it;
 // a handler here -- even one that exits -- would turn every ladder case into a
 // test of the ladder's `SIGKILL` fallback instead.
