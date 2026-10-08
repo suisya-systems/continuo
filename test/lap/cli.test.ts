@@ -2136,6 +2136,32 @@ describe("D-1123: a turn the timeout stopped is refused with what it spent", () 
     expect(eventTypes(inspect(f.databasePath))).not.toContain(WORKER_ESCALATION_EVENT_TYPE);
   });
 
+  test("a budget stop the timeout's stop raced keeps its cost", async () => {
+    // The cap's line lands after the last poll and is first read after the
+    // stop: it answers `budgetStop`, and its cost must not be dropped for it.
+    const f = lap("lap-timeout-budget-race", "run-timeout-budget-race");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    fakeEnv(
+      "FAKE_SIGTERM_RESULT_FIELDS",
+      JSON.stringify({
+        subtype: "error_max_budget_usd",
+        terminal_reason: "budget_exhausted",
+        total_cost_usd: 0.05,
+      }),
+    );
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      total_cost_usd: process.platform === "win32" ? null : 0.05,
+      error: { class: "LapTurnTimedOut" },
+    });
+  });
+
   test("a stopped CLI that wrote nothing is null, never a zero", async () => {
     const f = lap("lap-timeout-unspent", "run-timeout-unspent");
     patchSeams(lapCliSeams, { nowMs: () => Date.now() });

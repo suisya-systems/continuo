@@ -18444,9 +18444,11 @@ the session, so the line was written after anything read it.
    `totalCostUsd` from that line's `spend`. The read never throws: it runs in a `finally`, and a
    failure there would replace the refusal it annotates. A stop that did not report success leaves
    it `null`, since a child that may still be alive has no last word yet.
-3. **The Claude provider carries `spend` on a report-less `result` event.** The two definite
-   no-report answers built from a `result` event (no body, blank body) now carry `spend` beside
-   `reason`, so the stopped turn's line answers with its cost without becoming a report.
+3. **The Claude provider carries `spend` on a report-less `result` event.** Every definite
+   no-report answer built from a `result` event (no body, blank body, a budget stop) now carries
+   `spend` beside `reason`, so the stopped turn's line answers with its cost without becoming a
+   report -- including a budget stop that landed after the last poll and is first read after the
+   timeout's stop (Codex review).
 4. **Under `--json` the refusal document carries `total_cost_usd`**, the key `D-1122` added for a
    budget stop, beside `session_id`. `null` means the CLI did not say -- a stop that needed
    `SIGKILL`, a Windows child (where `SIGTERM` is a kill), a Codex lap (no cost, `D-1114`) -- never
