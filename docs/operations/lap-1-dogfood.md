@@ -190,6 +190,10 @@ node "$CLI" lap perform \
 > $0.0209669. A stopped turn opens no gate; the lap exits 2 with `LapBudgetExhausted` and, under
 > `--json`, `total_cost_usd`.
 
+> **Since `D-1123` a turn `--turn-timeout-ms` stopped says what it spent.** The lap exits 2 with
+> `LapTurnTimedOut` and, under `--json`, `total_cost_usd`: what the CLI wrote when the stop's
+> `SIGTERM` reached it, or `null` when it wrote nothing.
+
 Measured wall clock, each including one full worker turn: 52 s, 17 s, 32 s over the three laps.
 
 The command materialises the workspace, renders the fence, spawns the worker, waits for the turn's

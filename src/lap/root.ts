@@ -206,6 +206,11 @@ export interface LapNoTerminalReport {
   readonly reason: string;
   /** Present only for a turn its `--max-budget-usd` cap stopped (D-1122). */
   readonly budgetStop?: { readonly totalCostUsd: number | null };
+  /**
+   * What a turn that ended without a report spent, off its own terminal line,
+   * when it wrote one (D-1123). Absent while the turn is still running.
+   */
+  readonly spend?: TurnSpendFact;
 }
 
 /** What {@link TerminalReportReader.readTerminalReport} answers with. */
@@ -291,6 +296,28 @@ export class LapBudgetExhausted extends LapRefused {
     this.name = "LapBudgetExhausted";
     this.totalCostUsd = options.totalCostUsd;
     Object.setPrototypeOf(this, LapBudgetExhausted.prototype);
+  }
+}
+
+/**
+ * The turn outlived `--turn-timeout-ms` (D-1123).
+ *
+ * A {@link LapRefused} like every other turn without a report, and its own
+ * class so a host reads the ceiling off `error.class` and what the turn spent
+ * off `totalCostUsd`. The cost is only knowable after the stop: the CLI writes
+ * its `result` event when the stop's `SIGTERM` reaches it, so
+ * {@link awaitTerminalReport} raises this with `null` and {@link performLap}
+ * fills it in once the session it stopped has said. `null` is "not said" --
+ * no stop, a stop that needed `SIGKILL`, a backend that reports no cost --
+ * never a zero.
+ */
+export class LapTurnTimedOut extends LapRefused {
+  totalCostUsd: number | null = null;
+
+  constructor(message: string, options: { readonly sessionId: string }) {
+    super(message, options);
+    this.name = "LapTurnTimedOut";
+    Object.setPrototypeOf(this, LapTurnTimedOut.prototype);
   }
 }
 
@@ -1151,8 +1178,8 @@ export async function awaitTerminalReport(
         { sessionId },
       );
     }
-    const outOfBudget = (): LapRefused =>
-      new LapRefused(
+    const outOfBudget = (): LapTurnTimedOut =>
+      new LapTurnTimedOut(
         `session ${sessionId} did not finish its turn within ${timeoutMs}ms; the last ` +
           `answer was ${readout.reason}. The workspace and the fence are left exactly ` +
           "as they are -- the refusal is about the turn, and deleting a checkout the " +
@@ -1789,6 +1816,13 @@ async function performLapHoldingTheEndpointLease(
       if (!stopped) {
         hold.abandon();
       }
+      // A turn the ceiling stopped wrote its `result` event as the stop's
+      // `SIGTERM` reached it, after the refusal was raised (D-1123). Read once,
+      // and only after a stop that worked: before it the child is still
+      // writing, and a child that may be alive has no last word yet.
+      if (stopped && failure instanceof LapTurnTimedOut) {
+        failure.totalCostUsd = await spentAfterStop(reader, sessionId);
+      }
     }
   }
 }
@@ -1872,6 +1906,28 @@ function stillThisLapsSession(
     return false;
   }
   return readLease(connection, leaseResource)?.epoch === heldEpoch;
+}
+
+/**
+ * What a stopped turn's own terminal line says it spent, or `null` (D-1123).
+ *
+ * Runs in `performLap`'s `finally`, so it never throws: a failure here would
+ * replace the refusal it is only meant to annotate.
+ */
+async function spentAfterStop(
+  reader: TerminalReportReader,
+  sessionId: string,
+): Promise<number | null> {
+  try {
+    const result = await reader.readTerminalReport(sessionId);
+    if (Failure.is(result)) {
+      return null;
+    }
+    const readout = (result as Ok<LapTerminalReadout>).value;
+    return readout.spend?.totalCostUsd ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

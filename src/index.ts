@@ -713,6 +713,7 @@ export {
   type LapRequest,
   type LapTerminalReadout,
   type LapTerminalReport,
+  LapTurnTimedOut,
   LapUsageError,
   lapArtifactDir,
   lapStateRoot,
