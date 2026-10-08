@@ -227,6 +227,7 @@ spaces distinct.
 | D-1121 | A gate answer made under delegation is recorded as delegated: actor kind `delegate`, naming the person and the approval it rests on, and only a `worker_escalation` gate accepts one | accepted |
 | D-1122 | `lap perform --max-budget-usd` caps a Claude lap's spend through the CLI's own flag; a turn the cap stops is refused as `LapBudgetExhausted` with what it spent, and a Codex lap refuses the flag | accepted |
 | D-1123 | A turn `--turn-timeout-ms` stopped is refused as `LapTurnTimedOut`, carrying what the stopped CLI said it spent | accepted |
+| D-1125 | A `lap perform` refusal that names a session says what was done about it: `session_stop` with a confirmed, unconfirmed or not-attempted stop and the reason | accepted |
 
 ---
 
@@ -18475,3 +18476,49 @@ CLI's chance to write the line; a CLI slower than that is `SIGKILL`ed and report
 re-measured on the current CLI for this change: the worker sandbox cannot run a real lap);
 `D-1112`, `D-1114`, `D-1122`. Decision id `D-1123`, in the `D-11xx` shared cross-belt band opened by
 `D-1101`.
+
+## D-1125 -- A `lap perform` refusal that names a session says what was done about it: `session_stop` with a confirmed, unconfirmed or not-attempted stop and the reason
+
+**Context.** continuo#201. The refusal document has carried `session_id` since `D-1102`, but not
+what the lap's teardown did about that session. Teardown leaves the child running in three states:
+a `LoserTerminated` with `stopAttempted: false` (a takeover writer may have adopted the child), a
+lease epoch that moved under the lap (`D-0068`), and a stop the provider did not report successful.
+A host saw the same document as for a stop that worked, and had to assume the worst for every
+refusal naming a session, or derive the answer from process mechanics (rondo#24 did, off the child
+handle keeping the CLI open), which can change under it.
+
+**Decision.**
+
+1. **`performLap`'s teardown records what it did, keyed on the failure it ran under**, and
+   `sessionStopOf(error)` reads it: `outcome` is `confirmed` (the provider reported the stop, its
+   "no such session" included), `unconfirmed` (attempted, not reported successful: the child may
+   still be alive), or `not_attempted`, with `reason` `takeover_may_have_adopted`,
+   `lease_taken_over` or `not_bound`; `reason` is `null` unless the stop was not attempted. A side
+   table rather than a field, because `LoserTerminated` is the orchestrator's class.
+2. **A `LoserTerminated` that did attempt its stop reports that stop.** The lap's teardown then
+   usually stands down (the takeover moved the epoch), and "not attempted" would misstate what
+   happened; the outcome is `confirmed` if the orchestrator's or the lap's stop was.
+3. **Under `--json` the refusal carries `session_stop`, only beside `session_id`**, as
+   `{"outcome": ..., "reason": ...}`. Absent means the verb did not say; the schema stays `/1`,
+   the key being additive as in `D-1102`.
+
+**Alternatives.**
+
+- *Flat keys (`session_stop_outcome`, `session_stop_reason`) (rejected)*: the reason means nothing
+  without the outcome, and one object keeps them read together.
+- *Fold the reason into the outcome string (rejected)*: a host branching on "may the child still
+  run" would have to list every not-attempted spelling.
+- *Fields on `LoserTerminated` (rejected)*: the orchestrator does not know what the lap above it
+  did, and a mutable field on its class for that would belong to the wrong module.
+
+**Consequences.** A host reads `outcome != "confirmed"` as "the child may still be running" and
+`reason` for why. The human refusal line is unchanged.
+
+**Status.** accepted
+
+**Falsifier.** A teardown state that leaves the child running and is not one of the three reasons
+or `unconfirmed`: the outcome would then claim more than happened.
+
+**Source.** Issue #201; rondo#24 (`docs/design/refusal-session-lock.md`); `D-0068`, `D-1102`,
+`D-1123`. Decision id `D-1125`, in the `D-11xx` shared cross-belt band opened by `D-1101`
+(`D-1124` is taken by a concurrent pending change).

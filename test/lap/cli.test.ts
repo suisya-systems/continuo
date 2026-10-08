@@ -1545,6 +1545,7 @@ describe("D-1102: a refusal document names the session when the lap holds one", 
       "ok",
       "schema",
       "session_id",
+      "session_stop",
       "total_cost_usd",
     ]);
     expect(refusal["schema"]).toBe(PERFORM_SCHEMA);
@@ -2176,5 +2177,30 @@ describe("D-1123: a turn the timeout stopped is refused with what it spent", () 
       total_cost_usd: null,
       error: { class: "LapTurnTimedOut" },
     });
+  });
+});
+
+describe("D-1125: a refusal says what was done about the session it names", () => {
+  test("a timed-out turn the lap stopped says the stop was confirmed", async () => {
+    const f = lap("lap-refusal-session-stop", "run-refusal-session-stop");
+    patchSeams(lapCliSeams, { nowMs: () => Date.now() });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+    const refusal = oneDocument(f.err);
+    expect(typeof refusal["session_id"]).toBe("string");
+    expect(refusal["session_stop"]).toEqual({ outcome: "confirmed", reason: null });
+  });
+
+  test("a refusal with no session carries no stop either", async () => {
+    const f = lap("lap-refusal-no-session-stop");
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f, { "--run-id": "no-such-run" }))).toBe(2);
+    expect("session_stop" in oneDocument(f.err)).toBe(false);
   });
 });

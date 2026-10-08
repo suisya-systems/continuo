@@ -719,6 +719,9 @@ export {
   lapStateRoot,
   MaterializedWorkspaceRequired,
   performLap,
+  type SessionStop,
+  type SessionStopNotAttemptedReason,
+  sessionStopOf,
   type TerminalReportReader,
   type TurnCompletion,
 } from "./lap/root.js";
