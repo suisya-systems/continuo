@@ -313,9 +313,9 @@ describe("the endpoint's lease is held and renewed by its launcher (D-0072)", ()
   });
 
   test("a tick that finds the connection in a transaction changes nothing and retries sooner", () => {
-    // `withImmediate` refuses a connection already in a transaction, and the
-    // orchestrator genuinely holds a `BEGIN IMMEDIATE` across an awaited
-    // `provider.stop()`. Attempting anyway would latch a `LeaseUsageError` --
+    // `withImmediate` refuses a connection already in a transaction, and any
+    // caller may leave one open across an `await` (the orchestrator's loser
+    // path did until D-1129). Attempting anyway would latch a `LeaseUsageError` --
     // a defect-shaped exception -- over a lease that is perfectly healthy, and
     // the lap would refuse for a reason that has nothing to do with the lease.
     const connection = plane("delivery-busy");
