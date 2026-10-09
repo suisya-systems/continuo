@@ -232,6 +232,7 @@ spaces distinct.
 | D-1126 | The endpoint lease renewal case sets an attempt aside only when its lease lapsed while its own timer saw the runner freeze; `retry: 0` stands | accepted |
 | D-1127 | A lap whose child already wrote its result releases its delivery lease even when the session stop is not confirmed; a refused release is recorded | accepted |
 | D-1128 | A refused delivery lease release is reported: `LapOutcome.deliveryLeaseReleaseFailure`, beside a refusal, and `delivery_lease_release_failure` in `lap perform`'s output | accepted |
+| D-1129 | A losing orchestrator serialises its session stop against the winner with a durable stop claim, not a write transaction held across `await provider.stop()`; the winner waits on the claim after its before-resume gate | accepted |
 
 ---
 
@@ -18718,3 +18719,74 @@ dies in the teardown): the fact is then lost again.
 
 **Source.** Issue #255; `D-1127`, `D-1125`, `D-0073`. Decision id `D-1128`, in the `D-11xx` shared
 cross-belt band opened by `D-1101`.
+
+## D-1129 -- A losing orchestrator serialises its session stop against the winner with a durable stop claim, not a write transaction held across `await provider.stop()`; the winner waits on the claim after its before-resume gate
+
+**Context.** continuo#64, the residual `D-0801` names. `SessionOrchestrator`'s `#refuseAndTerminate`
+opened `BEGIN IMMEDIATE`, checked whether a takeover writer had confirmed the binding or applied a
+gate at a newer epoch, and held that transaction across `await this.#provider.stop()` before rolling
+it back. Across connections the held lock was the serialisation: a winner's gate and confirm blocked
+on it until the stop was over. On the loser's *own* connection it serialised nothing. `txn.ts`'s
+`transaction()` joins an open transaction, so anything another task wrote on that connection during
+the stop was discarded by the loser's `ROLLBACK`, and `withImmediate` refuses one, so a lease
+operation there threw. That shape already exists: the delivery lease renewal tick shares the lap's
+connection and has been stepping around the window since `D-0073`. Two orchestrators over one
+connection would hit it head on.
+
+**Decision.** Owner decision on continuo#64, option (A) of the three put to the owner (a durable stop
+claim, over re-checking after the stop and over an in-process per-connection lock).
+
+1. **The loser checks and claims in one short transaction, then stops outside any transaction.**
+   Under `withImmediate` it runs the same winner-confirmed / newer-gate check as before; if either
+   holds it stands down exactly as before (`stopAttempted: false`, no claim). Otherwise it inserts
+   a stop claim and commits. The stop is awaited with no transaction open on the connection.
+2. **A stop claim is an `action` row**: kind `effectKind(resource, "session_stop_claim")`, status
+   `pending`, idempotency key `session_stop_claim:<session>:<loser epoch>:<holder>:<now>`, written
+   unfenced (the loser's token is already dead, as with a recorded refusal) and with
+   `writer_epoch` NULL so it stays out of the resource's write history: it is coordination, not an
+   effect, and an applied row at the loser's lower epoch after the winner's rows would read as an
+   epoch regression. No migration is needed.
+3. **The claim is released when the stop settles, whatever the stop answered**: status `applied`,
+   `applied_at_ms` set. A waiting winner is waiting for the stop to be over, not for it to have
+   succeeded. A release that cannot be written is left to the TTL.
+4. **The winner waits after its before-resume gate commits and before `resume`.** While an
+   unexpired pending claim names the session, it waits (the orchestrator's `wait`, or one macrotask
+   when `wait` is `null`). The order is what makes this a serialisation and not a race: the
+   loser's check and claim are one transaction, so either that check saw the winner's gate (and
+   the loser stood down) or the claim committed first and the winner's read after its own gate
+   sees it. Resume is the one verb that adopts a child that may be the loser's; a `start` creates
+   a fresh session id, and every later gate or confirm in a resumed walk comes after the
+   before-resume gate a loser would already have seen.
+5. **A claim expires `STOP_CLAIM_TTL_MS` (30 s) after it was written**, by the winner's clock. That
+   bounds only a loser that died between claim and release. 30 s covers the C2 provider's
+   worst-case stop (a 5 s SIGTERM window and a fresh 5 s window after SIGKILL by default) with room.
+
+**Alternatives.**
+
+- *Re-check after the stop (rejected)*: it detects a kill of the winner's adopted worker rather
+  than preventing it, which weakens the invariant this path exists for.
+- *An in-process per-connection lock, keeping the SQL transaction for other processes (rejected)*:
+  the transaction would still be held across the `await`, which is what #64 asks to end.
+- *Refuse the winner while a claim is pending, instead of waiting (rejected)*: the winner holds the
+  live lease and would fail a walk that only had to wait seconds.
+- *A second connection for the held lock (rejected)*: `D-0073`'s reason. A synchronous busy-wait
+  on the shared connection would block the very event loop the stop has to settle on.
+
+**Consequences.** The delivery lease tick's step-around stays as a defensive guard; its comment no
+longer cites the orchestrator. A loser that dies mid-stop leaves a `pending` claim behind, which
+`reconstruct()`'s `pending_actions` reports. That is the truth: a stop whose outcome nobody
+recorded. Two `target-only` cases in `test/gate_item2/orchestrator-walk.test.ts` pin it: two
+orchestrators on one connection, where the winner crosses its gate during the loser's stop, waits,
+and resumes only after it, with none of its rows lost; and a claim never released, which holds the
+winner off only until it expires.
+
+**Status.** accepted
+
+**Falsifier.** A loser's stop that outruns `STOP_CLAIM_TTL_MS`: the winner resumes into a child that
+is still being stopped. The lock this replaced had the same ceiling at SQLite's busy timeout, where
+the winner's gate failed with `SQLITE_BUSY` instead. Also a construction where a winner adopts a
+loser's child by some verb other than `resume`, which would need the same wait in front of it.
+
+**Source.** Issue #64; `D-0801` (the residual), `D-0073` (the renewal tick on the shared
+connection), `D-0301` (promise-returning provider verbs). Decision id `D-1129`, in the `D-11xx`
+shared cross-belt band opened by `D-1101`.

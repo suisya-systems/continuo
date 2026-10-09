@@ -315,9 +315,10 @@ export class HeldDeliveryLease {
     }
     if (this.#connection.inTransaction) {
       // **Stepped around rather than attempted.** `withImmediate` refuses a
-      // connection that is already in a transaction, and the orchestrator
-      // genuinely holds a `BEGIN IMMEDIATE` across an `await provider.stop()`,
-      // so this window is reachable on an ordinary loser path. Attempting
+      // connection that is already in a transaction. The orchestrator's loser
+      // path used to hold a `BEGIN IMMEDIATE` across `await provider.stop()`;
+      // D-1129 removed that, and this stays for any transaction a future
+      // caller leaves open across an `await` on this connection. Attempting
       // anyway would latch a `LeaseUsageError` -- a defect-shaped exception --
       // over a lease that is perfectly healthy.
       //

@@ -126,6 +126,22 @@ export const DEFAULT_READBACK_BUDGET_MS = 30_000;
  */
 export const DEFAULT_LEASE_SLACK_MS = 30_000;
 
+/**
+ * How long a loser's stop claim holds a winner off before the winner stops
+ * waiting for it: thirty seconds (`D-1129`).
+ *
+ * The claim is released the instant the loser's `provider.stop()` settles, so
+ * this bounds only the loser that never gets there -- a crash between its claim
+ * and its release. It has to outlast a real stop, which the C2 provider bounds
+ * at its stop timeout twice over (SIGTERM's window, then a fresh one after
+ * SIGKILL: 5 s each by default); a stop that outruns it is the residual
+ * `D-1129` names, the same one a busy timeout drew under the lock this replaced.
+ */
+export const STOP_CLAIM_TTL_MS = 30_000;
+
+/** The effect a stop claim's `action` row is kinded under. */
+const STOP_CLAIM_EFFECT = "session_stop_claim";
+
 /** Sentinel distinguishing "not given" (paced default) from an explicit `null`. */
 const DEFAULT_WAIT = Symbol("default-wait");
 
@@ -543,18 +559,21 @@ export class SessionOrchestrator {
     // unresolved hazard instead -- coordinated with the holder, never a
     // blind kill and never a silent trust.
     //
-    // The check-and-stop is serialised against the winner's confirm, not a
-    // read-then-stop: the database write lock is held from before the read
-    // until after the stop (rolled back, never committed -- this reads, it
-    // does not write), so a winner cannot move the binding to confirmed in
-    // between (its own confirm blocks on the same lock, within SQLite's busy
-    // timeout).
+    // The check-and-stop is serialised against the winner by a durable stop
+    // claim, not by holding the write lock across the stop (D-1129, #64):
+    // better-sqlite3 cannot hold a transaction open across an `await`, and a
+    // transaction left open there is one every other user of this connection
+    // silently joins -- and then loses to this block's ROLLBACK. So the check
+    // and the claim commit together in one short `BEGIN IMMEDIATE`, the stop
+    // runs outside any transaction, and a winner that crosses its
+    // before-resume gate after the claim waits for it (`#awaitStopClaims`)
+    // before it can adopt anything. A winner whose gate committed first is
+    // seen by the check below and the loser stands down, as before.
     if (this.#connection.inTransaction) {
       throw new Error("refuse-and-terminate expects an idle connection");
     }
-    this.#connection.exec("BEGIN IMMEDIATE");
-    let stopAnswer: unknown;
-    {
+    let claimId: string | null = null;
+    leaseModule.withImmediate(this.#connection, () => {
       const binding = sessionBinding.bindingForSession(this.#connection, sessionId);
       const winnerConfirmed =
         binding !== undefined &&
@@ -580,37 +599,70 @@ export class SessionOrchestrator {
           }),
       );
       if (winnerConfirmed || newerWriterActive) {
-        const terminated = this.#nowMs();
-        this.#connection.exec("ROLLBACK");
-        return new LoserTerminated(
-          `claimant ${JSON.stringify(this.#holder)} lost the lease on ` +
-            `${JSON.stringify(this.#resource)} inside the spawn-admission critical ` +
-            `section; a takeover writer has already confirmed the ` +
-            `binding for session ${JSON.stringify(sessionId)} or is actively ` +
-            "driving it at a newer epoch, so no session-level stop " +
-            "was fired (it could kill the winner's adopted worker). " +
-            "Any process this claimant created is an UNRESOLVED " +
-            "hazard the holder must reconcile",
-          {
-            sessionId,
-            refusal,
-            detectedAtMs: detected,
-            terminatedAtMs: terminated,
-            stopAnswer: null,
-            stopConfirmed: false,
-            stopAttempted: false,
-          },
-        );
+        return;
       }
+      // Unfenced on purpose, like a recorded refusal: this writer's token is
+      // already dead. `writer_epoch` stays NULL so the claim is not part of
+      // the resource's write history -- it is coordination, not an effect --
+      // and the loser's epoch rides in the key as evidence instead.
+      const now = this.#nowMs();
+      const key = `${STOP_CLAIM_EFFECT}:${sessionId}:${lease.epoch}:${this.#holder}:${now}`;
+      claimId = `claim:${key}`;
+      this.#connection
+        .prepare(
+          "INSERT INTO action (action_id, run_id, kind, idempotency_key," +
+            " exactly_once_mechanism, status, created_at_ms)" +
+            " VALUES (:action_id, :run_id, :kind, :key, 'transactional_with_record'," +
+            " 'pending', :now)",
+        )
+        .run({
+          action_id: claimId,
+          run_id: this.#runId,
+          kind: effectKind(lease.resource, STOP_CLAIM_EFFECT),
+          key,
+          now,
+        });
+    });
+    if (claimId === null) {
+      const terminated = this.#nowMs();
+      return new LoserTerminated(
+        `claimant ${JSON.stringify(this.#holder)} lost the lease on ` +
+          `${JSON.stringify(this.#resource)} inside the spawn-admission critical ` +
+          `section; a takeover writer has already confirmed the ` +
+          `binding for session ${JSON.stringify(sessionId)} or is actively ` +
+          "driving it at a newer epoch, so no session-level stop " +
+          "was fired (it could kill the winner's adopted worker). " +
+          "Any process this claimant created is an UNRESOLVED " +
+          "hazard the holder must reconcile",
+        {
+          sessionId,
+          refusal,
+          detectedAtMs: detected,
+          terminatedAtMs: terminated,
+          stopAnswer: null,
+          stopConfirmed: false,
+          stopAttempted: false,
+        },
+      );
     }
-    // The provider verb is awaited outside the synchronous SQLite critical
-    // section above (better-sqlite3 has no async API to hold a transaction
-    // open across an `await`), and then the transaction is rolled back --
-    // it was only ever a read, never a write.
+    let stopAnswer: unknown;
     try {
       stopAnswer = await this.#provider.stop(sessionId);
     } finally {
-      this.#connection.exec("ROLLBACK");
+      // Released whatever the stop did: a waiting winner is waiting for the
+      // stop to be *over*, not for it to have succeeded. A release that
+      // cannot be written is left to the claim's TTL, which exists for
+      // exactly the loser that never gets here.
+      try {
+        this.#connection
+          .prepare(
+            "UPDATE action SET status = 'applied', applied_at_ms = :now" +
+              " WHERE action_id = :action_id AND status = 'pending'",
+          )
+          .run({ action_id: claimId, now: this.#nowMs() });
+      } catch {
+        // Bounded by STOP_CLAIM_TTL_MS, as above.
+      }
     }
     const terminated = this.#nowMs();
     // The provider's own verdict, never assumed: an Ok is the post-stop
@@ -636,6 +688,35 @@ export class SessionOrchestrator {
         stopConfirmed,
       },
     );
+  }
+
+  /**
+   * Hold the resume until no loser is mid-stop on `sessionId` (`D-1129`).
+   *
+   * Read *after* this walk's before-resume gate has committed, never before:
+   * a loser's claim and its check for a newer gate commit in one transaction,
+   * so either that check saw this gate (and the loser stood down) or the claim
+   * committed first and is visible here. Reading first would leave the claim
+   * free to land between the read and the gate. Only resume adopts a child
+   * that may be a loser's, so this is the one place a winner waits.
+   */
+  async #awaitStopClaims(lease: Lease, sessionId: string): Promise<void> {
+    const pending = this.#connection.prepare(
+      "SELECT 1 FROM action WHERE status = 'pending' AND kind = :kind" +
+        " AND substr(idempotency_key, 1, length(:prefix)) = :prefix" +
+        " AND created_at_ms > :now - :ttl LIMIT 1",
+    );
+    const parameters = (): Record<string, unknown> => ({
+      kind: effectKind(lease.resource, STOP_CLAIM_EFFECT),
+      prefix: `${STOP_CLAIM_EFFECT}:${sessionId}:`,
+      now: this.#nowMs(),
+      ttl: STOP_CLAIM_TTL_MS,
+    });
+    while (pending.get(parameters()) !== undefined) {
+      // A null wait still yields a macrotask, so the loser's stop -- on this
+      // connection or not -- can settle and release the claim.
+      await (this.#wait ?? (() => new Promise<void>((resolve) => setImmediate(resolve))))();
+    }
   }
 
   /** Post-spawn half of the critical section: refuse-and-terminate. */
@@ -960,6 +1041,7 @@ export class SessionOrchestrator {
     // second process is created on this id through the mediated path. The
     // gate write brackets the verb exactly as it brackets a spawn.
     this._postSpawnGate(lease, { moment: "before-resume" });
+    await this.#awaitStopClaims(lease, sessionId);
     const answer = await this.#provider.resume(sessionId);
     // Fence first, interpret second -- same reasoning as the start walk: a
     // resume Failure does not prove no process was created.

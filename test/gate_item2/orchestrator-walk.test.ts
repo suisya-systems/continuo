@@ -9,10 +9,12 @@ import {
   DEFAULT_READBACK_BUDGET_MS,
   IdentityUnconfirmed,
   LoserTerminated,
+  type OrchestrationOutcome,
   OrchestrationRefused,
   ProviderStartFailed,
   READBACK_POLL_INTERVAL_MS,
   SessionOrchestrator,
+  STOP_CLAIM_TTL_MS,
 } from "../../src/supervisor.js";
 import { caseRoot } from "../testkit/cases.js";
 import {
@@ -1010,5 +1012,108 @@ describe("D-0098: the post-spawn read-back window is a caller's budget", () => {
     const rows = activeRows(cp);
     expect(rows).toHaveLength(1);
     expect([rows[0]?.[1], rows[0]?.[2]]).toEqual(["spawned", "unobserved"]);
+  });
+});
+
+describe("D-1129: a loser's stop holds no transaction on a shared connection (target-only)", () => {
+  function claims(cp: SqliteDatabase): string[] {
+    return (
+      cp
+        .prepare("SELECT status FROM action WHERE kind LIKE 'session_stop_claim@%' ORDER BY rowid")
+        .all() as { status: string }[]
+    ).map((row) => row.status);
+  }
+
+  test("a winner sharing the loser's connection resumes only after the loser's stop", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.onStart = (_request) => {
+      clock.advancePastExpiry();
+      return undefined;
+    };
+    const events: string[] = [];
+    let releaseStop = (): void => {};
+    const stopReleased = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    provider.onResume = (sessionId) => {
+      events.push("resumed");
+      // A winner that resumes without waiting lets the stop finish too, so it
+      // fails on the ordering below rather than by timing out.
+      releaseStop();
+      provider.nextReadouts = [observed(sessionId)];
+      return undefined;
+    };
+    let winner: Promise<OrchestrationOutcome> | undefined;
+    const realStop = provider.stop.bind(provider);
+    provider.stop = async (sessionId: string) => {
+      events.push("stop-called");
+      // The second orchestrator, on the SAME connection, while the loser's
+      // stop is in flight -- the shape #64 names.
+      expect(cp.inTransaction).toBe(false);
+      winner = makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-b", {
+        wait: () => {
+          events.push("winner-waited");
+          releaseStop();
+          return new Promise<void>((resolve) => setImmediate(resolve));
+        },
+      }).recover();
+      await stopReleased;
+      const answer = await realStop(sessionId);
+      events.push("stopped");
+      return answer;
+    };
+
+    const caught = await expectAsyncRefusal(
+      () => makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start(),
+      LoserTerminated,
+    );
+    const outcome = await winner;
+
+    expect(caught.stopAttempted).toBe(true);
+    expect(caught.stopConfirmed).toBe(true);
+    // The winner crossed its gate during the stop, waited, and adopted only
+    // once the stop was over.
+    expect(events.indexOf("winner-waited")).toBeGreaterThan(events.indexOf("stop-called"));
+    expect(events.indexOf("winner-waited")).toBeLessThan(events.indexOf("stopped"));
+    expect(events.indexOf("stopped")).toBeLessThan(events.indexOf("resumed"));
+    // Nothing the winner wrote during the loser's stop was rolled back with it.
+    expect(outcome?.path).toBe("resumed");
+    expect(outcome?.binding.bindingPhase).toBe("identity_confirmed");
+    expect(gateMoments(cp)).toContain("before-resume");
+    expect(claims(cp)).toEqual(["applied"]);
+  });
+
+  test("a claim its loser never released holds a winner off only until it expires", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.onStart = (_request) => {
+      clock.advancePastExpiry();
+      return undefined;
+    };
+    let waits = 0;
+    const winner = new Promise<OrchestrationOutcome>((resolve, reject) => {
+      provider.stop = (sessionId: string) => {
+        provider.stopCalls.push(sessionId);
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-b", {
+          // Long enough that only the claim, not this lease, runs out.
+          ttlMs: 10 * STOP_CLAIM_TTL_MS,
+          wait: () => {
+            waits += 1;
+            clock.advancePastExpiry(STOP_CLAIM_TTL_MS);
+          },
+        })
+          .recover()
+          .then(resolve, reject);
+        // The loser dies mid-stop: its claim is never released.
+        return new Promise(() => {});
+      };
+    });
+    void makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start();
+
+    const outcome = await winner;
+
+    expect(waits).toBe(1);
+    expect(outcome.path).toBe("resumed");
+    expect(provider.resumeCalls).toEqual([outcome.sessionId]);
+    expect(claims(cp)).toEqual(["pending"]);
   });
 });
