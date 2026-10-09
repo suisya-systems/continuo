@@ -63,7 +63,7 @@
     "@biomejs/biome": "2.5.10",
     "@types/node": "26.3.0",
     "knip": "6.32.2",
-    "publint": "0.3.24",
+    "publint": "0.3.25",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }
