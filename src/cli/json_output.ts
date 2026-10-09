@@ -254,6 +254,12 @@ export interface RefusalMetadata {
    * beside a `session_id`; absent means the verb did not say.
    */
   readonly sessionStop?: { readonly outcome: string; readonly reason: string | null } | undefined;
+  /**
+   * The refusal the verb's release of its delivery lease met (continuo
+   * D-1128). Independent of `session_id`: a release can be refused on a lap
+   * that never named a session. Absent means none was refused.
+   */
+  readonly deliveryLeaseReleaseFailure?: { readonly message: string } | undefined;
 }
 
 /**
@@ -305,6 +311,11 @@ export function refusalLine(
       ? { session_stop: { outcome: stop.outcome, reason: stop.reason } }
       : {}),
     ...(metadata.totalCostUsd === undefined ? {} : { total_cost_usd: metadata.totalCostUsd }),
+    ...(metadata.deliveryLeaseReleaseFailure === undefined
+      ? {}
+      : {
+          delivery_lease_release_failure: { message: metadata.deliveryLeaseReleaseFailure.message },
+        }),
     error: { class: error.name, message: error.message },
   });
 }

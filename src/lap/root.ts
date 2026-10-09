@@ -365,6 +365,21 @@ export function sessionStopOf(error: unknown): SessionStop | undefined {
   return error instanceof Error ? sessionStops.get(error) : undefined;
 }
 
+/** Keyed on the failure `performLap` threw when its lease release was refused. */
+const deliveryLeaseReleaseFailures = new WeakMap<Error, Error>();
+
+/**
+ * The refusal `performLap`'s delivery lease release met, for the failure it
+ * threw (D-1128), or `undefined` when the release was not refused -- or was
+ * never attempted, because the lease was abandoned instead.
+ *
+ * A side table for {@link sessionStopOf}'s reason. The success path carries the
+ * same fact on {@link LapOutcome.deliveryLeaseReleaseFailure}.
+ */
+export function deliveryLeaseReleaseFailureOf(error: unknown): Error | undefined {
+  return error instanceof Error ? deliveryLeaseReleaseFailures.get(error) : undefined;
+}
+
 /** A malformed argument to {@link performLap}. A defect in a caller. */
 export class LapUsageError extends Error {
   constructor(message: string) {
@@ -1443,6 +1458,20 @@ export interface LapOutcome {
    * record.
    */
   readonly model: string | null;
+  /**
+   * The refusal this lap's release of its delivery lease met, or `null`
+   * (D-1128; recorded on the hold by `D-1127`).
+   *
+   * `null` means no release was refused, **not** that the lease was released:
+   * a lap that abandoned its lease (`D-0073`) attempted no release and says
+   * `null` too. Non-null means the run's delivery resource may still be
+   * withheld by a live row -- the fact an operator needs to explain why the
+   * run's next lap or `gate deliver --run-id` is refused `LeaseHeld`.
+   *
+   * Set after the teardown, which is why `performLap` adds it to the record
+   * its inner body returns rather than the body setting it.
+   */
+  readonly deliveryLeaseReleaseFailure: Error | null;
 }
 
 /**
@@ -1533,8 +1562,12 @@ export async function performLap(
     nowMs: request.nowMs,
     ...(request.deliveryLease ?? {}),
   });
+  // The thrown failure, so the `finally` -- which runs after any `catch` --
+  // can annotate it once the release has been attempted (D-1128).
+  let failure: unknown;
+  let outcome: Omit<LapOutcome, "deliveryLeaseReleaseFailure">;
   try {
-    return await performLapHoldingTheEndpointLease(
+    outcome = await performLapHoldingTheEndpointLease(
       connection,
       provider,
       reader,
@@ -1542,6 +1575,9 @@ export async function performLap(
       intent,
       hold,
     );
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
     // **Unconditional, and it runs last on every path.** None of the three
     // predicates that guard the session teardown applies to a timer, and a
@@ -1558,7 +1594,13 @@ export async function performLap(
     // `unref`-ed, so a path that acquires without reaching this `stop` hangs
     // `lap perform` forever.
     hold.stop();
+    if (failure instanceof Error && hold.releaseFailure !== null) {
+      deliveryLeaseReleaseFailures.set(failure, hold.releaseFailure);
+    }
   }
+  // Built here and not by the body: the release above is the last thing the
+  // lap does, so the record that reports it can only be finished after it.
+  return Object.freeze({ ...outcome, deliveryLeaseReleaseFailure: hold.releaseFailure });
 }
 
 /**
@@ -1577,7 +1619,7 @@ async function performLapHoldingTheEndpointLease(
   request: LapRequest,
   intent: LapRunIntent,
   hold: HeldDeliveryLease,
-): Promise<LapOutcome> {
+): Promise<Omit<LapOutcome, "deliveryLeaseReleaseFailure">> {
   // 2. The workspace, the fence, and the admitted plan. One call, and the
   //    `SessionOrchestratorOptions` it returns is complete -- nothing below adds
   //    a field to it, which is what makes step 7 the producer section 4.5 says
@@ -1786,7 +1828,7 @@ async function performLapHoldingTheEndpointLease(
       ...(request.gateOptions === undefined ? {} : { gateOptions: request.gateOptions }),
     });
 
-    return Object.freeze({
+    return {
       intent,
       materialized,
       orchestration,
@@ -1803,7 +1845,7 @@ async function performLapHoldingTheEndpointLease(
       // not the report -- the same trade `D-0065` made for an elapsed gate
       // deadline, in the same shape and one field along.
       endpointLeaseFailure: hold.failure,
-    });
+    };
   } catch (error) {
     failure = error;
     throw error;

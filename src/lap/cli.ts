@@ -129,6 +129,7 @@ import {
   WorkspaceMaterializationUsageError,
 } from "../workspace/materializer.js";
 import {
+  deliveryLeaseReleaseFailureOf,
   LapBudgetExhausted,
   type LapOutcome,
   LapRefused,
@@ -486,12 +487,31 @@ function isOperatorRefusal(error: unknown): error is Error {
  * way. `--json` changes the bytes, never the control flow.
  */
 function refuse(error: Error, db: string, json: boolean): never {
+  const releaseFailure = deliveryLeaseReleaseFailureOf(error);
   lapCliSeams.writeError(
     json
-      ? refusalLine(PERFORM_SCHEMA, db, error, refusalMetadata(error))
-      : `error: ${error.message}\n`,
+      ? refusalLine(PERFORM_SCHEMA, db, error, {
+          ...refusalMetadata(error),
+          ...(releaseFailure === undefined
+            ? {}
+            : { deliveryLeaseReleaseFailure: { message: releaseFailure.message } }),
+        })
+      : `error: ${error.message}\n` +
+          (releaseFailure === undefined ? "" : releaseFailureNote(releaseFailure)),
   );
   throw new ArgparseExit(2, "refused lap");
+}
+
+/**
+ * The `note:` line for a refused delivery lease release (D-1128), on success
+ * and refusal alike: the run's delivery resource may stay withheld until the
+ * row expires, and nothing else this verb prints says why.
+ */
+function releaseFailureNote(failure: Error): string {
+  return (
+    `note: releasing the run's delivery lease was refused, so the run's delivery resource ` +
+    `may stay held until the lease expires: ${failure.message}\n`
+  );
 }
 
 /**
@@ -683,6 +703,13 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
           outcome.endpointLeaseFailure === null
             ? null
             : { message: outcome.endpointLeaseFailure.message },
+        // Always present for `endpoint_lease_failure`'s reason (D-1128).
+        // `null` is "no release was refused", which includes a lap that
+        // abandoned its lease and attempted none.
+        delivery_lease_release_failure:
+          outcome.deliveryLeaseReleaseFailure === null
+            ? null
+            : { message: outcome.deliveryLeaseReleaseFailure.message },
         elapsed_deadline_at_ms: outcome.elapsedDeadlineAtMs,
         // **A key added under the same `/1`, which is the version story this
         // module's `PERFORM_SCHEMA` states rather than an exception to it**: an
@@ -794,6 +821,9 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
       `note: the endpoint's delivery lease was lost while the turn ran, so the worker's ` +
         `endpoint could no longer write: ${outcome.endpointLeaseFailure.message}\n`,
     );
+  }
+  if (outcome.deliveryLeaseReleaseFailure !== null) {
+    lapCliSeams.write(releaseFailureNote(outcome.deliveryLeaseReleaseFailure));
   }
   if (outcome.report.permissionDenials !== null && outcome.report.permissionDenials.length > 0) {
     // Its own line, on stdout beside the success it qualifies, exactly as the

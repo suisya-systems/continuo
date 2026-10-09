@@ -231,6 +231,7 @@ spaces distinct.
 | D-1125 | A `lap perform` refusal that names a session says what was done about it: `session_stop` with a confirmed, unconfirmed or not-attempted stop and the reason | accepted |
 | D-1126 | The endpoint lease renewal case sets an attempt aside only when its lease lapsed while its own timer saw the runner freeze; `retry: 0` stands | accepted |
 | D-1127 | A lap whose child already wrote its result releases its delivery lease even when the session stop is not confirmed; a refused release is recorded | accepted |
+| D-1128 | A refused delivery lease release is reported: `LapOutcome.deliveryLeaseReleaseFailure`, beside a refusal, and `delivery_lease_release_failure` in `lap perform`'s output | accepted |
 
 ---
 
@@ -18666,8 +18667,8 @@ released stayed live.
 - *Throw the release failure (rejected)*: it would replace the lap's outcome from a `finally`.
 
 **Consequences.** After a finished turn the run's delivery resource is free for its next lap and for
-`gate deliver --run-id` as soon as the lap exits. `releaseFailure` is recorded on the hold and not yet
-carried on `LapOutcome` or the CLI.
+`gate deliver --run-id` as soon as the lap exits. `releaseFailure` is recorded on the hold; `D-1128` carries
+it on `LapOutcome` and the CLI.
 
 **Status.** accepted
 
@@ -18676,3 +18677,44 @@ would then fence out live writes.
 
 **Source.** Issue #253; `D-0073`, `D-1125`. Decision id `D-1127`, in the `D-11xx` shared cross-belt
 band opened by `D-1101`.
+
+## D-1128 -- A refused delivery lease release is reported: `LapOutcome.deliveryLeaseReleaseFailure`, beside a refusal, and `delivery_lease_release_failure` in `lap perform`'s output
+
+**Context.** continuo#255. `D-1127` records a refused release on `HeldDeliveryLease.releaseFailure`,
+but `performLap` built its `LapOutcome` inside the body and released the lease in an outer `finally`
+afterwards, so the outcome was decided before the fact existed and nothing surfaced it. A run whose
+next lap or `gate deliver --run-id` is refused `LeaseHeld` had no record explaining why.
+
+**Decision.** Owner decision on continuo#255.
+
+1. **The outcome is finished after the release.** The body returns the record without the field;
+   `performLap` runs `hold.stop()` in its `finally` and then returns the frozen record with
+   `deliveryLeaseReleaseFailure` added.
+2. **On a refusal the failure rides beside the thrown error** in a side table,
+   `deliveryLeaseReleaseFailureOf(error)`, filled in the `finally` after the release, for `D-1125`'s
+   reason: the thrown error is not replaced and not all of its classes are this module's.
+3. **`lap perform` reports it.** The success document always carries
+   `delivery_lease_release_failure` (`null` or `{"message": ...}`), for `endpoint_lease_failure`'s
+   reason. A refusal document carries the key only when a release was refused, independent of
+   `session_id`. The human output adds one `note:` line, on stdout for a success and stderr for a
+   refusal.
+4. **`null` / absent means no release was refused, not that the lease was released**: an abandoned
+   lease (`D-0073`) attempts no release.
+
+**Alternatives.**
+
+- *Set the field from inside the body (rejected)*: the release runs after the body returns.
+- *Persist it and show it in `run show` (rejected)*: it would be a new durable fact for a
+  condition that ends when the row expires; the lap's own output is where the operator reads it.
+- *Throw it (rejected)*: `D-1127`'s reason.
+
+**Consequences.** The `continuo.lap.perform/1` success document gains a key; the schema stays `/1`
+(unreleased, and an unread key is one every reader handles).
+
+**Status.** accepted
+
+**Falsifier.** A release refused while no `LapOutcome` or refusal is produced at all (the process
+dies in the teardown): the fact is then lost again.
+
+**Source.** Issue #255; `D-1127`, `D-1125`, `D-0073`. Decision id `D-1128`, in the `D-11xx` shared
+cross-belt band opened by `D-1101`.
