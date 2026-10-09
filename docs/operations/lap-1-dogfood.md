@@ -199,6 +199,11 @@ node "$CLI" lap perform \
 > provider reported, `unconfirmed` for one it did not (the child may still be running), and
 > `not_attempted` with a `reason` (`takeover_may_have_adopted`, `lease_taken_over`, `not_bound`).
 
+> **Since `D-1128` a refused release of the run's delivery lease is reported.** Under `--json` the
+> success document carries `delivery_lease_release_failure` (`null` or `{"message": ...}`) and a
+> refusal carries the same key only when a release was refused; the human output adds a `note:`
+> line. `null` is not "released": an abandoned lease (`D-0073`) attempts no release.
+
 Measured wall clock, each including one full worker turn: 52 s, 17 s, 32 s over the three laps.
 
 The command materialises the workspace, renders the fence, spawns the worker, waits for the turn's

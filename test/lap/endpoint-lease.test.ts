@@ -60,7 +60,12 @@ import {
   type HeldDeliveryLease,
   holdDeliveryLease,
 } from "../../src/lap/endpoint_lease.js";
-import { type LapRequest, type LapTerminalReadout, performLap } from "../../src/lap/root.js";
+import {
+  deliveryLeaseReleaseFailureOf,
+  type LapRequest,
+  type LapTerminalReadout,
+  performLap,
+} from "../../src/lap/root.js";
 import { Failure, FailureKind, Ok, type ProviderResult } from "../../src/session/provider.js";
 import { LoserTerminated, OrchestrationRefused } from "../../src/supervisor.js";
 import { type GitOptions, runGitChecked } from "../../src/workspace/git.js";
@@ -606,6 +611,60 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
     expect(env["INTERLOCK_MESSAGEBUS_EPOCH"]).toBe(String(row.epoch));
     expect(env["INTERLOCK_MESSAGEBUS_HOLDER"]).toBe(row.holder);
     expect(outcome.endpointLeaseFailure).toBeNull();
+    expect(outcome.deliveryLeaseReleaseFailure).toBeNull();
+  });
+
+  test("a release the row refuses is on the outcome (D-1128)", async () => {
+    // The release runs after the body built its record, so this is the case
+    // that fails if the outcome is decided before the teardown again.
+    const clock = { ms: T0 };
+    const f = fixture("release-refused-on-outcome", () => clock.ms);
+    const readerThatSeesATakeover = {
+      readTerminalReport: (): Promise<ProviderResult<LapTerminalReadout>> => {
+        clock.ms = T0 + 5;
+        acquire(f.connection, {
+          resource: RUN_RESOURCE,
+          holder: OTHER_HOLDER,
+          nowMs: clock.ms,
+          ttlMs: DELIVERY_LEASE_TTL_MS,
+        });
+        return Promise.resolve(new Ok<LapTerminalReadout>(REPORT));
+      },
+    };
+
+    const outcome = await performLap(f.connection, f.provider, readerThatSeesATakeover, {
+      ...f.request,
+      deliveryLease: { ttlMs: 1, schedule: () => () => undefined },
+    });
+
+    expect(outcome.ingested.gateOpened).toBe(true);
+    expect(outcome.deliveryLeaseReleaseFailure).toBeInstanceOf(LeaseNotHeld);
+    expect(Object.isFrozen(outcome)).toBe(true);
+  });
+
+  test("a release the row refuses on a refusal path rides beside the refusal (D-1128)", async () => {
+    const clock = { ms: T0 };
+    const f = fixture("release-refused-on-refusal", () => clock.ms);
+    const refusal = new OrchestrationRefused("the provider would not start");
+    f.provider.onStart = () => {
+      clock.ms = T0 + 5;
+      acquire(f.connection, {
+        resource: RUN_RESOURCE,
+        holder: OTHER_HOLDER,
+        nowMs: clock.ms,
+        ttlMs: DELIVERY_LEASE_TTL_MS,
+      });
+      throw refusal;
+    };
+
+    const thrown = await performLap(f.connection, f.provider, UNREACHED_READER, {
+      ...f.request,
+      deliveryLease: { ttlMs: 1, schedule: () => () => undefined },
+    }).catch((error: unknown) => error);
+
+    // The lap's own refusal, unreplaced; the release failure is beside it.
+    expect(thrown).toBe(refusal);
+    expect(deliveryLeaseReleaseFailureOf(thrown)).toBeInstanceOf(LeaseNotHeld);
   });
 
   test("the lease is given back when the lap is over", async () => {
@@ -668,6 +727,20 @@ describe("the epoch the worker's endpoint starts under is a lease this lap holds
     const row = deliveryRow(f.connection);
     expect(row.expiresAtMs).toBe(T0 + DELIVERY_LEASE_TTL_MS);
     expect(row.epoch).toBe(1);
+  });
+
+  test("an abandoned lease records no release failure (D-1128)", async () => {
+    const f = fixture("stood-down-no-release-failure");
+    f.provider.onStart = () => {
+      throw loserThatMustNotStop(SESSION_ID);
+    };
+
+    const thrown = await performLap(f.connection, f.provider, UNREACHED_READER, f.request).catch(
+      (error: unknown) => error,
+    );
+
+    expect(thrown).toBeInstanceOf(LoserTerminated);
+    expect(deliveryLeaseReleaseFailureOf(thrown)).toBeUndefined();
   });
 
   test("a lap whose stop was not confirmed before any result does NOT give the lease back", async () => {

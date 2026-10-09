@@ -1116,6 +1116,8 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // Both conditionals present and null: this lap was clean, and a host must
       // not have to tell an absent key from a null one to learn that.
       endpoint_lease_failure: null,
+      // Present and null for the same reason (D-1128): no release was refused.
+      delivery_lease_release_failure: null,
       elapsed_deadline_at_ms: null,
       // Present and null for the same reason, and saying a different thing from
       // either of them (`D-0099`): this lap named no model, so what it ran on
@@ -1225,6 +1227,11 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       // still read as green if the lap went back to holding the global name.
       endpoint_lease_failure: {
         message: expect.stringContaining(deliveryResourceForRun(runId)),
+      },
+      // The same takeover refuses the teardown's release too (D-1128): the
+      // live row is someone else's, so the run's resource stays held.
+      delivery_lease_release_failure: {
+        message: expect.stringContaining("someone-else"),
       },
       // The operator's own number, handed back so a host can tell "my deadline
       // was too tight" from "the worker ran long".
@@ -2196,11 +2203,72 @@ describe("D-1125: a refusal says what was done about the session it names", () =
     expect(refusal["session_stop"]).toEqual({ outcome: "confirmed", reason: null });
   });
 
+  test("a refusal whose lease release was refused says so (D-1128)", async () => {
+    const runId = "run-refusal-release-failure";
+    const f = lap("lap-refusal-release-failure", runId);
+    const stealer = inspect(f.databasePath);
+    patchSeams(lapCliSeams, {
+      nowMs: () => Date.now(),
+      // The delivery lease taken over while the walk holds it, as in the
+      // `D-0090` notes case, so the teardown's release meets `LeaseNotHeld`.
+      sessionUuid: () => {
+        stealer
+          .prepare(
+            "UPDATE lease SET holder = :holder, epoch = epoch + 1 WHERE resource = :resource",
+          )
+          .run({ holder: "someone-else", resource: deliveryResourceForRun(runId) });
+        return randomUUID();
+      },
+    });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    f.err.length = 0;
+
+    expect(
+      await mainAsync(jsonArgv(f, { "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })),
+    ).toBe(2);
+    expect(oneDocument(f.err)).toMatchObject({
+      session_stop: { outcome: "confirmed", reason: null },
+      delivery_lease_release_failure: { message: expect.stringContaining("someone-else") },
+      error: { class: "LapTurnTimedOut" },
+    });
+  });
+
+  test("the human refusal carries the release failure as a note (D-1128)", async () => {
+    const runId = "run-refusal-release-note";
+    const f = lap("lap-refusal-release-note", runId);
+    const stealer = inspect(f.databasePath);
+    patchSeams(lapCliSeams, {
+      nowMs: () => Date.now(),
+      sessionUuid: () => {
+        stealer
+          .prepare(
+            "UPDATE lease SET holder = :holder, epoch = epoch + 1 WHERE resource = :resource",
+          )
+          .run({ holder: "someone-else", resource: deliveryResourceForRun(runId) });
+        return randomUUID();
+      },
+    });
+    fakeMode("events-then-hang");
+    fakeEnv("FAKE_SLEEP", "120");
+    f.err.length = 0;
+
+    expect(await f.perform({ "--turn-timeout-ms": "300", "--poll-interval-ms": "50" })).toBe(2);
+    const lines = f.err.join("").trimEnd().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^error: /);
+    expect(lines[1]).toMatch(
+      /^note: releasing the run's delivery lease was refused, .*someone-else/,
+    );
+  });
+
   test("a refusal with no session carries no stop either", async () => {
     const f = lap("lap-refusal-no-session-stop");
     f.err.length = 0;
 
     expect(await mainAsync(jsonArgv(f, { "--run-id": "no-such-run" }))).toBe(2);
     expect("session_stop" in oneDocument(f.err)).toBe(false);
+    // Nor a release failure: the lap refused before it held a lease.
+    expect("delivery_lease_release_failure" in oneDocument(f.err)).toBe(false);
   });
 });
