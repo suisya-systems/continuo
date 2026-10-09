@@ -1116,4 +1116,33 @@ describe("D-1129: a loser's stop holds no transaction on a shared connection (ta
     expect(provider.resumeCalls).toEqual([outcome.sessionId]);
     expect(claims(cp)).toEqual(["pending"]);
   });
+
+  test("a winner whose lease lapses while it waits is refused before it resumes", async () => {
+    const { cp, clock, provider, uuids, workspace } = harness();
+    provider.onStart = (_request) => {
+      clock.advancePastExpiry();
+      return undefined;
+    };
+    const winner = new Promise<unknown>((resolve) => {
+      // Reaching the verb at all is the failure; settle on it rather than hang.
+      provider.onResume = (_sessionId) => {
+        resolve("resumed");
+        return undefined;
+      };
+      provider.stop = (sessionId: string) => {
+        provider.stopCalls.push(sessionId);
+        makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-b", {
+          // The claim and this lease run out together.
+          wait: () => clock.advancePastExpiry(STOP_CLAIM_TTL_MS),
+        })
+          .recover()
+          .then(resolve, resolve);
+        return new Promise(() => {});
+      };
+    });
+    void makeOrchestrator(cp, clock, provider, uuids, workspace, "sup-a").start();
+
+    expect(await winner).toBeInstanceOf(StaleWriterRefused);
+    expect(provider.resumeCalls).toEqual([]);
+  });
 });

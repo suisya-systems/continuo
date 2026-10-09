@@ -712,10 +712,19 @@ export class SessionOrchestrator {
       now: this.#nowMs(),
       ttl: STOP_CLAIM_TTL_MS,
     });
+    let waited = false;
     while (pending.get(parameters()) !== undefined) {
+      waited = true;
       // A null wait still yields a macrotask, so the loser's stop -- on this
       // connection or not -- can settle and release the claim.
       await (this.#wait ?? (() => new Promise<void>((resolve) => setImmediate(resolve))))();
+    }
+    if (waited) {
+      // The wait can outlast this walk's own lease, and the gate above is the
+      // only fence in front of `resume`: cross it again so a walk that lost
+      // its lease while waiting is refused before the verb, not after. No
+      // claim can land behind it -- a loser's check already sees the first.
+      this._postSpawnGate(lease, { moment: "before-resume" });
     }
   }
 

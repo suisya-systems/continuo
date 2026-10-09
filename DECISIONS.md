@@ -18756,7 +18756,10 @@ claim, over re-checking after the stop and over an in-process per-connection loc
    the loser stood down) or the claim committed first and the winner's read after its own gate
    sees it. Resume is the one verb that adopts a child that may be the loser's; a `start` creates
    a fresh session id, and every later gate or confirm in a resumed walk comes after the
-   before-resume gate a loser would already have seen.
+   before-resume gate a loser would already have seen. A walk that did wait crosses the
+   before-resume gate a second time before `resume`, because the wait can outlast its own lease and
+   the first gate would otherwise be the only fence in front of the verb. No claim can land behind
+   the first gate: a lower-epoch loser's check sees it and stands down.
 5. **A claim expires `STOP_CLAIM_TTL_MS` (30 s) after it was written**, by the winner's clock. That
    bounds only a loser that died between claim and release. 30 s covers the C2 provider's
    worst-case stop (a 5 s SIGTERM window and a fresh 5 s window after SIGKILL by default) with room.
@@ -18775,10 +18778,11 @@ claim, over re-checking after the stop and over an in-process per-connection loc
 **Consequences.** The delivery lease tick's step-around stays as a defensive guard; its comment no
 longer cites the orchestrator. A loser that dies mid-stop leaves a `pending` claim behind, which
 `reconstruct()`'s `pending_actions` reports. That is the truth: a stop whose outcome nobody
-recorded. Two `target-only` cases in `test/gate_item2/orchestrator-walk.test.ts` pin it: two
+recorded. Three `target-only` cases in `test/gate_item2/orchestrator-walk.test.ts` pin it: two
 orchestrators on one connection, where the winner crosses its gate during the loser's stop, waits,
-and resumes only after it, with none of its rows lost; and a claim never released, which holds the
-winner off only until it expires.
+and resumes only after it, with none of its rows lost; a claim never released, which holds the
+winner off only until it expires; and a winner whose lease lapses while it waits, which is refused
+before `resume`.
 
 **Status.** accepted
 
