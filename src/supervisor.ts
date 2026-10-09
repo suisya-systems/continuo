@@ -715,9 +715,14 @@ export class SessionOrchestrator {
     let waited = false;
     while (pending.get(parameters()) !== undefined) {
       waited = true;
-      // A null wait still yields a macrotask, so the loser's stop -- on this
-      // connection or not -- can settle and release the claim.
-      await (this.#wait ?? (() => new Promise<void>((resolve) => setImmediate(resolve))))();
+      // Paced by the caller's wait, and always a macrotask on top: a wait that
+      // returns synchronously (or `null`) would otherwise yield only
+      // microtasks and starve the timers and child events the loser's stop
+      // needs to settle and release the claim.
+      if (this.#wait !== null) {
+        await this.#wait();
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
     if (waited) {
       // The wait can outlast this walk's own lease, and the gate above is the
