@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 
-import { afterAll, expect, onTestFinished } from "vitest";
-import { getCurrentSuite } from "vitest/suite";
+import { afterAll, expect, onTestFinished, TestRunner } from "vitest";
 
 /**
  * Per-test temporary directory.
@@ -113,7 +112,7 @@ export function createSuiteDir(label = "suite"): string {
   // `describe("")` is legal and produces a nested collector with an empty name
   // too, so a name check would wave through the one call shape most likely to
   // be written by someone parametrising a block title.
-  const collector = getCurrentSuite();
+  const collector = TestRunner.getCurrentSuite();
   if ("suite" in collector) {
     const where =
       collector.name === ""
