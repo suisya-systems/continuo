@@ -234,7 +234,11 @@ function fail(kind, detail) {
 function collectTargetTests() {
   const raw = execFileSync(
     process.execPath,
-    [join(ROOT, "node_modules", "vitest", "vitest.mjs"), "list", "--json"],
+    // `--staticParse=false`: vitest 5 lists by parsing the source by default,
+    // which cannot see tests declared through a wrapper such as
+    // `skipIf(...)(...)` (test/testkit/marks.ts) and fails the whole listing
+    // with "No test suite found". Executing the files is what vitest 4 did.
+    [join(ROOT, "node_modules", "vitest", "vitest.mjs"), "list", "--json", "--staticParse=false"],
     {
       cwd: ROOT,
       encoding: "utf8",
