@@ -233,6 +233,7 @@ spaces distinct.
 | D-1127 | A lap whose child already wrote its result releases its delivery lease even when the session stop is not confirmed; a refused release is recorded | accepted |
 | D-1128 | A refused delivery lease release is reported: `LapOutcome.deliveryLeaseReleaseFailure`, beside a refusal, and `delivery_lease_release_failure` in `lap perform`'s output | accepted |
 | D-1129 | A losing orchestrator serialises its session stop against the winner with a durable stop claim, not a write transaction held across `await provider.stop()`; the winner waits on the claim after its before-resume gate | accepted |
+| D-1130 | A Codex lap stays refused on Windows after the second measurement: the elevated sandbox holds writes but `codex sandbox` let every denied path be read, and the PreToolUse hook does not fire even in a lap whose calls run | accepted |
 
 ---
 
@@ -18794,3 +18795,89 @@ loser's child by some verb other than `resume`, which would need the same wait i
 **Source.** Issue #64; `D-0801` (the residual), `D-0073` (the renewal tick on the shared
 connection), `D-0301` (promise-returning provider verbs). Decision id `D-1129`, in the `D-11xx`
 shared cross-belt band opened by `D-1101`.
+
+---
+
+## D-1130 -- A Codex lap stays refused on Windows after the second measurement: the elevated sandbox holds writes but `codex sandbox` let every denied path be read, and the PreToolUse hook does not fire even in a lap whose calls run
+
+**Context.** Issue #238, the second round `D-1120` deferred. Round one could not reach the elevated
+Windows sandbox (W3) and saw no hook fire (W5), and its Codex homes sat under `%TEMP%`. #238 set the
+gate for designing a Windows admission: the elevated backend enforces the write, deny-read and
+glob-deny cells, and the hook fires.
+
+**What was measured.** On the same Windows 11 host (10.0.22631), Codex 0.153.4 from a private npm
+prefix, run by the window through WSL interop from a console that is not elevated (`whoami /groups`
+has no High Mandatory Level). The workspace and every Codex home were under `%USERPROFILE%`, not
+`%TEMP%`. The profile had the fence's shape, as in `D-1120`, plus `windows.sandbox="elevated"`. 80
+`codex sandbox` probes (backslash and forward-slash spellings, with and without the `*.pem` glob
+denial, each through PowerShell and through `cmd`), then three `codex exec` laps with a logging hook
+that denies one marker word:
+
+- **E1. The elevated backend runs, with no prompt, and its setup is per `CODEX_HOME`.** Each fresh
+  home logged `sandbox setup marker missing` and ran the setup helper in 5 to 8 seconds; a home
+  already set up answered in 0.5 seconds. No UAC prompt appeared and nobody approved one. The host
+  already had the `CodexSandboxOffline` and `CodexSandboxOnline` users from earlier use, so whether a
+  host without them needs an administrator is not measured. W3's silence was most likely the
+  `%TEMP%` home, not a waiting prompt.
+- **E2. The write boundary holds.** In every cell and both shells a write inside the workspace
+  succeeded, and writes outside it, into the denied directory and into the operator's Codex home
+  were refused. Network was refused (`curl` exit 7).
+- **E3. No read denial held under `codex sandbox`.** In every cell and both shells the file in the
+  denied directory, the file the `*.pem` glob matches and the operator's `auth.json` were all read.
+  (`cmd`'s `type` with a forward-slash path failed in its own syntax, which is not a denial.) The
+  sandbox log has no `deny-read ACLs` line for any probe; each `codex exec` lap logged `applied 4
+  deny-read ACLs`, one per deny entry. So `codex sandbox` on Windows does not apply the profile's
+  read denials. Whether a lap enforces them is not measured: in every lap the model declined the
+  step that read the denied file.
+- **E4. With code mode on, a lap works and the hook does not fire.** Shell calls ran in
+  `pwsh.exe -Command`, `apply_patch` created a file inside the workspace, and nothing was written
+  outside it. The hook never ran: no hook log line at all, and the command carrying the marker
+  word ran and created its file. Nothing in the lap's stderr or events said the hook was skipped.
+  The calls went through the code-mode `exec` tool, as in W5. On Windows the allowlist layer is
+  absent without a signal.
+- **E5. With the code-mode host disabled, a lap has no tools.** `--disable code_mode_host` left the
+  model calling `exec`, and every call failed with `code-mode host is disabled`; the hook did not
+  run either. No flag gives a lap that both works and fires the hook.
+- **E6. A copied credential spent the operator's login.** The first attempt at this round copied
+  the operator's `auth.json` into the lap's home, as #226's laps had, and all three laps failed
+  before their turn with `refresh_token_reused`: the operator's Windows login was already spent.
+  The only earlier writer of such a copy was #226's laps, which is consistent with a refresh in the
+  copy rotating the token the operator's file still held, though nothing here proves the cause. The
+  laps above used a login of their own.
+- **E7.** `W6` again: the model spells paths with backslashes by default and with forward slashes
+  when told to.
+
+**Decision.**
+
+1. **A Codex lap refuses on Windows**, as `D-1118` rule 9 and `D-1120` rule 1 have it. #238's gate
+   is not met: E4 and E5 alone mean the hook that carries the allowlist (`D-1114`) cannot be relied
+   on, and E3 means no read denial has been shown to hold. `D-1120`'s falsifier did not occur.
+2. **The refusal names the measured reasons**: the default and unelevated backends refuse the
+   profile, the elevated one holds writes but let a denied path be read, and the hook does not fire
+   even in a lap whose calls run. It no longer points at #238 for an open measurement.
+3. **No Windows admission is designed.** `PLAIN_COMMAND` keeps refusing a backslash, and no
+   PowerShell analysis or Windows allowlist is added: with no hook firing there is nothing for them
+   to govern.
+4. **A future Windows admission must not copy the operator's credential.** The copy in the Windows
+   branch of the spawn stays unreached, and its comment cites E6.
+
+**Alternatives.**
+
+- *A third round that makes a lap attempt the denied reads (deferred)*: it would settle whether
+  `codex exec` enforces the four deny ACLs it applies, but not change rule 1 while E4 holds.
+- *Admit Windows on the sandbox alone, without the hook (rejected)*: E3 shows no read denial
+  holding, and the allowlist the hook carries would be gone without a signal.
+
+**Consequences.** No behaviour changes: a Codex lap on Windows is refused before anything exists.
+The refusal's words change, and the fence-shape table checks each named reason. An operator who ran
+Codex on Windows after #226 may need to log in again (E6).
+
+**Status.** accepted
+
+**Falsifier.** A Codex release on Windows in which the `PreToolUse` hook fires for `exec_command` and
+`apply_patch` calls in a working lap, and a lap that attempts each denied read is refused; together
+they reopen rule 1.
+
+**Source.** Issue #238; the measurement run on the operator's Windows host on 2026-10-10 (UTC),
+whose script and logs are attached to #238's pull request; `D-1114`, `D-1118`, `D-1120`. Decision id
+`D-1130`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
