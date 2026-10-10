@@ -344,7 +344,7 @@ function hookFree(name: string, input: string): boolean {
 /**
  * The platform a Codex lap would run on. A seam, so the translation's cases
  * still run in the suite's Windows cells, where a real lap is refused (D-1118,
- * for the measured reasons of D-1120).
+ * for the measured reasons of D-1120 and D-1130).
  */
 export const codexCliSeams = { platform: process.platform as string };
 
@@ -654,10 +654,10 @@ function refused(detail: string): Failure {
 export function translateFence(cliArgs: readonly string[]): CodexFence | string {
   if (codexCliSeams.platform === "win32") {
     return (
-      "a Codex lap does not run on Windows (D-1120, measured on Codex 0.153.4): the default " +
-      "and unelevated Windows sandboxes refuse this profile's restricted reads, the elevated " +
-      "one is unmeasured, and the PreToolUse hook that carries the allowlist did not fire " +
-      "(#238 tracks a second measurement)"
+      "a Codex lap does not run on Windows (D-1120, D-1130, measured on Codex 0.153.4): the " +
+      "default and unelevated Windows sandboxes refuse this profile's restricted reads, the " +
+      "elevated one holds the write boundary but let a denied path be read, and the PreToolUse " +
+      "hook that carries the allowlist does not fire there, even in a lap whose calls run"
     );
   }
   const shape = [
@@ -1355,7 +1355,9 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
     //
     // Windows copies instead: a symlink there needs a privilege a runner may
     // not hold. Unreached today: `translateFence` refuses every Windows lap
-    // (D-1120), and #238 must weigh the copy's token-rotation risk first.
+    // (D-1120, D-1130). The copy's risk is measured, not hypothetical: after
+    // #226's laps refreshed a copied token, the operator's own Windows login
+    // failed with `refresh_token_reused` (D-1130 E6).
     try {
       const auth = join(home, "auth.json");
       rmSync(auth, { force: true });

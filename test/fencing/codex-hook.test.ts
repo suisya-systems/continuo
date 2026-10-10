@@ -228,7 +228,7 @@ describe("Bash", () => {
 
   // POSIX only: the cases spell paths with `join`, and a Windows path's
   // backslashes are refused by PLAIN_COMMAND before hook.mjs's rules are
-  // reached -- by design, and Codex on Windows is unmeasured (D-1114).
+  // reached -- by design, and a Codex lap on Windows is refused (D-1120, D-1130).
   test.skipIf(process.platform === "win32")(
     "hook.mjs's deny rules still apply to an admitted command",
     () => {

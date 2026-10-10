@@ -1905,7 +1905,7 @@ function codexHomeOf(f: Lap): string {
   return home;
 }
 
-// A Codex lap refuses on Windows (D-1118 rule 9, measured in D-1120); the
+// A Codex lap refuses on Windows (D-1118 rule 9, measured in D-1120 and D-1130); the
 // translation's own cases still run there, in
 // test/session/codex-fence-shapes.test.ts.
 describe.skipIf(process.platform === "win32")("D-1114: a lap whose worker runs on Codex", () => {
