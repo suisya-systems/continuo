@@ -16,12 +16,14 @@
   "target": {
     "test_file": "test/control_plane/events.test.ts",
     "target_only_tests": {
-      "count": 2,
+      "count": 4,
       "ids": [
         "test/control_plane/events.test.ts::the shared transaction helper > a deferred transaction body is refused rather than awaited (target-only)",
-        "test/control_plane/events.test.ts::the shared transaction helper > a deferred append side effect is refused rather than awaited (target-only)"
+        "test/control_plane/events.test.ts::the shared transaction helper > a deferred append side effect is refused rather than awaited (target-only)",
+        "test/control_plane/events.test.ts::the append transaction -- section 5.4 > the append takes the write lock before its first statement -- BEGIN IMMEDIATE, not a deferred BEGIN (target-only)",
+        "test/control_plane/events.test.ts::the module's own vocabulary > a malformed rendered delivery payload is refused by the module, not by the outbox CHECK (target-only)"
       ],
-      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Both here pin a hazard the TRANSLATION introduces rather than one the source has: Python's transaction() is an @contextmanager and its side_effect is a plain callable, neither of which can be async. The callback forms they become in TypeScript can be handed a deferred function, which would return at its first await having written nothing while the surrounding transaction went on to COMMIT. D-0103 already settled this question for the measurement lane; txn.ts refuses such a callback at both sites and these two tests are what pin the refusals."
+      "note": "Target-only tests translate no source case and are NOT counted as ported coverage. Both here pin a hazard the TRANSLATION introduces rather than one the source has: Python's transaction() is an @contextmanager and its side_effect is a plain callable, neither of which can be async. The callback forms they become in TypeScript can be handed a deferred function, which would return at its first await having written nothing while the surrounding transaction went on to COMMIT. D-0103 already settled this question for the measurement lane; txn.ts refuses such a callback at both sites and these two tests are what pin the refusals. The two added under continuo#267 (BEGIN IMMEDIATE is issued; a malformed rendered delivery payload is refused by requireJson) pin properties the source never asserts, so they have no source case to map to."
     },
     "approved_non_running": []
   },
@@ -550,13 +552,13 @@
   "inherited_limitations": [
     {
       "topic": "BEGIN IMMEDIATE -- the module's first named load-bearing property -- is pinned by no case.",
-      "status": "inherited, not fixed",
-      "detail": "Both docstrings open by explaining why the transaction must be BEGIN IMMEDIATE and not a deferred BEGIN: a deferred transaction takes the write lock at its first write, so two appenders can both read the subscription table before either discovers the conflict. Nothing in interlock's suite asserts which form is issued, so nothing here does either -- replacing BEGIN IMMEDIATE with BEGIN would leave both suites green. Recorded rather than fixed: adding the assertion would make the port stronger than its source. A fix belongs upstream, or in a change that moves both sides together."
+      "status": "REPAIRED in the tests by continuo#267 (test hardening, no behaviour change)",
+      "detail": "Both docstrings open by explaining why the transaction must be BEGIN IMMEDIATE and not a deferred BEGIN: a deferred transaction takes the write lock at its first write, so two appenders can both read the subscription table before either discovers the conflict. Nothing in interlock's suite asserts which form is issued, so nothing here does either -- replacing BEGIN IMMEDIATE with BEGIN would leave both suites green. Recorded rather than fixed: adding the assertion would make the port stronger than its source. A fix belongs upstream, or in a change that moves both sides together. REPAIRED: a target-only case in test/control_plane/events.test.ts probes from a second connection at the append's first statement and requires SQLITE_BUSY; measured, with txn.ts issuing BEGIN in place of BEGIN IMMEDIATE it fails."
     },
     {
       "topic": "requireJson's validation of a caller-rendered delivery payload is pinned by no case.",
-      "status": "inherited, not fixed",
-      "detail": "It is the one place a malformed payload could reach the outbox's json_valid CHECK. The source has no case for it either."
+      "status": "REPAIRED in the tests by continuo#267 (test hardening, no behaviour change)",
+      "detail": "It is the one place a malformed payload could reach the outbox's json_valid CHECK. The source has no case for it either. REPAIRED: a target-only case appends with a deliveryPayload returning malformed JSON and requires EventSpineUsageError with the delivery_payload message and nothing written; measured, with the requireJson call removed from the delivery path it fails (the outbox CHECK surfaces as a SQLite error instead)."
     },
     {
       "topic": "backloggedConsumers and orphanedOutbox are the DETECTION half of section 5.6 only.",

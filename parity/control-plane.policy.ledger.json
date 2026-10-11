@@ -340,8 +340,8 @@
   "inherited_limitations": [
     {
       "topic": "The refusal *reason* within PolicyUsageError and PolicyRefusal is unpinned.",
-      "status": "inherited, not fixed",
-      "detail": "interlock's test_policy.py uses class-only pytest.raises throughout -- `grep 'match=' tests/control_plane/test_policy.py` returns nothing -- so a case asserts the exception type and not which branch raised it. resolveToleranceMs has two distinct PolicyUsageError sites (a subject is required; no watcher_scope with that scope_id) and the two cases meant to pin them separately would each pass if the module short-circuited on the other branch. The port keeps the source's assertions rather than strengthening them; adding a match= would make it stronger than its source."
+      "status": "REPAIRED in the tests by continuo#267 (test hardening, no behaviour change)",
+      "detail": "interlock's test_policy.py uses class-only pytest.raises throughout -- `grep 'match=' tests/control_plane/test_policy.py` returns nothing -- so a case asserts the exception type and not which branch raised it. resolveToleranceMs has two distinct PolicyUsageError sites (a subject is required; no watcher_scope with that scope_id) and the two cases meant to pin them separately would each pass if the module short-circuited on the other branch. The port keeps the source's assertions rather than strengthening them; adding a match= would make it stronger than its source. REPAIRED: the four PolicyUsageError / PolicyRefusal cases now pass a match= naming the branch (period order, subject required, no watcher_scope, mixed subjects) and the NotADuration cases match their message; measured, rewording any of those messages fails the corresponding case."
     },
     {
       "topic": "Numeric reads use Number(), where Python narrows with int().",

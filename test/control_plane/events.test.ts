@@ -593,6 +593,39 @@ describe("the append transaction -- section 5.4", () => {
     ]);
   });
 
+  test("the append takes the write lock before its first statement -- BEGIN IMMEDIATE, not a deferred BEGIN (target-only)", () => {
+    // Nothing in interlock's suite pins which form is issued, so replacing
+    // BEGIN IMMEDIATE with BEGIN left both suites green (continuo#267). A deferred
+    // transaction holds no lock until its first write, so a second writer gets
+    // in while the append is still reading the subscription table. Probe from a
+    // second connection at the append's first statement, which is a read.
+    const path = productionDb();
+    const cp = cpFixture(path);
+    addRun(cp);
+    const other = secondConnection(path);
+    other.pragma("busy_timeout = 0");
+
+    let probe: string | undefined;
+    const prepare = cp.prepare.bind(cp);
+    cp.prepare = ((source: string) => {
+      if (probe === undefined) {
+        const inTransaction = cp.inTransaction;
+        try {
+          other.exec("BEGIN IMMEDIATE");
+          other.exec("ROLLBACK");
+          probe = `acquired (inTransaction=${inTransaction})`;
+        } catch (error) {
+          probe = (error as { code?: string }).code ?? String(error);
+        }
+      }
+      return prepare(source);
+    }) as typeof cp.prepare;
+
+    append(cp);
+
+    expect(probe).toBe("SQLITE_BUSY");
+  });
+
   test("the side effect receives the seq the event was assigned", () => {
     const cp = cpFixture();
     addRun(cp);
@@ -1255,6 +1288,27 @@ describe("the module's own vocabulary", () => {
     // every new producer a schema change.
     const appended = append(cp, { eventType: "something.this.module.never.emits" });
     expect(appended.duplicate).toBe(false);
+  });
+
+  test("a malformed rendered delivery payload is refused by the module, not by the outbox CHECK (target-only)", () => {
+    // requireJson on the caller-rendered payload is the one place a malformed
+    // document is stopped before the outbox's json_valid CHECK (continuo#267);
+    // the source has no case for it. The refusal type tells the two apart: the
+    // CHECK would surface as a SQLite error.
+    const path = productionDb();
+    const cp = cpFixture(path);
+    addRun(cp);
+    addConsumer(cp, "relay", { kind: "delivery", recipient: "pane-a" });
+
+    expectRefusal(
+      () => append(cp, { deliveryPayload: () => "not json" }),
+      EventSpineUsageError,
+      /delivery_payload\(\.\.\.\) must be a JSON document/,
+    );
+
+    const reader = secondConnection(path);
+    expect(count(reader, "event")).toBe(0);
+    expect(count(reader, "outbox")).toBe(0);
   });
 
   test("a malformed argument is refused before anything is written", () => {

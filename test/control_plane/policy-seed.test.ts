@@ -584,12 +584,16 @@ describe("section 6.1 -- gate ownership, resolved", () => {
     // stage costs no information: both types are still answerable from the
     // stages that remain.
     const connection = cp();
-    const standing = new Map(
-      query<{ gate_type: string; standing_owner: string }>(
-        connection,
-        "SELECT DISTINCT gate_type, standing_owner FROM policy_gate_stage_owner",
-      ).map((row) => [row.gate_type, row.standing_owner] as const),
+    const standingRows = query<{ gate_type: string; standing_owner: string }>(
+      connection,
+      "SELECT DISTINCT gate_type, standing_owner FROM policy_gate_stage_owner",
     );
+    const standing = new Map(
+      standingRows.map((row) => [row.gate_type, row.standing_owner] as const),
+    );
+    // A gate type with two standing owners would collapse in the Map to whichever
+    // row came last and could pass the equality below (continuo#267).
+    expect(standingRows.length, "one standing owner per gate type").toBe(standing.size);
     expect(standing).toEqual(
       new Map([
         ["worker_escalation", "secretary"],
@@ -612,6 +616,10 @@ describe("section 6.1 -- gate ownership, resolved", () => {
       connection,
       "SELECT gate_type, stage FROM policy_gate_stage_owner",
     ).map((row) => [row.gate_type, row.stage] as const);
+    // `timed <= owned` is vacuously true of an empty `timed`, which would let a
+    // regression that dropped every tolerance through (continuo#267).
+    expect(timed.length).toBeGreaterThan(0);
+    expect(owned.length).toBeGreaterThan(0);
     const ownedKeys = new Set(owned.map((pair) => JSON.stringify(pair)));
     // `timed <= owned`, as a subset check over the pairs.
     for (const pair of timed) {
@@ -668,6 +676,12 @@ describe("the seed is data, and it is versioned data", () => {
 
       expect(
         countOf(connection, `SELECT COUNT(*) AS n FROM ${table} WHERE revision_id = ?`, revisionId),
+      ).toBe(original);
+      // ...and the copy actually wrote the rows: an INSERT ... SELECT that wrote
+      // nothing would leave the check above green (continuo#267).
+      expect(original).toBeGreaterThan(0);
+      expect(
+        countOf(connection, `SELECT COUNT(*) AS n FROM ${table} WHERE revision_id = ?`, later),
       ).toBe(original);
     },
   );
