@@ -255,6 +255,11 @@ export interface RefusalMetadata {
    */
   readonly sessionStop?: { readonly outcome: string; readonly reason: string | null } | undefined;
   /**
+   * Whether the worker's own sandbox failed to initialize during the turn the
+   * refusal ended (continuo D-1132). Absent means the backend did not say.
+   */
+  readonly sandboxFailed?: boolean | undefined;
+  /**
    * The refusal the verb's release of its delivery lease met (continuo
    * D-1128). Independent of `session_id`: a release can be refused on a lap
    * that never named a session. Absent means none was refused.
@@ -311,6 +316,7 @@ export function refusalLine(
       ? { session_stop: { outcome: stop.outcome, reason: stop.reason } }
       : {}),
     ...(metadata.totalCostUsd === undefined ? {} : { total_cost_usd: metadata.totalCostUsd }),
+    ...(metadata.sandboxFailed === undefined ? {} : { sandbox_failed: metadata.sandboxFailed }),
     ...(metadata.deliveryLeaseReleaseFailure === undefined
       ? {}
       : {

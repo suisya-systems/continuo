@@ -1072,6 +1072,30 @@ function jsonArgv(f: Lap, overrides: Readonly<Record<string, string>> = {}): str
   return argv;
 }
 
+/** A Bash call the Claude CLI answered as rondo's lap 7 recorded it (D-1132). */
+const SANDBOX_FAILED_EVENTS = [
+  {
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] },
+  },
+  {
+    type: "user",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "t1",
+          content:
+            "Sandbox is enabled but failed to initialize: EPERM: operation not permitted, " +
+            "listen '/tmp/claude-1000/srt-mux-81-1.sock'. Sandboxing is disabled for the " +
+            "rest of this session; restart to retry.",
+          is_error: true,
+        },
+      ],
+    },
+  },
+];
+
 describe("D-0090: the host seam, continuo lap perform --json", () => {
   test("a clean lap answers a host with one document, and this is that document", async () => {
     // Without this, nothing pins the document a host parses: a key could be
@@ -1137,6 +1161,9 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       spend: CLAUDE_UNREAD_SPEND,
       // Present and empty: the transcript was read and the turn ran nothing.
       commands: [],
+      // Present and null (D-1132): no Bash call ran, so the sandbox was never
+      // asked, and that is "cannot say" rather than "it came up".
+      sandbox_failed: null,
     });
   });
 
@@ -1244,6 +1271,9 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       spend: CLAUDE_UNREAD_SPEND,
       // Present and empty: the transcript was read and the turn ran nothing.
       commands: [],
+      // Present and null (D-1132): no Bash call ran, so the sandbox was never
+      // asked, and that is "cannot say" rather than "it came up".
+      sandbox_failed: null,
     });
   });
 
@@ -1387,6 +1417,21 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
       "a".repeat(COMMAND_OUTPUT_LIMIT / 2) + "z".repeat(COMMAND_OUTPUT_LIMIT / 2),
     );
     expect(commands[1]?.["output"]).toBe("ok");
+    // A Bash call was answered without the CLI's diagnostic (D-1132).
+    expect(document["sandbox_failed"]).toBe(false);
+  });
+
+  test("a worker sandbox that failed to initialize is reported, not read as clean", async () => {
+    // D-1132, rondo D-0050 rule 7: the CLI says so only in the first Bash
+    // call's result, and every later call runs unsandboxed. The lap still opens
+    // its gate -- this is a report, not a control.
+    const f = lap("lap-sandbox-failed");
+    fakeEnv("FAKE_TRANSCRIPT_EVENTS", JSON.stringify(SANDBOX_FAILED_EVENTS));
+    f.out.length = 0;
+    f.err.length = 0;
+
+    expect(await mainAsync(jsonArgv(f)), f.err.join("")).toBe(0);
+    expect(oneDocument(f.out)).toMatchObject({ ok: true, sandbox_failed: true });
   });
 
   test("the real probe answers null or the kernel's code, and null off Linux", async () => {
@@ -1409,7 +1454,7 @@ describe("D-0090: the host seam, continuo lap perform --json", () => {
     expect(await mainAsync(jsonArgv(f))).toBe(2);
     expect(oneDocument(f.err)).toMatchObject({
       ok: false,
-      error: { class: "LapRefused", message: expect.stringContaining("Unix socket (EPERM)") },
+      error: { class: "LapNestedSandbox", message: expect.stringContaining("Unix socket (EPERM)") },
     });
     expect(existsSync(f.workspace), "the refusal came after the worktree").toBe(false);
 
@@ -1946,6 +1991,8 @@ describe.skipIf(process.platform === "win32")("D-1114: a lap whose worker runs o
     const commands = document["commands"] as Record<string, unknown>[];
     expect(commands.map((c) => c["output"])).toEqual(["clean"]);
     expect(commands[0]?.["command"]).toContain("exec_command");
+    // No Codex diagnostic has been measured, so the backend does not say (D-1132).
+    expect(document["sandbox_failed"]).toBeNull();
     const connection = inspect(f.databasePath);
     expect(
       (connection.prepare("SELECT provider FROM session").all() as { provider: string }[]).map(
@@ -1960,7 +2007,7 @@ describe.skipIf(process.platform === "win32")("D-1114: a lap whose worker runs o
     g.err.length = 0;
     expect(await mainAsync(jsonArgv(g))).toBe(2);
     expect(oneDocument(g.err)).toMatchObject({
-      error: { class: "LapRefused", message: expect.stringContaining("Unix socket (EPERM)") },
+      error: { class: "LapNestedSandbox", message: expect.stringContaining("Unix socket (EPERM)") },
     });
   });
 
@@ -2097,6 +2144,7 @@ describe("D-1122: a lap's spend cap", () => {
     fakeEnv("FAKE_IS_ERROR", "1");
     fakeEnv("FAKE_TERMINAL_REASON", "budget_exhausted");
     fakeEnv("FAKE_RESULT_FIELDS", JSON.stringify({ total_cost_usd: 0.0416399 }));
+    fakeEnv("FAKE_TRANSCRIPT_EVENTS", JSON.stringify(SANDBOX_FAILED_EVENTS));
     fakeEnv("FAKE_EXIT", "1");
     f.out.length = 0;
     f.err.length = 0;
@@ -2106,6 +2154,8 @@ describe("D-1122: a lap's spend cap", () => {
     expect(refusal).toMatchObject({
       ok: false,
       total_cost_usd: 0.0416399,
+      // The refused turn says it too (D-1132).
+      sandbox_failed: true,
       error: { class: "LapBudgetExhausted", message: expect.stringContaining("$0.0416399") },
     });
     expect(typeof refusal["session_id"]).toBe("string");
@@ -2123,6 +2173,7 @@ describe("D-1123: a turn the timeout stopped is refused with what it spent", () 
     fakeMode("events-then-hang");
     fakeEnv("FAKE_SLEEP", "120");
     fakeEnv("FAKE_SIGTERM_RESULT_FIELDS", JSON.stringify({ total_cost_usd: 0.0731 }));
+    fakeEnv("FAKE_TRANSCRIPT_EVENTS", JSON.stringify(SANDBOX_FAILED_EVENTS));
     f.err.length = 0;
 
     expect(
@@ -2135,6 +2186,8 @@ describe("D-1123: a turn the timeout stopped is refused with what it spent", () 
       // so the stopped CLI never writes its line there and the answer is the
       // honest `null` rather than a skipped case.
       total_cost_usd: process.platform === "win32" ? null : 0.0731,
+      // Read off the same line after the stop (D-1132); unsaid on Windows.
+      ...(process.platform === "win32" ? {} : { sandbox_failed: true }),
       error: {
         class: "LapTurnTimedOut",
         message: expect.stringContaining("did not finish its turn within 300ms"),

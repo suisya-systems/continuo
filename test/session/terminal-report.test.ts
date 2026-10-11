@@ -25,6 +25,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   ClaudeCliSessionProvider,
+  type NoTerminalReport,
   type TerminalReport,
   type TerminalReportReadout,
 } from "../../src/session/claude_cli_provider.js";
@@ -103,13 +104,10 @@ function reportOf(result: ProviderResult<TerminalReportReadout>): TerminalReport
 }
 
 /** The readout as a definite nothing, with the reason it carries. */
-function noReport(result: ProviderResult<TerminalReportReadout>): {
-  readonly pending: boolean;
-  readonly reason: string;
-} {
+function noReport(result: ProviderResult<TerminalReportReadout>): NoTerminalReport {
   const readout = okValue(result);
   expect(readout.kind, `expected no-report, got ${JSON.stringify(readout)}`).toBe("no-report");
-  return readout as { readonly pending: boolean; readonly reason: string };
+  return readout as NoTerminalReport;
 }
 
 /**
@@ -177,6 +175,8 @@ describe("a finished turn that wrote prose", () => {
       spend: { totalCostUsd: null, numTurns: null, durationMs: null },
       // The transcript holds no tool call.
       commands: [],
+      // No `Bash` call was answered, so the sandbox was never asked (D-1132).
+      sandboxFailed: null,
     });
   });
 
@@ -628,5 +628,67 @@ describe("D-1112: what the turn cost and what it ran", () => {
       { index: 2, command: "npm test", output: "1 failed\nexit 1", isError: true },
       { index: 4, command: 'Grep {"pattern":"x"}', output: "", isError: false },
     ]);
+  });
+});
+
+describe("D-1132: whether the worker's own sandbox came up", () => {
+  /** One `Bash` call and its answer, as two transcript lines. */
+  function bash(id: string, output: string, name = "Bash"): Record<string, unknown>[] {
+    return [
+      {
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id, name, input: { command: "ls" } }] },
+      },
+      {
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: id, content: output, is_error: true }],
+        },
+      },
+    ];
+  }
+  // The CLI's own words, as rondo's lap 7 transcript recorded them on call 1.
+  const FAILED =
+    "Sandbox is enabled but failed to initialize: EPERM: operation not permitted, listen " +
+    "'/tmp/claude-1000/srt-mux-81-1.sock'. Sandboxing is disabled for the rest of this " +
+    "session; restart to retry.";
+
+  test("a Bash result carrying the CLI's diagnostic is true, even when later calls ran", async () => {
+    const { provider, sessionId } = planted("failed-open", [
+      initLine("failed-open"),
+      ...bash("t1", FAILED),
+      ...bash("t2", "ok"),
+      resultLine("failed-open"),
+    ]);
+    expect(reportOf(await provider.readTerminalReport(sessionId)).sandboxFailed).toBe(true);
+  });
+
+  test("an answered Bash call without it is false", async () => {
+    const { provider, sessionId } = planted("held", [
+      initLine("held"),
+      ...bash("t1", "ok"),
+      resultLine("held"),
+    ]);
+    expect(reportOf(await provider.readTerminalReport(sessionId)).sandboxFailed).toBe(false);
+  });
+
+  test("no answered Bash call is null, and another tool's output is not read for it", async () => {
+    // The sandbox is started on the first Bash call, so a turn without one
+    // never asked it anything; the diagnostic in a Read result is a file's text.
+    const { provider, sessionId } = planted("unasked", [
+      initLine("unasked"),
+      ...bash("t1", FAILED, "Read"),
+      resultLine("unasked"),
+    ]);
+    expect(reportOf(await provider.readTerminalReport(sessionId)).sandboxFailed).toBeNull();
+  });
+
+  test("a turn with no report still says it", async () => {
+    const { provider, sessionId } = planted("silent", [
+      initLine("silent"),
+      ...bash("t1", FAILED),
+      resultLine("silent", { result: undefined }),
+    ]);
+    expect(noReport(await provider.readTerminalReport(sessionId)).sandboxFailed).toBe(true);
   });
 });

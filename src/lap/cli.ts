@@ -131,6 +131,7 @@ import {
 import {
   deliveryLeaseReleaseFailureOf,
   LapBudgetExhausted,
+  LapNestedSandbox,
   type LapOutcome,
   LapRefused,
   LapTurnTimedOut,
@@ -372,11 +373,11 @@ export function probeUnixSocket(
  * The refusal a probe answer gives, or `undefined`. Only `EPERM` is the filter;
  * any other failure is not evidence of it and does not stop a lap.
  */
-function unixSocketRefusal(code: string | null): LapRefused | undefined {
+function unixSocketRefusal(code: string | null): LapNestedSandbox | undefined {
   if (code !== "EPERM") {
     return undefined;
   }
-  return new LapRefused(
+  return new LapNestedSandbox(
     "this process may not create a Unix socket (EPERM), and the worker it would spawn " +
       "inherits that block, so the worker's own sandbox would fail to initialize and every " +
       "Bash call after the first would run unsandboxed. The usual cause is running continuo " +
@@ -553,9 +554,17 @@ function refusalMetadata(error: Error): RefusalMetadata {
   // What the teardown did about that session rides beside it (D-1125).
   const sessionStop = sessionStopOf(error);
   if (error instanceof LapBudgetExhausted || error instanceof LapTurnTimedOut) {
-    return { sessionId: error.sessionId, sessionStop, totalCostUsd: error.totalCostUsd };
+    return {
+      sessionId: error.sessionId,
+      sessionStop,
+      totalCostUsd: error.totalCostUsd,
+      sandboxFailed: error.sandboxFailed,
+    };
   }
-  if (error instanceof LoserTerminated || error instanceof LapRefused) {
+  if (error instanceof LapRefused) {
+    return { sessionId: error.sessionId, sessionStop, sandboxFailed: error.sandboxFailed };
+  }
+  if (error instanceof LoserTerminated) {
     return { sessionId: error.sessionId, sessionStop };
   }
   return {};
@@ -774,6 +783,11 @@ function report(path: string, outcome: LapOutcome, json: boolean): void {
               },
         commands:
           outcome.report.commands === null ? null : outcome.report.commands.map(commandDocument),
+        // **Whether the worker's own sandbox failed to initialize** (D-1132,
+        // rondo D-0050 rule 7). Always present, for `permission_denials`'
+        // reason: `true` it failed and every later command ran unsandboxed,
+        // `false` it came up, `null` the backend cannot say -- never "clean".
+        sandbox_failed: outcome.report.sandboxFailed ?? null,
       }),
     );
     return;

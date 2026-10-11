@@ -235,6 +235,7 @@ spaces distinct.
 | D-1129 | A losing orchestrator serialises its session stop against the winner with a durable stop claim, not a write transaction held across `await provider.stop()`; the winner waits on the claim after its before-resume gate | accepted |
 | D-1130 | A Codex lap stays refused on Windows after the second measurement: the elevated sandbox holds writes but `codex sandbox` let every denied path be read, and the PreToolUse hook does not fire even in a lap whose calls run | accepted |
 | D-1131 | Four inherited defects still open under #18 are repaired: a `"format": true` fence, the write-history suffix filter, unvalidated PR fact times, and an unreadable migration step | accepted |
+| D-1132 | `lap perform` reports a worker sandbox that did not come up in `sandbox_failed`, and the nested-sandbox refusal is its own class, `LapNestedSandbox` | accepted |
 
 ---
 
@@ -18923,3 +18924,76 @@ writer exists) and the test-strength entries, which pin no behaviour.
 
 **Falsifier.** A caller that needs one of the four old behaviours, such as a persisted fence
 written with `"format": true` by a tool other than continuo.
+
+---
+
+## D-1132 -- `lap perform` reports a worker sandbox that did not come up in `sandbox_failed`, and the nested-sandbox refusal is its own class, `LapNestedSandbox`
+
+**Context.** Issue #269, from rondo `D-0050` rule 7. A Claude worker whose own sandbox fails to
+initialize prints `Sandbox is enabled but failed to initialize`, and every later Bash call runs
+unsandboxed. The lap then reports like a clean one (rondo#129). rondo asks continuo to report this
+in a field whose absence means "the backend declined to say". `D-1112` refuses one cause before the
+spawn (a nested seccomp filter refusing `socket(AF_UNIX)`), but as a bare `LapRefused`, so rondo
+matches its English sentence (`isNestedSandboxRefusal`). Every other cause was not reported at all.
+
+**Where the failure surfaces (measured, from recorded transcripts).** rondo's laps 1, 6 and 7 hit
+it (`docs/operations/lap-1-dogfood.md` F-18, `lap-6-dogfood.md`, `lap-7-dogfood.md` N-21). The
+lap-7 transcript was read call by call: the CLI's diagnostic is the `tool_result` text of the
+**first Bash call**, flagged `is_error`, ending `Sandboxing is disabled for the rest of this session;
+restart to retry.` In rondo#129 the `result` event's `permission_denials` held only the unrelated
+refusal, so no `result` field carries it. Lap 8, which ran without the failure, had an empty
+`stderr-000.log` and no `sandbox` text in its transcript. So the fact is observable, but only as a
+string in a Bash result. It is not a structured event. Not re-measured on the current CLI for this
+change: the worker's own environment refused to start a nested Claude session to test it.
+
+**Decision.**
+
+1. **The nested-sandbox refusal is `LapNestedSandbox`**, a `LapRefused`. It is raised before any
+   write or spawn, carries no session, and its message is unchanged word for word. A host reads
+   `error.class`, as with `LapBudgetExhausted` (`D-1122`) and `LapTurnTimedOut` (`D-1123`).
+2. **The Claude provider reads `sandboxFailed` from the transcript it already reads for `commands`**
+   (`D-1112`): `true` when an answered `Bash` call's result contains `Sandbox is enabled but failed
+   to initialize`; `false` when at least one `Bash` call was answered and none contains it (the CLI
+   starts its sandbox on the first Bash call, and the fence renders `sandbox.enabled`,
+   `D-0082`); `null` when no `Bash` call was answered, because the sandbox was never asked. Other
+   tools' output is not read for it: a `Read` of a file that quotes the sentence is not the CLI's
+   diagnostic. The string stays in the provider, which owns the CLI's shape.
+3. **The success document carries `sandbox_failed`** (`true` / `false` / `null`), always present,
+   under `/1`, for `permission_denials`' reason (`D-1110`): `null` is "cannot say" and never
+   "clean".
+4. **A refusal document carries `sandbox_failed` when the turn ended and its transcript said**: a
+   turn with no report or a blank one, a budget stop, and a timed-out turn whose stop worked (read
+   after the stop beside `total_cost_usd`). Otherwise the key is absent, which is `D-1102`'s
+   meaning: unknown. It is absent on `LapNestedSandbox` too, because no worker ran.
+5. **The Codex provider answers `null`.** No Codex diagnostic for a sandbox that did not come up
+   has been measured, so it cannot say. Codex refuses a lap whose fence layer cannot be enforced
+   before the spawn (`D-1114`, `D-1118`), and that is a refusal, not this field.
+6. **It is a report, not a control.** A lap whose sandbox failed still opens its gate. rondo asked
+   to be told, not for continuo to police the sandbox (rondo `D-0050` rule 7).
+
+**Alternatives.**
+
+- *Refuse or stop the lap on `true` (rejected):* rondo asked for a report. Claude Code's own
+  `sandbox.failIfUnavailable` is the control, and choosing it is the fence author's decision.
+- *Report only `true` and absent (rejected):* rondo's complaint is that silence reads as clean. A
+  positive `false` lets a host show "the sandbox came up" where it has grounds to, and `null` keeps
+  "not asked" apart from it.
+- *Read stderr or a `system` event (rejected):* neither carried the diagnostic in the recorded laps.
+
+**Consequences.** rondo can read `error.class === "LapNestedSandbox"` and drop its pinned
+sentence, and can show `sandbox_failed` on the gate screen at its next pin move. The `false` answer
+depends on the CLI's wording: if the CLI rewords the diagnostic, a failed sandbox reads as `false`.
+The falsifier names that.
+
+**Status.** accepted
+
+**Falsifier.** A Claude CLI that rewords `Sandbox is enabled but failed to initialize`, or that
+reports the failure somewhere other than a Bash result (a `system` event, stderr, a `result` field).
+Either way a failed sandbox reads as `false`, and the reader needs the new wording or source. Also a
+CLI that starts its sandbox on something other than the first Bash call, which makes "no answered
+Bash call" a wrong reason for `null`. And a Codex diagnostic for a sandbox that did not come up,
+which `null` would then be failing to report.
+
+**Source.** Issue #269; rondo `D-0050` rule 7 and its annotation, rondo#129, rondo#144, rondo
+`docs/operations/lap-7-dogfood.md` (the call-by-call transcript read). `D-1110`, `D-1112`, `D-1102`,
+`D-1122`, `D-1123`. Decision id `D-1132`, in the `D-11xx` shared cross-belt band (`D-1101`).

@@ -150,6 +150,17 @@ export interface LapTerminalReport {
    * (`D-1112`). `null` is not `[]`: the second is a turn that ran nothing.
    */
   readonly commands: readonly TurnCommandFact[] | null;
+  /**
+   * Whether the worker's own sandbox failed to initialize during the turn
+   * (D-1132): `true` it did, `false` it came up, and `null` or absent when the
+   * backend cannot say. Optional so a backend that knows nothing about a
+   * sandbox satisfies this shape by leaving it out.
+   *
+   * A report and not a control, as rondo `D-0050` rule 7 asks: a turn whose
+   * sandbox failed open ran every later command with one containment fewer,
+   * and without this a host reads it as a clean lap.
+   */
+  readonly sandboxFailed?: boolean | null;
 }
 
 /**
@@ -211,6 +222,8 @@ export interface LapNoTerminalReport {
    * when it wrote one (D-1123). Absent while the turn is still running.
    */
   readonly spend?: TurnSpendFact;
+  /** {@link LapTerminalReport.sandboxFailed}, when the turn ended (D-1132). */
+  readonly sandboxFailed?: boolean | null;
 }
 
 /** What {@link TerminalReportReader.readTerminalReport} answers with. */
@@ -262,14 +275,24 @@ export interface TerminalReportReader {
 export class LapRefused extends ControlPlaneRefusal {
   /** The confirmed session this refusal is about, or `undefined` when none. */
   readonly sessionId: string | undefined;
+  /**
+   * {@link LapTerminalReport.sandboxFailed} for the turn this refusal ended,
+   * or `undefined` when the backend did not say (D-1132).
+   */
+  readonly sandboxFailed: boolean | undefined;
 
   constructor(
     message: string,
-    options?: { readonly cause?: unknown; readonly sessionId?: string },
+    options?: {
+      readonly cause?: unknown;
+      readonly sessionId?: string;
+      readonly sandboxFailed?: boolean | null | undefined;
+    },
   ) {
     super(message, options);
     this.name = "LapRefused";
     this.sessionId = options?.sessionId;
+    this.sandboxFailed = options?.sandboxFailed ?? undefined;
     // The family's convention, and it is load-bearing rather than decorative:
     // extending a built-in under a downlevel emit target loses the prototype
     // chain and `instanceof` then silently reports false. See `refusals.ts`.
@@ -290,9 +313,13 @@ export class LapBudgetExhausted extends LapRefused {
 
   constructor(
     message: string,
-    options: { readonly sessionId: string; readonly totalCostUsd: number | null },
+    options: {
+      readonly sessionId: string;
+      readonly totalCostUsd: number | null;
+      readonly sandboxFailed?: boolean | null | undefined;
+    },
   ) {
-    super(message, { sessionId: options.sessionId });
+    super(message, options);
     this.name = "LapBudgetExhausted";
     this.totalCostUsd = options.totalCostUsd;
     Object.setPrototypeOf(this, LapBudgetExhausted.prototype);
@@ -313,11 +340,29 @@ export class LapBudgetExhausted extends LapRefused {
  */
 export class LapTurnTimedOut extends LapRefused {
   totalCostUsd: number | null = null;
+  // Filled in after the stop, like the cost (D-1132).
+  declare sandboxFailed: boolean | undefined;
 
   constructor(message: string, options: { readonly sessionId: string }) {
     super(message, options);
     this.name = "LapTurnTimedOut";
     Object.setPrototypeOf(this, LapTurnTimedOut.prototype);
+  }
+}
+
+/**
+ * This process may not create a Unix socket, so the worker it would spawn
+ * could not bring its own sandbox up (D-1112, D-1132).
+ *
+ * Raised before anything is written or spawned. Its own class so a host reads
+ * the cause off `error.class` rather than matching the message, which rondo
+ * had to do until now; the message is unchanged word for word.
+ */
+export class LapNestedSandbox extends LapRefused {
+  constructor(message: string) {
+    super(message);
+    this.name = "LapNestedSandbox";
+    Object.setPrototypeOf(this, LapNestedSandbox.prototype);
   }
 }
 
@@ -1225,7 +1270,11 @@ export async function awaitTerminalReport(
     if (!readout.pending && readout.budgetStop !== undefined) {
       throw new LapBudgetExhausted(
         `session ${sessionId} finished its turn without a report to escalate: ${readout.reason}`,
-        { sessionId, totalCostUsd: readout.budgetStop.totalCostUsd },
+        {
+          sessionId,
+          totalCostUsd: readout.budgetStop.totalCostUsd,
+          sandboxFailed: readout.sandboxFailed,
+        },
       );
     }
     if (!readout.pending) {
@@ -1234,7 +1283,7 @@ export async function awaitTerminalReport(
       // is not made by reading a diagnostic message.
       throw new LapRefused(
         `session ${sessionId} finished its turn without a report to escalate: ${readout.reason}`,
-        { sessionId },
+        { sessionId, sandboxFailed: readout.sandboxFailed },
       );
     }
     const outOfBudget = (): LapTurnTimedOut =>
@@ -1923,7 +1972,9 @@ async function performLapHoldingTheEndpointLease(
       // and only after a stop that worked: before it the child is still
       // writing, and a child that may be alive has no last word yet.
       if (stopped && failure instanceof LapTurnTimedOut) {
-        failure.totalCostUsd = await spentAfterStop(reader, sessionId);
+        const said = await saidAfterStop(reader, sessionId);
+        failure.totalCostUsd = said.totalCostUsd;
+        failure.sandboxFailed = said.sandboxFailed ?? undefined;
       }
     }
   }
@@ -2039,24 +2090,28 @@ function sessionStopAfter(
 }
 
 /**
- * What a stopped turn's own terminal line says it spent, or `null` (D-1123).
+ * What a stopped turn's own terminal line says it spent (D-1123) and whether
+ * its sandbox failed to initialize (D-1132), each `null` when not said.
  *
  * Runs in `performLap`'s `finally`, so it never throws: a failure here would
  * replace the refusal it is only meant to annotate.
  */
-async function spentAfterStop(
+async function saidAfterStop(
   reader: TerminalReportReader,
   sessionId: string,
-): Promise<number | null> {
+): Promise<{ readonly totalCostUsd: number | null; readonly sandboxFailed: boolean | null }> {
   try {
     const result = await reader.readTerminalReport(sessionId);
     if (Failure.is(result)) {
-      return null;
+      return { totalCostUsd: null, sandboxFailed: null };
     }
     const readout = (result as Ok<LapTerminalReadout>).value;
-    return readout.spend?.totalCostUsd ?? null;
+    return {
+      totalCostUsd: readout.spend?.totalCostUsd ?? null,
+      sandboxFailed: readout.sandboxFailed ?? null,
+    };
   } catch {
-    return null;
+    return { totalCostUsd: null, sandboxFailed: null };
   }
 }
 
