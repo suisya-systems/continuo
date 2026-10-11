@@ -1215,25 +1215,44 @@ export interface TurnCommand {
 }
 
 /**
- * The turn's tool calls, paired with their results by `tool_use_id`.
+ * The text the Claude CLI puts in a `Bash` call's `tool_result` when its own
+ * sandbox did not come up (continuo D-1132). Measured in rondo's lap 1, 6 and
+ * 7 transcripts (rondo `docs/operations/lap-7-dogfood.md`, call 1): the first
+ * `Bash` call answers `Sandbox is enabled but failed to initialize: EPERM ...
+ * Sandboxing is disabled for the rest of this session`, and the calls after it
+ * run unsandboxed. No `result` event field and no `system` event carries it.
+ */
+const SANDBOX_INIT_FAILURE = "Sandbox is enabled but failed to initialize";
+
+/**
+ * The turn's tool calls, paired with their results by `tool_use_id`, and
+ * whether the worker's own sandbox failed to initialize (continuo D-1132).
  *
  * **The event shape is the Claude CLI's `stream-json`**, and that knowledge is
  * why this lives beside the provider rather than in a host: `tool_use` blocks in
  * an `assistant` event's `message.content`, `tool_result` blocks in a `user`
  * event's. A transcript in another shape yields no commands rather than wrong
  * ones.
+ *
+ * `sandboxFailed` is `true` when a `Bash` result carries
+ * {@link SANDBOX_INIT_FAILURE}, `false` when at least one `Bash` call was
+ * answered and none did (the CLI starts its sandbox on the first `Bash` call,
+ * and the fence always renders `sandbox.enabled`), and `null` when no `Bash`
+ * call was answered, which is a turn that never asked the sandbox anything.
  */
-function turnCommandsOf(
+function turnCallsOf(
   events: readonly Record<string, unknown>[],
   lineNumbers: readonly number[],
-): readonly TurnCommand[] {
+): { readonly commands: readonly TurnCommand[]; readonly sandboxFailed: boolean | null } {
   const commands: {
     index: number;
     id: unknown;
+    bash: boolean;
     command: string;
     output: string;
     isError: boolean;
   }[] = [];
+  let sandboxFailed: boolean | null = null;
   for (const [position, event] of events.entries()) {
     const message = getOwn(event, "message");
     const content =
@@ -1253,6 +1272,7 @@ function turnCommandsOf(
         commands.push({
           index: lineNumbers[position] ?? 0,
           id: getOwn(entry, "id"),
+          bash: getOwn(entry, "name") === "Bash",
           command: commandTextOf(entry),
           output: "",
           isError: false,
@@ -1263,13 +1283,19 @@ function turnCommandsOf(
         if (call !== undefined) {
           call.output = resultTextOf(getOwn(entry, "content"));
           call.isError = getOwn(entry, "is_error") === true;
+          if (call.bash) {
+            sandboxFailed = sandboxFailed === true || call.output.includes(SANDBOX_INIT_FAILURE);
+          }
         }
       }
     }
   }
-  return Object.freeze(
-    commands.map(({ index, command, output, isError }) => ({ index, command, output, isError })),
-  );
+  return {
+    commands: Object.freeze(
+      commands.map(({ index, command, output, isError }) => ({ index, command, output, isError })),
+    ),
+    sandboxFailed,
+  };
 }
 
 /** A `Bash` call's command, or any other tool's name and JSON input. */
@@ -1358,7 +1384,7 @@ export function readLiveTurn(stateRoot: string, sessionId: string): LiveTurn | n
   const { events, lineNumbers } = parseEventLines(raw, sessionId);
   return Object.freeze({
     generation: record.generation,
-    commands: turnCommandsOf(events, lineNumbers),
+    commands: turnCallsOf(events, lineNumbers).commands,
     partialLine: raw.length > 0 && raw[raw.length - 1] !== 0x0a,
   });
 }
@@ -1404,6 +1430,11 @@ export interface TerminalReport {
   readonly spend: TurnSpend;
   /** The tool calls the turn made, off the same transcript (`D-1112`). */
   readonly commands: readonly TurnCommand[];
+  /**
+   * Whether the worker's own sandbox failed to initialize, off the same
+   * transcript; `null` when the backend cannot say (continuo D-1132).
+   */
+  readonly sandboxFailed: boolean | null;
 }
 
 /**
@@ -1447,6 +1478,11 @@ export interface NoTerminalReport {
    * while no `result` event exists.
    */
   readonly spend?: TurnSpend;
+  /**
+   * {@link TerminalReport.sandboxFailed}, on every no-report built from a
+   * `result` event (continuo D-1132). Absent while no `result` event exists.
+   */
+  readonly sandboxFailed?: boolean | null;
 }
 
 /**
@@ -1506,6 +1542,7 @@ export interface CliTurnFacts {
   readonly permissionDenials: TerminalReport["permissionDenials"];
   readonly spend: TerminalReport["spend"];
   readonly commands: TerminalReport["commands"];
+  readonly sandboxFailed: TerminalReport["sandboxFailed"];
 }
 
 /** Constructor options, which are keyword-only in the source. */
@@ -1848,7 +1885,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
       body: getOwn(terminal, "result"),
       permissionDenials: permissionDenialsOf(terminal),
       spend: turnSpendOf(terminal),
-      commands: turnCommandsOf(events, lineNumbers),
+      ...turnCallsOf(events, lineNumbers),
     };
   }
 
@@ -3689,6 +3726,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             `${spent === null ? "an unreported amount" : `$${String(spent)}`}`,
           budgetStop: { totalCostUsd: spent },
           spend: facts.spend,
+          sandboxFailed: facts.sandboxFailed,
         });
       }
       const body = facts.body;
@@ -3702,6 +3740,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             `the result event of session ${pyRepr(record.session_id)} carries no ` +
             `report: its 'result' field is ${pyRepr(noneOf(body))}`,
           spend: facts.spend,
+          sandboxFailed: facts.sandboxFailed,
         });
       }
       if (pyStrip(body) === "") {
@@ -3715,6 +3754,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
             `the result event of session ${pyRepr(record.session_id)} carries a ` +
             "blank report, which is a turn that ended without saying anything",
           spend: facts.spend,
+          sandboxFailed: facts.sandboxFailed,
         });
       }
       return new Ok({
@@ -3742,6 +3782,7 @@ export class ClaudeCliSessionProvider extends SessionProvider {
         // what some other file on disk says (`D-1112`).
         spend: facts.spend,
         commands: facts.commands,
+        sandboxFailed: facts.sandboxFailed,
       });
     });
   }

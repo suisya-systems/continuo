@@ -1588,6 +1588,9 @@ export class CodexCliSessionProvider extends ClaudeCliSessionProvider {
         reasoningOutputTokens: numberOrNull(field(usage, "reasoning_output_tokens")),
       },
       commands: Object.freeze(commands),
+      // Not said (continuo D-1132): no Codex diagnostic for a sandbox that did
+      // not come up has been measured, so there is nothing to read it off.
+      sandboxFailed: null,
     };
   }
 

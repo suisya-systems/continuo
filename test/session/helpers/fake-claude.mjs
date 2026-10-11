@@ -454,6 +454,14 @@ async function main() {
     out("mid-stream line that is not JSON");
   }
 
+  // Events a case wants in the transcript ahead of the terminal line -- a
+  // tool call and its result, say (`D-1112`) -- before
+  // `events-then-hang` hangs, so a stopped turn has run them too (`D-1132`). A JSON array, emitted verbatim
+  // for `FAKE_PERMISSION_DENIALS`'s reason, and absent by default.
+  for (const event of JSON.parse(env.FAKE_TRANSCRIPT_EVENTS ?? "[]")) {
+    emit(event);
+  }
+
   if (mode === "events-then-hang") {
     if (env.FAKE_SIGTERM_RESULT_FIELDS !== undefined) {
       // What the real CLI writes when a `SIGTERM` reaches a turn mid-flight
@@ -475,13 +483,6 @@ async function main() {
     }
     await sleep(sleepForMs);
     return 0;
-  }
-
-  // Events a case wants in the transcript ahead of the terminal line -- a
-  // tool call and its result, say (`D-1112`). A JSON array, emitted verbatim
-  // for `FAKE_PERMISSION_DENIALS`'s reason, and absent by default.
-  for (const event of JSON.parse(env.FAKE_TRANSCRIPT_EVENTS ?? "[]")) {
-    emit(event);
   }
 
   if (env.FAKE_RESULT_BARE === "1") {

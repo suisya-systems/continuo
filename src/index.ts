@@ -708,6 +708,7 @@ export {
   deliveryLeaseReleaseFailureOf,
   LAP_ACTOR_ID,
   LapBudgetExhausted,
+  LapNestedSandbox,
   type LapNoTerminalReport,
   type LapOutcome,
   LapRefused,
