@@ -169,6 +169,11 @@ export const EXACTLY_ONCE_MECHANISMS = Object.freeze([
  * can disagree with the order the rows were actually written in -- and an
  * ordering claim read out of a skewed clock would manufacture regressions
  * that never happened and hide ones that did.
+ *
+ * The kind half reads the resource exactly as {@link resourceOfKind} does:
+ * everything after the FIRST `@` (an effect may not contain one). interlock
+ * matched a suffix, so asking for `r` also returned `effect@x@r`, a row of
+ * resource `x@r`, and mixed two unrelated epoch sequences (D-1131, #18).
  */
 export const WRITE_HISTORY_QUERY = `
     SELECT rowid AS write_seq, action_id, kind, status, writer_epoch,
@@ -179,7 +184,8 @@ export const WRITE_HISTORY_QUERY = `
        AND (:resource IS NULL
             OR (writer_resource IS NOT NULL AND writer_resource = :resource)
             OR (writer_resource IS NULL
-                AND substr(kind, -(length(:resource) + 1)) = '@' || :resource))
+                AND instr(kind, '@') > 1
+                AND substr(kind, instr(kind, '@') + 1) = :resource))
      ORDER BY write_seq
 `;
 

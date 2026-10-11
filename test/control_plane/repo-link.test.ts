@@ -867,6 +867,39 @@ describe("the pull-request projection (section 7.2)", () => {
     expect(rows(cp, "SELECT state FROM pull_request")).toEqual([{ state: "closed" }]);
   });
 
+  test("a fractional merge or close time is refused (target-only, D-1131)", () => {
+    // interlock validates only observed_at_ms and ingested_at_ms, and the
+    // INTEGER column has no typeof CHECK, so 1.5 persisted as REAL.
+    const cp = cpFixture();
+    const repo = addRepo(cp);
+    observe(cp, { repoId: repo, prNumber: 1, headSha: SHA_A, at: T0 });
+    expectRefusal(
+      () =>
+        observe(cp, {
+          repoId: repo,
+          prNumber: 1,
+          state: "merged",
+          at: T0 + 1,
+          mergedAtMs: T0 + 0.5,
+        }),
+      TypeError,
+      /merged_at_ms must be an int/,
+    );
+    expectRefusal(
+      () =>
+        observe(cp, {
+          repoId: repo,
+          prNumber: 1,
+          state: "closed",
+          at: T0 + 1,
+          closedAtMs: T0 + 0.5,
+        }),
+      TypeError,
+      /closed_at_ms must be an int/,
+    );
+    expect(rows(cp, "SELECT state FROM pull_request")).toEqual([{ state: "open" }]);
+  });
+
   test("a merged pull request does not reopen", () => {
     const cp = cpFixture();
     const repo = addRepo(cp);

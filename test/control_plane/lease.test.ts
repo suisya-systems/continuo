@@ -1540,6 +1540,35 @@ describe(
       expect(writeHistory(cp, { resource: "run/r2" })).toEqual([]);
     });
 
+    test("a resource that is another resource's suffix collects only its own rows (target-only, D-1131)", () => {
+      // interlock's filter was a suffix match, so asking for 'r' also returned
+      // 'deliver_task@x@r' -- a row of resource 'x@r' -- and mixed two
+      // unrelated epoch sequences. The query reads the resource the way
+      // `resourceOfKind` does: after the first '@'.
+      const cp = cpFixture(dbPathFixture());
+      const short = acquire(cp, { resource: "r", holder: "alpha", nowMs: T0, ttlMs: TTL });
+      const long = acquire(cp, { resource: "x@r", holder: "alpha", nowMs: T0, ttlMs: TTL });
+      protectedWrite(
+        cp,
+        short,
+        effect("a1", { nowMs: T0 + 1, kind: effectKind("r", "deliver_task") }),
+        {
+          nowMs: T0 + 1,
+        },
+      );
+      protectedWrite(
+        cp,
+        long,
+        effect("a2", { nowMs: T0 + 2, kind: effectKind("x@r", "deliver_task") }),
+        {
+          nowMs: T0 + 2,
+        },
+      );
+
+      expect(writeHistory(cp, { resource: "r" }).map((row) => row["action_id"])).toEqual(["a1"]);
+      expect(writeHistory(cp, { resource: "x@r" }).map((row) => row["action_id"])).toEqual(["a2"]);
+    });
+
     test("every effect under one lease stays in one history", () => {
       // Two effect kinds, one lease: they share an epoch sequence and a history.
       //

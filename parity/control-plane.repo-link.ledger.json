@@ -16,11 +16,12 @@
   "target": {
     "test_file": "test/control_plane/repo-link.test.ts",
     "target_only_tests": {
-      "count": 1,
+      "count": 2,
       "ids": [
-        "test/control_plane/repo-link.test.ts::the signature scan (target-only) > the parameter scan finds the ported signatures"
+        "test/control_plane/repo-link.test.ts::the signature scan (target-only) > the parameter scan finds the ported signatures",
+        "test/control_plane/repo-link.test.ts::the pull-request projection (section 7.2) > a fractional merge or close time is refused (target-only, D-1131)"
       ],
-      "note": "Target-only. The source asserts, via inspect.signature, that no ported function takes a parameter meaning 'we guessed from the working directory' -- the 2026-08-06 regression. TypeScript erases parameter names at runtime, so the runtime half of that assertion has no equivalent and the scan reads the module source instead. It is listed here rather than counted as ported coverage because it asserts a property of the FILE, not a behaviour, and the source case it accompanies is recorded separately as adapted."
+      "note": "Target-only. The source asserts, via inspect.signature, that no ported function takes a parameter meaning 'we guessed from the working directory' -- the 2026-08-06 regression. TypeScript erases parameter names at runtime, so the runtime half of that assertion has no equivalent and the scan reads the module source instead. It is listed here rather than counted as ported coverage because it asserts a property of the FILE, not a behaviour, and the source case it accompanies is recorded separately as adapted. D-1131 adds one case pinning the repair of an inherited defect this ledger disclosed (see inherited_limitations)."
     },
     "approved_non_running": []
   },
@@ -263,7 +264,7 @@
     },
     {
       "topic": "observePullRequest does not validate the optional mergedAtMs / closedAtMs as integer epoch milliseconds.",
-      "status": "inherited, not fixed (continuo D-0023 (which superseded D-0022))",
+      "status": "REPAIRED -- deliberate divergence from interlock (continuo D-1131): a non-null mergedAtMs / closedAtMs goes through the same epoch-ms guard. Target-only case: test/control_plane/repo-link.test.ts > a fractional merge or close time is refused (target-only, D-1131)",
       "detail": "Only observedAtMs and ingestedAtMs go through the epoch-ms guard, so a merged or closed observation can supply a fractional value. The pull_request table declares those columns INTEGER but carries no typeof CHECK, and SQLite's INTEGER affinity stores a non-losslessly-convertible REAL as given -- so 1.5 persists as 1.5 and the module's integer-epoch contract is violated in the projection. interlock's observe_pull_request applies exactly the same two validators (`_require_epoch_ms(observed_at_ms=..., ingested_at_ms=...)`) and validates neither optional timestamp, so the port is at parity. Reproduced rather than repaired, per D-0023, which superseded D-0022; the repair is reserved for the post-parity change. Raised by the Codex review gate (2026-08-22, P2)."
     }
   ]

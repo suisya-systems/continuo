@@ -228,7 +228,11 @@ export function fenceToJson(fence: Fence): Record<string, unknown> {
 export function fenceFromJson(payload: Readonly<Record<string, unknown>>): Fence {
   try {
     const format = getOwn(payload, "format");
-    if (!equalsFormatVersion(format)) {
+    // A strict `!==`, so `"format": true` is refused (D-1131, #18). interlock
+    // compares with `!=`, where `True == 1`, and loads such a fence as version
+    // 1; continuo is authoritative here and fails closed. `1.0` still passes:
+    // `JSON.parse` collapses it to the same `number`.
+    if (format !== FENCE_FORMAT_VERSION) {
       // `pyReprOf(payload, "format")`: the payload came through `pyJsonLoads`,
       // so a `"format": 1.0` is named as interlock names it (D-0095).
       throw new FenceStateError(`unsupported fence format: ${pyReprOf(payload, "format")}`);
@@ -306,32 +310,6 @@ export function fenceFromJson(payload: Readonly<Record<string, unknown>>): Fence
     }
     throw exc;
   }
-}
-
-/**
- * Python's `payload.get("format") != FENCE_FORMAT_VERSION`, including the part
- * that looks like a bug.
- *
- * `True == 1` in Python, because `bool` is a subclass of `int`. So a fence
- * whose `"format"` is the JSON literal `true` PASSES interlock's version check
- * and is loaded. `true !== 1` in JavaScript, so reproducing that takes an
- * explicit branch. Inherited defect, disclosed rather than repaired (D-0022):
- * repairing it here would make the port refuse a file interlock accepts, and
- * the refusal would be invisible until a hand-edited fence hit it.
- *
- * `1.0 == 1` is the same rule and needs no branch: `JSON.parse` collapses both
- * spellings to the same `number`.
- */
-function equalsFormatVersion(value: unknown): boolean {
-  if (typeof value === "boolean") {
-    // `True` is 1 and `False` is 0 under the comparison, so the whole rule is
-    // one line. The cast is only to stop TypeScript from narrowing the constant
-    // to its literal type and calling the `false` half a comparison between
-    // types with no overlap -- which is exactly the reasoning Python does not
-    // do, and the reason a boolean gets here at all.
-    return (value ? 1 : 0) === (FENCE_FORMAT_VERSION as number);
-  }
-  return value === FENCE_FORMAT_VERSION;
 }
 
 /**

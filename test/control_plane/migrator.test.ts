@@ -683,6 +683,21 @@ describe("discovery", () => {
     );
   });
 
+  test("an unreadable step file is refused, not raised raw (target-only, D-1131)", () => {
+    // interlock reads the bytes outside its try, so a directory named like a
+    // step escaped as IsADirectoryError; here it is the refusal family.
+    const root = caseRoot("migrator");
+    const directory = join(root, "unreadable");
+    writeStep(directory, "0001_alpha.sql", "CREATE TABLE alpha (id INTEGER);\n");
+    mkdirSync(join(directory, "0002_beta.sql"));
+
+    expectRefusal(
+      () => discoverMigrationSteps(directory),
+      MigrationStepsRefused,
+      /0002_beta\.sql cannot be read/,
+    );
+  });
+
   test("a refused ledger creates no database", () => {
     const root = caseRoot("migrator");
     const dbPath = databasePath(root);

@@ -234,6 +234,7 @@ spaces distinct.
 | D-1128 | A refused delivery lease release is reported: `LapOutcome.deliveryLeaseReleaseFailure`, beside a refusal, and `delivery_lease_release_failure` in `lap perform`'s output | accepted |
 | D-1129 | A losing orchestrator serialises its session stop against the winner with a durable stop claim, not a write transaction held across `await provider.stop()`; the winner waits on the claim after its before-resume gate | accepted |
 | D-1130 | A Codex lap stays refused on Windows after the second measurement: the elevated sandbox holds writes but `codex sandbox` let every denied path be read, and the PreToolUse hook does not fire even in a lap whose calls run | accepted |
+| D-1131 | Four inherited defects still open under #18 are repaired: a `"format": true` fence, the write-history suffix filter, unvalidated PR fact times, and an unreadable migration step | accepted |
 
 ---
 
@@ -18881,3 +18882,44 @@ they reopen rule 1.
 **Source.** Issue #238; the measurement run on the operator's Windows host on 2026-10-10 (UTC),
 whose script and logs are attached to #238's pull request; `D-1114`, `D-1118`, `D-1120`. Decision id
 `D-1130`, in the `D-11xx` shared cross-belt band opened by `D-1101`.
+
+---
+
+## D-1131 -- Four inherited defects still open under #18 are repaired: a `"format": true` fence, the write-history suffix filter, unvalidated PR fact times, and an unreadable migration step
+
+**Context.** Issue #18 tracks the inherited defects `D-0022` deferred. Its checklist was cleared by
+`D-0024`, `D-0026`, `D-0208` and `D-0095`, but four ledger entries still read "inherited, not
+fixed" with a repair reserved for the post-parity change, and one of them names #18 as its tracker.
+The owner ruled on 2026-09-26 that parity does not bind a repair. Each defect exists line for line
+in interlock at `65f36c5`.
+
+**Decision.** continuo is authoritative and diverges in four places. Each has a target-only case
+that turns red when its repair is reverted (measured).
+
+1. **`readFence` refuses `"format": true`.** interlock compares with `!=`, and `True == 1`, so it
+   loads such a fence as version 1. continuo compares with `!==` and refuses it as
+   `unsupported fence format: True`. Fail-closed; `1.0` still loads.
+2. **`WRITE_HISTORY_QUERY` reads a kind's resource after the first `@`**, as `resourceOfKind`
+   does. interlock matches a suffix, so asking for resource `r` also returned `effect@x@r`, a row of
+   resource `x@r`, and mixed two epoch sequences in one history.
+3. **`observePullRequest` validates a non-null `mergedAtMs` / `closedAtMs`** with the same epoch-ms
+   guard as the two required times. interlock validates neither, and `pull_request` has no typeof
+   CHECK, so `1.5` was stored as REAL.
+4. **`discoverMigrationSteps` refuses an unreadable step file** with `MigrationStepsRefused`.
+   interlock reads the bytes outside its try, so a directory or broken symlink escaped as a raw
+   filesystem error.
+
+**Alternatives.** Leave them disclosed (rejected: interlock is frozen, `D-0023`). For item 2, carry
+the resource in a column for every writer (rejected here: `D-1104` keeps the four `effectKind`
+writers unchanged, and the query fix is enough).
+
+**Consequences.** A database or fence that one of these inputs reached under the old code is not
+rewritten. A history read for a resource that is a suffix of another resource returns fewer rows.
+The four ledger entries now read REPAIRED. #18 keeps the `D-0204` revisit (blocked: `engines.node`
+admits Node 22.14, which cannot run `.ts` unflagged), the `D-0206` lock revisit (no multi-process
+writer exists) and the test-strength entries, which pin no behaviour.
+
+**Status.** accepted
+
+**Falsifier.** A caller that needs one of the four old behaviours, such as a persisted fence
+written with `"format": true` by a tool other than continuo.
