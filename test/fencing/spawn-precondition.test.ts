@@ -1090,6 +1090,11 @@ describe("str() of a document number reaches the fence and the payload (target-o
     expect(readBack("fence-bad-format.json", { format: "<<2.0>>" })).toContain(
       "unsupported fence format: 2.0",
     );
+    // `True == 1` in Python, so interlock loads a `"format": true` fence as
+    // version 1. continuo refuses it (target-only, D-1131).
+    expect(readBack("fence-bool-format.json", { format: true })).toContain(
+      "unsupported fence format: True",
+    );
     expect(
       readBack("fence-bad-rule.json", { format: 1, rules: ["<<1.0>>"], settings: {} }),
     ).toContain("persisted rule is not an object: 1.0");

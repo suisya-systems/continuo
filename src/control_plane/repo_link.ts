@@ -480,6 +480,11 @@ export function observePullRequest(
   } = options;
 
   requireEpochMs({ observed_at_ms: observedAtMs, ingested_at_ms: ingestedAtMs });
+  // The optional fact times are held to the same contract (D-1131, #18):
+  // interlock validates neither, and `pull_request` has no typeof CHECK, so a
+  // fractional `merged_at_ms` would persist as REAL.
+  if (mergedAtMs !== null) requireEpochMs({ merged_at_ms: mergedAtMs });
+  if (closedAtMs !== null) requireEpochMs({ closed_at_ms: closedAtMs });
   requireText({ repo_id: repoId, event_id: eventId, producer });
   if (typeof prNumber !== "number" || !Number.isInteger(prNumber) || prNumber <= 0) {
     throw new PullRequestObservationRefused(

@@ -16,13 +16,14 @@
   "target": {
     "test_file": "test/control_plane/lease.test.ts",
     "target_only_tests": {
-      "count": 3,
+      "count": 4,
       "ids": [
         "test/control_plane/lease.test.ts::seam liveness (target-only) > the generated refusal id comes from the seam",
         "test/control_plane/lease.test.ts::Criterion 2 -- validation is atomic with the write in a single transaction, and the check-then-write shape would have admitted a writer the atomic shape refuses. > the fences own resource is a sentinel and not a spelling",
-        "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a bare kind is attributed by its own column and stays in the history"
+        "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a bare kind is attributed by its own column and stays in the history",
+        "test/control_plane/lease.test.ts::Criterion 3 -- at most one live holder per leased resource at any instant, shown over a timeline of lease rows rather than at sampled points. > a resource that is another resource's suffix collects only its own rows (target-only, D-1131)"
       ],
-      "note": "Target-only. lease.ts routes its one nondeterministic call -- the generated fallback action_id in recordRefusal -- through leaseSeams.uuid4Hex (D-0014), so a case needing a pinned id has a way to get one. interlock's own suite never needs it (every case that reaches the refusal path passes its own attempt_id), so this liveness test has no source counterpart and is not counted as ported coverage. It exists because a seam nothing routes through is worse than no seam: it would look like a control point while production went around it."
+      "note": "Target-only. lease.ts routes its one nondeterministic call -- the generated fallback action_id in recordRefusal -- through leaseSeams.uuid4Hex (D-0014), so a case needing a pinned id has a way to get one. interlock's own suite never needs it (every case that reaches the refusal path passes its own attempt_id), so this liveness test has no source counterpart and is not counted as ported coverage. It exists because a seam nothing routes through is worse than no seam: it would look like a control point while production went around it. D-1131 adds one case pinning the repair of an inherited defect this ledger disclosed (see inherited_limitations)."
     },
     "approved_non_running": []
   },
@@ -608,7 +609,7 @@
     },
     {
       "topic": "WRITE_HISTORY_QUERY's resource filter is a suffix match, so an '@' inside a resource name makes it ambiguous.",
-      "status": "inherited, not fixed (continuo D-0023 (which superseded D-0022))",
+      "status": "REPAIRED -- deliberate divergence from interlock (continuo D-1131): the kind half of the filter reads the resource after the FIRST '@', exactly as resourceOfKind does, so 'r' no longer collects 'effect@x@r'. Target-only case: test/control_plane/lease.test.ts > a resource that is another resource's suffix collects only its own rows (target-only, D-1131)",
       "detail": "The filter is `substr(kind, -(length(:resource) + 1)) = '@' || :resource`, so asking for resource 'r' also returns rows whose kind is 'effect@x@r' -- which belong to resource 'x@r'. Two independently allocated epoch sequences can therefore be mixed in one history read. The SQL is carried byte-identically from interlock, where the query has exactly the same shape, so the port is at parity; the ambiguity is the design's, arising from encoding the resource into the composed `kind` string because the spike `action` table has no resource column (Q-0001). Reproduced rather than repaired, per D-0023, which superseded D-0022. Raised by the Codex review gate (2026-08-22, P2)."
     }
   ]

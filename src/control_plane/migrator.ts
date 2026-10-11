@@ -234,7 +234,19 @@ export function discoverMigrationSteps(directory?: string): readonly MigrationSt
       );
     }
 
-    const bytes = readFileSync(path);
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(path);
+    } catch (error) {
+      // interlock reads outside its try, so a directory or a broken symlink
+      // escaped as a raw filesystem error; here every fault in the build is the
+      // refusal family (D-1131, #18).
+      throw new MigrationStepsRefused(
+        `${path} cannot be read (${describe(error)}); a step file that cannot be read is a ` +
+          `broken artifact in this build, not a step that can be skipped`,
+        { cause: error },
+      );
+    }
     let sql: string;
     try {
       // `Buffer.toString("utf8")` substitutes U+FFFD and never fails, so a
