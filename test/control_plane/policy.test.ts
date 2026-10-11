@@ -456,6 +456,7 @@ describe("resolving a revision -- the predicate every other reader depends on", 
     expectRefusal(
       () => revisionOverPeriod(cp, { periodStartMs: T0 + 1, periodEndMs: T0 }),
       PolicyUsageError,
+      /precedes periodStartMs/,
     );
   });
 });
@@ -660,6 +661,7 @@ describe("a relative threshold meets its subject", () => {
           subject: "scope-1",
         }),
       NotADuration,
+      /it is a count, not a duration/,
     );
     expectRefusal(
       () =>
@@ -669,6 +671,7 @@ describe("a relative threshold meets its subject", () => {
           subject: undefined,
         }),
       NotADuration,
+      /it is a count, not a duration/,
     );
   });
 
@@ -684,6 +687,7 @@ describe("a relative threshold meets its subject", () => {
           subject: undefined,
         }),
       PolicyUsageError,
+      /a subject is required/,
     );
   });
 
@@ -699,6 +703,7 @@ describe("a relative threshold meets its subject", () => {
           subject: "scope-absent",
         }),
       PolicyUsageError,
+      /no watcher_scope with scope_id='scope-absent'/,
     );
   });
 });
@@ -879,6 +884,7 @@ describe("section 10's per-subject T + P <= L pass", () => {
     expectRefusal(
       () => budgetViolations(cp, { revisionId: revision, nowMs: T0 + 1_000 }),
       PolicyRefusal,
+      /mixes threshold_kind='scope_interval_multiple' with budget_kind='lease_ttl_multiple'/,
     );
   });
 

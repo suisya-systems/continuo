@@ -407,9 +407,16 @@ describe("discarded axes", () => {
         text.replaceAll("`transport.descriptor`", ""),
         `${entry} references the discarded transport axis`,
       ).not.toContain("transport.descriptor");
-      expect(
-        !text.includes("sandbox_by_pattern") || text.includes("DISCARDED") || text.includes("/**"),
-      ).toBe(true);
+      // The axis may be NAMED (a doc comment, or the renderer's own list of axes
+      // it refuses) but never used. The source's third disjunct -- "or the file
+      // has a docstring" -- is true of every file, so it could not fail; this
+      // checks each line that names the axis instead (continuo#267).
+      for (const line of text.split("\n").filter((l) => l.includes("sandbox_by_pattern"))) {
+        expect(
+          /^\s*(\*|\/\/|\/\*)/.test(line) || line.trim() === '"sandbox_by_pattern",',
+          `${entry} uses the discarded sandbox_by_pattern axis: ${line.trim()}`,
+        ).toBe(true);
+      }
     }
   });
 });

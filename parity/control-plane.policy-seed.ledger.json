@@ -354,18 +354,18 @@
     },
     {
       "topic": "'no stage carries a tolerance without a ball holder to name' is vacuous if the tolerance set is empty.",
-      "status": "inherited, not fixed",
-      "detail": "The source asserts the set relation `timed <= owned`, which is trivially true for an empty `timed`; the port expands it to a per-pair assertion, which is vacuous in the same case and for the same reason. Neither side would catch a regression that dropped every non-NULL tolerance. Adding a non-empty guard would make the port stronger than its source, so it is disclosed instead."
+      "status": "REPAIRED in the tests by continuo#267 (test hardening, no behaviour change)",
+      "detail": "The source asserts the set relation `timed <= owned`, which is trivially true for an empty `timed`; the port expands it to a per-pair assertion, which is vacuous in the same case and for the same reason. Neither side would catch a regression that dropped every non-NULL tolerance. Adding a non-empty guard would make the port stronger than its source, so it is disclosed instead. REPAIRED: the case now requires both the tolerance set and the owner set to be non-empty; measured, a tolerance query matching no row fails it."
     },
     {
       "topic": "The supersession cases assert the original revision's row count is unchanged, not that the copy inserted the expected number of rows.",
-      "status": "inherited, not fixed",
-      "detail": "Neither the source nor the port asserts that the copying INSERT ... SELECT actually wrote `original` rows under the later revision, so an INSERT that wrote nothing would still pass. Faithful to interlock at 65f36c5."
+      "status": "REPAIRED in the tests by continuo#267 (test hardening, no behaviour change)",
+      "detail": "Neither the source nor the port asserts that the copying INSERT ... SELECT actually wrote `original` rows under the later revision, so an INSERT that wrote nothing would still pass. Faithful to interlock at 65f36c5. REPAIRED: the cases now also require the original revision to have rows and the later revision to hold the same count; measured, a copy that inserts nothing fails all three tables."
     },
     {
       "topic": "The standing-owner comparison keys by gate_type from a SELECT DISTINCT.",
-      "status": "inherited, not fixed",
-      "detail": "A gate type carrying two different standing owners collapses to whichever row came last, so the equality can pass on data the assertion means to reject. Present identically in the source."
+      "status": "REPAIRED in the tests by continuo#267 (test hardening, no behaviour change)",
+      "detail": "A gate type carrying two different standing owners collapses to whichever row came last, so the equality can pass on data the assertion means to reject. Present identically in the source. REPAIRED: the case now requires one DISTINCT row per gate type, so a gate type with two standing owners fails; measured with an UPDATE giving one gate type a second owner."
     }
   ]
 }
